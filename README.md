@@ -61,11 +61,18 @@ Teams 탭이 초기화되면 TeamsJS `authentication.getAuthToken()`으로 받�
 
 실제 Teams 등록 후 발급받은 값으로 패키지를 생성합니다.
 
+운영 패키지를 만들기 전에 배포 환경 사전검사를 실행합니다. 이 검사는 검증용 placeholder, 로컬 호스트, 잘못된 GUID, 봇 ID와 Entra Client ID 불일치를 차단합니다.
+
+```bash
+npm run check:deployment
+```
+
 ```bash
 TEAMS_APP_ID=<teams-app-id> \
 BOT_ID=<bot-or-entra-app-id> \
 TAB_DOMAIN=<public-https-host> \
 CLIENT_ID=<entra-application-client-id> \
+TENANT_ID=<entra-tenant-id> \
 APPLICATION_ID_URI=<entra-application-id-uri> \
 npm run package:app
 ```
