@@ -9,10 +9,16 @@ await build({
   bundle: true,
   format: 'esm',
   platform: 'node',
-  packages: 'external',
+  // Bundle the Teams SDK and its transitive runtime dependencies so the
+  // production process does not pay the very large cold module-load cost on
+  // every start. Node built-ins remain external for the node platform.
+  packages: 'bundle',
   outdir: outputDir,
   entryNames: 'index',
   sourcemap: true,
+  banner: {
+    js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
+  },
   logLevel: 'info',
 });
 
