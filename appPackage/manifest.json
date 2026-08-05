@@ -1,7 +1,8 @@
 {
   "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.25/MicrosoftTeams.schema.json",
   "manifestVersion": "1.25",
-  "version": "0.1.0",
+  "version": "1.0.0",
+  "supportsChannelFeatures": "tier1",
   "id": "${{TEAMS_APP_ID}}",
   "developer": {
     "name": "Teams SDK MVP",
