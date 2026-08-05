@@ -72,6 +72,20 @@ function activity(text, baseUrl, suffix) {
   };
 }
 
+function installActivity(baseUrl, suffix) {
+  return {
+    type: 'installationUpdate',
+    action: 'add',
+    id: `runtime-install-${suffix}`,
+    timestamp: new Date().toISOString(),
+    serviceUrl: baseUrl,
+    channelId: 'msteams',
+    from: { id: 'runtime-user', name: 'Runtime Test User' },
+    conversation: { id: `runtime-conversation-${suffix}`, conversationType: 'personal' },
+    recipient: { id: 'runtime-bot', name: 'Teams SDK MVP' },
+  };
+}
+
 async function startServer({ production, dataFile }) {
   const port = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -182,6 +196,15 @@ async function runLocalFlow(dataFile) {
       body: JSON.stringify(activity('list', server.baseUrl, 'list')),
     });
     assert(list.response.status === 200, 'Bot list activity completes locally');
+
+    const install = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(installActivity(server.baseUrl, 'install')),
+    });
+    assert(
+      install.response.status === 200 && install.body.messages[0].includes('help'),
+      'Bot installation activity returns a useful welcome message',
+    );
 
     const persisted = JSON.parse(await fs.readFile(dataFile, 'utf8'));
     assert(Array.isArray(persisted) && persisted.length === 2, 'isolated JSON store persists final state');

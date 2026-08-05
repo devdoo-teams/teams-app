@@ -166,10 +166,24 @@ async function handleMessage(activity: any, send: (text: string) => Promise<void
   );
 }
 
+async function handleInstall(activity: any, send: (text: string) => Promise<void>): Promise<void> {
+  const conversationType = activity.conversation?.conversationType;
+  const scopeHint = conversationType === 'channel' || conversationType === 'groupChat'
+    ? '이 대화'
+    : '개인 공간';
+
+  await send(
+    `업무 허브가 ${scopeHint}에 추가되었습니다. 탭에서 업무를 관리하고, help·status·list 명령으로 기능을 확인할 수 있습니다.`,
+  );
+}
+
 // The Bot Framework normally receives this outbound activity from Teams.
 // In local mode, return the generated response directly so the full message loop is testable.
 if (teamsApp) {
   teamsApp.tab('home', clientDist);
+  teamsApp.on('install.add', async ({ activity, send }: any) => {
+    await handleInstall(activity, send);
+  });
   teamsApp.on('message', async ({ activity, send }: any) => {
     await handleMessage(activity, send);
   });
@@ -181,9 +195,16 @@ if (teamsApp) {
     }
 
     const messages: string[] = [];
-    await handleMessage(request.body, async (text) => {
+    const send = async (text: string) => {
       messages.push(text);
-    });
+    };
+
+    if (request.body?.type === 'installationUpdate' && request.body?.action === 'add') {
+      await handleInstall(request.body, send);
+    } else {
+      await handleMessage(request.body, send);
+    }
+
     response.json({ messages });
   });
 

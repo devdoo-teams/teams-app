@@ -17,6 +17,7 @@ TypeScript + React + Express + Microsoft Teams SDK 기반의 내부용 Teams 앱
 - 운영 모드 Entra bearer token 검증 미들웨어
 - Teams SDK `/api/messages` 메시지 핸들러 (`help`, `status`, `list` 명령 포함)
 - Teams SDK `/api/messages` `status` 명령으로 진행 중 업무 수 확인
+- Teams SDK `install.add` 설치 이벤트 welcome message와 명령 안내
 - 런타임 상태 패널과 서버 health 확인
 - 환경 템플릿 기반 Teams manifest
 - 환경변수 치환형 Teams 앱 ZIP 패키징
@@ -46,7 +47,7 @@ TEAMS_SKIP_AUTH=true npm run dev
 npm test
 ```
 
-`npm run test:runtime`만 실행하면 이미 빌드된 서버를 기준으로 런타임 테스트를 반복할 수 있습니다. 테스트는 로컬 인증 우회 흐름과 production bearer token 거부 흐름을 모두 확인합니다.
+`npm run test:runtime`만 실행하면 이미 빌드된 서버를 기준으로 런타임 테스트를 반복할 수 있습니다. 테스트는 로컬 인증 우회 흐름, 업무 CRUD, Bot 명령, 설치 welcome message와 production bearer token 거부 흐름을 모두 확인합니다.
 
 `npm run check:types`는 별도로 TypeScript 타입 검사를 실행합니다. 실행 환경의 TypeScript CLI가 멈추는 경우에도 `npm run build`는 esbuild 산출물을 만들고 런타임 테스트를 계속할 수 있습니다.
 
