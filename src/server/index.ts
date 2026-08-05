@@ -12,8 +12,9 @@ const clientDist = path.resolve(process.cwd(), 'dist/client');
 const itemStore = new ItemStore(
   process.env.ITEM_STORE_PATH ?? path.resolve(process.cwd(), 'data/items.json'),
 );
+const botClientId = process.env.BOT_CLIENT_ID ?? process.env.CLIENT_ID;
 const userAuthConfigured = Boolean(
-  process.env.CLIENT_ID && process.env.TENANT_ID && process.env.APPLICATION_ID_URI,
+  botClientId && process.env.TENANT_ID && process.env.APPLICATION_ID_URI,
 );
 
 if (process.env.NODE_ENV === 'production' && skipAuth) {
@@ -30,6 +31,9 @@ if (useTeamsSdk) {
   http = new teams.ExpressAdapter();
   teamsApp = new teams.App({
     httpServerAdapter: http,
+    clientId: botClientId,
+    clientSecret: process.env.CLIENT_SECRET,
+    tenantId: process.env.TENANT_ID,
     applicationIdUri: process.env.APPLICATION_ID_URI,
   });
 } else {

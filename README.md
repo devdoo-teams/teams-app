@@ -53,7 +53,7 @@ npm test
 
 ## 인증과 저장소
 
-Teams 탭이 초기화되면 TeamsJS `authentication.getAuthToken()`으로 받은 bearer token을 `/api/items` 요청에 전달합니다. 서버는 운영 모드에서 `CLIENT_ID`, `TENANT_ID`, `APPLICATION_ID_URI`를 기준으로 Microsoft Entra 토큰을 검증합니다. 로컬 개발에서만 `TEAMS_SKIP_AUTH=true`로 이 검증을 우회합니다.
+Teams 탭이 초기화되면 TeamsJS `authentication.getAuthToken()`으로 받은 bearer token을 `/api/items` 요청에 전달합니다. 서버는 운영 모드에서 `BOT_CLIENT_ID`, `TENANT_ID`, `APPLICATION_ID_URI`를 기준으로 Microsoft Entra 토큰을 검증하고 Bot 메시지 발신에도 `BOT_CLIENT_ID`와 `CLIENT_SECRET`를 사용합니다. `CLIENT_ID`는 manifest의 탭/SSO용 Entra 앱 ID입니다. 로컬 개발에서만 `TEAMS_SKIP_AUTH=true`로 이 검증을 우회합니다.
 
 현재 업무 저장소는 `data/items.json`입니다. 이 파일은 로컬 MVP의 재시작 검증을 위해 사용하며 Git에는 포함하지 않습니다. 여러 인스턴스 운영이나 감사 로그가 필요한 단계에서는 SQL/managed database로 교체해야 합니다.
 
@@ -72,6 +72,7 @@ TEAMS_APP_ID=<teams-app-id> \
 BOT_ID=<teams-bot-registration-id> \
 TAB_DOMAIN=<public-https-host> \
 CLIENT_ID=<entra-application-client-id> \
+BOT_CLIENT_ID=<azure-bot-application-client-id> \
 TENANT_ID=<entra-tenant-id> \
 APPLICATION_ID_URI=<entra-application-id-uri> \
 npm run package:app
@@ -102,6 +103,8 @@ teams app create --name teams-sdk-mvp --endpoint https://<tunnel-host>/api/messa
 docker build -t teams-sdk-mvp .
 docker run --rm -p 3978:3978 \
   -e CLIENT_ID=... \
+  -e BOT_CLIENT_ID=... \
+  -e CLIENT_SECRET=... \
   -e TENANT_ID=... \
   -e APPLICATION_ID_URI=... \
   -e BOT_ID=... \

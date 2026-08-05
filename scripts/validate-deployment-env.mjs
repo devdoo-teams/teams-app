@@ -3,6 +3,7 @@ const required = [
   'BOT_ID',
   'TAB_DOMAIN',
   'CLIENT_ID',
+  'BOT_CLIENT_ID',
   'TENANT_ID',
   'APPLICATION_ID_URI',
 ];
@@ -15,7 +16,7 @@ if (missing.length > 0) {
 
 const values = Object.fromEntries(required.map((name) => [name, process.env[name].trim()]));
 const guidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const invalidGuids = ['TEAMS_APP_ID', 'BOT_ID', 'CLIENT_ID', 'TENANT_ID'].filter(
+const invalidGuids = ['TEAMS_APP_ID', 'BOT_ID', 'CLIENT_ID', 'BOT_CLIENT_ID', 'TENANT_ID'].filter(
   (name) => !guidPattern.test(values[name]),
 );
 
