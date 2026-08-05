@@ -1,0 +1,38 @@
+{
+  "name": "teams-sdk-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server/index.ts",
+    "build": "npm run build:client && npm run build:server",
+    "build:server": "node scripts/build-server.mjs",
+    "build:client": "node scripts/build-client.mjs",
+    "start": "node dist/server/index.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "check:types": "npm run typecheck",
+    "validate:manifest": "node scripts/validate-manifest.mjs",
+    "package:app": "node scripts/package-app.mjs",
+    "check": "npm run build:client && npm run validate:manifest",
+    "test:runtime": "node scripts/runtime-test.mjs",
+    "test": "npm run check && npm run build && npm run test:runtime"
+  },
+  "dependencies": {
+    "@microsoft/teams-js": "^2.54.0",
+    "@microsoft/teams.apps": "^2.0.15",
+    "esbuild": "^0.28.1",
+    "express": "^5.1.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.5",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.4",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.3",
+    "vite": "^8.2.0"
+  }
+}

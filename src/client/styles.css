@@ -1,0 +1,69 @@
+:root {
+  color: #1f2937;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #f5f7fb;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+button, input { font: inherit; }
+
+.shell { margin: 0 auto; max-width: 880px; padding: 56px 24px 32px; }
+.hero { align-items: flex-start; display: flex; justify-content: space-between; gap: 24px; margin-bottom: 28px; }
+.eyebrow { color: #6264a7; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.14em; margin: 0 0 8px; }
+h1, h2 { color: #111827; margin: 0; }
+h1 { font-size: clamp(2rem, 6vw, 3.5rem); letter-spacing: -0.05em; }
+h2 { font-size: 1.35rem; }
+.subtitle { color: #667085; margin: 12px 0 0; }
+.badge { background: #e9f8ef; border: 1px solid #bce8ca; border-radius: 999px; color: #18794e; font-size: 0.8rem; font-weight: 700; padding: 9px 13px; white-space: nowrap; }
+.badge.warning { background: #fff4e5; border-color: #f9d8a6; color: #b54708; }
+.panel { background: #fff; border: 1px solid #e6e9f0; border-radius: 20px; box-shadow: 0 16px 50px rgba(37, 52, 89, 0.08); padding: 28px; }
+.runtime-panel { background: #eef2ff; border: 1px solid #dce2ff; border-radius: 14px; display: grid; gap: 12px; grid-template-columns: repeat(4, 1fr); margin-bottom: 18px; padding: 14px 16px; }
+.runtime-panel div { display: flex; flex-direction: column; gap: 4px; }
+.runtime-panel span { color: #667085; font-size: 0.75rem; }
+.runtime-panel strong { color: #34366f; font-size: 0.9rem; }
+.section-heading { align-items: center; display: flex; justify-content: space-between; gap: 16px; }
+.add-form { display: flex; gap: 10px; margin: 24px 0 18px; }
+input { border: 1px solid #d9deea; border-radius: 10px; color: #1f2937; flex: 1; min-width: 0; padding: 12px 14px; }
+input:focus { border-color: #6264a7; box-shadow: 0 0 0 3px rgba(98, 100, 167, 0.15); outline: none; }
+button { border: 0; border-radius: 10px; cursor: pointer; font-weight: 750; padding: 11px 16px; }
+.primary { background: #6264a7; color: #fff; }
+.primary:hover { background: #4f518e; }
+.secondary { background: #f0f1fa; color: #4f518e; }
+.summary-grid { display: grid; gap: 10px; grid-template-columns: repeat(3, 1fr); margin: 18px 0 14px; }
+.summary-card { background: #f7f7fc; border: 1px solid #ececf7; border-radius: 12px; display: flex; flex-direction: column; gap: 4px; padding: 13px 15px; }
+.summary-card span { color: #667085; font-size: 0.78rem; }
+.summary-card strong { color: #25274b; font-size: 1.45rem; }
+.open-card { background: #fff9ed; border-color: #f9e7bd; }
+.done-card { background: #effaf3; border-color: #ccebd6; }
+.filters { display: flex; gap: 8px; margin-bottom: 14px; }
+.filter { background: #f7f8fb; color: #667085; font-size: 0.82rem; padding: 8px 12px; }
+.filter.active { background: #6264a7; color: #fff; }
+.item-list { display: grid; gap: 10px; list-style: none; margin: 0; padding: 0; }
+.item { align-items: center; background: #fafbfe; border: 1px solid #edf0f6; border-radius: 12px; display: flex; gap: 12px; padding: 15px 16px; }
+.item small { color: #8a93a6; margin-left: auto; }
+.item-actions { align-items: center; display: flex; gap: 12px; margin-left: auto; }
+.edit-row { align-items: center; display: flex; flex: 1; gap: 8px; }
+.edit-row input { padding: 8px 10px; }
+.toggle { background: transparent; color: #6264a7; font-size: 0.82rem; margin-left: auto; padding: 4px 0; }
+.toggle:hover { color: #4f518e; text-decoration: underline; }
+.item-actions .toggle { margin-left: 0; }
+.toggle.danger { color: #b42318; }
+.status { background: #f59e0b; border-radius: 50%; height: 9px; width: 9px; }
+.status.done { background: #29a36a; }
+.empty { color: #8a93a6; padding: 20px 0 8px; text-align: center; }
+.error { background: #fff1f1; border-radius: 9px; color: #b42318; padding: 10px 12px; }
+footer { color: #98a2b3; font-size: 0.78rem; padding-top: 20px; text-align: center; }
+
+@media (max-width: 560px) {
+  .shell { padding: 28px 16px; }
+  .hero { display: block; }
+  .badge { display: inline-block; margin-top: 18px; }
+  .panel { padding: 20px; }
+  .add-form { flex-direction: column; }
+  .summary-grid { grid-template-columns: 1fr; }
+  .runtime-panel { grid-template-columns: repeat(2, 1fr); }
+  .item { align-items: flex-start; flex-wrap: wrap; }
+  .item-actions { margin-left: 21px; width: calc(100% - 21px); }
+  .edit-row { flex-wrap: wrap; }
+}
