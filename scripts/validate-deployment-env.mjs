@@ -24,10 +24,9 @@ if (invalidGuids.length > 0) {
   process.exit(1);
 }
 
-if (values.BOT_ID.toLowerCase() !== values.CLIENT_ID.toLowerCase()) {
-  console.error('BOT_ID must match CLIENT_ID because webApplicationInfo.id must match the bot ID.');
-  process.exit(1);
-}
+// A Teams/Bot registration ID and the Entra app registration used by the tab
+// and SSO can be different applications. The manifest intentionally keeps
+// bots[].botId and webApplicationInfo.id as separate environment values.
 
 if (
   values.TAB_DOMAIN.includes('://') ||
