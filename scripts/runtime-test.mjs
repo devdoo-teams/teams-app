@@ -86,7 +86,7 @@ function installActivity(baseUrl, suffix) {
   };
 }
 
-async function startServer({ production, dataFile }) {
+async function startServer({ production, dataFile, jobDataFile }) {
   const port = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const command = process.execPath;
@@ -98,6 +98,11 @@ async function startServer({ production, dataFile }) {
       NODE_ENV: production ? 'production' : 'development',
       PORT: String(port),
       ITEM_STORE_PATH: dataFile,
+      AGENT_JOB_STORE_PATH: jobDataFile,
+      AGENT_WORKSPACE: root,
+      CODEX_BIN: process.execPath,
+      CODEX_SCRIPT: path.join(root, 'scripts/fake-codex.mjs'),
+      TEAMS_USE_SDK: 'false',
       ...(production ? { TEAMS_SKIP_AUTH: '' } : { TEAMS_SKIP_AUTH: 'true' }),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -120,6 +125,19 @@ async function startServer({ production, dataFile }) {
   }
 }
 
+async function waitForAgentJob(baseUrl, jobId) {
+  const deadline = Date.now() + 10_000;
+
+  while (Date.now() < deadline) {
+    const result = await request(baseUrl, '/api/debug/agent-jobs');
+    const job = result.body.jobs.find((candidate) => candidate.id === jobId);
+    if (job && ['completed', 'failed', 'cancelled'].includes(job.status)) return job;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  throw new Error(`Agent job did not finish: ${jobId}`);
+}
+
 async function stopServer(child) {
   if (child.exitCode !== null) return;
   child.kill('SIGTERM');
@@ -135,8 +153,8 @@ async function stopServer(child) {
   });
 }
 
-async function runLocalFlow(dataFile) {
-  const server = await startServer({ production: false, dataFile });
+async function runLocalFlow(dataFile, jobDataFile) {
+  const server = await startServer({ production: false, dataFile, jobDataFile });
 
   try {
     const health = await request(server.baseUrl, '/api/health');
@@ -206,6 +224,41 @@ async function runLocalFlow(dataFile) {
       'Bot installation activity returns a useful welcome message',
     );
 
+    const agentRun = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity('run 저장소의 현재 상태를 안전하게 요약해줘', server.baseUrl, 'agent-run')),
+    });
+    assert(agentRun.response.status === 200, 'Bot accepts a remote Codex run request');
+    const readOnlyJobId = agentRun.body.messages[0].match(/task-[\w-]+/)?.[0];
+    assert(Boolean(readOnlyJobId), 'remote Codex request returns a task id');
+
+    const completedReadOnly = await waitForAgentJob(server.baseUrl, readOnlyJobId);
+    assert(completedReadOnly.status === 'completed', 'read-only Codex job completes');
+    assert(completedReadOnly.result.includes('FAKE_CODEX_OK'), 'Codex JSONL result is persisted');
+
+    const readOnlyOutbox = await request(server.baseUrl, '/api/debug/agent-outbox/runtime-conversation-agent-run');
+    assert(
+      readOnlyOutbox.body.messages.some((message) => message.includes(readOnlyJobId)),
+      'completed Codex result is delivered to the conversation outbox',
+    );
+
+    const writeRequest = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity('write 테스트 파일 변경 계획을 검토해줘', server.baseUrl, 'agent-write')),
+    });
+    const writeJobId = writeRequest.body.messages[0].match(/task-[\w-]+/)?.[0];
+    assert(writeRequest.body.messages[0].includes('승인 대기'), 'workspace-write request requires approval');
+
+    const approved = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity(`approve ${writeJobId}`, server.baseUrl, 'agent-approve')),
+    });
+    assert(approved.body.messages[0].includes('승인'), 'workspace-write job can be approved from Teams');
+
+    const completedWrite = await waitForAgentJob(server.baseUrl, writeJobId);
+    assert(completedWrite.status === 'completed', 'approved workspace-write job completes');
+    assert(completedWrite.mode === 'workspace-write', 'approved job preserves write mode');
+
     const persisted = JSON.parse(await fs.readFile(dataFile, 'utf8'));
     assert(Array.isArray(persisted) && persisted.length === 2, 'isolated JSON store persists final state');
   } finally {
@@ -213,8 +266,8 @@ async function runLocalFlow(dataFile) {
   }
 }
 
-async function runProductionAuthFlow(dataFile) {
-  const server = await startServer({ production: true, dataFile });
+async function runProductionAuthFlow(dataFile, jobDataFile) {
+  const server = await startServer({ production: true, dataFile, jobDataFile });
 
   try {
     const health = await request(server.baseUrl, '/api/health');
@@ -236,12 +289,14 @@ async function runProductionAuthFlow(dataFile) {
 const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-sdk-runtime-'));
 const localDataFile = path.join(tempDir, 'local-items.json');
 const productionDataFile = path.join(tempDir, 'production-items.json');
+const localJobDataFile = path.join(tempDir, 'local-agent-jobs.json');
+const productionJobDataFile = path.join(tempDir, 'production-agent-jobs.json');
 
 try {
   console.log('Runtime verification: local authenticated-bypass flow');
-  await runLocalFlow(localDataFile);
+  await runLocalFlow(localDataFile, localJobDataFile);
   console.log('Runtime verification: production authentication guard');
-  await runProductionAuthFlow(productionDataFile);
+  await runProductionAuthFlow(productionDataFile, productionJobDataFile);
   console.log('Runtime verification complete.');
 } finally {
   await fs.rm(tempDir, { recursive: true, force: true });

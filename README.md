@@ -17,6 +17,9 @@ TypeScript + React + Express + Microsoft Teams SDK 기반의 내부용 Teams 앱
 - 운영 모드 Entra bearer token 검증 미들웨어
 - Teams SDK `/api/messages` 메시지 핸들러 (`help`, `status`, `list` 명령 포함)
 - Teams SDK `/api/messages` `status` 명령으로 진행 중 업무 수 확인
+- Teams에서 Codex CLI 읽기 전용 작업을 시작하고 작업 ID로 상태 조회
+- `write` 작업의 승인·취소 흐름과 Codex JSONL 결과 영속 저장
+- Codex 완료·실패 결과의 Teams proactive message 전송
 - Teams SDK `install.add` 설치 이벤트 welcome message와 명령 안내
 - 런타임 상태 패널과 서버 health 확인
 - 환경 템플릿 기반 Teams manifest
@@ -39,6 +42,27 @@ TEAMS_SKIP_AUTH=true npm run dev
 
 `TEAMS_SKIP_AUTH=true`는 로컬 탭 API의 사용자 인증만 우회하는 개발용 설정입니다. `BOT_CLIENT_ID`, `CLIENT_SECRET`, `TENANT_ID`가 있으면 Teams SDK Bot은 계속 실행되어 실제 Teams 메시지 outbound를 테스트할 수 있습니다. 운영에서는 이 값을 제거하고 탭 API도 Entra SSO로 보호합니다.
 
+## Teams 원격 Codex 작업
+
+로컬에서 `codex` CLI가 로그인되어 있으면 Teams Bot을 원격 작업 채널로 사용할 수 있습니다. Codex는 기본적으로 현재 저장소를 읽기 전용으로 분석하고, 파일 수정 작업은 명시적 승인 후 `workspace-write`로 실행합니다.
+
+```text
+help
+run 저장소의 현재 구현 상태를 분석해줘
+status <작업 ID>
+write 테스트 보강 계획을 적용해줘
+approve <작업 ID>
+cancel <작업 ID>
+```
+
+관련 환경변수:
+
+- `AGENT_WORKSPACE`: Codex가 작업할 Git 저장소 경로. 기본값은 현재 실행 디렉터리입니다.
+- `AGENT_JOB_STORE_PATH`: Teams 작업·Codex thread·결과를 저장할 JSON 경로입니다.
+- `CODEX_BIN`: Codex 실행 파일. 기본값은 `codex`입니다.
+
+운영 환경에서는 Codex 실행기를 별도 worker로 분리하고, Teams Bot에는 허용 사용자·승인·작업 상태만 노출하는 구성을 권장합니다. `data/agent-jobs.json`도 로컬 업무 데이터와 동일하게 Git에 포함하지 않습니다.
+
 ## 런타임 검증
 
 기존 `data/items.json`을 건드리지 않고 임시 저장소로 실제 서버 프로세스를 실행하여 API, Bot, 파일 저장, 운영 인증 경계를 검증합니다.
@@ -47,7 +71,7 @@ TEAMS_SKIP_AUTH=true npm run dev
 npm test
 ```
 
-`npm run test:runtime`만 실행하면 이미 빌드된 서버를 기준으로 런타임 테스트를 반복할 수 있습니다. 테스트는 로컬 인증 우회 흐름, 업무 CRUD, Bot 명령, 설치 welcome message와 production bearer token 거부 흐름을 모두 확인합니다.
+`npm run test:runtime`만 실행하면 이미 빌드된 서버를 기준으로 런타임 테스트를 반복할 수 있습니다. 테스트는 로컬 인증 우회 흐름, 업무 CRUD, Bot 명령, 설치 welcome message, 원격 Codex 작업·승인·outbox 전달과 production bearer token 거부 흐름을 모두 확인합니다.
 
 `npm run check:types`는 별도로 TypeScript 타입 검사를 실행합니다. 실행 환경의 TypeScript CLI가 멈추는 경우에도 `npm run build`는 esbuild 산출물을 만들고 런타임 테스트를 계속할 수 있습니다.
 

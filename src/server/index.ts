@@ -4,6 +4,9 @@ import express from 'express';
 
 import { createUserAuthMiddleware } from './user-auth.js';
 import { ItemStore } from './item-store.js';
+import { AgentJobStore, type AgentJob } from './agent-job-store.js';
+import { AgentService } from './agent-service.js';
+import { CodexRunner } from './codex-runner.js';
 
 const port = Number(process.env.PORT ?? 3978);
 const skipAuth = process.env.TEAMS_SKIP_AUTH === 'true';
@@ -11,6 +14,11 @@ const clientDist = path.resolve(process.cwd(), 'dist/client');
 const itemStore = new ItemStore(
   process.env.ITEM_STORE_PATH ?? path.resolve(process.cwd(), 'data/items.json'),
 );
+const agentJobStore = new AgentJobStore(
+  process.env.AGENT_JOB_STORE_PATH ?? path.resolve(process.cwd(), 'data/agent-jobs.json'),
+);
+const codexRunner = new CodexRunner();
+const agentWorkspace = path.resolve(process.env.AGENT_WORKSPACE ?? process.cwd());
 const botClientId = process.env.BOT_CLIENT_ID ?? process.env.CLIENT_ID;
 const botConfigured = Boolean(botClientId && process.env.CLIENT_SECRET && process.env.TENANT_ID);
 const useTeamsSdk = process.env.TEAMS_USE_SDK !== 'false' && botConfigured;
@@ -27,6 +35,7 @@ await itemStore.initialize();
 let http: any;
 let teamsApp: any;
 let userAuthValidator: any;
+const localOutbox = new Map<string, string[]>();
 
 if (useTeamsSdk) {
   const teams = await import('@microsoft/teams.apps');
@@ -66,6 +75,8 @@ http.get('/api/health', (_request: any, response: any) => {
     auth: skipAuth ? 'local-bypass' : 'teams-authenticated',
     userAuth: skipAuth ? 'local-bypass' : userAuthConfigured ? 'entra-sso' : 'not-configured',
     bot: teamsApp ? 'teams-sdk' : 'local-handler',
+    agent: process.env.CODEX_BIN ?? 'codex-cli',
+    agentWorkspace,
     storage: 'file-json',
     timestamp: new Date().toISOString(),
   });
@@ -157,31 +168,122 @@ http.delete('/api/items/:id', async (request: any, response: any) => {
   response.json({ item });
 });
 
+const notifyConversation = async (conversationId: string, text: string): Promise<void> => {
+  if (teamsApp) {
+    await teamsApp.send(conversationId, { type: 'message', text });
+    return;
+  }
+
+  const messages = localOutbox.get(conversationId) ?? [];
+  messages.push(text);
+  localOutbox.set(conversationId, messages);
+};
+
+const agentService = new AgentService(
+  agentJobStore,
+  codexRunner,
+  agentWorkspace,
+  notifyConversation,
+);
+await agentService.initialize();
+
+function formatAgentJob(job: AgentJob): string {
+  const lines = [
+    `작업 ID: ${job.id}`,
+    `상태: ${job.status}`,
+    `권한: ${job.mode}`,
+  ];
+
+  if (job.threadId) lines.push(`Codex thread: ${job.threadId}`);
+  if (job.progress.length > 0) lines.push(`최근 진행: ${job.progress[job.progress.length - 1]}`);
+  if (job.error) lines.push(`오류: ${job.error}`);
+  if (job.result) lines.push(`결과:\n${job.result.slice(0, 5000)}`);
+  return lines.join('\n');
+}
+
 async function handleMessage(activity: any, send: (text: string) => Promise<void>): Promise<void> {
   const text = activity.text?.replace(/<at>.*?<\/at>/gi, '').trim() || '';
   const normalizedText = text.toLowerCase();
+  const conversationId = activity.conversation?.id ?? 'unknown-conversation';
+  const requesterId = activity.from?.id ?? 'unknown-user';
 
-  if (normalizedText === 'status') {
+  if (normalizedText === 'help') {
+    await send(
+      '사용 가능한 명령: help, status, list, run <작업>, write <작업>, approve <작업 ID>, cancel <작업 ID>',
+    );
+    return;
+  }
+
+  if (normalizedText === 'status' || normalizedText.startsWith('status ')) {
+    const jobId = text.split(/\s+/)[1];
+    if (jobId) {
+      const job = agentService.get(jobId);
+      await send(job ? formatAgentJob(job) : `작업 ${jobId}을 찾을 수 없습니다.`);
+      return;
+    }
+
     const openCount = itemStore.countOpen();
-    await send(`현재 진행 중인 업무는 ${openCount}개입니다.`);
+    await send(`현재 진행 중인 업무는 ${openCount}개이며, 에이전트 활성 작업은 ${agentService.countActive()}개입니다.`);
     return;
   }
 
   if (normalizedText === 'list') {
     const openItems = itemStore.list().filter((item) => item.status === 'open').slice(0, 8);
-    await send(
-      openItems.length === 0
-        ? '진행 중인 업무가 없습니다.'
-        : `진행 중인 업무:\n${openItems.map((item) => `- ${item.title}`).join('\n')}`,
-    );
+    const jobs = agentService.list(5);
+    const itemText = openItems.length === 0
+      ? '진행 중인 업무가 없습니다.'
+      : `진행 중인 업무:\n${openItems.map((item) => `- ${item.title}`).join('\n')}`;
+    const jobText = jobs.length === 0
+      ? '에이전트 작업이 없습니다.'
+      : `최근 에이전트 작업:\n${jobs.map((job) => `- ${job.id}: ${job.status}`).join('\n')}`;
+    await send(`${itemText}\n\n${jobText}`);
     return;
   }
 
-  await send(
-    normalizedText === 'help'
-      ? '사용 가능한 명령: help, status, list'
-      : `받은 메시지: ${text || '(내용 없음)'}`,
-  );
+  const commandMatch = text.match(/^(run|write)\s+([\s\S]+)$/i);
+  if (commandMatch) {
+    const mode = commandMatch[1].toLowerCase() === 'write' ? 'workspace-write' : 'read-only';
+    const job = await agentService.submit({
+      prompt: commandMatch[2].trim(),
+      mode,
+      conversationId,
+      requesterId,
+    });
+
+    if (mode === 'workspace-write') {
+      await send(`쓰기 작업 ${job.id}이 승인 대기 중입니다.\napprove ${job.id} 또는 cancel ${job.id}`);
+    } else {
+      await send(`읽기 전용 Codex 작업 ${job.id}을 시작했습니다.\nstatus ${job.id}로 진행 상태를 확인할 수 있습니다.`);
+    }
+    return;
+  }
+
+  const approveMatch = text.match(/^approve\s+(task-[\w-]+)$/i);
+  if (approveMatch) {
+    const job = await agentService.approve(approveMatch[1]);
+    await send(job ? `작업 ${job.id} 승인을 처리했습니다.\nstatus ${job.id}` : '승인할 작업을 찾을 수 없습니다.');
+    return;
+  }
+
+  const cancelMatch = text.match(/^cancel\s+(task-[\w-]+)$/i);
+  if (cancelMatch) {
+    const job = await agentService.cancel(cancelMatch[1]);
+    await send(job ? `작업 ${job.id} 취소를 처리했습니다.\n상태: ${job.status}` : '취소할 작업을 찾을 수 없습니다.');
+    return;
+  }
+
+  if (text) {
+    const job = await agentService.submit({
+      prompt: text,
+      mode: 'read-only',
+      conversationId,
+      requesterId,
+    });
+    await send(`자연어 작업 ${job.id}을 읽기 전용으로 시작했습니다.\nstatus ${job.id}`);
+    return;
+  }
+
+  await send('내용이 없습니다. help를 입력해 사용 가능한 명령을 확인하세요.');
 }
 
 async function handleInstall(activity: any, send: (text: string) => Promise<void>): Promise<void> {
@@ -230,6 +332,19 @@ if (teamsApp) {
     response.sendFile(path.join(clientDist, 'index.html'));
   });
   http.use('/tabs/home', express.static(clientDist));
+}
+
+if (skipAuth) {
+  http.get('/api/debug/agent-jobs', (_request: any, response: any) => {
+    response.json({ jobs: agentService.list(50) });
+  });
+
+  http.get('/api/debug/agent-outbox/:conversationId', (request: any, response: any) => {
+    const conversationId = request.params.conversationId;
+    const messages = localOutbox.get(conversationId) ?? [];
+    localOutbox.delete(conversationId);
+    response.json({ conversationId, messages });
+  });
 }
 
 if (skipAuth) {
