@@ -30,6 +30,7 @@ export function McpGenUiWidget() {
   const [bridgeConnected, setBridgeConnected] = useState(false);
   const [bridgeError, setBridgeError] = useState<Error | null>(null);
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  const hasSuppressedActions = Boolean(envelope && (envelope.actions.length > 0 || envelope.aiGenerated));
 
   const handleToolResult = useCallback((result: ToolResult) => {
     const parsed = GenUiEnvelopeV1Schema.safeParse(result.structuredContent);
@@ -76,7 +77,16 @@ export function McpGenUiWidget() {
   return (
     <main className="mcp-root" data-theme={theme}>
       <style>{styles}</style>
-      {envelope ? <GenUiCard envelope={envelope} theme={theme} /> : <PreviewNotice connected={bridgeConnected} error={bridgeError} />}
+      {envelope ? (
+        <>
+          <GenUiCard envelope={envelope} theme={theme} interactive={false} />
+          {hasSuppressedActions && (
+            <p className="mcp-readonly-note" role="note">
+              MCP 미리보기는 현재 읽기 전용입니다. 승인·취소·피드백 작업은 지원되는 호스트의 작업 경계에서만 실행됩니다.
+            </p>
+          )}
+        </>
+      ) : <PreviewNotice connected={bridgeConnected} error={bridgeError} />}
       {toolResultError && <p className="mcp-inline-error" role="alert">{toolResultError}</p>}
     </main>
   );
@@ -94,6 +104,7 @@ body { margin: 0; background: transparent; color: #242424; }
 .mcp-empty code { display: block; margin: 10px 0; padding: 8px; overflow-wrap: anywhere; border-radius: 8px; background: rgba(128,128,128,.12); text-align: left; font-size: 11px; }
 .mcp-empty small { display: block; margin-top: 14px; line-height: 1.5; opacity: .65; }
 .mcp-inline-error { color: #b42318; font-size: 12px; }
+.mcp-readonly-note { margin: 8px 2px 0; color: #667085; font-size: 11px; line-height: 1.5; }
 .genui-card { width: 100%; max-width: 640px; margin: 0 auto; overflow: hidden; border: 1px solid #e0e3f2; border-radius: 16px; background: #fff; color: #25274b; box-shadow: 0 12px 32px rgba(37,52,89,.09); font-family: inherit; }
 .genui-card[data-theme="dark"] { border-color: #3b3e4e; background: #1e1f25; color: #f5f6ff; }
 .genui-card__header { display: flex; gap: 12px; justify-content: space-between; padding: 16px; color: #fff; background: linear-gradient(135deg,#4f518e,#6264a7); }

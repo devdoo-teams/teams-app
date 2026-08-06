@@ -9,6 +9,14 @@ import { useState } from 'react';
 import { z } from 'zod';
 
 import { apiFetch } from './auth.js';
+import { GenUiCard } from './genui/GenUiCard.js';
+import './genui/genui.css';
+import {
+  createApprovalResultEnvelope,
+  createApprovalToolEnvelope,
+  createTaskToolEnvelope,
+  createWeatherToolEnvelope,
+} from './genui/tool-adapters.js';
 
 type WeatherContext = {
   source: 'open-meteo' | 'demo';
@@ -75,65 +83,25 @@ type TaskRenderProps = RenderToolProps<typeof taskToolSchema>;
 type ApprovalRenderProps = RenderToolProps<typeof approvalToolSchema>;
 
 function WeatherToolCard({ status, parameters, result }: WeatherRenderProps) {
-  if (status === 'inProgress') {
-    return <div className="copilot-tool-card copilot-tool-loading">날씨 카드를 준비하고 있습니다…</div>;
-  }
-
-  return (
-    <div className="copilot-tool-card copilot-weather-card">
-      <div className="copilot-tool-title">
-        <span aria-hidden="true">☀️</span>
-        <span>날씨 위젯</span>
-        <small>{parameters.location}</small>
-      </div>
-      <div className="copilot-weather-summary">
-        <strong>{parameters.temperature.toFixed(1)}°</strong>
-        <span>{parameters.condition}</span>
-      </div>
-      <div className="copilot-weather-stats">
-        <span>체감 {parameters.apparentTemperature.toFixed(1)}°C</span>
-        <span>습도 {Math.round(parameters.humidity)}%</span>
-        <span>바람 {parameters.windSpeed.toFixed(1)}km/h</span>
-        <span>강수 {parameters.precipitation.toFixed(1)}mm</span>
-      </div>
-      {status === 'complete' && <small className="copilot-tool-result">{parameters.source} 데이터</small>}
-      {status === 'executing' && <small className="copilot-tool-result">카드 렌더링 중…</small>}
-      {result && status === 'complete' && <details className="copilot-tool-details"><summary>응답 보기</summary><pre>{result}</pre></details>}
-    </div>
-  );
+  const envelope = createWeatherToolEnvelope(parameters, status, result);
+  return <GenUiCard envelope={envelope} theme="auto" className="copilot-tool-genui-card" />;
 }
 
 function TaskToolCard({ status, parameters }: TaskRenderProps) {
-  if (status === 'inProgress') {
-    return <div className="copilot-tool-card copilot-tool-loading">업무 카드를 준비하고 있습니다…</div>;
-  }
-
-  return (
-    <div className="copilot-tool-card copilot-task-card">
-      <div className="copilot-tool-title">
-        <span aria-hidden="true">✓</span>
-        <span>업무 현황</span>
-        <small>{parameters.open}개 진행 중</small>
-      </div>
-      <div className="copilot-task-summary">
-        <strong>{parameters.total}</strong>
-        <span>전체 업무</span>
-        <strong>{parameters.done}</strong>
-        <span>완료</span>
-      </div>
-      <ul>
-        {parameters.items.filter((item) => item.status === 'open').slice(0, 5).map((item) => (
-          <li key={item.id}>{item.title}</li>
-        ))}
-      </ul>
-    </div>
-  );
+  const envelope = createTaskToolEnvelope(parameters, status);
+  return <GenUiCard envelope={envelope} theme="auto" className="copilot-tool-genui-card" />;
 }
 
 function ApprovalToolCard({ status, parameters }: ApprovalRenderProps) {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [resolvedAction, setResolvedAction] = useState<'approve' | 'cancel' | null>(null);
   const chatConfiguration = useCopilotChatConfiguration();
+  const jobId = parameters.jobId?.trim();
+  const prompt = parameters.prompt?.trim();
+  const envelope = resolvedAction && jobId && prompt
+    ? createApprovalResultEnvelope({ jobId, prompt }, resolvedAction, message)
+    : createApprovalToolEnvelope(parameters, status);
 
   async function resolve(action: 'approve' | 'cancel'): Promise<void> {
     const conversationId = chatConfiguration?.threadId;
@@ -141,10 +109,15 @@ function ApprovalToolCard({ status, parameters }: ApprovalRenderProps) {
       setMessage('Copilot 대화 context가 없어 작업을 처리할 수 없습니다. 채팅을 다시 연 뒤 시도하세요.');
       return;
     }
+    if (!jobId) {
+      setMessage('승인 작업 ID가 없어 작업을 처리할 수 없습니다.');
+      return;
+    }
     setBusy(true);
+    setResolvedAction(null);
     setMessage('처리 중…');
     try {
-      const response = await apiFetch(`/api/agent-jobs/${parameters.jobId}/${action}`, {
+      const response = await apiFetch(`/api/agent-jobs/${encodeURIComponent(jobId)}/${action}`, {
         method: 'POST',
         body: JSON.stringify({ conversationId }),
         headers: { 'content-type': 'application/json' },
@@ -152,6 +125,7 @@ function ApprovalToolCard({ status, parameters }: ApprovalRenderProps) {
       const body = (await response.json()) as { job?: { status?: string }; error?: string };
       if (!response.ok) throw new Error(body.error || '작업을 처리하지 못했습니다.');
       setMessage(`작업 상태: ${body.job?.status || action}`);
+      setResolvedAction(action);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '작업을 처리하지 못했습니다.');
     } finally {
@@ -159,27 +133,23 @@ function ApprovalToolCard({ status, parameters }: ApprovalRenderProps) {
     }
   }
 
-  if (status === 'inProgress') {
-    return <div className="copilot-tool-card copilot-tool-loading">승인 카드를 준비하고 있습니다…</div>;
-  }
-
   return (
-    <div className="copilot-tool-card copilot-approval-card">
-      <div className="copilot-tool-title">
-        <span aria-hidden="true">!</span>
-        <span>쓰기 작업 승인</span>
-        <small>{parameters.jobId}</small>
-      </div>
-      <p>{parameters.prompt}</p>
-      <div className="copilot-approval-actions">
-        <button className="primary" disabled={busy} onClick={() => void resolve('approve')} type="button">
-          승인
-        </button>
-        <button className="secondary" disabled={busy} onClick={() => void resolve('cancel')} type="button">
-          취소
-        </button>
-      </div>
-      {message && <small className="copilot-tool-result">{message}</small>}
+    <div className="copilot-tool-genui-card">
+      <GenUiCard envelope={envelope} theme="auto" />
+      {status === 'complete' && !resolvedAction && jobId && prompt && (
+        <div className="genui-card__actions-wrap" aria-label="쓰기 작업 승인 작업">
+          <div className="genui-card__actions">
+            <button className="genui-card__action genui-card__action--primary" disabled={busy} onClick={() => void resolve('approve')} type="button">
+              {busy ? '처리 중…' : '승인'}
+            </button>
+            <button className="genui-card__action genui-card__action--danger" disabled={busy} onClick={() => void resolve('cancel')} type="button">
+              {busy ? '처리 중…' : '취소'}
+            </button>
+          </div>
+          {message && <p className="copilot-tool-result" aria-live="polite">{message}</p>}
+        </div>
+      )}
+      {message && resolvedAction && <p className="copilot-tool-result" aria-live="polite">{message}</p>}
     </div>
   );
 }

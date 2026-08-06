@@ -19,6 +19,7 @@ export type GenUiActionHandler = (
 export type GenUiCardProps = {
   envelope?: GenUiEnvelopeV1 | null;
   onAction?: GenUiActionHandler;
+  interactive?: boolean;
   theme?: GenUiTheme;
   className?: string;
 };
@@ -259,11 +260,15 @@ function ActionBar({
   envelope,
   onAction,
   aiGenerated,
+  interactive,
 }: {
   envelope: GenUiEnvelopeV1;
   onAction?: GenUiActionHandler;
   aiGenerated: boolean;
+  interactive: boolean;
 }) {
+  if (!interactive) return null;
+
   const actions = envelope.actions ?? [];
   const regularActions = actions.filter((action) => !isFeedbackAction(action));
   const feedbackActions = aiGenerated
@@ -345,6 +350,7 @@ function LoadingBody() {
 export function GenUiCard({
   envelope,
   onAction,
+  interactive = true,
   theme = 'auto',
   className,
 }: GenUiCardProps) {
@@ -418,7 +424,12 @@ export function GenUiCard({
       )}
 
       {!isLoading && envelope && !isError && (
-        <ActionBar envelope={envelope} onAction={onAction} aiGenerated={aiGenerated} />
+        <ActionBar
+          envelope={envelope}
+          onAction={onAction}
+          aiGenerated={aiGenerated}
+          interactive={interactive}
+        />
       )}
     </article>
   );
