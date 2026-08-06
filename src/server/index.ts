@@ -12,6 +12,11 @@ import { CodexRunner } from './codex-runner.js';
 import { GitService } from './git-service.js';
 import { TeamsCodexAgent } from './copilot-agent.js';
 import { formatWeatherMessage, getWeather } from './weather-service.js';
+import { GenUiActionStore, type GenUiActionName } from './genui-action-store.js';
+import { GenUiResponseFactory } from './genui-response.js';
+import { createAdaptiveCardActivity, createTextFallbackActivity } from './genui-teams.js';
+import { createMcpGenUiRouter } from './mcp-genui.js';
+import { GenUiEnvelopeV1Schema, type GenUiEnvelopeV1 } from '../shared/genui.js';
 
 const port = Number(process.env.PORT ?? 3978);
 const skipAuth = process.env.TEAMS_SKIP_AUTH === 'true';
@@ -32,17 +37,84 @@ const useTeamsSdk = process.env.TEAMS_USE_SDK !== 'false' && botConfigured;
 const userAuthConfigured = Boolean(
   process.env.CLIENT_ID && process.env.TENANT_ID && process.env.APPLICATION_ID_URI,
 );
+const genUiMode = process.env.TEAMS_GENUI_MODE === 'legacy' || process.env.TEAMS_GENUI_MODE === 'channels-shadow'
+  ? process.env.TEAMS_GENUI_MODE
+  : 'hybrid';
+const genUiActionStore = new GenUiActionStore(
+  process.env.GENUI_ACTION_STORE_PATH ?? path.resolve(process.cwd(), 'data/genui-actions.json'),
+);
+const genUi = new GenUiResponseFactory(genUiActionStore);
 
 if (process.env.NODE_ENV === 'production' && skipAuth) {
   throw new Error('TEAMS_SKIP_AUTH must not be enabled in production.');
 }
 
 await itemStore.initialize();
+await genUiActionStore.initialize();
 
 let http: any;
 let teamsApp: any;
 let userAuthValidator: any;
 const localOutbox = new Map<string, string[]>();
+const localOutboxActivities = new Map<string, unknown[]>();
+
+type BotSend = (text: string, envelope?: GenUiEnvelopeV1) => Promise<void>;
+type GenUiCardAction = Extract<GenUiActionName, 'approve' | 'cancel' | 'refresh' | 'feedback'>;
+type GenUiActionPayload = Record<string, unknown>;
+
+const GENUI_CARD_ACTIONS = ['approve', 'cancel', 'refresh', 'feedback'] as const satisfies readonly GenUiCardAction[];
+const inFlightGenUiActions = new Set<string>();
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function envelopeText(envelope: GenUiEnvelopeV1): string {
+  return envelope.fallbackText ?? envelope.summary ?? envelope.title ?? '요청 결과를 카드로 확인하세요.';
+}
+
+async function deliverGenUiActivity(
+  deliver: ((activity: unknown) => Promise<unknown>) | undefined,
+  text: string,
+  envelope?: GenUiEnvelopeV1,
+): Promise<void> {
+  if (!deliver) return;
+
+  const normalized = envelope ? GenUiEnvelopeV1Schema.parse(envelope) : undefined;
+  const activity = normalized && genUiMode !== 'legacy'
+    ? createAdaptiveCardActivity(normalized)
+    : { type: 'message', text };
+
+  try {
+    await deliver(activity);
+  } catch (error) {
+    if (!normalized) throw error;
+    await deliver(createTextFallbackActivity(normalized));
+  }
+}
+
+function createBotSender(
+  deliver?: (activity: unknown) => Promise<unknown>,
+  messages?: string[],
+  activities?: unknown[],
+): BotSend {
+  return async (text, envelope) => {
+    const normalized = envelope ? GenUiEnvelopeV1Schema.parse(envelope) : undefined;
+    const activity = normalized && genUiMode !== 'legacy'
+      ? createAdaptiveCardActivity(normalized)
+      : { type: 'message', text };
+
+    if (messages) {
+      messages.push(text);
+      activities?.push(activity);
+      return;
+    }
+
+    await deliverGenUiActivity(deliver, text, normalized);
+  };
+}
 
 if (useTeamsSdk) {
   const teams = await import('@microsoft/teams.apps');
@@ -94,6 +166,9 @@ http.get('/api/health', (_request: any, response: any) => {
       : process.env.OPENAI_API_KEY?.trim()
         ? 'openai-configured'
         : 'not-configured',
+    genUiMode,
+    genUi: 'adaptive-cards',
+    mcp: '/mcp',
     timestamp: new Date().toISOString(),
   });
 });
@@ -207,18 +282,29 @@ http.delete('/api/items/:id', async (request: any, response: any) => {
   response.json({ item });
 });
 
+let agentService: AgentService;
+
 const notifyConversation = async (conversationId: string, text: string): Promise<void> => {
+  const envelope = genUiMode === 'legacy'
+    ? undefined
+    : genUi.answer(text, `notification-${Date.now().toString(36)}`);
   if (teamsApp && !skipOutbound) {
-    await teamsApp.send(conversationId, { type: 'message', text });
+    await deliverGenUiActivity(
+      (activity) => teamsApp.send(conversationId, activity),
+      text,
+      envelope,
+    );
     return;
   }
 
   const messages = localOutbox.get(conversationId) ?? [];
-  messages.push(text);
   localOutbox.set(conversationId, messages);
+  const activities = localOutboxActivities.get(conversationId) ?? [];
+  localOutboxActivities.set(conversationId, activities);
+  await createBotSender(undefined, messages, activities)(text, envelope);
 };
 
-const agentService = new AgentService(
+agentService = new AgentService(
   agentJobStore,
   codexRunner,
   agentWorkspace,
@@ -226,6 +312,16 @@ const agentService = new AgentService(
   gitService,
 );
 await agentService.initialize();
+
+const mcpRouter = createMcpGenUiRouter({
+  itemStore,
+  agentService,
+  getWeather,
+  sessionMode: process.env.MCP_SESSION_MODE === 'stateless' ? 'stateless' : 'stateful',
+  enableJsonResponse: true,
+  serverVersion: process.env.APP_VERSION ?? '1.0.0',
+});
+http.use('/mcp', mcpRouter);
 
 const copilotRuntime = new CopilotRuntime({
   agents: {
