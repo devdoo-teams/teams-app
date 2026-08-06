@@ -86,7 +86,7 @@ function installActivity(baseUrl, suffix) {
   };
 }
 
-async function startServer({ production, dataFile, jobDataFile }) {
+async function startServer({ production, dataFile, jobDataFile, teamsSdk = false }) {
   const port = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const command = process.execPath;
@@ -102,7 +102,17 @@ async function startServer({ production, dataFile, jobDataFile }) {
       AGENT_WORKSPACE: root,
       CODEX_BIN: process.execPath,
       CODEX_SCRIPT: path.join(root, 'scripts/fake-codex.mjs'),
-      TEAMS_USE_SDK: 'false',
+      TEAMS_USE_SDK: teamsSdk ? 'true' : 'false',
+      TEAMS_SKIP_OUTBOUND: teamsSdk ? 'true' : 'false',
+      ...(teamsSdk
+        ? {
+            BOT_CLIENT_ID: '00000000-0000-4000-8000-000000000001',
+            CLIENT_ID: '00000000-0000-4000-8000-000000000002',
+            CLIENT_SECRET: 'runtime-test-secret',
+            TENANT_ID: '00000000-0000-4000-8000-000000000003',
+            APPLICATION_ID_URI: 'api://runtime.test/00000000-0000-4000-8000-000000000002',
+          }
+        : {}),
       ...(production ? { TEAMS_SKIP_AUTH: '' } : { TEAMS_SKIP_AUTH: 'true' }),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -286,15 +296,53 @@ async function runProductionAuthFlow(dataFile, jobDataFile) {
   }
 }
 
+async function runTeamsSdkFlow(dataFile, jobDataFile) {
+  const server = await startServer({ production: false, dataFile, jobDataFile, teamsSdk: true });
+
+  try {
+    const health = await request(server.baseUrl, '/api/health');
+    assert(health.body.bot === 'teams-sdk', 'Teams SDK runtime branch is active');
+
+    const response = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity('run SDK 라우트에서 Codex 작업을 확인해줘', server.baseUrl, 'sdk-agent')),
+    });
+    assert(
+      response.response.status >= 200 && response.response.status < 300,
+      `Teams SDK accepts a Bot Framework Activity (${response.response.status}) ${JSON.stringify(response.body)}`,
+    );
+
+    const jobsDeadline = Date.now() + 10_000;
+    let jobs = [];
+    while (Date.now() < jobsDeadline) {
+      const result = await request(server.baseUrl, '/api/debug/agent-jobs');
+      jobs = result.body.jobs;
+      if (jobs.some((job) => job.status === 'completed')) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const sdkJob = jobs.find((job) => job.id.includes('task-') && job.status === 'completed');
+    assert(Boolean(sdkJob), 'Teams SDK Activity reaches and completes a Codex job');
+
+    const outbox = await request(server.baseUrl, '/api/debug/agent-outbox/runtime-conversation-sdk-agent');
+    assert(outbox.body.messages.some((message) => message.includes(sdkJob.id)), 'Teams SDK completion is queued for outbound delivery');
+  } finally {
+    await stopServer(server.child);
+  }
+}
+
 const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-sdk-runtime-'));
 const localDataFile = path.join(tempDir, 'local-items.json');
 const productionDataFile = path.join(tempDir, 'production-items.json');
 const localJobDataFile = path.join(tempDir, 'local-agent-jobs.json');
 const productionJobDataFile = path.join(tempDir, 'production-agent-jobs.json');
+const sdkDataFile = path.join(tempDir, 'sdk-items.json');
+const sdkJobDataFile = path.join(tempDir, 'sdk-agent-jobs.json');
 
 try {
   console.log('Runtime verification: local authenticated-bypass flow');
   await runLocalFlow(localDataFile, localJobDataFile);
+  console.log('Runtime verification: Teams SDK Activity flow');
+  await runTeamsSdkFlow(sdkDataFile, sdkJobDataFile);
   console.log('Runtime verification: production authentication guard');
   await runProductionAuthFlow(productionDataFile, productionJobDataFile);
   console.log('Runtime verification complete.');

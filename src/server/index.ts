@@ -46,6 +46,7 @@ if (useTeamsSdk) {
     clientSecret: process.env.CLIENT_SECRET,
     tenantId: process.env.TENANT_ID,
     applicationIdUri: process.env.APPLICATION_ID_URI,
+    dangerouslyAllowUnauthenticatedRequests: skipAuth,
   });
 
   // A Teams tab SSO token is issued for the Entra app declared in
@@ -169,7 +170,7 @@ http.delete('/api/items/:id', async (request: any, response: any) => {
 });
 
 const notifyConversation = async (conversationId: string, text: string): Promise<void> => {
-  if (teamsApp) {
+  if (teamsApp && !skipAuth) {
     await teamsApp.send(conversationId, { type: 'message', text });
     return;
   }
@@ -302,10 +303,12 @@ async function handleInstall(activity: any, send: (text: string) => Promise<void
 if (teamsApp) {
   teamsApp.tab('home', clientDist);
   teamsApp.on('install.add', async ({ activity, send }: any) => {
-    await handleInstall(activity, send);
+    const runtimeSend = process.env.TEAMS_SKIP_OUTBOUND === 'true' ? async () => {} : send;
+    await handleInstall(activity, runtimeSend);
   });
   teamsApp.on('message', async ({ activity, send }: any) => {
-    await handleMessage(activity, send);
+    const runtimeSend = process.env.TEAMS_SKIP_OUTBOUND === 'true' ? async () => {} : send;
+    await handleMessage(activity, runtimeSend);
   });
 } else {
   http.post('/api/messages', async (request: any, response: any) => {
