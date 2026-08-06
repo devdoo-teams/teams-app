@@ -16,7 +16,7 @@ import { formatWeatherMessage, getWeather } from './weather-service.js';
 import { GenUiActionStore, type GenUiActionName } from './genui-action-store.js';
 import { GenUiResponseFactory } from './genui-response.js';
 import { createAdaptiveCardActivity, createTextFallbackActivity, renderGenUiCard } from './genui-teams.js';
-import { createMcpGenUiRouter } from './mcp-genui.js';
+import { createMcpGenUiRouter, type McpGenUiRouter } from './mcp-genui.js';
 import {
   GENUI_ACTION_PAYLOAD_KEYS,
   GENUI_SCHEMA_VERSION,
@@ -456,8 +456,9 @@ agentService = new AgentService(
 );
 await agentService.initialize();
 
+let mcpRouter: McpGenUiRouter | undefined;
 if (mcpEnabled) {
-  const mcpRouter = createMcpGenUiRouter({
+  mcpRouter = createMcpGenUiRouter({
     itemStore,
     agentService,
     getWeather,
@@ -466,6 +467,30 @@ if (mcpEnabled) {
     serverVersion: appVersion,
   });
   http.use('/mcp', mcpRouter);
+}
+
+if (mcpRouter) {
+  let shutdownPromise: Promise<void> | undefined;
+  const handleSignal = (signal: NodeJS.Signals): void => {
+    if (shutdownPromise) return;
+    shutdownPromise = (async () => {
+      try {
+        await mcpRouter?.close();
+      } finally {
+        // Removing both handlers before re-sending the signal restores Node's
+        // default termination behavior after MCP cleanup and prevents signal
+        // listeners from accumulating during repeated local restarts.
+        process.removeListener('SIGINT', handleSigint);
+        process.removeListener('SIGTERM', handleSigterm);
+        process.exitCode = signal === 'SIGINT' ? 130 : 143;
+        process.kill(process.pid, signal);
+      }
+    })();
+  };
+  const handleSigint = (): void => handleSignal('SIGINT');
+  const handleSigterm = (): void => handleSignal('SIGTERM');
+  process.once('SIGINT', handleSigint);
+  process.once('SIGTERM', handleSigterm);
 }
 
 const copilotRuntime = new CopilotRuntime({

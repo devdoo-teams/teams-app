@@ -82,9 +82,14 @@ async function listen(app: express.Express): Promise<{ server: http.Server; base
   return { server, baseUrl: `http://127.0.0.1:${address.port}` };
 }
 
-async function mcpRequest(baseUrl: string, body: Record<string, unknown>, sessionId?: string) {
+async function mcpRequest(
+  baseUrl: string,
+  body: Record<string, unknown>,
+  sessionId?: string,
+  method = 'POST',
+) {
   const response = await fetch(`${baseUrl}/mcp`, {
-    method: 'POST',
+    method,
     headers: {
       accept: 'application/json, text/event-stream',
       'content-type': 'application/json',
@@ -173,15 +178,210 @@ async function verifyDirectServerFactory(): Promise<void> {
 
 async function verifyDirectRouterFactory(): Promise<void> {
   const app = express();
-  app.use('/mcp', createMcpGenUiRouter(dependencies));
+  let initializedCount = 0;
+  let closedCount = 0;
+  const router = createMcpGenUiRouter({
+    ...dependencies,
+    onSessionInitialized: () => {
+      initializedCount += 1;
+    },
+    onSessionClosed: () => {
+      closedCount += 1;
+    },
+  });
+  app.use('/mcp', router);
   const listener = await listen(app);
   try {
+    const missingSession = await mcpRequest(listener.baseUrl, {
+      jsonrpc: '2.0',
+      id: 'no-session',
+      method: 'tools/list',
+      params: {},
+    });
+    assert.equal(missingSession.response.status, 400, 'stateful non-initialize request without a session is rejected');
+    assert.equal(initializedCount, 0, 'rejected non-initialize request does not initialize a session');
+
+    const unknownSession = await mcpRequest(listener.baseUrl, {
+      jsonrpc: '2.0',
+      id: 'unknown-session',
+      method: 'tools/list',
+      params: {},
+    }, 'missing-session');
+    assert.equal(unknownSession.response.status, 404, 'unknown session is rejected without creating a server');
+
     await verifyProtocol('createMcpGenUiRouter', listener.baseUrl);
+    assert.equal(initializedCount, 1, 'normal initialize creates exactly one mapped session');
+
+    await Promise.all([router.close(), router.close()]);
+    assert.equal(closedCount, 1, 'router.close is idempotent and closes the mapped session once');
   } finally {
+    await router.close();
+    await new Promise<void>((resolve) => listener.server.close(() => resolve()));
+  }
+}
+
+async function verifySessionLimit(): Promise<void> {
+  const app = express();
+  let closedCount = 0;
+  const router = createMcpGenUiRouter({
+    ...dependencies,
+    maxSessions: 1,
+    onSessionClosed: () => {
+      closedCount += 1;
+    },
+  });
+  app.use('/mcp', router);
+  const listener = await listen(app);
+  try {
+    const first = await mcpRequest(listener.baseUrl, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-11-25',
+        capabilities: {},
+        clientInfo: { name: 'mcp-session-limit-one', version: '1.0.0' },
+      },
+    });
+    assert.equal(first.response.status, 200, 'first session fits under maxSessions');
+    assert.ok(first.sessionId, 'first session has an id');
+
+    const second = await mcpRequest(listener.baseUrl, {
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-11-25',
+        capabilities: {},
+        clientInfo: { name: 'mcp-session-limit-two', version: '1.0.0' },
+      },
+    });
+    assert.equal(second.response.status, 503, 'maxSessions rejects another initialize without evicting the first');
+
+    await router.close();
+    assert.equal(closedCount, 1, 'maxSessions router cleanup closes the retained session');
+  } finally {
+    await router.close();
+    await new Promise<void>((resolve) => listener.server.close(() => resolve()));
+  }
+}
+
+async function verifyDeleteLifecycle(): Promise<void> {
+  const app = express();
+  let closedCount = 0;
+  const router = createMcpGenUiRouter({
+    ...dependencies,
+    onSessionClosed: () => {
+      closedCount += 1;
+    },
+  });
+  app.use('/mcp', router);
+  const listener = await listen(app);
+  try {
+    const initialized = await mcpRequest(listener.baseUrl, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-11-25',
+        capabilities: {},
+        clientInfo: { name: 'mcp-delete-lifecycle', version: '1.0.0' },
+      },
+    });
+    assert.ok(initialized.sessionId, 'DELETE lifecycle session has an id');
+
+    const deleted = await mcpRequest(listener.baseUrl, {
+      jsonrpc: '2.0',
+      id: 'delete',
+      method: 'notifications/initialized',
+      params: {},
+    }, initialized.sessionId, 'DELETE');
+    assert.equal(deleted.response.status, 200, 'DELETE closes a known session');
+    assert.equal(closedCount, 1, 'onsessionclosed removes and closes the session once');
+
+    const afterDelete = await mcpRequest(listener.baseUrl, {
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/list',
+      params: {},
+    }, initialized.sessionId);
+    assert.equal(afterDelete.response.status, 404, 'deleted session cannot be reused');
+  } finally {
+    await router.close();
+    await new Promise<void>((resolve) => listener.server.close(() => resolve()));
+  }
+}
+
+async function verifySessionTtl(): Promise<void> {
+  const app = express();
+  let closedCount = 0;
+  const router = createMcpGenUiRouter({
+    ...dependencies,
+    sessionTtlMs: 40,
+    sessionSweepIntervalMs: 10,
+    onSessionClosed: () => {
+      closedCount += 1;
+    },
+  });
+  app.use('/mcp', router);
+  const listener = await listen(app);
+  try {
+    const initialized = await mcpRequest(listener.baseUrl, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-11-25',
+        capabilities: {},
+        clientInfo: { name: 'mcp-session-ttl', version: '1.0.0' },
+      },
+    });
+    assert.equal(initialized.response.status, 200, 'short TTL session initializes');
+    assert.ok(initialized.sessionId, 'short TTL session has an id');
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const expired = await mcpRequest(listener.baseUrl, {
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/list',
+      params: {},
+    }, initialized.sessionId);
+    assert.equal(expired.response.status, 404, 'idle session expires after the configured TTL');
+    assert.equal(closedCount, 1, 'TTL expiry closes the idle session once');
+  } finally {
+    await router.close();
+    await new Promise<void>((resolve) => listener.server.close(() => resolve()));
+  }
+}
+
+async function verifyStatelessFactory(): Promise<void> {
+  const app = express();
+  const router = createMcpGenUiRouter({ ...dependencies, sessionMode: 'stateless' });
+  app.use('/mcp', router);
+  const listener = await listen(app);
+  try {
+    const initialize = await mcpRequest(listener.baseUrl, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-11-25',
+        capabilities: {},
+        clientInfo: { name: 'mcp-stateless', version: '1.0.0' },
+      },
+    });
+    assert.equal(initialize.response.status, 200, 'stateless initialize remains valid');
+    assert.equal(initialize.sessionId, undefined, 'stateless mode does not accumulate a session id');
+  } finally {
+    await router.close();
     await new Promise<void>((resolve) => listener.server.close(() => resolve()));
   }
 }
 
 await verifyDirectServerFactory();
 await verifyDirectRouterFactory();
-console.log('MCP direct-factory tests passed: server and router initialize, list tools, and call get_workspace_snapshot without index.ts.');
+await verifySessionLimit();
+await verifyDeleteLifecycle();
+await verifySessionTtl();
+await verifyStatelessFactory();
+console.log('MCP direct-factory tests passed: stateful gates, lifecycle limits, TTL cleanup, stateless mode, and direct factories.');

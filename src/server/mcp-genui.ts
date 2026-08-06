@@ -60,6 +60,12 @@ export interface McpGenUiServerOptions extends McpGenUiDependencies {
   /** Optional server identity override for host diagnostics. */
   serverName?: string;
   serverVersion?: string;
+  /** Maximum idle time for a stateful MCP session. Defaults to ten minutes. */
+  sessionTtlMs?: number;
+  /** Maximum number of mapped or initializing stateful sessions. Defaults to 64. */
+  maxSessions?: number;
+  /** Optional stateful-session sweep interval. Defaults to at most one minute. */
+  sessionSweepIntervalMs?: number;
   onSessionInitialized?: (sessionId: string) => void | Promise<void>;
   onSessionClosed?: (sessionId: string) => void | Promise<void>;
 }
@@ -473,75 +479,261 @@ export function createMcpGenUiServer(options: McpGenUiServerOptions): McpGenUiSe
     onsessionclosed: options.onSessionClosed,
   });
   const ready = server.connect(transport);
+  let closePromise: Promise<void> | undefined;
 
   return {
     server,
     transport,
     ready,
     async close(): Promise<void> {
-      await transport.close().catch(() => undefined);
-      await server.close().catch(() => undefined);
+      if (!closePromise) {
+        closePromise = (async () => {
+          await transport.close().catch(() => undefined);
+          await server.close().catch(() => undefined);
+        })();
+      }
+      await closePromise;
     },
   };
 }
 
 type Session = McpGenUiServerInstance;
 
-export function createMcpGenUiHandler(options: McpGenUiServerOptions): RequestHandler & { close(): Promise<void> } {
-  const sessions = new Map<string, Session>();
-  const stateful = options.sessionMode !== 'stateless';
-  const transientSessions = new Set<Session>();
+type SessionEntry = {
+  session: Session;
+  sessionId?: string;
+  lastActivity: number;
+  inFlight: number;
+  initializing: boolean;
+  closed: boolean;
+  closeNotified: boolean;
+  closePromise?: Promise<void>;
+};
 
-  const close = async (): Promise<void> => {
-    const current = [...sessions.values(), ...transientSessions];
-    sessions.clear();
-    transientSessions.clear();
-    await Promise.all(current.map((session) => session.close()));
+function positiveIntegerOption(value: number | undefined, fallback: number, name: string): number {
+  const candidate = value ?? fallback;
+  if (!Number.isFinite(candidate) || candidate <= 0) {
+    throw new RangeError(`${name} must be a positive finite number`);
+  }
+  return Math.max(1, Math.floor(candidate));
+}
+
+function isInitializeRequestBody(body: unknown): boolean {
+  const message = Array.isArray(body)
+    ? body.length === 1 ? body[0] : undefined
+    : body;
+  if (!message || typeof message !== 'object' || Array.isArray(message)) return false;
+  return (message as { method?: unknown }).method === 'initialize';
+}
+
+export function createMcpGenUiHandler(options: McpGenUiServerOptions): RequestHandler & { close(): Promise<void> } {
+  const sessions = new Map<string, SessionEntry>();
+  const stateful = options.sessionMode !== 'stateless';
+  const transientSessions = new Set<SessionEntry>();
+  const entries = new Set<SessionEntry>();
+  const sessionTtlMs = positiveIntegerOption(options.sessionTtlMs, 10 * 60 * 1000, 'sessionTtlMs');
+  const maxSessions = positiveIntegerOption(options.maxSessions, 64, 'maxSessions');
+  const sessionSweepIntervalMs = positiveIntegerOption(
+    options.sessionSweepIntervalMs,
+    Math.min(sessionTtlMs, 60 * 1000),
+    'sessionSweepIntervalMs',
+  );
+  let sweepPromise: Promise<void> | undefined;
+  let closed = false;
+  let closePromise: Promise<void> | undefined;
+
+  const removeEntry = (entry: SessionEntry): void => {
+    if (entry.sessionId && sessions.get(entry.sessionId) === entry) {
+      sessions.delete(entry.sessionId);
+    }
+    transientSessions.delete(entry);
+    entries.delete(entry);
+  };
+
+  const closeEntry = (entry: SessionEntry): Promise<void> => {
+    if (entry.closePromise) return entry.closePromise;
+
+    entry.closed = true;
+    removeEntry(entry);
+    let resolveClose!: () => void;
+    let rejectClose!: (error: unknown) => void;
+    entry.closePromise = new Promise<void>((resolve, reject) => {
+      resolveClose = resolve;
+      rejectClose = reject;
+    });
+    void (async () => {
+      try {
+        await entry.session.close();
+        if (entry.sessionId && !entry.closeNotified) {
+          entry.closeNotified = true;
+          await options.onSessionClosed?.(entry.sessionId);
+        }
+        resolveClose();
+      } catch (error) {
+        rejectClose(error);
+      }
+    })();
+    return entry.closePromise;
+  };
+
+  const sweepIdleSessions = async (): Promise<void> => {
+    if (!stateful || closed || sweepPromise) return;
+    sweepPromise = (async () => {
+      const now = Date.now();
+      const idle = [...entries].filter((entry) =>
+        !entry.closed
+        && entry.inFlight === 0
+        && now - entry.lastActivity >= sessionTtlMs,
+      );
+      await Promise.allSettled(idle.map((entry) => closeEntry(entry)));
+    })();
+    try {
+      await sweepPromise;
+    } finally {
+      sweepPromise = undefined;
+    }
+  };
+
+  const sweepTimer = stateful
+    ? setInterval(() => {
+      void sweepIdleSessions();
+    }, sessionSweepIntervalMs)
+    : undefined;
+  sweepTimer?.unref?.();
+
+  const close = (): Promise<void> => {
+    if (closePromise) return closePromise;
+    closed = true;
+    if (sweepTimer) clearInterval(sweepTimer);
+    const current = [...entries];
+    closePromise = Promise.allSettled(current.map((entry) => closeEntry(entry))).then(() => undefined);
+    return closePromise;
   };
 
   const handler: RequestHandler = async (request, response) => {
     const sessionId = request.header('mcp-session-id');
-    let session = sessionId ? sessions.get(sessionId) : undefined;
+    const method = request.method.toUpperCase();
 
-    if (!session && request.method.toUpperCase() === 'POST') {
+    if (!stateful) {
+      if (method !== 'POST') {
+        response.status(sessionId ? 404 : 400).json({
+          error: sessionId ? 'Unknown MCP session' : 'MCP session is required for this method',
+        });
+        return;
+      }
+
+      let session: Session | undefined;
+      try {
+        session = createMcpGenUiServer(options);
+        await session.ready;
+        await session.transport.handleRequest(request, response, request.body);
+      } catch (error) {
+        if (!response.headersSent) {
+          const message = error instanceof Error ? error.message : 'MCP request failed';
+          response.status(500).json({ error: message });
+        }
+      } finally {
+        if (session) await session.close();
+      }
+      return;
+    }
+
+    let entry: SessionEntry | undefined;
+    if (sessionId) {
+      entry = sessions.get(sessionId);
+      if (!entry) {
+        response.status(404).json({ error: 'Unknown MCP session' });
+        return;
+      }
+    } else if (method === 'POST' && isInitializeRequestBody(request.body)) {
+      if (closed) {
+        response.status(503).json({ error: 'MCP router is closing' });
+        return;
+      }
+      if (entries.size >= maxSessions) {
+        response.status(503).json({ error: 'MCP session limit reached' });
+        return;
+      }
+
       let created: Session | undefined;
       const serverOptions: McpGenUiServerOptions = {
         ...options,
         onSessionInitialized: async (initializedId) => {
-          if (created && stateful) {
-            sessions.set(initializedId, created);
-            transientSessions.delete(created);
+          if (!entry || entry.closed) throw new Error('MCP session was closed during initialization');
+          entry.sessionId = initializedId;
+          sessions.set(initializedId, entry);
+          transientSessions.delete(entry);
+          try {
+            await options.onSessionInitialized?.(initializedId);
+          } catch (error) {
+            await closeEntry(entry);
+            throw error;
           }
-          await options.onSessionInitialized?.(initializedId);
         },
         onSessionClosed: async (closedId) => {
-          sessions.delete(closedId);
+          const current = sessions.get(closedId);
+          if (current) {
+            await closeEntry(current);
+            return;
+          }
           await options.onSessionClosed?.(closedId);
         },
       };
-      created = createMcpGenUiServer(serverOptions);
-      session = created;
-      if (stateful) transientSessions.add(created);
-      await created.ready;
-    }
 
-    if (!session) {
-      response.status(sessionId ? 404 : 400).json({
-        error: sessionId ? 'Unknown MCP session' : 'MCP session is required for this method',
-      });
+      try {
+        created = createMcpGenUiServer(serverOptions);
+        entry = {
+          session: created,
+          lastActivity: Date.now(),
+          inFlight: 0,
+          initializing: true,
+          closed: false,
+          closeNotified: false,
+        };
+        entries.add(entry);
+        transientSessions.add(entry);
+        created.transport.onclose = () => {
+          void closeEntry(entry!).catch(() => undefined);
+        };
+        created.transport.onerror = () => {
+          if (entry && (entry.initializing || !entry.sessionId)) {
+            void closeEntry(entry).catch(() => undefined);
+          }
+        };
+        await created.ready;
+      } catch (error) {
+        if (entry) await closeEntry(entry).catch(() => undefined);
+        if (!response.headersSent) {
+          const message = error instanceof Error ? error.message : 'MCP session initialization failed';
+          response.status(500).json({ error: message });
+        }
+        return;
+      }
+    } else {
+      response.status(400).json({ error: 'MCP session is required for this method' });
       return;
     }
 
+    if (!entry || entry.closed) {
+      response.status(404).json({ error: 'Unknown MCP session' });
+      return;
+    }
+    entry.lastActivity = Date.now();
+    entry.inFlight += 1;
+    const initializationRequest = method === 'POST' && isInitializeRequestBody(request.body);
     try {
-      await session.transport.handleRequest(request, response, request.body);
-      if (!stateful) await session.close();
+      await entry.session.transport.handleRequest(request, response, request.body);
     } catch (error) {
       if (!response.headersSent) {
         const message = error instanceof Error ? error.message : 'MCP request failed';
         response.status(500).json({ error: message });
       }
     } finally {
-      if (stateful && sessionId) transientSessions.delete(session);
+      entry.inFlight -= 1;
+      entry.initializing = false;
+      if (initializationRequest && response.statusCode >= 400) {
+        await closeEntry(entry).catch(() => undefined);
+      }
     }
   };
 
