@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { AgentJob } from './agent-job-store.js';
+import type { AgentNotification } from './agent-service.js';
 import type { GenUiActionStore } from './genui-action-store.js';
 import type { Item } from './item-store.js';
 import type { WeatherResponse } from './weather-service.js';
@@ -12,12 +13,7 @@ import {
   type GenUiState,
 } from '../shared/genui.js';
 
-export type GenUiNotification = {
-  kind: 'job-status' | 'result' | 'error';
-  jobId: string;
-  status?: string;
-  message: string;
-};
+export type GenUiNotification = AgentNotification;
 
 export type GenUiJobAction = 'approve' | 'cancel';
 
@@ -333,14 +329,40 @@ export class GenUiResponseFactory {
     });
   }
 
-  notification(notification: GenUiNotification, job?: AgentJob): GenUiEnvelopeV1 {
-    const current = job?.status ?? notification.status ?? (notification.kind === 'error' ? 'failed' : 'running');
-    const kind = notification.kind;
-    const status: GenUiState = kind === 'result' ? 'complete' : kind === 'error' ? 'error' : 'loading';
+  notification(notification: GenUiNotification): GenUiEnvelopeV1 {
+    const kind = notification.kind === 'progress'
+      ? 'job-status'
+      : notification.kind === 'cancelled'
+        ? 'result'
+        : notification.kind;
+    const status: GenUiState = notification.kind === 'progress'
+      ? 'loading'
+      : notification.kind === 'error'
+        ? 'error'
+        : 'complete';
+    const summary = compactNotification(notification.message, 1_900);
+    const fallbackText = compactNotification(notification.message, 4_000);
+    const sectionStatus = notification.phase === 'blocked'
+      ? 'blocked'
+      : notification.phase === 'cancelled'
+        ? 'cancelled'
+        : notification.job.status;
+    const title = notification.kind === 'progress'
+      ? 'Codex 작업 진행'
+      : notification.kind === 'cancelled'
+        ? 'Codex 작업 취소'
+        : notification.kind === 'error'
+          ? notification.phase === 'blocked' ? 'Codex 작업 차단' : 'Codex 작업 오류'
+          : notification.phase === 'commit' ? 'Git 커밋 결과' : 'Codex 작업 완료';
     return this.create({
-      kind, id: notification.jobId, status, title: kind === 'result' ? 'Codex 작업 완료' : kind === 'error' ? 'Codex 작업 오류' : 'Codex 작업 진행',
-      summary: notification.message, sections: [{ type: 'status', status: current, description: notification.message }],
-      fallbackText: notification.message, metadata: { source: 'agent-service', deterministic: true },
+      kind,
+      id: notification.job.id,
+      status,
+      title,
+      summary,
+      sections: [{ type: 'status', title: '작업 상태', status: sectionStatus, description: summary }],
+      fallbackText,
+      metadata: { source: 'agent-service', event: notification.phase, deterministic: true },
     });
   }
 
@@ -355,4 +377,10 @@ export class GenUiResponseFactory {
       metadata: { source: 'teams-bot', deterministic: true },
     });
   }
+}
+
+function compactNotification(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  const suffix = '\n\n(알림이 길어 일부 생략되었습니다.)';
+  return `${value.slice(0, Math.max(1, maxLength - suffix.length))}${suffix}`;
 }

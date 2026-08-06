@@ -8,7 +8,7 @@ import { createCopilotExpressHandler } from '@copilotkit/runtime/v2/express';
 import { createUserAuthMiddleware } from './user-auth.js';
 import { ItemStore } from './item-store.js';
 import { AgentJobStore, type AgentJob, type AgentJobScope } from './agent-job-store.js';
-import { AgentService } from './agent-service.js';
+import { AgentService, type AgentNotification } from './agent-service.js';
 import { CodexRunner } from './codex-runner.js';
 import { GitService } from './git-service.js';
 import { TeamsCodexAgent } from './copilot-agent.js';
@@ -480,17 +480,15 @@ http.delete('/api/items/:id', async (request: any, response: any) => {
 
 let agentService: AgentService;
 
-const notifyConversation = async (conversationId: string, text: string): Promise<void> => {
-  const cardSummary = text.length > 1_900
-    ? `${text.slice(0, 1_900)}\n(카드에서 일부 생략됨)`
-    : text;
+const notifyConversation = async (notification: AgentNotification): Promise<void> => {
+  const { conversationId, message } = notification;
   const envelope = genUiMode === 'legacy'
     ? undefined
-    : genUi.answer(cardSummary, `notification-${Date.now().toString(36)}`);
+    : genUi.notification(notification);
   if (teamsApp && !skipOutbound) {
     await deliverGenUiActivity(
       (activity) => teamsApp.send(conversationId, activity),
-      text,
+      message,
       envelope,
     );
     return;
@@ -500,7 +498,7 @@ const notifyConversation = async (conversationId: string, text: string): Promise
   localOutbox.set(conversationId, messages);
   const activities = localOutboxActivities.get(conversationId) ?? [];
   localOutboxActivities.set(conversationId, activities);
-  await createBotSender(undefined, messages, activities)(text, envelope);
+  await createBotSender(undefined, messages, activities)(message, envelope);
 };
 
 agentService = new AgentService(

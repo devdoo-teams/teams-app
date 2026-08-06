@@ -676,6 +676,19 @@ async function runLocalFlow(dataFile, jobDataFile) {
       readOnlyOutbox.body.activities.some((activityValue) => Boolean(adaptiveCardFromActivity(activityValue))),
       'proactive outbox notifications include an Adaptive Card activity',
     );
+    const proactiveCards = readOnlyOutbox.body.activities
+      .map((activityValue) => adaptiveCardFromActivity(activityValue))
+      .filter(Boolean);
+    assert(
+      proactiveCards.some((card) => JSON.stringify(card).includes('Codex 작업 진행'))
+        && proactiveCards.some((card) => JSON.stringify(card).includes('상태: running')),
+      'proactive progress uses a job-status/loading card with the running job state',
+    );
+    assert(
+      proactiveCards.some((card) => JSON.stringify(card).includes('Codex 작업 완료'))
+        && proactiveCards.some((card) => JSON.stringify(card).includes('상태: completed')),
+      'proactive completion uses a result/complete card with the completed job state',
+    );
 
     const naturalFollowUp = await request(server.baseUrl, '/api/messages', {
       method: 'POST',
@@ -1001,12 +1014,20 @@ async function runAgentTimeoutFlow(dataFile, jobDataFile) {
     assert(failed.status === 'failed', 'Codex job fails cleanly after timeout');
     assert(failed.error.includes('시간 제한'), 'timeout failure explains the reason');
 
-    await waitForOutboxMessage(
+    const timeoutOutbox = await waitForOutboxMessage(
       server.baseUrl,
       'runtime-conversation-agent-timeout',
       '시간 제한',
     );
     assert(true, 'timeout failure is delivered to Teams');
+    const timeoutCards = timeoutOutbox.activities
+      .map((activityValue) => adaptiveCardFromActivity(activityValue))
+      .filter(Boolean);
+    assert(
+      timeoutCards.some((card) => JSON.stringify(card).includes('Codex 작업 오류'))
+        && timeoutCards.some((card) => JSON.stringify(card).includes('상태: failed')),
+      'proactive timeout failure uses an error/error card with the failed job state',
+    );
   } finally {
     await stopServer(server.child);
   }

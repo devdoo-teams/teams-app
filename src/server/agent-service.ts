@@ -4,7 +4,26 @@ import { CodexRunner, type CodexRunEvent } from './codex-runner.js';
 import { GitService } from './git-service.js';
 import { diagnoseRemoteAgentResult, formatRemoteTroubleshooting } from './remote-troubleshooting.js';
 
-type Notify = (conversationId: string, text: string) => Promise<void>;
+export type AgentNotificationKind = 'progress' | 'result' | 'error' | 'cancelled';
+export type AgentNotificationPhase =
+  | 'analysis'
+  | 'tools'
+  | 'agent-update'
+  | 'completed'
+  | 'blocked'
+  | 'failed'
+  | 'cancelled'
+  | 'commit';
+
+export type AgentNotification = {
+  conversationId: string;
+  job: AgentJob;
+  kind: AgentNotificationKind;
+  phase: AgentNotificationPhase;
+  message: string;
+};
+
+type Notify = (notification: AgentNotification) => Promise<void>;
 type ProgressListener = (message: string) => Promise<void> | void;
 
 type ProgressState = {
@@ -98,7 +117,7 @@ export class AgentService {
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
 
-    await this.cancel(id, scope);
+    await this.cancel(id, scope, { notify: true });
     const job = this.store.get(id, scope);
     if (!job) throw new Error(`작업 ${id}을 찾을 수 없습니다.`);
     return job;
@@ -114,23 +133,43 @@ export class AgentService {
     return refreshed;
   }
 
-  async cancel(id: string, scope: AgentJobScope): Promise<AgentJob | undefined> {
+  async cancel(
+    id: string,
+    scope: AgentJobScope,
+    options: { notify?: boolean } = {},
+  ): Promise<AgentJob | undefined> {
     const job = this.store.get(id, scope);
     if (!job) return undefined;
 
     if (job.status === 'awaiting_approval' || job.status === 'queued') {
-      return this.store.update(id, scope, {
+      const cancelled = await this.store.update(id, scope, {
         status: 'cancelled',
         finishedAt: new Date().toISOString(),
       });
+      if (options.notify && cancelled) {
+        await this.notifyIfEnabled(cancelled, {
+          kind: 'cancelled',
+          phase: 'cancelled',
+          message: `작업 ${id}이 취소되었습니다.`,
+        });
+      }
+      return cancelled;
     }
 
     if (job.status === 'running') {
       this.runner.cancel(id);
-      return this.store.update(id, scope, {
+      const cancelled = await this.store.update(id, scope, {
         status: 'cancelled',
         finishedAt: new Date().toISOString(),
       });
+      if (options.notify && cancelled) {
+        await this.notifyIfEnabled(cancelled, {
+          kind: 'cancelled',
+          phase: 'cancelled',
+          message: `작업 ${id}이 취소되었습니다.`,
+        });
+      }
+      return cancelled;
     }
 
     return job;
@@ -163,12 +202,18 @@ export class AgentService {
       return this.store.get(id, scope);
     }
 
-    await this.store.update(id, scope, {
+    const refreshed = await this.store.update(id, scope, {
       commitHash: commit.hash,
       commitMessage: commit.message,
     });
-    await this.notify(job.conversationId, `작업 ${id}: ${commit.message}`);
-    return this.store.get(id, scope);
+    if (refreshed) {
+      await this.notifyIfEnabled(refreshed, {
+        kind: 'result',
+        phase: 'commit',
+        message: `작업 ${id}: ${commit.message}`,
+      });
+    }
+    return refreshed;
   }
 
   /** Local-only MCP/debug reader. Authenticated callers must use scoped methods. */
@@ -218,7 +263,11 @@ export class AgentService {
           finishedAt: new Date().toISOString(),
         });
         await this.store.appendProgress(job.id, scope, `Codex 작업이 차단되었습니다: ${diagnostic.code}`);
-        await this.notifyIfEnabled(job, `작업 ${job.id}이 차단되었습니다.\n\n${diagnosticMessage}`);
+        await this.notifyIfEnabled(job, {
+          kind: 'error',
+          phase: 'blocked',
+          message: `작업 ${job.id}이 차단되었습니다.\n\n${diagnosticMessage}`,
+        });
         return;
       }
 
@@ -229,7 +278,11 @@ export class AgentService {
         finishedAt: new Date().toISOString(),
       });
       await this.store.appendProgress(job.id, scope, `Codex 작업 완료 (${result.eventCount}개 이벤트).`);
-      await this.notifyIfEnabled(job, this.formatCompletion(job.id, result.finalMessage));
+      await this.notifyIfEnabled(job, {
+        kind: 'result',
+        phase: 'completed',
+        message: this.formatCompletion(job.id, result.finalMessage),
+      });
     } catch (error: any) {
       const latest = this.store.get(job.id, scope);
       if (!latest || latest.status === 'cancelled') return;
@@ -241,7 +294,11 @@ export class AgentService {
         finishedAt: new Date().toISOString(),
       });
       await this.store.appendProgress(job.id, scope, 'Codex 작업이 실패했습니다.');
-      await this.notifyIfEnabled(job, `작업 ${job.id}이 실패했습니다.\n\n${message}`);
+      await this.notifyIfEnabled(job, {
+        kind: 'error',
+        phase: 'failed',
+        message: `작업 ${job.id}이 실패했습니다.\n\n${message}`,
+      });
     } finally {
       this.progressStates.delete(job.id);
     }
@@ -258,13 +315,13 @@ export class AgentService {
     }
 
     if (event.type === 'turn.started') {
-      await this.publishProgress(job, state, 'analysis', 'Codex가 작업을 분석하고 있습니다.', 'Codex 분석을 시작했습니다.');
+      await this.publishProgress(job, state, 'analysis', 'analysis', 'Codex가 작업을 분석하고 있습니다.', 'Codex 분석을 시작했습니다.');
       return;
     }
 
     if (event.type === 'item.started' && event.item?.type === 'command_execution') {
       await this.flushPendingAgentMessage(job, state);
-      await this.publishProgress(job, state, 'tools', 'Codex가 필요한 도구를 실행하고 있습니다.', 'Codex가 필요한 도구를 실행하고 있습니다.');
+      await this.publishProgress(job, state, 'tools', 'tools', 'Codex가 필요한 도구를 실행하고 있습니다.', 'Codex가 필요한 도구를 실행하고 있습니다.');
       return;
     }
 
@@ -294,13 +351,18 @@ export class AgentService {
     if (!scope) return;
     await this.store.appendProgress(job.id, scope, `Codex 업데이트: ${compact}`);
     await state.onProgress?.(`Codex 업데이트: ${compact}`);
-    await this.notifyIfEnabled(job, `작업 ${job.id}: Codex 업데이트\n\n${compact}`);
+    await this.notifyIfEnabled(job, {
+      kind: 'progress',
+      phase: 'agent-update',
+      message: `작업 ${job.id}: Codex 업데이트\n\n${compact}`,
+    });
   }
 
   private async publishProgress(
     job: AgentJob,
     state: ProgressState,
     key: string,
+    phase: Extract<AgentNotificationPhase, 'analysis' | 'tools'>,
     storedMessage: string,
     notification: string,
   ): Promise<void> {
@@ -310,12 +372,28 @@ export class AgentService {
     if (!scope) return;
     await this.store.appendProgress(job.id, scope, storedMessage);
     await state.onProgress?.(storedMessage);
-    await this.notifyIfEnabled(job, `작업 ${job.id}: ${notification}`);
+    await this.notifyIfEnabled(job, {
+      kind: 'progress',
+      phase,
+      message: `작업 ${job.id}: ${notification}`,
+    });
   }
 
-  private async notifyIfEnabled(job: AgentJob, message: string): Promise<void> {
+  private async notifyIfEnabled(
+    job: AgentJob,
+    event: Omit<AgentNotification, 'conversationId' | 'job'>,
+  ): Promise<void> {
     const state = this.progressStates.get(job.id);
-    if (state?.notify !== false) await this.notify(job.conversationId, message);
+    if (state?.notify === false) return;
+
+    const scope = scopeForJob(job);
+    if (!scope) return;
+    const current = this.store.get(job.id, scope) ?? job;
+    await this.notify({
+      ...event,
+      conversationId: current.conversationId,
+      job: current,
+    });
   }
 
   private formatCompletion(id: string, result: string): string {
