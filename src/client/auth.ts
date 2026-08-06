@@ -2,6 +2,10 @@ import * as teamsSdk from '@microsoft/teams-js';
 
 type AuthTokenProvider = () => Promise<string>;
 
+export const LOCAL_ACCESS_TOKEN_HEADER = 'X-Teams-Local-Access-Token';
+export const LOCAL_ACCESS_TOKEN_STORAGE_KEY = 'teams.localAccessToken';
+export const LOCAL_ACCESS_TOKEN_FRAGMENT_KEY = 'teams_local_access_token';
+
 const teamsAuthentication = teamsSdk.authentication;
 
 let teamsHostReady = false;
@@ -13,6 +17,62 @@ const defaultAuthTokenProvider: AuthTokenProvider = () => {
   return teamsAuthentication.getAuthToken({ silent: false });
 };
 let authTokenProvider: AuthTokenProvider = defaultAuthTokenProvider;
+
+function getSessionStorage(): Storage | undefined {
+  if (typeof window === 'undefined') return undefined;
+  try {
+    return window.sessionStorage;
+  } catch {
+    return undefined;
+  }
+}
+
+export function captureLocalAccessTokenFromFragment(): void {
+  if (typeof window === 'undefined') return;
+
+  const fragment = window.location.hash.startsWith('#')
+    ? window.location.hash.slice(1)
+    : '';
+  if (!fragment) return;
+
+  const token = new URLSearchParams(fragment).get(LOCAL_ACCESS_TOKEN_FRAGMENT_KEY)?.trim();
+  if (!token) return;
+
+  try {
+    getSessionStorage()?.setItem(LOCAL_ACCESS_TOKEN_STORAGE_KEY, token);
+  } catch {
+    // The server will reject the request if the browser cannot retain the
+    // secret; never expose the token in an error or diagnostic message.
+  }
+
+  // A fragment is not sent in HTTP requests, but remove it immediately so
+  // screenshots, copied URLs, and browser history do not retain the secret.
+  window.history.replaceState(
+    window.history.state,
+    document.title,
+    `${window.location.pathname}${window.location.search}`,
+  );
+}
+
+captureLocalAccessTokenFromFragment();
+
+function localAccessTokenForSameOrigin(input: RequestInfo | URL = '/api/health'): string | undefined {
+  if (typeof window === 'undefined') return undefined;
+
+  let target: URL;
+  try {
+    target = new URL(
+      input instanceof Request ? input.url : input instanceof URL ? input.href : String(input),
+      window.location.href,
+    );
+  } catch {
+    return undefined;
+  }
+  if (target.origin !== window.location.origin) return undefined;
+
+  const token = getSessionStorage()?.getItem(LOCAL_ACCESS_TOKEN_STORAGE_KEY)?.trim();
+  return token || undefined;
+}
 
 export function markTeamsHostReady(): void {
   teamsHostReady = true;
@@ -33,7 +93,11 @@ export function setAuthRequired(required: boolean): void {
 }
 
 export function getCachedAuthHeaders(): Record<string, string> {
-  return cachedAuthToken ? { Authorization: `Bearer ${cachedAuthToken}` } : {};
+  const headers: Record<string, string> = {};
+  const localToken = localAccessTokenForSameOrigin('/api/copilotkit');
+  if (localToken) headers[LOCAL_ACCESS_TOKEN_HEADER] = localToken;
+  if (cachedAuthToken) headers.Authorization = `Bearer ${cachedAuthToken}`;
+  return headers;
 }
 
 export function clearCachedAuthToken(): void {
@@ -59,6 +123,10 @@ export function resetAuthStateForTest(): void {
 
 export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers);
+  headers.delete(LOCAL_ACCESS_TOKEN_HEADER);
+
+  const localToken = localAccessTokenForSameOrigin(input);
+  if (localToken) headers.set(LOCAL_ACCESS_TOKEN_HEADER, localToken);
 
   if (!authRequired) headers.delete('Authorization');
 

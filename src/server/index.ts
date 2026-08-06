@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
+import crypto from 'node:crypto';
 
 import express from 'express';
 import { CopilotRuntime } from '@copilotkit/runtime/v2';
@@ -41,6 +42,9 @@ const localDev = process.env.TEAMS_LOCAL_DEV === 'true';
 const publicHintNames = ['PUBLIC_BASE_URL', 'TAB_DOMAIN', 'BOT_DOMAIN', 'DEV_TUNNEL_ID'] as const;
 const publicHints = publicHintNames.filter((name) => Boolean(process.env[name]?.trim()));
 const safeLocal = skipAuth && localDev && !isProduction && publicHints.length === 0;
+const LOCAL_ACCESS_TOKEN_HEADER = 'x-teams-local-access-token';
+const MIN_LOCAL_ACCESS_TOKEN_LENGTH = 32;
+const localAccessToken = process.env.TEAMS_LOCAL_ACCESS_TOKEN?.trim() ?? '';
 const legacyPublicMcp = process.env.MCP_PUBLIC_ENABLED?.trim().toLowerCase() === 'true';
 const fileJsonMultiWorker = numericEnvGreaterThan('WEB_CONCURRENCY', 1)
   || numericEnvGreaterThan('NODE_APP_INSTANCE', 0);
@@ -103,6 +107,10 @@ if (skipAuth && !safeLocal) {
       ? 'TEAMS_LOCAL_DEV=true is required'
       : `public deployment hints are set: ${publicHints.join(', ')}`;
   throw new Error(`TEAMS_SKIP_AUTH=true is unsafe (${reason}).`);
+}
+
+if (safeLocal && localAccessToken.length < MIN_LOCAL_ACCESS_TOKEN_LENGTH) {
+  throw new Error(`TEAMS_LOCAL_ACCESS_TOKEN must be at least ${MIN_LOCAL_ACCESS_TOKEN_LENGTH} characters in safe local mode.`);
 }
 
 if (isProduction && (!botConfigured || !useTeamsSdk)) {
@@ -270,6 +278,24 @@ function isDirectLoopbackRequest(request: any): boolean {
   return isLoopbackAddress(request.socket?.remoteAddress);
 }
 
+function isUnprotectedLocalResource(request: any): boolean {
+  if (!['GET', 'HEAD'].includes(String(request.method ?? '').toUpperCase())) return false;
+  const pathname = typeof request.path === 'string' ? request.path : String(request.url ?? '').split('?')[0];
+  return pathname === '/privacy'
+    || pathname === '/termsOfUse'
+    || pathname === '/tabs/home'
+    || pathname.startsWith('/tabs/home/');
+}
+
+function hasValidLocalAccessToken(request: any): boolean {
+  const candidate = request.headers?.[LOCAL_ACCESS_TOKEN_HEADER];
+  if (typeof candidate !== 'string') return false;
+  const candidateBuffer = Buffer.from(candidate.trim());
+  const expectedBuffer = Buffer.from(localAccessToken);
+  return candidateBuffer.length === expectedBuffer.length
+    && crypto.timingSafeEqual(candidateBuffer, expectedBuffer);
+}
+
 function isLoopbackHost(value: string): boolean {
   if (!value || value.includes(',') || /\s/.test(value)) return false;
   if (value.startsWith('[')) {
@@ -404,20 +430,30 @@ if (teamsApp && loopbackOnly) {
   });
 }
 
-http.use(express.json());
-
 if (safeLocal) {
-  // The auth bypass is intentionally usable only through a direct loopback
-  // request. Host and proxy-header checks happen before every route so a Dev
-  // Tunnel/reverse proxy cannot expose the local APIs by accident.
+  // Static tab assets and policy pages are intentionally public. Everything
+  // else, including health, Bot, MCP, CopilotKit, data, weather, and debug
+  // routes, requires both a direct loopback connection and the explicit local
+  // access secret. The gate is before body parsing so rejected requests cannot
+  // make the JSON parser process attacker-controlled bodies.
   http.use((request: any, response: any, next: any) => {
+    if (isUnprotectedLocalResource(request)) {
+      next();
+      return;
+    }
     if (!isDirectLoopbackRequest(request)) {
       response.status(403).json({ error: 'local development endpoints require a direct loopback request' });
+      return;
+    }
+    if (!hasValidLocalAccessToken(request)) {
+      response.status(401).json({ error: 'local development access token is required' });
       return;
     }
     next();
   });
 }
+
+http.use(express.json());
 
 http.get('/api/health', (_request: any, response: any) => {
   response.json({
@@ -828,7 +864,7 @@ function replayedGenUiAction(action: GenUiCardAction, job: AgentJob | undefined)
   if (action === 'refresh') return genUi.jobStatus(job);
   if (action === 'feedback') return genUi.answer('피드백을 이미 확인했습니다.', `feedback-${job.id}`);
   if (action === 'approve' && ['queued', 'running', 'completed', 'failed'].includes(job.status)) {
-    return genUi.approvalAccepted(job);
+    return genUi.jobStatus(job);
   }
   if (action === 'cancel' && job.status === 'cancelled') {
     return genUi.cancelled(job);

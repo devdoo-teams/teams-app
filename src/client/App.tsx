@@ -450,7 +450,7 @@ export function App() {
     setHealthLoading(true);
 
     try {
-      const response = await fetch('/api/health');
+      const response = await apiFetch('/api/health');
       if (!response.ok) throw new Error('health check failed');
       const data = (await response.json()) as HealthResponse;
       setHealth(data);

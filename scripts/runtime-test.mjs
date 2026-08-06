@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { execFile } from 'node:child_process';
+import crypto from 'node:crypto';
 import http from 'node:http';
 import { promisify } from 'node:util';
 import fs from 'node:fs/promises';
@@ -9,6 +10,8 @@ import path from 'node:path';
 
 const root = process.cwd();
 const execFileAsync = promisify(execFile);
+const LOCAL_ACCESS_TOKEN_HEADER = 'x-teams-local-access-token';
+const localAccessTokens = new Map();
 
 function assert(condition, message) {
   if (!condition) throw new Error(`FAIL: ${message}`);
@@ -32,7 +35,11 @@ async function waitForHealth(baseUrl) {
 
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${baseUrl}/api/health`);
+      const response = await fetch(`${baseUrl}/api/health`, {
+        headers: localAccessTokens.has(baseUrl)
+          ? { [LOCAL_ACCESS_TOKEN_HEADER]: localAccessTokens.get(baseUrl) }
+          : undefined,
+      });
       if (response.ok) return;
     } catch {
       // The process may still be starting.
@@ -45,11 +52,13 @@ async function waitForHealth(baseUrl) {
 }
 
 async function request(baseUrl, pathname, init = {}) {
+  const { localAccessToken = localAccessTokens.get(baseUrl), ...fetchInit } = init;
   const response = await fetch(`${baseUrl}${pathname}`, {
-    ...init,
+    ...fetchInit,
     headers: {
-      ...(init.body ? { 'content-type': 'application/json' } : {}),
-      ...(init.headers ?? {}),
+      ...(fetchInit.body ? { 'content-type': 'application/json' } : {}),
+      ...(fetchInit.headers ?? {}),
+      ...(localAccessToken ? { [LOCAL_ACCESS_TOKEN_HEADER]: localAccessToken } : {}),
     },
   });
   const text = await response.text();
@@ -62,7 +71,7 @@ async function request(baseUrl, pathname, init = {}) {
   return { response, body };
 }
 
-async function rawRequest(baseUrl, pathname, headers = {}) {
+async function rawRequest(baseUrl, pathname, headers = {}, localAccessToken = localAccessTokens.get(baseUrl)) {
   const target = new URL(`${baseUrl}${pathname}`);
   return new Promise((resolve, reject) => {
     const request = http.request({
@@ -70,7 +79,10 @@ async function rawRequest(baseUrl, pathname, headers = {}) {
       port: Number(target.port),
       path: `${target.pathname}${target.search}`,
       method: 'GET',
-      headers,
+      headers: {
+        ...(localAccessToken ? { [LOCAL_ACCESS_TOKEN_HEADER]: localAccessToken } : {}),
+        ...headers,
+      },
     }, (response) => {
       let text = '';
       response.setEncoding('utf8');
@@ -117,13 +129,14 @@ function parseJsonOrSse(text) {
   return undefined;
 }
 
-async function mcpRequest(baseUrl, body, { sessionId, protocolVersion = '2025-11-25' } = {}) {
+async function mcpRequest(baseUrl, body, { sessionId, protocolVersion = '2025-11-25', localAccessToken = localAccessTokens.get(baseUrl) } = {}) {
   const headers = {
     'content-type': 'application/json',
     accept: 'application/json, text/event-stream',
     'MCP-Protocol-Version': protocolVersion,
   };
   if (sessionId) headers['mcp-session-id'] = sessionId;
+  if (localAccessToken) headers[LOCAL_ACCESS_TOKEN_HEADER] = localAccessToken;
 
   const response = await fetch(`${baseUrl}/mcp`, {
     method: 'POST',
@@ -254,6 +267,8 @@ function installActivity(baseUrl, suffix) {
 async function startServer({ production, dataFile, jobDataFile, teamsSdk = false, workspace = root, codexTimeoutMs, extraEnv = {} }) {
   const port = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
+  const localAccessToken = production ? '' : crypto.randomBytes(32).toString('base64url');
+  if (!production) localAccessTokens.set(baseUrl, localAccessToken);
   const command = process.execPath;
   const entry = path.join(root, 'dist/server/index.js');
   const child = spawn(command, [entry], {
@@ -274,6 +289,7 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
       TEAMS_SKIP_OUTBOUND: teamsSdk ? 'true' : 'false',
       TEAMS_LOCAL_DEV: production ? 'false' : 'true',
       TEAMS_BIND_HOST: '127.0.0.1',
+      TEAMS_LOCAL_ACCESS_TOKEN: localAccessToken,
       MCP_PUBLIC_ENABLED: '',
       ...(teamsSdk
         ? {
@@ -301,9 +317,10 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
 
   try {
     await waitForHealth(baseUrl);
-    return { child, baseUrl, getOutput: () => output };
+    return { child, baseUrl, localAccessToken, getOutput: () => output };
   } catch (error) {
     child.kill('SIGTERM');
+    localAccessTokens.delete(baseUrl);
     throw new Error(`${error.message}\n${output}`);
   }
 }
@@ -347,6 +364,7 @@ async function expectStartupFailure(label, extraEnv, expectedMessage) {
 
 async function expectStoreLeaseConflict(dataFile, jobDataFile) {
   const port = await getFreePort();
+  const localAccessToken = crypto.randomBytes(32).toString('base64url');
   const child = spawn(process.execPath, [path.join(root, 'dist/server/index.js')], {
     cwd: root,
     env: {
@@ -366,6 +384,7 @@ async function expectStoreLeaseConflict(dataFile, jobDataFile) {
       TEAMS_SKIP_AUTH: 'true',
       TEAMS_LOCAL_DEV: 'true',
       TEAMS_BIND_HOST: '127.0.0.1',
+      TEAMS_LOCAL_ACCESS_TOKEN: localAccessToken,
       MCP_PUBLIC_ENABLED: '',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -428,6 +447,11 @@ async function runStartupGateFlow() {
     'auth bypass with a public deployment hint',
     { TEAMS_SKIP_AUTH: 'true', TEAMS_LOCAL_DEV: 'true', PUBLIC_BASE_URL: 'https://example.test' },
     'public deployment hints',
+  );
+  await expectStartupFailure(
+    'safe local mode without an explicit access token',
+    { TEAMS_SKIP_AUTH: 'true', TEAMS_LOCAL_DEV: 'true', TEAMS_LOCAL_ACCESS_TOKEN: '' },
+    'TEAMS_LOCAL_ACCESS_TOKEN',
   );
   await expectStartupFailure(
     'file-json multi-worker configuration',
@@ -542,7 +566,7 @@ async function runLocalFlow(dataFile, jobDataFile) {
   const server = await startServer({ production: false, dataFile, jobDataFile });
 
   try {
-  const health = await request(server.baseUrl, '/api/health');
+    const health = await request(server.baseUrl, '/api/health');
     assert(health.response.status === 200, 'local health endpoint returns 200');
     assert(health.body.auth === 'local-bypass', 'local runtime uses explicit auth bypass');
     assert(health.body.userAuth === 'local-bypass', 'local health reports the user auth bypass truthfully');
@@ -557,11 +581,26 @@ async function runLocalFlow(dataFile, jobDataFile) {
     assert(health.body.genUi === 'adaptive-cards', 'health reports Adaptive Cards as the GenUI renderer');
     assert(health.body.channelsShadow?.enabled === false, 'hybrid health disables Channels shadow diagnostics');
     assert(health.body.mcp === '/mcp' && health.body.mcpEnabled === true, 'local health exposes only the explicitly gated local MCP route');
+    const healthSerialized = JSON.stringify(health.body);
+    assert(!healthSerialized.includes(server.localAccessToken), 'local access token is absent from health output');
+
+    const staticTab = await rawRequest(server.baseUrl, '/tabs/home', {}, null);
+    assert(staticTab.response.statusCode === 200, 'static tab entry loads without the local access token');
+    assert(!String(staticTab.body).includes(server.localAccessToken), 'static tab entry does not contain the local access token');
+
+    const missingToken = await rawRequest(server.baseUrl, '/api/health', {}, null);
+    assert(missingToken.response.statusCode === 401, 'local API denies a missing access token');
+    assert(!String(missingToken.body).includes(server.localAccessToken), 'missing-token error does not contain the local access token');
+    const wrongToken = await rawRequest(server.baseUrl, '/api/health', {}, 'wrong-local-access-token');
+    assert(wrongToken.response.statusCode === 401, 'local API denies a wrong access token');
+    assert(!String(wrongToken.body).includes(server.localAccessToken), 'wrong-token error does not contain the local access token');
 
     const publicHost = await rawRequest(server.baseUrl, '/api/health', { host: 'public.example.test' });
     assert(publicHost.response.statusCode === 403, 'safe local mode rejects a public Host header');
     const forwarded = await rawRequest(server.baseUrl, '/api/health', { 'x-forwarded-host': 'public.example.test' });
     assert(forwarded.response.statusCode === 403, 'safe local mode rejects forwarded proxy headers');
+    const rewrittenLocalHost = await rawRequest(server.baseUrl, '/api/health', { host: '127.0.0.1' }, null);
+    assert(rewrittenLocalHost.response.statusCode === 401, 'a rewritten local Host without a token is still denied');
 
     const initialize = await mcpRequest(server.baseUrl, {
       jsonrpc: '2.0',
