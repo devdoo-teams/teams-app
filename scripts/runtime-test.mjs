@@ -89,7 +89,7 @@ function installActivity(baseUrl, suffix) {
   };
 }
 
-async function startServer({ production, dataFile, jobDataFile, teamsSdk = false, workspace = root }) {
+async function startServer({ production, dataFile, jobDataFile, teamsSdk = false, workspace = root, codexTimeoutMs }) {
   const port = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const command = process.execPath;
@@ -105,6 +105,7 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
       AGENT_WORKSPACE: workspace,
       CODEX_BIN: process.execPath,
       CODEX_SCRIPT: path.join(root, 'scripts/fake-codex.mjs'),
+      WEATHER_MODE: 'demo',
       TEAMS_USE_SDK: teamsSdk ? 'true' : 'false',
       TEAMS_SKIP_OUTBOUND: teamsSdk ? 'true' : 'false',
       ...(teamsSdk
@@ -117,6 +118,7 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
           }
         : {}),
       ...(production ? { TEAMS_SKIP_AUTH: '' } : { TEAMS_SKIP_AUTH: 'true' }),
+      ...(codexTimeoutMs ? { CODEX_TIMEOUT_MS: String(codexTimeoutMs) } : {}),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -191,6 +193,17 @@ async function runLocalFlow(dataFile, jobDataFile) {
     const initial = await request(server.baseUrl, '/api/items');
     assert(initial.response.status === 200, 'local item list returns 200');
     assert(initial.body.summary.total === 2, 'seed data is available in the isolated store');
+
+    const weather = await request(server.baseUrl, '/api/weather?latitude=37.5665&longitude=126.978&mode=demo');
+    assert(weather.response.status === 200, 'weather widget endpoint returns 200');
+    assert(weather.body.source === 'demo' && weather.body.current.condition === '맑음', 'weather widget returns demo conditions');
+
+    const weatherCommand = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity('날씨', server.baseUrl, 'weather')),
+    });
+    assert(weatherCommand.response.status === 200, 'Bot weather command completes locally');
+    assert(weatherCommand.body.messages[0].includes('날씨 위젯'), 'Bot weather command returns widget summary');
 
     const invalid = await request(server.baseUrl, '/api/items', {
       method: 'POST',
@@ -275,6 +288,14 @@ async function runLocalFlow(dataFile, jobDataFile) {
       readOnlyOutbox.body.messages.some((message) => message.includes('완료되었습니다')),
       'Codex completion notification is delivered to the conversation',
     );
+    assert(
+      readOnlyOutbox.body.messages.some((message) => message.includes('중간 분석 업데이트')),
+      'Codex intermediate agent updates are delivered to the conversation',
+    );
+    assert(
+      readOnlyOutbox.body.messages.filter((message) => message.includes('필요한 도구를 실행하고 있습니다')).length === 1,
+      'repeated tool events are deduplicated into one Teams progress notification',
+    );
 
     const naturalFollowUp = await request(server.baseUrl, '/api/messages', {
       method: 'POST',
@@ -330,6 +351,26 @@ async function runLocalFlow(dataFile, jobDataFile) {
 
     const persisted = JSON.parse(await fs.readFile(dataFile, 'utf8'));
     assert(Array.isArray(persisted) && persisted.length === 2, 'isolated JSON store persists final state');
+  } finally {
+    await stopServer(server.child);
+  }
+}
+
+async function runAgentTimeoutFlow(dataFile, jobDataFile) {
+  const server = await startServer({ production: false, dataFile, jobDataFile, codexTimeoutMs: 300 });
+
+  try {
+    const response = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity('run SLOW 시간 제한 검증', server.baseUrl, 'agent-timeout')),
+    });
+    const jobId = response.body.messages[0].match(/task-[\w-]+/)?.[0];
+    const failed = await waitForAgentJob(server.baseUrl, jobId);
+    assert(failed.status === 'failed', 'Codex job fails cleanly after timeout');
+    assert(failed.error.includes('시간 제한'), 'timeout failure explains the reason');
+
+    const outbox = await request(server.baseUrl, '/api/debug/agent-outbox/runtime-conversation-agent-timeout');
+    assert(outbox.body.messages.some((message) => message.includes('시간 제한')), 'timeout failure is delivered to Teams');
   } finally {
     await stopServer(server.child);
   }
@@ -465,6 +506,8 @@ const gitDataFile = path.join(tempDir, 'git-items.json');
 const gitJobDataFile = path.join(tempDir, 'git-agent-jobs.json');
 const recoveryDataFile = path.join(tempDir, 'recovery-items.json');
 const recoveryJobDataFile = path.join(tempDir, 'recovery-agent-jobs.json');
+const timeoutDataFile = path.join(tempDir, 'timeout-items.json');
+const timeoutJobDataFile = path.join(tempDir, 'timeout-agent-jobs.json');
 
 try {
   console.log('Runtime verification: local authenticated-bypass flow');
@@ -475,6 +518,8 @@ try {
   await runGitCommitFlow(gitWorkspace, gitDataFile, gitJobDataFile);
   console.log('Runtime verification: interrupted job recovery');
   await runRecoveryFlow(recoveryDataFile, recoveryJobDataFile);
+  console.log('Runtime verification: Codex timeout flow');
+  await runAgentTimeoutFlow(timeoutDataFile, timeoutJobDataFile);
   console.log('Runtime verification: production authentication guard');
   await runProductionAuthFlow(productionDataFile, productionJobDataFile);
   console.log('Runtime verification complete.');

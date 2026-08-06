@@ -10,12 +10,13 @@ TypeScript + React + Express + Microsoft Teams SDK 기반의 내부용 Teams 앱
 - `GET /api/items` 응답의 전체/진행 중/완료 요약
 - `POST /api/items` 업무 추가
 - `GET /api/items/:id` 단건 업무 조회
+- `GET /api/weather?latitude=<위도>&longitude=<경도>` 현재 위치 날씨 조회 및 서울 데모 fallback
 - `PUT /api/items/:id` 업무 제목 수정
 - `PATCH /api/items/:id` 업무 완료/재개 전환
 - `DELETE /api/items/:id` 업무 삭제
 - JSON 파일 기반 업무 영속 저장 및 재시작 복구
 - 운영 모드 Entra bearer token 검증 미들웨어
-- Teams SDK `/api/messages` 메시지 핸들러 (`help`, `status`, `list` 명령 포함)
+- Teams SDK `/api/messages` 메시지 핸들러 (`help`, `weather`, `status`, `list` 명령 포함)
 - Teams SDK `/api/messages` `status` 명령으로 진행 중 업무 수 확인
 - Teams에서 Codex CLI 읽기 전용 작업을 시작하고 작업 ID로 상태 조회
 - 같은 Teams 대화의 자연어 후속 답장을 마지막 완료 Codex thread에 자동 연결
@@ -23,6 +24,7 @@ TypeScript + React + Express + Microsoft Teams SDK 기반의 내부용 Teams 앱
 - Codex 완료·실패 결과의 Teams proactive message 전송
 - Teams SDK `install.add` 설치 이벤트 welcome message와 명령 안내
 - 런타임 상태 패널과 서버 health 확인
+- 위치 권한 기반 날씨 위젯과 `날씨`/`weather` Bot 명령
 - 환경 템플릿 기반 Teams manifest
 - 환경변수 치환형 Teams 앱 ZIP 패키징
 
@@ -39,6 +41,7 @@ TEAMS_SKIP_AUTH=true npm run dev
 - 탭: http://localhost:3978/tabs/home
 - 상태: http://localhost:3978/api/health
 - API: http://localhost:3978/api/items
+- 날씨 데모: http://localhost:3978/api/weather?latitude=37.5665&longitude=126.978&mode=demo
 - Teams 메시지 엔드포인트: http://localhost:3978/api/messages
 
 `TEAMS_SKIP_AUTH=true`는 로컬 탭 API의 사용자 인증만 우회하는 개발용 설정입니다. `BOT_CLIENT_ID`, `CLIENT_SECRET`, `TENANT_ID`가 있으면 Teams SDK Bot은 계속 실행되어 실제 Teams 메시지 outbound를 테스트할 수 있습니다. `TEAMS_SKIP_OUTBOUND=true`를 별도로 설정한 경우에만 비동기 진행·완료 메시지를 로컬 outbox에 보관합니다. 운영에서는 `TEAMS_SKIP_AUTH`를 제거하고 탭 API도 Entra SSO로 보호합니다.
@@ -49,6 +52,8 @@ TEAMS_SKIP_AUTH=true npm run dev
 
 ```text
 help
+날씨
+weather 37.5665 126.978
 run 저장소의 현재 구현 상태를 분석해줘
 status <작업 ID>
 continue <작업 ID> <추가 요청>

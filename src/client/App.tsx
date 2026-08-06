@@ -27,6 +27,30 @@ type HealthResponse = {
   timestamp: string;
 };
 
+type WeatherResponse = {
+  source: 'open-meteo' | 'demo';
+  location: {
+    name: string;
+    latitude: number;
+    longitude: number;
+    timezone: string;
+  };
+  current: {
+    time: string;
+    temperature: number;
+    apparentTemperature: number;
+    humidity: number;
+    precipitation: number;
+    weatherCode: number;
+    isDay: boolean;
+    windSpeed: number;
+    condition: string;
+    icon: 'sun' | 'cloud' | 'fog' | 'rain' | 'snow' | 'storm';
+  };
+};
+
+const DEMO_COORDINATES = { latitude: 37.5665, longitude: 126.978 };
+
 export function App() {
   const [items, setItems] = useState<Item[]>([]);
   const [title, setTitle] = useState('');
@@ -38,6 +62,82 @@ export function App() {
   const [healthLoading, setHealthLoading] = useState(true);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
+  const [weather, setWeather] = useState<WeatherResponse | null>(null);
+  const [weatherLoading, setWeatherLoading] = useState(true);
+  const [weatherError, setWeatherError] = useState('');
+
+  async function requestWeather(latitude: number, longitude: number, demo: boolean) {
+    const query = new URLSearchParams({
+      latitude: String(latitude),
+      longitude: String(longitude),
+    });
+    if (demo) query.set('mode', 'demo');
+
+    const response = await apiFetch(`/api/weather?${query.toString()}`);
+    if (!response.ok) throw new Error('날씨 정보를 불러오지 못했습니다.');
+    return (await response.json()) as WeatherResponse;
+  }
+
+  function getCurrentPosition(): Promise<GeolocationPosition> {
+    return new Promise((resolve, reject) => {
+      if (!navigator.geolocation) {
+        reject(new Error('이 브라우저에서는 위치 정보를 지원하지 않습니다.'));
+        return;
+      }
+
+      navigator.geolocation.getCurrentPosition(resolve, reject, {
+        enableHighAccuracy: false,
+        maximumAge: 300_000,
+        timeout: 8_000,
+      });
+    });
+  }
+
+  async function loadWeather(useCurrentLocation: boolean): Promise<void> {
+    setWeatherLoading(true);
+    setWeatherError('');
+
+    let latitude = DEMO_COORDINATES.latitude;
+    let longitude = DEMO_COORDINATES.longitude;
+    let demo = true;
+    let locationMessage = '';
+
+    if (useCurrentLocation) {
+      try {
+        const position = await getCurrentPosition();
+        latitude = position.coords.latitude;
+        longitude = position.coords.longitude;
+        demo = false;
+      } catch {
+        locationMessage = '위치 권한을 사용할 수 없어 서울 데모 위치를 표시합니다.';
+      }
+    }
+
+    try {
+      const result = await requestWeather(latitude, longitude, demo);
+      setWeather(result);
+      setWeatherError(locationMessage);
+    } catch (caught) {
+      if (!demo) {
+        try {
+          const fallback = await requestWeather(
+            DEMO_COORDINATES.latitude,
+            DEMO_COORDINATES.longitude,
+            true,
+          );
+          setWeather(fallback);
+          setWeatherError('실시간 날씨 연결에 실패해 데모 위치를 표시합니다.');
+          return;
+        } catch {
+          // Report the original error below when the demo fallback also fails.
+        }
+      }
+      setWeather(null);
+      setWeatherError(caught instanceof Error ? caught.message : '날씨 정보를 불러오지 못했습니다.');
+    } finally {
+      setWeatherLoading(false);
+    }
+  }
 
   async function loadItems() {
     setLoading(true);
@@ -89,6 +189,7 @@ export function App() {
 
   useEffect(() => {
     void refreshRuntime();
+    void loadWeather(true);
   }, []);
 
   const visibleItems = items.filter((item) => filter === 'all' || item.status === filter);
@@ -215,6 +316,68 @@ export function App() {
           <span>마지막 확인</span>
           <strong>{health ? new Date(health.timestamp).toLocaleTimeString('ko-KR') : '-'}</strong>
         </div>
+      </section>
+
+      <section className="weather-widget" aria-label="현재 위치 날씨 위젯">
+        <div className="weather-heading">
+          <div>
+            <p className="eyebrow">LOCATION WEATHER</p>
+            <h2>현재 위치 날씨</h2>
+            <p className="weather-location">
+              {weather?.location.name ?? '위치를 확인하는 중입니다'}
+            </p>
+          </div>
+          <button
+            className="secondary"
+            onClick={() => void loadWeather(true)}
+            type="button"
+          >
+            현재 위치로 새로고침
+          </button>
+        </div>
+
+        {weatherLoading ? (
+          <p className="empty">현재 위치와 날씨를 확인하는 중입니다…</p>
+        ) : weather ? (
+          <>
+            <div className="weather-main">
+              <span className={`weather-icon ${weather.current.icon}`} aria-hidden="true">
+                {weather.current.icon === 'sun'
+                  ? '☀️'
+                  : weather.current.icon === 'cloud'
+                    ? '⛅'
+                    : weather.current.icon === 'fog'
+                      ? '🌫️'
+                      : weather.current.icon === 'rain'
+                        ? '🌧️'
+                        : weather.current.icon === 'snow'
+                          ? '❄️'
+                          : '⛈️'}
+              </span>
+              <div>
+                <strong>{weather.current.temperature.toFixed(1)}°</strong>
+                <span>{weather.current.condition}</span>
+              </div>
+            </div>
+
+            <div className="weather-stats" aria-label="현재 날씨 상세">
+              <div><span>체감</span><strong>{weather.current.apparentTemperature.toFixed(1)}°C</strong></div>
+              <div><span>습도</span><strong>{Math.round(weather.current.humidity)}%</strong></div>
+              <div><span>바람</span><strong>{weather.current.windSpeed.toFixed(1)} km/h</strong></div>
+              <div><span>강수</span><strong>{weather.current.precipitation.toFixed(1)} mm</strong></div>
+            </div>
+
+            <div className="weather-footer">
+              <span>{weather.source === 'demo' ? '서울 데모 데이터' : '실시간 위치 데이터'}</span>
+              <span>{weather.location.timezone}</span>
+              <span>업데이트 {weather.current.time.replace('T', ' ').slice(0, 16)}</span>
+            </div>
+          </>
+        ) : (
+          <p className="empty">날씨 데이터를 표시할 수 없습니다.</p>
+        )}
+
+        {weatherError && <p className="weather-note">{weatherError}</p>}
       </section>
 
       <section className="panel">

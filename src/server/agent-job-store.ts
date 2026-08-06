@@ -104,6 +104,8 @@ export class AgentJobStore {
     const job = this.get(id);
     if (!job) return undefined;
 
+    if (job.progress.at(-1) === message) return job;
+
     job.progress = [...job.progress.slice(-7), message];
     await this.persist();
     return job;

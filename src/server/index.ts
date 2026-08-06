@@ -8,6 +8,7 @@ import { AgentJobStore, type AgentJob } from './agent-job-store.js';
 import { AgentService } from './agent-service.js';
 import { CodexRunner } from './codex-runner.js';
 import { GitService } from './git-service.js';
+import { formatWeatherMessage, getWeather } from './weather-service.js';
 
 const port = Number(process.env.PORT ?? 3978);
 const skipAuth = process.env.TEAMS_SKIP_AUTH === 'true';
@@ -109,6 +110,29 @@ http.get('/api/items/:id', (request: any, response: any) => {
   }
 
   response.json({ item });
+});
+
+http.get('/api/weather', async (request: any, response: any) => {
+  const latitude = Number(request.query?.latitude);
+  const longitude = Number(request.query?.longitude);
+  const demo = request.query?.mode === 'demo';
+
+  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
+    response.status(400).json({ error: 'latitude must be between -90 and 90' });
+    return;
+  }
+
+  if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+    response.status(400).json({ error: 'longitude must be between -180 and 180' });
+    return;
+  }
+
+  try {
+    response.json(await getWeather(latitude, longitude, { demo }));
+  } catch (error) {
+    console.error('Weather lookup failed', error);
+    response.status(502).json({ error: '날씨 정보를 가져오지 못했습니다.' });
+  }
 });
 
 http.get('/privacy', (_request: any, response: any) => {
@@ -217,8 +241,28 @@ async function handleMessage(activity: any, send: (text: string) => Promise<void
 
   if (normalizedText === 'help') {
     await send(
-      '사용 가능한 명령: help, status, list, run <작업>, continue <작업 ID> <추가 요청>, write <작업>, approve <작업 ID>, commit <작업 ID> [메시지], cancel <작업 ID>',
+      '사용 가능한 명령: help, weather [위도 경도], status, list, run <작업>, continue <작업 ID> <추가 요청>, write <작업>, approve <작업 ID>, commit <작업 ID> [메시지], cancel <작업 ID>',
     );
+    return;
+  }
+
+  const weatherMatch = text.match(/^(?:weather|날씨)(?:\s+([-+]?\d+(?:\.\d+)?)\s+([-+]?\d+(?:\.\d+)?))?$/i);
+  if (weatherMatch) {
+    const latitude = weatherMatch[1] ? Number(weatherMatch[1]) : 37.5665;
+    const longitude = weatherMatch[2] ? Number(weatherMatch[2]) : 126.978;
+    const isExplicitLocation = Boolean(weatherMatch[1] && weatherMatch[2]);
+
+    if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+      await send('위도는 -90~90, 경도는 -180~180 범위로 입력하세요. 예: weather 37.5665 126.978');
+      return;
+    }
+
+    try {
+      const weather = await getWeather(latitude, longitude, { demo: !isExplicitLocation });
+      await send(formatWeatherMessage(weather));
+    } catch {
+      await send('날씨 정보를 가져오지 못했습니다. 잠시 후 다시 시도하세요.');
+    }
     return;
   }
 
@@ -335,7 +379,7 @@ async function handleInstall(activity: any, send: (text: string) => Promise<void
     : '개인 공간';
 
   await send(
-    `업무 허브가 ${scopeHint}에 추가되었습니다. 탭에서 업무를 관리하고, help·status·list 명령으로 기능을 확인할 수 있습니다.`,
+    `업무 허브가 ${scopeHint}에 추가되었습니다. 탭에서 업무와 현재 위치 날씨를 확인하고, help·날씨·status·list 명령으로 기능을 사용할 수 있습니다.`,
   );
 }
 

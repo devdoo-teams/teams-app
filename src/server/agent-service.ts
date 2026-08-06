@@ -5,14 +5,21 @@ import { GitService } from './git-service.js';
 
 type Notify = (conversationId: string, text: string) => Promise<void>;
 
+type ProgressState = {
+  notifiedKeys: Set<string>;
+  pendingAgentMessage?: string;
+};
+
 export class AgentService {
   constructor(
     private readonly store: AgentJobStore,
     private readonly runner: CodexRunner,
-    private readonly workspace: string,
-    private readonly notify: Notify,
-    private readonly gitService: GitService,
+  private readonly workspace: string,
+  private readonly notify: Notify,
+  private readonly gitService: GitService,
   ) {}
+
+  private readonly progressStates = new Map<string, ProgressState>();
 
   async initialize(): Promise<void> {
     await this.store.initialize();
@@ -115,6 +122,7 @@ export class AgentService {
   }
 
   private async execute(job: AgentJob): Promise<void> {
+    this.progressStates.set(job.id, { notifiedKeys: new Set() });
     await this.store.update(job.id, {
       status: 'running',
       startedAt: new Date().toISOString(),
@@ -154,25 +162,68 @@ export class AgentService {
       });
       await this.store.appendProgress(job.id, 'Codex 작업이 실패했습니다.');
       await this.notify(job.conversationId, `작업 ${job.id}이 실패했습니다.\n\n${message}`);
+    } finally {
+      this.progressStates.delete(job.id);
     }
   }
 
   private async handleEvent(job: AgentJob, event: CodexRunEvent): Promise<void> {
+    const state = this.progressStates.get(job.id) ?? { notifiedKeys: new Set<string>() };
+    this.progressStates.set(job.id, state);
+
     if (event.type === 'thread.started' && event.thread_id) {
       await this.store.update(job.id, { threadId: event.thread_id });
       return;
     }
 
     if (event.type === 'turn.started') {
-      await this.store.appendProgress(job.id, 'Codex가 작업을 분석하고 있습니다.');
-      await this.notify(job.conversationId, `작업 ${job.id}: Codex 분석을 시작했습니다.`);
+      await this.publishProgress(job, state, 'analysis', 'Codex가 작업을 분석하고 있습니다.', 'Codex 분석을 시작했습니다.');
       return;
     }
 
     if (event.type === 'item.started' && event.item?.type === 'command_execution') {
-      await this.store.appendProgress(job.id, 'Codex가 저장소를 확인하고 있습니다.');
-      await this.notify(job.conversationId, `작업 ${job.id}: 저장소를 확인하고 있습니다.`);
+      await this.flushPendingAgentMessage(job, state);
+      await this.publishProgress(job, state, 'tools', 'Codex가 필요한 도구를 실행하고 있습니다.', 'Codex가 필요한 도구를 실행하고 있습니다.');
+      return;
     }
+
+    if (event.type === 'item.completed' && event.item?.type === 'agent_message') {
+      const message = event.item.text?.trim();
+      if (message && message !== state.pendingAgentMessage) {
+        if (state.pendingAgentMessage) await this.publishAgentUpdate(job, state.pendingAgentMessage);
+        state.pendingAgentMessage = message;
+      }
+    }
+  }
+
+  private async flushPendingAgentMessage(job: AgentJob, state: ProgressState): Promise<void> {
+    if (!state.pendingAgentMessage) return;
+    await this.publishAgentUpdate(job, state.pendingAgentMessage);
+    state.pendingAgentMessage = undefined;
+  }
+
+  private async publishAgentUpdate(job: AgentJob, message: string): Promise<void> {
+    const compact = message.length > 1200 ? `${message.slice(0, 1200)}\n\n(중간 업데이트가 일부 생략되었습니다.)` : message;
+    const state = this.progressStates.get(job.id);
+    if (!state) return;
+    const key = `agent:${compact}`;
+    if (state.notifiedKeys.has(key)) return;
+    state.notifiedKeys.add(key);
+    await this.store.appendProgress(job.id, `Codex 업데이트: ${compact}`);
+    await this.notify(job.conversationId, `작업 ${job.id}: Codex 업데이트\n\n${compact}`);
+  }
+
+  private async publishProgress(
+    job: AgentJob,
+    state: ProgressState,
+    key: string,
+    storedMessage: string,
+    notification: string,
+  ): Promise<void> {
+    if (state.notifiedKeys.has(key)) return;
+    state.notifiedKeys.add(key);
+    await this.store.appendProgress(job.id, storedMessage);
+    await this.notify(job.conversationId, `작업 ${job.id}: ${notification}`);
   }
 
   private formatCompletion(id: string, result: string): string {

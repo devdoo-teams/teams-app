@@ -53,6 +53,10 @@ export class CodexRunner {
     let stdoutBuffer = '';
     let stderr = '';
     let eventQueue = Promise.resolve();
+    const configuredTimeout = Number(process.env.CODEX_TIMEOUT_MS ?? 10 * 60 * 1000);
+    const timeoutMs = Number.isFinite(configuredTimeout) && configuredTimeout > 0
+      ? configuredTimeout
+      : 10 * 60 * 1000;
 
     const handleLine = async (line: string): Promise<void> => {
       const trimmed = line.trim();
@@ -88,14 +92,32 @@ export class CodexRunner {
       stderr += chunk;
     });
 
-    const exitCode = await new Promise<number>((resolve, reject) => {
-      child.once('error', reject);
-      child.once('exit', (code, signal) => resolve(code ?? (signal ? 1 : 0)));
-    });
+    let timedOut = false;
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    let forceKillHandle: NodeJS.Timeout | undefined;
+    let exitCode: number;
+    try {
+      exitCode = await new Promise<number>((resolve, reject) => {
+        child.once('error', reject);
+        child.once('exit', (code, signal) => resolve(code ?? (signal ? 1 : 0)));
+        timeoutHandle = setTimeout(() => {
+          timedOut = true;
+          child.kill('SIGTERM');
+          forceKillHandle = setTimeout(() => child.kill('SIGKILL'), 5_000);
+        }, timeoutMs);
+      });
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      if (forceKillHandle) clearTimeout(forceKillHandle);
+    }
 
     if (stdoutBuffer.trim()) await handleLine(stdoutBuffer);
     await eventQueue;
     this.processes.delete(options.jobId);
+
+    if (timedOut) {
+      throw new Error(`Codex 작업이 ${Math.ceil(timeoutMs / 1000)}초 시간 제한을 초과했습니다.`);
+    }
 
     if (exitCode !== 0) {
       const reason = stderr.trim().split('\n').slice(-3).join('\n') || `Codex exited with code ${exitCode}`;

@@ -9,12 +9,16 @@ if (prompt.includes('MUTATE')) {
 console.log(JSON.stringify({ type: 'thread.started', thread_id: 'fake-thread-runtime' }));
 console.log(JSON.stringify({ type: 'turn.started' }));
 console.log(JSON.stringify({
+  type: 'item.completed',
+  item: { type: 'agent_message', text: '중간 분석 업데이트: 작업 범위를 확인했습니다.' },
+}));
+console.log(JSON.stringify({
   type: 'item.started',
   item: { type: 'command_execution', command: `inspect: ${prompt.slice(0, 60)}` },
 }));
 
 if (prompt.includes('SLOW')) {
-  await new Promise(() => {});
+  await new Promise(() => setInterval(() => {}, 1_000));
 }
 
 console.log(JSON.stringify({
