@@ -8,6 +8,9 @@ export type Item = {
 
 export const MAX_ITEM_TITLE_LENGTH = 400;
 
+const ITEM_TITLE_CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/g;
+const LEGACY_EMPTY_ITEM_TITLE = '(제목 없음)';
+
 const seedItems: Item[] = [
   { id: 1, title: 'Teams SDK 연결 확인', status: 'done' },
   { id: 2, title: '첫 번째 업무 항목 만들기', status: 'open' },
@@ -24,11 +27,20 @@ export class ItemStore {
       const contents = await readAtomicJsonStore(this.dataFile);
       const parsed = JSON.parse(contents) as unknown;
 
-      if (!Array.isArray(parsed) || !parsed.every(isItem)) {
+      if (!Array.isArray(parsed)) {
         throw new Error(`Invalid item store format: ${this.dataFile}`);
       }
 
-      this.items = parsed;
+      const ids = new Set<number>();
+      let migrated = false;
+      const loadedItems = parsed.map((value, index) => {
+        const loaded = loadItem(value, index, ids);
+        migrated ||= loaded.migrated;
+        return loaded.item;
+      });
+
+      this.items = loadedItems;
+      if (migrated) await this.persist();
     } catch (error) {
       if (!isFileNotFound(error)) throw error;
 
@@ -43,7 +55,11 @@ export class ItemStore {
 
   async add(title: string): Promise<Item> {
     const normalizedTitle = assertItemTitle(title);
-    const nextId = this.items.reduce((largest, item) => Math.max(largest, item.id), 0) + 1;
+    const largestId = this.items.reduce((largest, item) => Math.max(largest, item.id), 0);
+    if (largestId >= Number.MAX_SAFE_INTEGER) {
+      throw new RangeError('no safe item id is available');
+    }
+    const nextId = largestId + 1;
     const item: Item = { id: nextId, title: normalizedTitle, status: 'open' };
     this.items.unshift(item);
     await this.persist();
@@ -93,15 +109,44 @@ export class ItemStore {
   }
 }
 
-function isItem(value: unknown): value is Item {
-  if (!value || typeof value !== 'object') return false;
+function loadItem(value: unknown, index: number, ids: Set<number>): { item: Item; migrated: boolean } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw invalidItem(index, 'record must be an object');
+  }
 
   const item = value as Partial<Item>;
-  return (
-    typeof item.id === 'number' &&
-    typeof item.title === 'string' &&
-    (item.status === 'open' || item.status === 'done')
-  );
+  if (
+    typeof item.id !== 'number' ||
+    !Number.isFinite(item.id) ||
+    !Number.isSafeInteger(item.id) ||
+    item.id <= 0
+  ) {
+    throw invalidItem(index, 'id must be a unique positive safe integer');
+  }
+  if (ids.has(item.id)) throw invalidItem(index, 'id must be unique');
+  if (typeof item.title !== 'string') throw invalidItem(index, 'title must be a string');
+  if (item.status !== 'open' && item.status !== 'done') {
+    throw invalidItem(index, 'status must be open or done');
+  }
+
+  ids.add(item.id);
+  const title = normalizeLegacyTitle(item.title);
+  return {
+    item: { id: item.id, title, status: item.status },
+    migrated: title !== item.title,
+  };
+}
+
+function invalidItem(index: number, reason: string): Error {
+  return new Error(`Invalid item store format: record ${index}: ${reason}`);
+}
+
+function normalizeLegacyTitle(title: string): string {
+  const normalized = title
+    .replace(ITEM_TITLE_CONTROL_CHARACTERS, '')
+    .trim()
+    .slice(0, MAX_ITEM_TITLE_LENGTH);
+  return normalized || LEGACY_EMPTY_ITEM_TITLE;
 }
 
 function isFileNotFound(error: unknown): error is NodeJS.ErrnoException {
