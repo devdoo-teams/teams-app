@@ -7,14 +7,15 @@ import { ItemStore } from './item-store.js';
 
 const port = Number(process.env.PORT ?? 3978);
 const skipAuth = process.env.TEAMS_SKIP_AUTH === 'true';
-const useTeamsSdk = !skipAuth && process.env.TEAMS_USE_SDK !== 'false';
 const clientDist = path.resolve(process.cwd(), 'dist/client');
 const itemStore = new ItemStore(
   process.env.ITEM_STORE_PATH ?? path.resolve(process.cwd(), 'data/items.json'),
 );
 const botClientId = process.env.BOT_CLIENT_ID ?? process.env.CLIENT_ID;
+const botConfigured = Boolean(botClientId && process.env.CLIENT_SECRET && process.env.TENANT_ID);
+const useTeamsSdk = process.env.TEAMS_USE_SDK !== 'false' && botConfigured;
 const userAuthConfigured = Boolean(
-  botClientId && process.env.TENANT_ID && process.env.APPLICATION_ID_URI,
+  process.env.CLIENT_ID && process.env.TENANT_ID && process.env.APPLICATION_ID_URI,
 );
 
 if (process.env.NODE_ENV === 'production' && skipAuth) {
@@ -64,6 +65,7 @@ http.get('/api/health', (_request: any, response: any) => {
     environment: process.env.NODE_ENV ?? 'development',
     auth: skipAuth ? 'local-bypass' : 'teams-authenticated',
     userAuth: skipAuth ? 'local-bypass' : userAuthConfigured ? 'entra-sso' : 'not-configured',
+    bot: teamsApp ? 'teams-sdk' : 'local-handler',
     storage: 'file-json',
     timestamp: new Date().toISOString(),
   });

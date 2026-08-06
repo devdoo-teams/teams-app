@@ -37,7 +37,7 @@ TEAMS_SKIP_AUTH=true npm run dev
 - API: http://localhost:3978/api/items
 - Teams 메시지 엔드포인트: http://localhost:3978/api/messages
 
-`TEAMS_SKIP_AUTH=true`는 로컬 개발 전용입니다. 실제 Teams에서는 Entra/Bot 인증 환경변수를 설정하고 이 값을 제거해야 합니다.
+`TEAMS_SKIP_AUTH=true`는 로컬 탭 API의 사용자 인증만 우회하는 개발용 설정입니다. `BOT_CLIENT_ID`, `CLIENT_SECRET`, `TENANT_ID`가 있으면 Teams SDK Bot은 계속 실행되어 실제 Teams 메시지 outbound를 테스트할 수 있습니다. 운영에서는 이 값을 제거하고 탭 API도 Entra SSO로 보호합니다.
 
 ## 런타임 검증
 

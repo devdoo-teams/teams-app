@@ -18,7 +18,7 @@ h2 { font-size: 1.35rem; }
 .badge { background: #e9f8ef; border: 1px solid #bce8ca; border-radius: 999px; color: #18794e; font-size: 0.8rem; font-weight: 700; padding: 9px 13px; white-space: nowrap; }
 .badge.warning { background: #fff4e5; border-color: #f9d8a6; color: #b54708; }
 .panel { background: #fff; border: 1px solid #e6e9f0; border-radius: 20px; box-shadow: 0 16px 50px rgba(37, 52, 89, 0.08); padding: 28px; }
-.runtime-panel { background: #eef2ff; border: 1px solid #dce2ff; border-radius: 14px; display: grid; gap: 12px; grid-template-columns: repeat(4, 1fr); margin-bottom: 18px; padding: 14px 16px; }
+.runtime-panel { background: #eef2ff; border: 1px solid #dce2ff; border-radius: 14px; display: grid; gap: 12px; grid-template-columns: repeat(5, 1fr); margin-bottom: 18px; padding: 14px 16px; }
 .runtime-panel div { display: flex; flex-direction: column; gap: 4px; }
 .runtime-panel span { color: #667085; font-size: 0.75rem; }
 .runtime-panel strong { color: #34366f; font-size: 0.9rem; }

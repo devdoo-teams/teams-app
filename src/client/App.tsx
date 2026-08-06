@@ -22,6 +22,7 @@ type HealthResponse = {
   environment: string;
   auth: 'local-bypass' | 'teams-authenticated';
   userAuth: string;
+  bot: 'teams-sdk' | 'local-handler';
   storage: string;
   timestamp: string;
 };
@@ -201,6 +202,10 @@ export function App() {
         <div>
           <span>인증 모드</span>
           <strong>{health?.userAuth === 'entra-sso' ? 'Entra SSO' : '로컬 우회'}</strong>
+        </div>
+        <div>
+          <span>Bot 경로</span>
+          <strong>{health?.bot === 'teams-sdk' ? 'Teams SDK' : '로컬 핸들러'}</strong>
         </div>
         <div>
           <span>저장소</span>
