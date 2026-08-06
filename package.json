@@ -20,10 +20,14 @@
     "test": "npm run check && npm run build && npm run test:troubleshooting && npm run test:runtime"
   },
   "dependencies": {
+    "@copilotkit/channels-teams": "0.7.3",
+    "@copilotkit/channels-ui": "0.7.3",
     "@copilotkit/react-core": "^1.66.2",
     "@copilotkit/runtime": "^1.66.2",
     "@microsoft/teams-js": "^2.54.0",
     "@microsoft/teams.apps": "^2.0.15",
+    "@modelcontextprotocol/ext-apps": "1.7.5",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "esbuild": "^0.28.1",
     "express": "^5.1.0",
     "react": "^19.2.8",
