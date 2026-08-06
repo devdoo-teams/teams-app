@@ -13,6 +13,7 @@ import {
   envelopeToChannelsIR,
   renderChannelsShadow,
 } from '../src/server/copilot-channels-shadow.js';
+import { ChannelsShadowMonitor } from '../src/server/channels-shadow-monitor.js';
 
 const baseAction = (action: (typeof GENUI_ACTIONS)[number], index: number) => ({
   id: `action-${index}`,
@@ -134,5 +135,25 @@ const longEnvelope = GenUiEnvelopeV1Schema.parse({
 const longResult = renderChannelsShadow(longEnvelope);
 assert.equal(longResult.diagnostics.withinTeamsBudget, true);
 assert.ok(longResult.payloadBytes <= TEAMS_CARD_BUDGET_BYTES);
+
+const monitor = new ChannelsShadowMonitor();
+monitor.record({
+  nativeActionCount: 2,
+  nativeBytes: result.payloadBytes,
+  shadowActionCount: result.diagnostics.actionCount,
+  shadowBytes: result.payloadBytes,
+  shadowWithinBudget: result.diagnostics.withinTeamsBudget,
+});
+monitor.recordFailure();
+assert.deepEqual(monitor.snapshot(), {
+  enabled: true,
+  renderCount: 2,
+  failureCount: 1,
+  budgetFailures: 0,
+  actionCountMismatches: 1,
+  lastNativeBytes: result.payloadBytes,
+  lastShadowBytes: result.payloadBytes,
+  lastWithinBudget: true,
+});
 
 console.log(`Channels shadow tests passed: ${GENUI_KINDS.length} kinds, ${GENUI_SECTION_TYPES.length} sections, ${GENUI_ACTIONS.length} actions, ${result.payloadBytes} bytes.`);
