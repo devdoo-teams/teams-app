@@ -37,6 +37,11 @@ if (!manifest.devicePermissions?.includes('geolocation')) {
   process.exit(1);
 }
 
+if (!manifest.bots?.[0]?.commandLists?.some((list) => list.commands?.some((command) => command.title === '날씨'))) {
+  console.error('Manifest must expose the 날씨 Bot command.');
+  process.exit(1);
+}
+
 if (!manifest.webApplicationInfo.id || !manifest.webApplicationInfo.resource) {
   console.error('Manifest webApplicationInfo must include id and resource.');
   process.exit(1);

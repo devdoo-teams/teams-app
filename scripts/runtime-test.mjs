@@ -166,6 +166,18 @@ async function waitForAgentStatus(baseUrl, jobId, expectedStatus) {
   throw new Error(`Agent job did not reach ${expectedStatus}: ${jobId}`);
 }
 
+async function waitForOutboxMessage(baseUrl, conversationId, needle) {
+  const deadline = Date.now() + 10_000;
+
+  while (Date.now() < deadline) {
+    const result = await request(baseUrl, `/api/debug/agent-outbox/${conversationId}`);
+    if (result.body.messages.some((message) => message.includes(needle))) return result.body;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  throw new Error(`Outbox message did not arrive: ${conversationId}`);
+}
+
 async function stopServer(child) {
   if (child.exitCode !== null) return;
   child.kill('SIGTERM');
@@ -369,8 +381,12 @@ async function runAgentTimeoutFlow(dataFile, jobDataFile) {
     assert(failed.status === 'failed', 'Codex job fails cleanly after timeout');
     assert(failed.error.includes('시간 제한'), 'timeout failure explains the reason');
 
-    const outbox = await request(server.baseUrl, '/api/debug/agent-outbox/runtime-conversation-agent-timeout');
-    assert(outbox.body.messages.some((message) => message.includes('시간 제한')), 'timeout failure is delivered to Teams');
+    await waitForOutboxMessage(
+      server.baseUrl,
+      'runtime-conversation-agent-timeout',
+      '시간 제한',
+    );
+    assert(true, 'timeout failure is delivered to Teams');
   } finally {
     await stopServer(server.child);
   }

@@ -51,12 +51,12 @@ type WeatherResponse = {
 };
 
 const DEMO_COORDINATES = { latitude: 37.5665, longitude: 126.978 };
-type LocationSource = 'teams-native' | 'demo';
+type LocationSource = 'browser' | 'teams-native' | 'demo';
 type DeviceLocation = {
   latitude: number;
   longitude: number;
   accuracy?: number;
-  source: 'teams-native';
+  source: 'browser' | 'teams-native';
 };
 
 export function App() {
@@ -142,13 +142,55 @@ export function App() {
     });
   }
 
+  function getBrowserLocation(): Promise<DeviceLocation> {
+    return new Promise((resolve, reject) => {
+      if (!navigator.geolocation) {
+        reject(new Error('이 환경에서는 HTML5 위치 정보를 지원하지 않습니다.'));
+        return;
+      }
+
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          if (!Number.isFinite(position.coords.latitude) || !Number.isFinite(position.coords.longitude)) {
+            reject(new Error('브라우저가 유효한 위치를 반환하지 않았습니다.'));
+            return;
+          }
+
+          resolve({
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+            accuracy: position.coords.accuracy,
+            source: 'browser',
+          });
+        },
+        (error) => {
+          const message = error.code === 1
+            ? '위치 권한이 거부되었습니다. Teams 탭 메뉴의 앱 권한에서 위치를 허용한 뒤 탭을 다시 로드하세요.'
+            : error.code === 3
+              ? '위치 확인 시간이 초과되었습니다. 잠시 후 다시 시도하세요.'
+              : '브라우저 위치를 확인하지 못했습니다. Teams 앱 권한을 확인하세요.';
+          reject(new Error(message));
+        },
+        { enableHighAccuracy: false, maximumAge: 300_000, timeout: 8_000 },
+      );
+    });
+  }
+
   async function getCurrentDeviceLocation(): Promise<DeviceLocation> {
-    const teamsLocationSupported = await initializeTeamsLocation();
-    if (!teamsLocationSupported) {
-      throw new Error('외부 브라우저에서는 Teams 앱 권한을 사용할 수 없습니다. 모바일 Teams에서 설치된 업무 허브 탭을 직접 열어주세요.');
+    const locationErrors: string[] = [];
+
+    // The current Teams client guidance recommends HTML5 Geolocation for tabs.
+    // TeamsJS native APIs remain as a compatibility fallback for older hosts.
+    try {
+      return await getBrowserLocation();
+    } catch (caught) {
+      locationErrors.push(caught instanceof Error ? caught.message : 'HTML5 위치 API를 사용할 수 없습니다.');
     }
 
-    const locationErrors: string[] = [];
+    const teamsLocationSupported = await initializeTeamsLocation();
+    if (!teamsLocationSupported) {
+      throw new Error(locationErrors.join(' '));
+    }
 
     if (geoLocation.isSupported()) {
       try {
@@ -208,7 +250,7 @@ export function App() {
       } catch (caught) {
         locationMessage = caught instanceof Error
           ? `${caught.message} 현재 카드는 서울 데모 위치이며, 현재 위치가 아닙니다.`
-          : 'Teams 네이티브 위치를 확인하지 못했습니다. 현재 카드는 서울 데모 위치이며, 현재 위치가 아닙니다.';
+          : '위치를 확인하지 못했습니다. 현재 카드는 서울 데모 위치이며, 현재 위치가 아닙니다.';
       }
     }
 
@@ -434,21 +476,24 @@ export function App() {
             </p>
           </div>
           <button
+            aria-label="내 위치 사용"
             className="secondary"
             disabled={weatherLoading}
             onClick={() => void loadWeather(true)}
             type="button"
           >
-            {weatherLoading ? '위치 확인 중…' : locationSource === 'demo' ? '내 위치 사용' : '현재 위치 새로고침'}
+            {weatherLoading ? '위치 확인 중…' : '내 위치 사용'}
           </button>
         </div>
 
         <p className="weather-location-meta">
-          {locationSource === 'teams-native'
+          {locationSource === 'browser'
+            ? 'HTML5 위치 권한 사용 · Teams 앱 권한에서 위치를 허용해야 합니다.'
+            : locationSource === 'teams-native'
             ? `Teams ${teamsClientType === 'android' || teamsClientType === 'ios' ? '모바일' : '호스트'} 네이티브 위치 권한 사용`
             : teamsHost
-              ? 'Teams 앱 권한으로 현재 위치를 확인합니다. 카드는 아직 서울 데모 위치입니다.'
-              : '현재 위치 아님 · 모바일 Teams 앱에서 업무 허브 탭을 직접 열어주세요.'}
+              ? 'Teams 앱 권한에서 위치를 허용한 뒤 내 위치 사용을 누르세요.'
+              : '현재 위치 아님 · Teams 모바일 탭에서 앱 권한을 허용한 뒤 내 위치 사용을 누르세요.'}
         </p>
 
         {weatherLoading ? (
@@ -483,7 +528,11 @@ export function App() {
             </div>
 
             <div className="weather-footer">
-              <span>{weather.source === 'demo' ? '서울 데모 데이터 · 현재 위치 아님' : '실시간 Teams 위치 데이터'}</span>
+              <span>{weather.source === 'demo'
+                ? '서울 데모 데이터 · 현재 위치 아님'
+                : locationSource === 'browser'
+                  ? '실시간 HTML5 위치 데이터'
+                  : '실시간 Teams 위치 데이터'}</span>
               <span>좌표 {weather.location.latitude.toFixed(4)}, {weather.location.longitude.toFixed(4)}</span>
               {locationAccuracy !== null && <span>정확도 ±{Math.round(locationAccuracy)}m</span>}
               <span>{weather.location.timezone}</span>

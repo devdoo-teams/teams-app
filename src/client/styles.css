@@ -8,7 +8,7 @@
 body { margin: 0; min-width: 320px; }
 button, input { font: inherit; }
 
-.shell { margin: 0 auto; max-width: 880px; padding: 56px 24px 32px; }
+.shell { margin: 0 auto; max-width: 880px; padding: 56px 24px calc(32px + env(safe-area-inset-bottom)); }
 .hero { align-items: flex-start; display: flex; justify-content: space-between; gap: 24px; margin-bottom: 28px; }
 .eyebrow { color: #6264a7; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.14em; margin: 0 0 8px; }
 h1, h2 { color: #111827; margin: 0; }
@@ -46,7 +46,7 @@ h2 { font-size: 1.35rem; }
 .add-form { display: flex; gap: 10px; margin: 24px 0 18px; }
 input { border: 1px solid #d9deea; border-radius: 10px; color: #1f2937; flex: 1; min-width: 0; padding: 12px 14px; }
 input:focus { border-color: #6264a7; box-shadow: 0 0 0 3px rgba(98, 100, 167, 0.15); outline: none; }
-button { border: 0; border-radius: 10px; cursor: pointer; font-weight: 750; padding: 11px 16px; }
+button { border: 0; border-radius: 10px; cursor: pointer; font-weight: 750; min-height: 44px; padding: 11px 16px; }
 .primary { background: #6264a7; color: #fff; }
 .primary:hover { background: #4f518e; }
 .secondary { background: #f0f1fa; color: #4f518e; }
@@ -76,7 +76,7 @@ button { border: 0; border-radius: 10px; cursor: pointer; font-weight: 750; padd
 footer { color: #98a2b3; font-size: 0.78rem; padding-top: 20px; text-align: center; }
 
 @media (max-width: 900px) {
-  .shell { padding: 28px 16px; }
+  .shell { padding: max(20px, env(safe-area-inset-top)) 16px calc(28px + env(safe-area-inset-bottom)); }
   .hero { display: block; }
   .badge { display: inline-block; margin-top: 18px; }
   .panel { padding: 20px; }
@@ -85,7 +85,7 @@ footer { color: #98a2b3; font-size: 0.78rem; padding-top: 20px; text-align: cent
   .runtime-panel { grid-template-columns: repeat(2, 1fr); }
   .weather-widget { padding: 20px; }
   .weather-heading { display: block; }
-  .weather-heading .secondary { margin-top: 16px; }
+  .weather-heading .secondary { margin-top: 16px; width: 100%; }
   .weather-stats { grid-template-columns: repeat(2, 1fr); }
   .item { align-items: flex-start; flex-wrap: wrap; }
   .item-actions { margin-left: 21px; width: calc(100% - 21px); }
