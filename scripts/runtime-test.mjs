@@ -129,6 +129,7 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
       CODEX_BIN: process.execPath,
       CODEX_SCRIPT: path.join(root, 'scripts/fake-codex.mjs'),
       WEATHER_MODE: 'demo',
+      COPILOTKIT_DETERMINISTIC_MODE: production ? '' : 'true',
       TEAMS_USE_SDK: teamsSdk ? 'true' : 'false',
       TEAMS_SKIP_OUTBOUND: teamsSdk ? 'true' : 'false',
       ...(teamsSdk
@@ -225,6 +226,7 @@ async function runLocalFlow(dataFile, jobDataFile) {
     assert(health.body.auth === 'local-bypass', 'local runtime uses explicit auth bypass');
     assert(health.body.storage === 'file-json', 'local runtime reports file storage');
     assert(health.body.copilotKit === 'enabled', 'CopilotKit runtime is enabled');
+    assert(health.body.genAI === 'deterministic-test', 'local runtime reports explicit deterministic test mode');
 
     const copilotInfo = await request(server.baseUrl, '/api/copilotkit/info');
     assert(copilotInfo.response.status === 200, 'CopilotKit info endpoint returns 200');
@@ -285,7 +287,14 @@ async function runLocalFlow(dataFile, jobDataFile) {
       body: JSON.stringify(activity('날씨', server.baseUrl, 'weather')),
     });
     assert(weatherCommand.response.status === 200, 'Bot weather command completes locally');
-    assert(weatherCommand.body.messages[0].includes('날씨 위젯'), 'Bot weather command returns widget summary');
+    assert(weatherCommand.body.messages[0].includes('현재 기기 위치가 자동으로 전달되지 않습니다'), 'Bot weather command does not guess a location');
+
+    const explicitWeatherCommand = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity('날씨 35.1796 129.0756', server.baseUrl, 'weather-explicit')),
+    });
+    assert(explicitWeatherCommand.response.status === 200, 'Bot explicit weather command completes locally');
+    assert(explicitWeatherCommand.body.messages[0].includes('날씨 위젯'), 'Bot explicit weather command returns widget summary');
 
     const invalid = await request(server.baseUrl, '/api/items', {
       method: 'POST',

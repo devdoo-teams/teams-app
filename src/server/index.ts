@@ -89,6 +89,11 @@ http.get('/api/health', (_request: any, response: any) => {
     storage: 'file-json',
     copilotKit: 'enabled',
     copilotKitRuntime: '/api/copilotkit',
+    genAI: process.env.COPILOTKIT_DETERMINISTIC_MODE === 'true'
+      ? 'deterministic-test'
+      : process.env.OPENAI_API_KEY?.trim()
+        ? 'openai-configured'
+        : 'not-configured',
     timestamp: new Date().toISOString(),
   });
 });
@@ -298,9 +303,15 @@ async function handleMessage(activity: any, send: (text: string) => Promise<void
 
   const weatherMatch = text.match(/^(?:weather|날씨)(?:\s+([-+]?\d+(?:\.\d+)?)\s+([-+]?\d+(?:\.\d+)?))?$/i);
   if (weatherMatch) {
-    const latitude = weatherMatch[1] ? Number(weatherMatch[1]) : 37.5665;
-    const longitude = weatherMatch[2] ? Number(weatherMatch[2]) : 126.978;
     const isExplicitLocation = Boolean(weatherMatch[1] && weatherMatch[2]);
+
+    if (!isExplicitLocation) {
+      await send('Bot 대화에는 현재 기기 위치가 자동으로 전달되지 않습니다. Teams 탭에서 “내 위치 사용”을 누르거나, weather 37.5665 126.978처럼 좌표를 함께 입력하세요.');
+      return;
+    }
+
+    const latitude = Number(weatherMatch[1]);
+    const longitude = Number(weatherMatch[2]);
 
     if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
       await send('위도는 -90~90, 경도는 -180~180 범위로 입력하세요. 예: weather 37.5665 126.978');
@@ -308,7 +319,7 @@ async function handleMessage(activity: any, send: (text: string) => Promise<void
     }
 
     try {
-      const weather = await getWeather(latitude, longitude, { demo: !isExplicitLocation });
+      const weather = await getWeather(latitude, longitude);
       await send(formatWeatherMessage(weather));
     } catch {
       await send('날씨 정보를 가져오지 못했습니다. 잠시 후 다시 시도하세요.');

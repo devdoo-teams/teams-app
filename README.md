@@ -29,6 +29,7 @@ TypeScript + React + Express + Microsoft Teams SDK 기반의 내부용 Teams 앱
 - AG-UI 스트리밍 에이전트와 `useAgentContext` 기반 업무·날씨 컨텍스트 전달
 - CopilotKit `useRenderTool` 기반 업무 현황·날씨·workspace-write 승인 카드
 - `POST /api/copilotkit/agent/default/run` CopilotKit REST/SSE 런타임
+- OpenAI-compatible Chat Completions 기반 GenAI 에이전트와 tool-calling
 - Teams 모바일 HTML5 Geolocation 위치 조회 및 구형 호스트용 TeamsJS 위치 API fallback
 - Teams 앱 manifest `devicePermissions: ["geolocation"]` 선언
 - 환경 템플릿 기반 Teams manifest
@@ -53,7 +54,9 @@ TEAMS_SKIP_AUTH=true npm run dev
 
 `TEAMS_SKIP_AUTH=true`는 로컬 탭 API의 사용자 인증만 우회하는 개발용 설정입니다. `BOT_CLIENT_ID`, `CLIENT_SECRET`, `TENANT_ID`가 있으면 Teams SDK Bot은 계속 실행되어 실제 Teams 메시지 outbound를 테스트할 수 있습니다. `TEAMS_SKIP_OUTBOUND=true`를 별도로 설정한 경우에만 비동기 진행·완료 메시지를 로컬 outbox에 보관합니다. 운영에서는 `TEAMS_SKIP_AUTH`를 제거하고 탭 API도 Entra SSO로 보호합니다.
 
-모바일 Teams 탭에서는 `내 위치 사용` 버튼을 눌러 위치를 요청합니다. iPhone/iPad Teams 호스트에서 구형 네이티브 TeamsJS 위치 API가 지원되면 먼저 사용하고, 실패하거나 지원되지 않으면 HTML5 Geolocation을 시도합니다. New Teams·웹에서는 HTML5 위치를 먼저 사용하며, 호스트가 명시적으로 지원할 때만 TeamsJS `geoLocation` Preview API를 보조 경로로 사용합니다. 위치가 거부되면 Teams 탭 메뉴의 `앱 권한`에서 위치를 허용하고, iPhone 설정의 개인정보 보호 및 보안 > 위치 서비스 > Teams도 `앱 사용 중`으로 설정한 뒤 다시 시도해야 합니다. 위치 권한을 새로 선언한 뒤에는 버전이 올라간 Teams 앱 패키지를 다시 업로드해야 합니다. 위치를 얻지 못한 경우 서울 카드는 현재 위치가 아닌 데모 데이터로 명시됩니다.
+CopilotKit 채팅은 `OPENAI_API_KEY`가 설정된 경우에만 실제 GenAI 경로를 사용합니다. 선택적으로 `OPENAI_MODEL`(기본 `gpt-4o-mini`)과 OpenAI-compatible `OPENAI_BASE_URL`을 지정할 수 있습니다. 키가 없는 운영 프로세스는 결정형 응답으로 위장하지 않고 GenAI 설정 오류를 반환합니다. `COPILOTKIT_DETERMINISTIC_MODE=true`는 자동 테스트 전용이며 운영에서 사용하면 안 됩니다.
+
+모바일 Teams 탭은 시작할 때 현재 위치 권한을 요청하고, 실패하면 서울 데모로 대체하지 않고 위치 권한 안내만 표시합니다. `내 위치 사용` 버튼으로 다시 요청할 수 있습니다. iPhone/iPad Teams 호스트에서 구형 네이티브 TeamsJS 위치 API가 지원되면 먼저 사용하고, 실패하거나 지원되지 않으면 HTML5 Geolocation을 시도합니다. New Teams·웹에서는 HTML5 위치를 먼저 사용하며, 호스트가 명시적으로 지원할 때만 TeamsJS `geoLocation` Preview API를 보조 경로로 사용합니다. 위치가 거부되면 Teams 탭 메뉴의 `앱 권한`에서 위치를 허용하고, iPhone 설정의 개인정보 보호 및 보안 > 위치 서비스 > Teams도 `앱 사용 중`으로 설정한 뒤 다시 시도해야 합니다. 위치 권한을 새로 선언한 뒤에는 버전이 올라간 Teams 앱 패키지를 다시 업로드해야 합니다. Bot 대화에는 기기 위치가 자동 전달되지 않으므로 `날씨`만 입력해 서울을 추측하지 않으며, Teams 탭에서 위치를 허용하거나 `weather <위도> <경도>`를 입력해야 합니다.
 
 모바일 구현 참고: [Teams 모바일 탭 설계](https://learn.microsoft.com/en-us/microsoftteams/platform/tabs/design/tabs?tabs=mobile), [Teams 모바일 앱 모범 사례](https://learn.microsoft.com/en-us/microsoftteams/platform/resources/teams-mobile-best-practices), [Teams 위치 기능](https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/device-capabilities/location-capability), [Teams 브라우저 장치 권한](https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/device-capabilities/browser-device-permissions).
 

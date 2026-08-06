@@ -38,6 +38,7 @@ type WorkspaceHealth = {
   ok: boolean;
   bot: 'teams-sdk' | 'local-handler';
   userAuth: string;
+  genAI: 'openai-configured' | 'not-configured' | 'deterministic-test';
 };
 
 const weatherToolSchema = z.object({
@@ -211,11 +212,11 @@ export function CopilotWorkspaceAssistant(props: {
     <section className="copilot-panel" aria-label="CopilotKit 업무 도우미">
       <div className="copilot-panel-heading">
         <div>
-          <p className="eyebrow">COPILOTKIT · AG-UI</p>
+          <p className="eyebrow">GENAI · COPILOTKIT · AG-UI</p>
           <h2>업무 도우미</h2>
-          <p>업무·날씨·Codex 작업을 Teams 탭 안에서 대화로 확인하세요.</p>
+          <p>모델이 선택한 도구 결과를 날씨·업무·승인 카드로 표시합니다.</p>
         </div>
-        <span className="copilot-live-badge"><span aria-hidden="true" />실시간</span>
+        <span className="copilot-live-badge"><span aria-hidden="true" />{props.health?.genAI === 'openai-configured' ? 'GenAI 연결됨' : 'GenAI 설정 필요'}</span>
       </div>
       <CopilotChat
         agentId="default"

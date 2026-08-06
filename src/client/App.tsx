@@ -29,6 +29,7 @@ type HealthResponse = {
   storage: string;
   timestamp: string;
   copilotKit: 'enabled' | 'disabled';
+  genAI: 'openai-configured' | 'not-configured' | 'deterministic-test';
 };
 
 type WeatherResponse = {
@@ -53,7 +54,6 @@ type WeatherResponse = {
   };
 };
 
-const DEMO_COORDINATES = { latitude: 37.5665, longitude: 126.978 };
 type LocationSource = 'browser' | 'teams-native' | 'demo';
 type DeviceLocation = {
   latitude: number;
@@ -91,12 +91,11 @@ export function App() {
   const [copilotReady, setCopilotReady] = useState(false);
   const teamsLocationReady = useRef<Promise<TeamsLocationRuntime> | null>(null);
 
-  async function requestWeather(latitude: number, longitude: number, demo: boolean) {
+  async function requestWeather(latitude: number, longitude: number) {
     const query = new URLSearchParams({
       latitude: String(latitude),
       longitude: String(longitude),
     });
-    if (demo) query.set('mode', 'demo');
 
     const response = await apiFetch(`/api/weather?${query.toString()}`);
     if (!response.ok) throw new Error('날씨 정보를 불러오지 못했습니다.');
@@ -298,53 +297,50 @@ export function App() {
     setWeatherLoading(true);
     setWeatherError('');
 
-    let latitude = DEMO_COORDINATES.latitude;
-    let longitude = DEMO_COORDINATES.longitude;
-    let demo = true;
-    let locationMessage = '';
-    let resolvedLocationSource: LocationSource = 'demo';
-    let resolvedLocationAccuracy: number | null = null;
+    if (!useCurrentLocation) {
+      setWeather(null);
+      setLocationSource('demo');
+      setLocationAccuracy(null);
+      setWeatherError('현재 위치 권한을 허용해야 날씨를 표시할 수 있습니다.');
+      setWeatherLoading(false);
+      return;
+    }
 
-    if (useCurrentLocation) {
-      try {
-        const position = await getCurrentDeviceLocation();
-        latitude = position.latitude;
-        longitude = position.longitude;
-        demo = false;
-        resolvedLocationSource = position.source;
-        resolvedLocationAccuracy = position.accuracy ?? null;
-      } catch (caught) {
-        locationMessage = caught instanceof Error
-          ? `${caught.message} 현재 카드는 서울 데모 위치이며, 현재 위치가 아닙니다.`
-          : '위치를 확인하지 못했습니다. 현재 카드는 서울 데모 위치이며, 현재 위치가 아닙니다.';
-      }
+    let latitude: number;
+    let longitude: number;
+    let resolvedLocationSource: LocationSource;
+    let resolvedLocationAccuracy: number | null;
+
+    try {
+      const position = await getCurrentDeviceLocation();
+      latitude = position.latitude;
+      longitude = position.longitude;
+      resolvedLocationSource = position.source;
+      resolvedLocationAccuracy = position.accuracy ?? null;
+    } catch (caught) {
+      setWeather(null);
+      setLocationSource('demo');
+      setLocationAccuracy(null);
+      setWeatherError(caught instanceof Error
+        ? caught.message
+        : '현재 위치를 확인하지 못했습니다. 위치 권한을 허용한 뒤 다시 시도하세요.');
+      setWeatherLoading(false);
+      return;
     }
 
     try {
-      const result = await requestWeather(latitude, longitude, demo);
+      const result = await requestWeather(latitude, longitude);
       setWeather(result);
       setLocationSource(resolvedLocationSource);
       setLocationAccuracy(resolvedLocationAccuracy);
-      setWeatherError(locationMessage);
+      setWeatherError('');
     } catch (caught) {
-      if (!demo) {
-        try {
-          const fallback = await requestWeather(
-            DEMO_COORDINATES.latitude,
-            DEMO_COORDINATES.longitude,
-            true,
-          );
-          setWeather(fallback);
-          setLocationSource('demo');
-          setLocationAccuracy(null);
-          setWeatherError('실시간 날씨 연결에 실패해 데모 위치를 표시합니다.');
-          return;
-        } catch {
-          // Report the original error below when the demo fallback also fails.
-        }
-      }
       setWeather(null);
-      setWeatherError(caught instanceof Error ? caught.message : '날씨 정보를 불러오지 못했습니다.');
+      setLocationSource('demo');
+      setLocationAccuracy(null);
+      setWeatherError(caught instanceof Error
+        ? caught.message
+        : '실시간 날씨를 불러오지 못했습니다.');
     } finally {
       setWeatherLoading(false);
     }
@@ -401,7 +397,7 @@ export function App() {
   useEffect(() => {
     void refreshRuntime().finally(() => setCopilotReady(true));
     void initializeTeamsLocation();
-    void loadWeather(false);
+    void loadWeather(true);
   }, []);
 
   const visibleItems = items.filter((item) => filter === 'all' || item.status === filter);
@@ -523,6 +519,10 @@ export function App() {
           <strong>{health?.bot === 'teams-sdk' ? 'Teams SDK' : '로컬 핸들러'}</strong>
         </div>
         <div>
+          <span>GenAI</span>
+          <strong>{health?.genAI === 'openai-configured' ? 'OpenAI 연결됨' : health?.genAI === 'deterministic-test' ? '테스트 모드' : '설정 필요'}</strong>
+        </div>
+        <div>
           <span>저장소</span>
           <strong>{health?.storage === 'file-json' ? '파일 JSON' : health?.storage || '-'}</strong>
         </div>
@@ -559,7 +559,7 @@ export function App() {
             ? `Teams ${teamsClientType === 'android' || teamsClientType === 'ios' || teamsClientType === 'ipados' ? '모바일' : '호스트'} 네이티브 위치 권한 사용`
             : teamsHost
               ? `${teamsHostName || 'Teams'} 호스트 · 앱 권한에서 위치를 허용한 뒤 내 위치 사용을 누르세요.`
-              : '현재 위치 아님 · Teams 모바일 탭에서 앱 권한을 허용한 뒤 내 위치 사용을 누르세요.'}
+              : '위치 권한 필요 · Teams 모바일 탭에서 앱 권한을 허용한 뒤 내 위치 사용을 누르세요.'}
         </p>
 
         {weatherLoading ? (
@@ -595,7 +595,7 @@ export function App() {
 
             <div className="weather-footer">
               <span>{weather.source === 'demo'
-                ? '서울 데모 데이터 · 현재 위치 아님'
+                ? '데모 데이터 · 현재 위치 아님'
                 : locationSource === 'browser'
                   ? '실시간 HTML5 위치 데이터'
                   : '실시간 Teams 위치 데이터'}</span>
@@ -749,7 +749,7 @@ export function App() {
       {dashboard}
       <div className="shell copilot-shell">
         <CopilotWorkspaceAssistant
-          health={health ? { ok: health.ok, bot: health.bot, userAuth: health.userAuth } : null}
+          health={health ? { ok: health.ok, bot: health.bot, userAuth: health.userAuth, genAI: health.genAI } : null}
           items={items}
           summary={summary}
           weather={weather}
