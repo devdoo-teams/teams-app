@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { build } from 'esbuild';
@@ -21,9 +22,11 @@ await build({
 });
 
 const sourceHtml = await fs.readFile(path.join(root, 'src/client/index.html'), 'utf8');
+const clientBundle = await fs.readFile(path.join(assetsDir, 'main.js'));
+const assetVersion = crypto.createHash('sha256').update(clientBundle).digest('hex').slice(0, 12);
 const html = sourceHtml
   .replace('<meta name="theme-color" content="#6264a7" />', '<meta name="theme-color" content="#6264a7" />\n    <link rel="stylesheet" href="./assets/main.css" />')
-  .replace('<script type="module" src="/main.tsx"></script>', '<script type="module" src="./assets/main.js"></script>');
+  .replace('<script type="module" src="/main.tsx"></script>', `<script type="module" src="./assets/main.js?v=${assetVersion}"></script>`);
 
 await fs.writeFile(path.join(outputDir, 'index.html'), html, 'utf8');
 

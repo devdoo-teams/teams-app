@@ -25,6 +25,7 @@ await itemStore.initialize();
 
 let http: any;
 let teamsApp: any;
+let userAuthValidator: any;
 
 if (useTeamsSdk) {
   const teams = await import('@microsoft/teams.apps');
@@ -36,6 +37,17 @@ if (useTeamsSdk) {
     tenantId: process.env.TENANT_ID,
     applicationIdUri: process.env.APPLICATION_ID_URI,
   });
+
+  // A Teams tab SSO token is issued for the Entra app declared in
+  // webApplicationInfo, which is intentionally separate from the Bot app ID.
+  // Build a second public SDK App instance only to reuse its Entra validator;
+  // it is never started and does not handle HTTP traffic.
+  const userAuthApp = new teams.App({
+    clientId: process.env.CLIENT_ID,
+    tenantId: process.env.TENANT_ID,
+    applicationIdUri: process.env.APPLICATION_ID_URI,
+  });
+  userAuthValidator = userAuthApp.entraTokenValidator;
 } else {
   // Local mode keeps the browser and API fully runnable even when the host machine
   // has an incompatible optional auth dependency. Production Teams traffic uses the SDK branch above.
@@ -61,7 +73,7 @@ http.use(
   '/api/items',
   createUserAuthMiddleware({
     allowUnauthenticated: skipAuth,
-    validator: teamsApp?.entraTokenValidator,
+    validator: userAuthValidator,
   }),
 );
 

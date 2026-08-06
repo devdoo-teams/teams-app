@@ -46,6 +46,14 @@ if (!values.APPLICATION_ID_URI.startsWith('api://') || /[<>$]|\$\{\{/.test(value
   process.exit(1);
 }
 
+const expectedApplicationIdUri = `api://${values.TAB_DOMAIN}/${values.CLIENT_ID}`;
+if (values.APPLICATION_ID_URI !== expectedApplicationIdUri) {
+  console.error(
+    `APPLICATION_ID_URI must match the Teams tab origin: expected ${expectedApplicationIdUri}.`,
+  );
+  process.exit(1);
+}
+
 const placeholderPattern = /demo\.example\.com|11111111-1111-1111-1111-111111111111|22222222-2222-2222-2222-222222222222|33333333-3333-3333-3333-333333333333|\$\{\{/i;
 const placeholderFields = required.filter((name) => placeholderPattern.test(values[name]));
 if (placeholderFields.length > 0) {

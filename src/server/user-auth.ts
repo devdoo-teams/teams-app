@@ -9,6 +9,21 @@ type UserAuthOptions = {
   validator?: TokenValidator;
 };
 
+function tokenMetadata(rawToken: string): string {
+  try {
+    const payload = JSON.parse(Buffer.from(rawToken.split('.')[1] ?? '', 'base64url').toString('utf8')) as Record<string, unknown>;
+    return JSON.stringify({
+      aud: payload.aud,
+      iss: payload.iss,
+      tid: payload.tid,
+      ver: payload.ver,
+      scp: payload.scp,
+    });
+  } catch {
+    return '{"decode":"failed"}';
+  }
+}
+
 export function createUserAuthMiddleware(options: UserAuthOptions) {
   return async function requireUserAuth(
     request: Request,
@@ -31,6 +46,7 @@ export function createUserAuthMiddleware(options: UserAuthOptions) {
       : undefined;
 
     if (!token) {
+      console.warn(`[WARN] user auth rejected (${request.method} ${request.originalUrl}): missing bearer token`);
       response.status(401).json({ error: 'Bearer token is required' });
       return;
     }
@@ -43,6 +59,9 @@ export function createUserAuthMiddleware(options: UserAuthOptions) {
     }
 
     if (!claims) {
+      console.warn(
+        `[WARN] user auth rejected (${request.method} ${request.originalUrl}): invalid bearer token ${tokenMetadata(token)}`,
+      );
       response.status(401).json({ error: 'Invalid bearer token' });
       return;
     }

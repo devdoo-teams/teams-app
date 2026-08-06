@@ -55,7 +55,7 @@ button { border: 0; border-radius: 10px; cursor: pointer; font-weight: 750; padd
 .error { background: #fff1f1; border-radius: 9px; color: #b42318; padding: 10px 12px; }
 footer { color: #98a2b3; font-size: 0.78rem; padding-top: 20px; text-align: center; }
 
-@media (max-width: 560px) {
+@media (max-width: 900px) {
   .shell { padding: 28px 16px; }
   .hero { display: block; }
   .badge { display: inline-block; margin-top: 18px; }

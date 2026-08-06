@@ -53,7 +53,7 @@ npm test
 
 ## 인증과 저장소
 
-Teams 탭이 초기화되면 TeamsJS `authentication.getAuthToken()`으로 받은 bearer token을 `/api/items` 요청에 전달합니다. 서버는 운영 모드에서 `BOT_CLIENT_ID`, `TENANT_ID`, `APPLICATION_ID_URI`를 기준으로 Microsoft Entra 토큰을 검증하고 Bot 메시지 발신에도 `BOT_CLIENT_ID`와 `CLIENT_SECRET`를 사용합니다. `CLIENT_ID`는 manifest의 탭/SSO용 Entra 앱 ID입니다. 로컬 개발에서만 `TEAMS_SKIP_AUTH=true`로 이 검증을 우회합니다.
+Teams 탭이 초기화되면 TeamsJS `authentication.getAuthToken()`으로 받은 bearer token을 `/api/items` 요청에 전달합니다. 서버는 운영 모드에서 탭/SSO용 `CLIENT_ID`, `TENANT_ID`, `APPLICATION_ID_URI`를 기준으로 Microsoft Entra 토큰을 검증하고, Bot 메시지 발신에는 별도의 `BOT_CLIENT_ID`와 `CLIENT_SECRET`를 사용합니다. 로컬 개발에서만 `TEAMS_SKIP_AUTH=true`로 이 검증을 우회합니다.
 
 현재 업무 저장소는 `data/items.json`입니다. 이 파일은 로컬 MVP의 재시작 검증을 위해 사용하며 Git에는 포함하지 않습니다. 여러 인스턴스 운영이나 감사 로그가 필요한 단계에서는 SQL/managed database로 교체해야 합니다.
 
@@ -81,6 +81,8 @@ npm run package:app
 생성된 `appPackage/build/teams-sdk-mvp.zip`을 Teams Developer Portal 또는 Teams Admin Center에 업로드합니다.
 
 `APPLICATION_ID_URI`는 Microsoft Entra 앱 등록의 `Expose an API`에 표시되는 실제 Application ID URI를 사용해야 합니다. 이 값은 manifest의 `webApplicationInfo.resource`로 들어갑니다.
+
+Teams 탭 SSO에서는 `TAB_DOMAIN`이 Microsoft Entra 테넌트에서 검증된 공개 HTTPS 도메인이어야 하며, `APPLICATION_ID_URI`는 반드시 `api://<TAB_DOMAIN>/<CLIENT_ID>`와 같아야 합니다. Dev Tunnel의 임시 호스트가 테넌트 검증 도메인이 아니면 Teams 화면은 열리지만 SSO 토큰 발급은 시작되지 않습니다. 이 경우에는 로컬 개발용 `TEAMS_SKIP_AUTH=true`로 기능을 확인하고, 운영 전환 시 검증된 도메인으로 패키지를 다시 생성합니다.
 
 ## Teams에서 실행
 

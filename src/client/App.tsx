@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react';
 
-import { apiFetch } from './auth.js';
+import { apiFetch, getLastAuthError, setAuthRequired } from './auth.js';
 
 type Item = {
   id: number;
@@ -49,30 +49,46 @@ export function App() {
       setItems(data.items);
       setSummary(data.summary);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : '알 수 없는 오류가 발생했습니다.');
+      const authError = getLastAuthError();
+      setError(
+        authError
+          ? `SSO 토큰 요청 실패: ${authError}`
+          : caught instanceof Error
+            ? caught.message
+            : '알 수 없는 오류가 발생했습니다.',
+      );
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => {
-    void loadItems();
-    void loadHealth();
-  }, []);
-
-  async function loadHealth() {
+  async function loadHealth(): Promise<HealthResponse | null> {
     setHealthLoading(true);
 
     try {
       const response = await fetch('/api/health');
       if (!response.ok) throw new Error('health check failed');
-      setHealth((await response.json()) as HealthResponse);
+      const data = (await response.json()) as HealthResponse;
+      setHealth(data);
+      setAuthRequired(data.userAuth === 'entra-sso');
+      return data;
     } catch {
       setHealth(null);
+      setAuthRequired(true);
+      return null;
     } finally {
       setHealthLoading(false);
     }
   }
+
+  async function refreshRuntime(): Promise<void> {
+    await loadHealth();
+    await loadItems();
+  }
+
+  useEffect(() => {
+    void refreshRuntime();
+  }, []);
 
   const visibleItems = items.filter((item) => filter === 'all' || item.status === filter);
 
@@ -204,10 +220,7 @@ export function App() {
           </div>
           <button
             className="secondary"
-            onClick={() => {
-              void loadItems();
-              void loadHealth();
-            }}
+            onClick={() => void refreshRuntime()}
             type="button"
           >
             새로고침
