@@ -25,6 +25,8 @@ TypeScript + React + Express + Microsoft Teams SDK 기반의 내부용 Teams 앱
 - Teams SDK `install.add` 설치 이벤트 welcome message와 명령 안내
 - 런타임 상태 패널과 서버 health 확인
 - 위치 권한 기반 날씨 위젯과 `날씨`/`weather` Bot 명령
+- TeamsJS `geoLocation` 우선 위치 조회와 HTML5 geolocation fallback
+- Teams 앱 manifest `devicePermissions: ["geolocation"]` 선언
 - 환경 템플릿 기반 Teams manifest
 - 환경변수 치환형 Teams 앱 ZIP 패키징
 
@@ -45,6 +47,8 @@ TEAMS_SKIP_AUTH=true npm run dev
 - Teams 메시지 엔드포인트: http://localhost:3978/api/messages
 
 `TEAMS_SKIP_AUTH=true`는 로컬 탭 API의 사용자 인증만 우회하는 개발용 설정입니다. `BOT_CLIENT_ID`, `CLIENT_SECRET`, `TENANT_ID`가 있으면 Teams SDK Bot은 계속 실행되어 실제 Teams 메시지 outbound를 테스트할 수 있습니다. `TEAMS_SKIP_OUTBOUND=true`를 별도로 설정한 경우에만 비동기 진행·완료 메시지를 로컬 outbox에 보관합니다. 운영에서는 `TEAMS_SKIP_AUTH`를 제거하고 탭 API도 Entra SSO로 보호합니다.
+
+모바일 Teams 탭에서는 `내 위치 사용` 버튼을 눌러 TeamsJS `geoLocation` 권한을 요청합니다. 호스트가 해당 API를 지원하지 않는 경우 HTML5 위치 API로 fallback하며, 권한을 허용하지 않으면 서울 데모 데이터를 표시합니다. 위치 권한을 새로 선언한 뒤에는 업데이트된 Teams 앱 패키지를 다시 업로드해야 합니다.
 
 ## Teams 원격 Codex 작업
 

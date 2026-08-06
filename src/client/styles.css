@@ -27,7 +27,9 @@ h2 { font-size: 1.35rem; }
 .weather-heading { align-items: flex-start; display: flex; justify-content: space-between; gap: 16px; position: relative; z-index: 1; }
 .weather-heading h2, .weather-widget .eyebrow { color: #fff; }
 .weather-location { color: rgba(255, 255, 255, 0.72); margin: 8px 0 0; }
+.weather-location-meta { color: rgba(255, 255, 255, 0.68); font-size: 0.82rem; margin: 14px 0 -6px; position: relative; z-index: 1; }
 .weather-widget .secondary { background: rgba(255, 255, 255, 0.16); color: #fff; position: relative; z-index: 1; }
+.weather-widget .secondary:disabled { cursor: wait; opacity: 0.68; }
 .weather-widget .secondary:hover { background: rgba(255, 255, 255, 0.24); }
 .weather-main { align-items: center; display: flex; gap: 16px; margin: 28px 0 24px; position: relative; z-index: 1; }
 .weather-icon { font-size: 4rem; line-height: 1; }

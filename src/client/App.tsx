@@ -1,4 +1,5 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { app as teamsApp, geoLocation } from '@microsoft/teams-js';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 
 import { apiFetch, getLastAuthError, setAuthRequired } from './auth.js';
 
@@ -50,6 +51,13 @@ type WeatherResponse = {
 };
 
 const DEMO_COORDINATES = { latitude: 37.5665, longitude: 126.978 };
+type LocationSource = 'teams-native' | 'browser' | 'demo';
+type DeviceLocation = {
+  latitude: number;
+  longitude: number;
+  accuracy?: number;
+  source: Exclude<LocationSource, 'demo'>;
+};
 
 export function App() {
   const [items, setItems] = useState<Item[]>([]);
@@ -65,6 +73,10 @@ export function App() {
   const [weather, setWeather] = useState<WeatherResponse | null>(null);
   const [weatherLoading, setWeatherLoading] = useState(true);
   const [weatherError, setWeatherError] = useState('');
+  const [locationSource, setLocationSource] = useState<LocationSource>('demo');
+  const [locationAccuracy, setLocationAccuracy] = useState<number | null>(null);
+  const [teamsClientType, setTeamsClientType] = useState('');
+  const teamsLocationReady = useRef<Promise<boolean> | null>(null);
 
   async function requestWeather(latitude: number, longitude: number, demo: boolean) {
     const query = new URLSearchParams({
@@ -78,19 +90,82 @@ export function App() {
     return (await response.json()) as WeatherResponse;
   }
 
-  function getCurrentPosition(): Promise<GeolocationPosition> {
+  async function initializeTeamsLocation(): Promise<boolean> {
+    if (typeof window === 'undefined' || window.parent === window) return false;
+    if (!teamsLocationReady.current) {
+      teamsLocationReady.current = (async () => {
+        try {
+          if (!teamsApp.isInitialized()) await teamsApp.initialize();
+          const context = await teamsApp.getContext();
+          setTeamsClientType(context.app.host.clientType);
+          return geoLocation.isSupported();
+        } catch {
+          return false;
+        }
+      })();
+    }
+    return teamsLocationReady.current;
+  }
+
+  function getBrowserLocation(): Promise<DeviceLocation> {
     return new Promise((resolve, reject) => {
       if (!navigator.geolocation) {
         reject(new Error('이 브라우저에서는 위치 정보를 지원하지 않습니다.'));
         return;
       }
 
-      navigator.geolocation.getCurrentPosition(resolve, reject, {
+      navigator.geolocation.getCurrentPosition(
+        (position) => resolve({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+          source: 'browser',
+        }),
+        reject,
+        {
         enableHighAccuracy: false,
         maximumAge: 300_000,
         timeout: 8_000,
-      });
+        },
+      );
     });
+  }
+
+  async function getCurrentDeviceLocation(): Promise<DeviceLocation> {
+    const teamsLocationSupported = await initializeTeamsLocation();
+    let teamsLocationError = '';
+
+    if (teamsLocationSupported) {
+      try {
+        const hasPermission = await geoLocation.hasPermission();
+        if (!hasPermission && !(await geoLocation.requestPermission())) {
+          throw new Error('Teams 위치 권한이 거부되었습니다.');
+        }
+
+        const location = await geoLocation.getCurrentLocation();
+        if (!Number.isFinite(location.latitude) || !Number.isFinite(location.longitude)) {
+          throw new Error('Teams가 유효한 위치를 반환하지 않았습니다.');
+        }
+
+        return {
+          latitude: location.latitude,
+          longitude: location.longitude,
+          accuracy: location.accuracy,
+          source: 'teams-native',
+        };
+      } catch (caught) {
+        teamsLocationError = caught instanceof Error ? caught.message : 'Teams 위치 API를 사용할 수 없습니다.';
+      }
+    }
+
+    try {
+      return await getBrowserLocation();
+    } catch (caught) {
+      if (teamsLocationError) {
+        throw new Error(`${teamsLocationError} 모바일 Teams의 앱 권한에서 위치를 허용한 뒤 다시 시도하세요.`);
+      }
+      throw caught;
+    }
   }
 
   async function loadWeather(useCurrentLocation: boolean): Promise<void> {
@@ -101,21 +176,27 @@ export function App() {
     let longitude = DEMO_COORDINATES.longitude;
     let demo = true;
     let locationMessage = '';
+    let resolvedLocationSource: LocationSource = 'demo';
+    let resolvedLocationAccuracy: number | null = null;
 
     if (useCurrentLocation) {
       try {
-        const position = await getCurrentPosition();
-        latitude = position.coords.latitude;
-        longitude = position.coords.longitude;
+        const position = await getCurrentDeviceLocation();
+        latitude = position.latitude;
+        longitude = position.longitude;
         demo = false;
+        resolvedLocationSource = position.source;
+        resolvedLocationAccuracy = position.accuracy ?? null;
       } catch {
-        locationMessage = '위치 권한을 사용할 수 없어 서울 데모 위치를 표시합니다.';
+        locationMessage = '현재 위치를 확인하지 못해 서울 데모 위치를 표시합니다. 모바일 Teams 앱 권한에서 위치를 허용한 뒤 다시 시도하세요.';
       }
     }
 
     try {
       const result = await requestWeather(latitude, longitude, demo);
       setWeather(result);
+      setLocationSource(resolvedLocationSource);
+      setLocationAccuracy(resolvedLocationAccuracy);
       setWeatherError(locationMessage);
     } catch (caught) {
       if (!demo) {
@@ -126,6 +207,8 @@ export function App() {
             true,
           );
           setWeather(fallback);
+          setLocationSource('demo');
+          setLocationAccuracy(null);
           setWeatherError('실시간 날씨 연결에 실패해 데모 위치를 표시합니다.');
           return;
         } catch {
@@ -189,7 +272,8 @@ export function App() {
 
   useEffect(() => {
     void refreshRuntime();
-    void loadWeather(true);
+    void initializeTeamsLocation();
+    void loadWeather(false);
   }, []);
 
   const visibleItems = items.filter((item) => filter === 'all' || item.status === filter);
@@ -329,12 +413,21 @@ export function App() {
           </div>
           <button
             className="secondary"
+            disabled={weatherLoading}
             onClick={() => void loadWeather(true)}
             type="button"
           >
-            현재 위치로 새로고침
+            {weatherLoading ? '위치 확인 중…' : locationSource === 'demo' ? '내 위치 사용' : '현재 위치 새로고침'}
           </button>
         </div>
+
+        <p className="weather-location-meta">
+          {locationSource === 'teams-native'
+            ? `Teams ${teamsClientType === 'android' || teamsClientType === 'ios' ? '모바일' : '호스트'} 위치 권한 사용`
+            : locationSource === 'browser'
+              ? '브라우저 위치 권한 사용'
+              : '모바일에서 내 위치 사용을 눌러 위치를 확인하세요.'}
+        </p>
 
         {weatherLoading ? (
           <p className="empty">현재 위치와 날씨를 확인하는 중입니다…</p>
@@ -369,6 +462,8 @@ export function App() {
 
             <div className="weather-footer">
               <span>{weather.source === 'demo' ? '서울 데모 데이터' : '실시간 위치 데이터'}</span>
+              <span>좌표 {weather.location.latitude.toFixed(4)}, {weather.location.longitude.toFixed(4)}</span>
+              {locationAccuracy !== null && <span>정확도 ±{Math.round(locationAccuracy)}m</span>}
               <span>{weather.location.timezone}</span>
               <span>업데이트 {weather.current.time.replace('T', ' ').slice(0, 16)}</span>
             </div>

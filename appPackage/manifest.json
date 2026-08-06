@@ -51,6 +51,7 @@
     }
   ],
   "validDomains": ["${{TAB_DOMAIN}}"],
+  "devicePermissions": ["geolocation"],
   "webApplicationInfo": {
     "id": "${{CLIENT_ID}}",
     "resource": "${{APPLICATION_ID_URI}}"

@@ -32,6 +32,11 @@ if (!manifest.staticTabs.some((tab) => tab.entityId === 'home' && tab.scopes.inc
   process.exit(1);
 }
 
+if (!manifest.devicePermissions?.includes('geolocation')) {
+  console.error('Manifest must declare geolocation device permission.');
+  process.exit(1);
+}
+
 if (!manifest.webApplicationInfo.id || !manifest.webApplicationInfo.resource) {
   console.error('Manifest webApplicationInfo must include id and resource.');
   process.exit(1);
