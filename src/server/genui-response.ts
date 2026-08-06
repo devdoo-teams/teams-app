@@ -5,6 +5,7 @@ import type { AgentNotification } from './agent-service.js';
 import type { GenUiActionStore } from './genui-action-store.js';
 import type { Item } from './item-store.js';
 import type { WeatherResponse } from './weather-service.js';
+import { redactSensitiveText } from './sensitive-text.js';
 import {
   GENUI_SCHEMA_VERSION,
   GenUiEnvelopeV1Schema,
@@ -30,23 +31,39 @@ function fieldOf(job: AgentJob, name: string): unknown {
   return recordOf(job)[name];
 }
 
-function displayText(value: unknown, maxLength: number, fallback = ''): string {
+function normalizedText(value: unknown, fallback = ''): string {
   const raw = typeof value === 'string' ? value : value === undefined || value === null ? '' : String(value);
   const normalized = raw.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '�').trim();
+  return normalized || fallback;
+}
+
+function boundedText(value: unknown, maxLength: number, fallback = ''): string {
+  const normalized = normalizedText(value, fallback);
   if (!normalized) return fallback;
   if (normalized.length <= maxLength) return normalized;
   const suffix = '…';
   return `${normalized.slice(0, Math.max(1, maxLength - suffix.length))}${suffix}`;
 }
 
+function displayText(value: unknown, maxLength: number, fallback = ''): string {
+  const normalized = normalizedText(value);
+  const safeFallback = redactSensitiveText(fallback);
+  if (!normalized) return safeFallback;
+  return boundedText(redactSensitiveText(normalized), maxLength, safeFallback);
+}
+
+function identifierText(value: unknown, maxLength: number, fallback = ''): string {
+  return boundedText(value, maxLength, fallback);
+}
+
 function safeJobId(job: AgentJob): string {
-  return displayText(fieldOf(job, 'id'), 200, 'unknown-job');
+  return identifierText(fieldOf(job, 'id'), 200, 'unknown-job');
 }
 
 function safeItemId(item: Item): string {
   const value = item && typeof item.id === 'number' && Number.isSafeInteger(item.id)
     ? String(item.id)
-    : displayText(item?.id, 120, 'unknown-item');
+    : identifierText(item?.id, 120, 'unknown-item');
   return value || 'unknown-item';
 }
 
@@ -92,8 +109,8 @@ function jobFallback(job: AgentJob): string {
     `권한: ${safeJobMode(job)}`,
   ];
 
-  const threadId = displayText(fieldOf(job, 'threadId'), 200);
-  const commitHash = displayText(fieldOf(job, 'commitHash'), 200);
+  const threadId = identifierText(fieldOf(job, 'threadId'), 200);
+  const commitHash = identifierText(fieldOf(job, 'commitHash'), 200);
   const commitMessage = displayText(fieldOf(job, 'commitMessage'), 1_000);
   const progress = safeJobProgress(job);
   const error = safeJobError(job);
@@ -105,6 +122,58 @@ function jobFallback(job: AgentJob): string {
   if (error) lines.push(`오류: ${error}`);
   if (result) lines.push(`결과:\n${result}`);
   return compactNotification(lines.join('\n'), 4_000);
+}
+
+const APPROVAL_SCOPE_MAX_LENGTH = 512;
+
+function approvalScopeField(job: AgentJob, name: 'conversationId' | 'requesterId' | 'tenantId'): string | undefined {
+  const value = fieldOf(job, name);
+  if (typeof value !== 'string' || value.length === 0 || value.length > APPROVAL_SCOPE_MAX_LENGTH) return undefined;
+  if (value.trim() !== value || /[\u0000-\u001f\u007f]/.test(value)) return undefined;
+  return value;
+}
+
+function validApprovalScope(job: AgentJob): {
+  conversationId: string;
+  requesterId: string;
+  tenantId: string;
+} | undefined {
+  const conversationId = approvalScopeField(job, 'conversationId');
+  const requesterId = approvalScopeField(job, 'requesterId');
+  const tenantId = approvalScopeField(job, 'tenantId');
+  if (!conversationId || !requesterId || !tenantId) return undefined;
+  return { conversationId, requesterId, tenantId };
+}
+
+const IDENTITY_KEYS = new Set([
+  'id',
+  'entityid',
+  'correlationid',
+  'jobid',
+  'itemid',
+  'threadid',
+  'parentjobid',
+  'commithash',
+  'actiontoken',
+]);
+
+function preservesIdentity(key: string): boolean {
+  const normalized = key.replace(/[^A-Za-z0-9]/g, '').toLowerCase();
+  return IDENTITY_KEYS.has(normalized) || normalized.endsWith('id');
+}
+
+function redactSharedValue(value: unknown, key = ''): unknown {
+  if (typeof value === 'string') return preservesIdentity(key) ? value : redactSensitiveText(value);
+  if (Array.isArray(value)) return value.map((entry) => redactSharedValue(entry, key));
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([entryKey, entryValue]) => [
+    entryKey,
+    redactSharedValue(entryValue, entryKey),
+  ]));
+}
+
+function redactSharedSections(sections: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return redactSharedValue(sections) as Array<Record<string, unknown>>;
 }
 
 function stateForJob(job: AgentJob): GenUiState {
@@ -138,10 +207,12 @@ export class GenUiResponseFactory {
       actions: [],
       citations: [],
       ...input,
-      id: displayText(input.id, 200, 'genui-response'),
+      id: identifierText(input.id, 200, 'genui-response'),
       title: displayText(input.title, 240),
       summary: input.summary === undefined ? undefined : displayText(input.summary, 2_000),
+      sections: redactSharedSections(input.sections),
       fallbackText: displayText(input.fallbackText, 4_000, '요청 결과를 확인하세요.'),
+      metadata: redactSharedValue(input.metadata ?? {}) as Record<string, string | number | boolean | null>,
     });
   }
 
@@ -299,14 +370,19 @@ export class GenUiResponseFactory {
   async approval(job: AgentJob): Promise<GenUiEnvelopeV1> {
     const jobId = safeJobId(job);
     const prompt = safeJobPrompt(job);
-    if (!job.tenantId) throw new Error(`Cannot issue a GenUI approval grant without tenantId: ${jobId}`);
+    const scope = validApprovalScope(job);
+    if (!scope) {
+      // Do not include the corrupt scope or prompt in this card.  In
+      // particular, this path must return before the first grant is issued.
+      return this.error('쓰기 작업 승인을 생성할 수 없습니다. 승인 범위가 유효하지 않습니다.', 'approval-scope-invalid');
+    }
     const correlationId = randomUUID();
     const common = {
       entityId: jobId,
       correlationId,
-      conversationId: job.conversationId,
-      requesterId: job.requesterId,
-      tenantId: job.tenantId,
+      conversationId: scope.conversationId,
+      requesterId: scope.requesterId,
+      tenantId: scope.tenantId,
     };
     const approveToken = await this.actionStore.issue({ ...common, action: 'approve' });
     const cancelToken = await this.actionStore.issue({ ...common, action: 'cancel' });
