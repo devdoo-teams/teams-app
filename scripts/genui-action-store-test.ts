@@ -78,19 +78,19 @@ try {
   await assert.rejects(() => new GenUiActionStore(malformedFile).initialize(), /Invalid GenUI action store format/);
 
   const responseFactory = new GenUiResponseFactory(store);
-  await assert.rejects(
-    () => responseFactory.approval({
-      id: 'legacy-job',
-      prompt: 'legacy',
-      mode: 'workspace-write',
-      status: 'awaiting_approval',
-      conversationId: 'conversation-1',
-      requesterId: 'user-1',
-      progress: [],
-      createdAt: new Date().toISOString(),
-    }),
-    /without tenantId/,
-  );
+  const invalidScopeCard = await responseFactory.approval({
+    id: 'legacy-job',
+    prompt: 'legacy',
+    mode: 'workspace-write',
+    status: 'awaiting_approval',
+    conversationId: 'conversation-1',
+    requesterId: 'user-1',
+    progress: [],
+    createdAt: new Date().toISOString(),
+  });
+  assert.equal(invalidScopeCard.kind, 'error');
+  assert.equal(invalidScopeCard.id, 'approval-scope-invalid');
+  assert.equal(invalidScopeCard.actions.length, 0, 'invalid scope must issue zero grants');
   console.log('PASS: GenUI action grants are scoped, single-use, persistent, and expiring');
 } finally {
   await fs.rm(directory, { recursive: true, force: true });

@@ -18,3 +18,8 @@ All requested checks passed:
   - PASS: TypeScript compilation completed with no errors.
 
 The full `npm test` suite was intentionally not run, per Task 0 instructions.
+
+## Follow-up regression check
+
+- `npx tsx scripts/genui-action-store-test.ts`
+  - PASS: GenUI action grants are scoped, single-use, persistent, and expiring.
