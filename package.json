@@ -16,12 +16,13 @@
     "validate:manifest": "node scripts/validate-manifest.mjs",
     "package:app": "node scripts/package-app.mjs",
     "test:troubleshooting": "tsx scripts/remote-troubleshooting-test.ts",
+    "test:atomic-stores": "tsx scripts/atomic-json-store-test.ts",
     "test:genui-actions": "tsx scripts/genui-action-store-test.ts",
     "test:genui-contract": "tsx scripts/genui-contract-test.ts",
     "test:mcp-direct-factory": "tsx scripts/mcp-direct-factory-test.ts",
     "check": "npm run build:client && npm run validate:manifest",
     "test:runtime": "node scripts/runtime-test.mjs",
-    "test": "npm run check && npm run build && npm run test:troubleshooting && npm run test:genui-contract && npm run test:genui-actions && npm run test:mcp-direct-factory && npm run test:runtime"
+    "test": "npm run check && npm run build && npm run test:troubleshooting && npm run test:atomic-stores && npm run test:genui-contract && npm run test:genui-actions && npm run test:mcp-direct-factory && npm run test:runtime"
   },
   "dependencies": {
     "@copilotkit/channels-teams": "0.7.3",

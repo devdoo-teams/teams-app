@@ -333,6 +333,16 @@ async function runStartupGateFlow() {
     'public deployment hints',
   );
   await expectStartupFailure(
+    'file-json multi-worker configuration',
+    { WEB_CONCURRENCY: '2' },
+    'file-json storage is single-process only',
+  );
+  await expectStartupFailure(
+    'file-json clustered instance configuration',
+    { NODE_APP_INSTANCE: '1' },
+    'file-json storage is single-process only',
+  );
+  await expectStartupFailure(
     'production without Teams bot credentials',
     {
       NODE_ENV: 'production',
@@ -398,6 +408,24 @@ async function waitForOutboxMessage(baseUrl, conversationId, needle) {
   throw new Error(`Outbox message did not arrive: ${conversationId}`);
 }
 
+async function waitForOutboxMessages(baseUrl, conversationId, needles) {
+  const messages = [];
+  const activities = [];
+  const deadline = Date.now() + 10_000;
+
+  while (Date.now() < deadline) {
+    const result = await request(baseUrl, `/api/debug/agent-outbox/${conversationId}`);
+    messages.push(...(result.body.messages ?? []));
+    activities.push(...(result.body.activities ?? []));
+    if (needles.every((needle) => messages.some((message) => message.includes(needle)))) {
+      return { body: { conversationId, messages, activities } };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  throw new Error(`Outbox messages did not arrive: ${conversationId} (${needles.join(', ')})`);
+}
+
 async function stopServer(child) {
   if (child.exitCode !== null) return;
   child.kill('SIGTERM');
@@ -425,7 +453,7 @@ async function runLocalFlow(dataFile, jobDataFile) {
     assert(health.body.outbound === 'local-outbox', 'local health reports the local outbox truthfully');
     assert(health.body.version === '1.0.6', 'health version comes from the Teams manifest');
     assert(!('agent' in health.body) && !('agentWorkspace' in health.body), 'health does not expose agent binary or workspace paths');
-    assert(health.body.storage === 'file-json', 'local runtime reports file storage');
+    assert(health.body.storage === 'file-json-single-process', 'local runtime reports single-process file storage');
     assert(health.body.copilotKit === 'enabled', 'CopilotKit runtime is enabled');
     assert(health.body.genAI === 'deterministic-test', 'local runtime reports explicit deterministic test mode');
     assert(health.body.genUiMode === 'hybrid', 'health reports the hybrid GenUI mode');
@@ -618,7 +646,11 @@ async function runLocalFlow(dataFile, jobDataFile) {
     assert(completedReadOnly.result.includes('FAKE_CODEX_OK'), 'Codex JSONL result is persisted');
     assert(completedReadOnly.result.includes('REMOTE TEAMS CODEX OPERATING RULES'), 'remote Codex receives troubleshooting guidance');
 
-    const readOnlyOutbox = await request(server.baseUrl, '/api/debug/agent-outbox/runtime-conversation-agent-run');
+    const readOnlyOutbox = await waitForOutboxMessages(
+      server.baseUrl,
+      'runtime-conversation-agent-run',
+      [readOnlyJobId, '분석을 시작했습니다', '완료되었습니다', '중간 분석 업데이트'],
+    );
     assert(
       readOnlyOutbox.body.messages.some((message) => message.includes(readOnlyJobId)),
       'completed Codex result is delivered to the conversation outbox',

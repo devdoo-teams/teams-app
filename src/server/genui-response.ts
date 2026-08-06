@@ -215,8 +215,15 @@ export class GenUiResponseFactory {
   }
 
   async approval(job: AgentJob): Promise<GenUiEnvelopeV1> {
+    if (!job.tenantId) throw new Error(`Cannot issue a GenUI approval grant without tenantId: ${job.id}`);
     const correlationId = randomUUID();
-    const common = { entityId: job.id, correlationId, conversationId: job.conversationId, requesterId: job.requesterId };
+    const common = {
+      entityId: job.id,
+      correlationId,
+      conversationId: job.conversationId,
+      requesterId: job.requesterId,
+      tenantId: job.tenantId,
+    };
     const approveToken = await this.actionStore.issue({ ...common, action: 'approve' });
     const cancelToken = await this.actionStore.issue({ ...common, action: 'cancel' });
     const actions: GenUiAction[] = [

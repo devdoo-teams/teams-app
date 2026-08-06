@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
-import fs from 'node:fs/promises';
-import path from 'node:path';
+
+import { atomicWriteJson, readAtomicJsonStore } from './atomic-file.js';
 
 export type AgentJobMode = 'read-only' | 'workspace-write';
 export type AgentJobStatus =
@@ -45,10 +45,8 @@ export class AgentJobStore {
   constructor(private readonly filePath: string) {}
 
   async initialize(): Promise<void> {
-    await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-
     try {
-      const raw = await fs.readFile(this.filePath, 'utf8');
+      const raw = await readAtomicJsonStore(this.filePath);
       const parsed = JSON.parse(raw);
       this.jobs = Array.isArray(parsed) ? parsed : [];
     } catch (error: any) {
@@ -163,9 +161,9 @@ export class AgentJobStore {
   }
 
   private async persist(): Promise<void> {
-    const snapshot = JSON.stringify(this.jobs, null, 2);
-    this.writeChain = this.writeChain.then(() => fs.writeFile(this.filePath, snapshot, 'utf8'));
-    await this.writeChain;
+    const nextWrite = this.writeChain.then(() => atomicWriteJson(this.filePath, this.jobs));
+    this.writeChain = nextWrite.catch(() => undefined);
+    await nextWrite;
   }
 }
 

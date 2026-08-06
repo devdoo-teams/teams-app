@@ -1,5 +1,4 @@
-import fs from 'node:fs/promises';
-import path from 'node:path';
+import { atomicWriteJson, readAtomicJsonStore } from './atomic-file.js';
 
 export type Item = {
   id: number;
@@ -19,10 +18,8 @@ export class ItemStore {
   constructor(private readonly dataFile: string) {}
 
   async initialize(): Promise<void> {
-    await fs.mkdir(path.dirname(this.dataFile), { recursive: true });
-
     try {
-      const contents = await fs.readFile(this.dataFile, 'utf8');
+      const contents = await readAtomicJsonStore(this.dataFile);
       const parsed = JSON.parse(contents) as unknown;
 
       if (!Array.isArray(parsed) || !parsed.every(isItem)) {
@@ -87,8 +84,7 @@ export class ItemStore {
   }
 
   private async persist(): Promise<void> {
-    const snapshot = `${JSON.stringify(this.items, null, 2)}\n`;
-    const nextWrite = this.writeQueue.then(() => fs.writeFile(this.dataFile, snapshot, 'utf8'));
+    const nextWrite = this.writeQueue.then(() => atomicWriteJson(this.dataFile, this.items));
     this.writeQueue = nextWrite.catch(() => undefined);
     await nextWrite;
   }

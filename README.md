@@ -104,7 +104,7 @@ CopilotKit 런타임 검증은 `/api/copilotkit/info` 검색, 업무 현황·날
 
 Teams 탭이 초기화되면 TeamsJS `authentication.getAuthToken()`으로 받은 bearer token을 `/api/items` 요청에 전달합니다. 서버는 운영 모드에서 탭/SSO용 `CLIENT_ID`, `TENANT_ID`, `APPLICATION_ID_URI`를 기준으로 Microsoft Entra 토큰을 검증하고, Bot 메시지 발신에는 별도의 `BOT_CLIENT_ID`와 `CLIENT_SECRET`를 사용합니다. 로컬 개발에서만 `TEAMS_LOCAL_DEV=true TEAMS_SKIP_AUTH=true`로 이 검증을 우회합니다.
 
-현재 업무 저장소는 `data/items.json`입니다. 이 파일은 로컬 MVP의 재시작 검증을 위해 사용하며 Git에는 포함하지 않습니다. 여러 인스턴스 운영이나 감사 로그가 필요한 단계에서는 SQL/managed database로 교체해야 합니다.
+현재 업무·작업·GenUI grant 저장소는 private atomic JSON 파일입니다. 각 파일은 동일 디렉터리 임시 파일에 `fsync`한 뒤 원자적으로 교체되며, 디렉터리/파일 권한은 각각 `0700`/`0600`으로 유지됩니다. 이 `file-json-single-process` 저장소는 단일 프로세스 전용이며 `WEB_CONCURRENCY>1` 또는 `NODE_APP_INSTANCE>0` 설정으로 시작하지 않습니다. 여러 worker/replica 운영이나 감사 로그가 필요한 단계에서는 SQL/managed database로 교체해야 하며, atomic rename만으로 분산 동시성 문제를 해결한다고 간주하지 않습니다.
 
 ## 앱 패키지 생성
 

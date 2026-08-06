@@ -33,6 +33,8 @@ const publicHintNames = ['PUBLIC_BASE_URL', 'TAB_DOMAIN', 'BOT_DOMAIN', 'DEV_TUN
 const publicHints = publicHintNames.filter((name) => Boolean(process.env[name]?.trim()));
 const safeLocal = skipAuth && localDev && !isProduction && publicHints.length === 0;
 const legacyPublicMcp = process.env.MCP_PUBLIC_ENABLED?.trim().toLowerCase() === 'true';
+const fileJsonMultiWorker = numericEnvGreaterThan('WEB_CONCURRENCY', 1)
+  || numericEnvGreaterThan('NODE_APP_INSTANCE', 0);
 const clientDist = path.resolve(process.cwd(), 'dist/client');
 const itemStore = new ItemStore(
   process.env.ITEM_STORE_PATH ?? path.resolve(process.cwd(), 'data/items.json'),
@@ -75,6 +77,10 @@ const genUi = new GenUiResponseFactory(genUiActionStore);
 
 if (legacyPublicMcp) {
   throw new Error('MCP_PUBLIC_ENABLED=true is no longer supported; MCP is local-only and requires the safe local gate.');
+}
+
+if (fileJsonMultiWorker) {
+  throw new Error('file-json storage is single-process only; configure one worker or migrate to a transactional shared store.');
 }
 
 if (skipAuth && !safeLocal) {
@@ -289,7 +295,7 @@ http.get('/api/health', (_request: any, response: any) => {
     userAuth: safeLocal ? 'local-bypass' : userAuthConfigured && userAuthValidator ? 'entra-sso' : 'not-configured',
     bot: teamsApp ? 'teams-sdk' : safeLocal ? 'local-handler' : 'not-configured',
     outbound: teamsApp ? (skipOutbound ? 'disabled' : 'teams-sdk') : safeLocal ? 'local-outbox' : 'not-configured',
-    storage: 'file-json',
+    storage: 'file-json-single-process',
     copilotKit: 'enabled',
     copilotKitRuntime: '/api/copilotkit',
     genAI: process.env.COPILOTKIT_DETERMINISTIC_MODE === 'true'
@@ -700,6 +706,7 @@ async function resolveGenUiAction(activity: any): Promise<GenUiEnvelopeV1> {
       correlationId: payload.correlationId,
       conversationId,
       requesterId,
+      tenantId,
     });
 
     if (!consumed.ok) {
@@ -1084,3 +1091,10 @@ if (teamsApp) {
 
 console.log(`Tab URL: http://localhost:${port}/tabs/home`);
 console.log(`Teams messages: http://localhost:${port}/api/messages`);
+
+function numericEnvGreaterThan(name: string, threshold: number): boolean {
+  const raw = process.env[name]?.trim();
+  if (!raw) return false;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > threshold;
+}
