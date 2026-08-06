@@ -1,10 +1,13 @@
 import { spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import fs from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
 const root = process.cwd();
+const execFileAsync = promisify(execFile);
 
 function assert(condition, message) {
   if (!condition) throw new Error(`FAIL: ${message}`);
@@ -86,7 +89,7 @@ function installActivity(baseUrl, suffix) {
   };
 }
 
-async function startServer({ production, dataFile, jobDataFile, teamsSdk = false }) {
+async function startServer({ production, dataFile, jobDataFile, teamsSdk = false, workspace = root }) {
   const port = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const command = process.execPath;
@@ -99,7 +102,7 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
       PORT: String(port),
       ITEM_STORE_PATH: dataFile,
       AGENT_JOB_STORE_PATH: jobDataFile,
-      AGENT_WORKSPACE: root,
+      AGENT_WORKSPACE: workspace,
       CODEX_BIN: process.execPath,
       CODEX_SCRIPT: path.join(root, 'scripts/fake-codex.mjs'),
       TEAMS_USE_SDK: teamsSdk ? 'true' : 'false',
@@ -146,6 +149,19 @@ async function waitForAgentJob(baseUrl, jobId) {
   }
 
   throw new Error(`Agent job did not finish: ${jobId}`);
+}
+
+async function waitForAgentStatus(baseUrl, jobId, expectedStatus) {
+  const deadline = Date.now() + 10_000;
+
+  while (Date.now() < deadline) {
+    const result = await request(baseUrl, '/api/debug/agent-jobs');
+    const job = result.body.jobs.find((candidate) => candidate.id === jobId);
+    if (job?.status === expectedStatus) return job;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  throw new Error(`Agent job did not reach ${expectedStatus}: ${jobId}`);
 }
 
 async function stopServer(child) {
@@ -251,6 +267,34 @@ async function runLocalFlow(dataFile, jobDataFile) {
       readOnlyOutbox.body.messages.some((message) => message.includes(readOnlyJobId)),
       'completed Codex result is delivered to the conversation outbox',
     );
+    assert(
+      readOnlyOutbox.body.messages.some((message) => message.includes('분석을 시작했습니다')),
+      'Codex progress is delivered before the final result',
+    );
+
+    const continued = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity(`continue ${readOnlyJobId} 같은 thread에서 한 줄로 이어서 확인해줘`, server.baseUrl, 'agent-continue')),
+    });
+    const continuedJobId = continued.body.messages[0].match(/task-[\w-]+/)?.[0];
+    assert(continued.body.messages[0].includes('이전 Codex thread'), 'Teams can continue a previous Codex thread');
+    const completedContinuation = await waitForAgentJob(server.baseUrl, continuedJobId);
+    assert(completedContinuation.status === 'completed', 'continued Codex job completes');
+    assert(completedContinuation.parentJobId === readOnlyJobId, 'continued job keeps its parent task link');
+
+    const slowRun = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity('run SLOW 취소 가능한 작업', server.baseUrl, 'agent-cancel')),
+    });
+    const slowJobId = slowRun.body.messages[0].match(/task-[\w-]+/)?.[0];
+    await waitForAgentStatus(server.baseUrl, slowJobId, 'running');
+    const cancelled = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity(`cancel ${slowJobId}`, server.baseUrl, 'agent-cancel-command')),
+    });
+    assert(cancelled.body.messages[0].includes('취소'), 'running Codex job can be cancelled');
+    const cancelledJob = await waitForAgentJob(server.baseUrl, slowJobId);
+    assert(cancelledJob.status === 'cancelled', 'cancelled Codex job stays cancelled');
 
     const writeRequest = await request(server.baseUrl, '/api/messages', {
       method: 'POST',
@@ -330,6 +374,70 @@ async function runTeamsSdkFlow(dataFile, jobDataFile) {
   }
 }
 
+async function runGitCommitFlow(workspace, dataFile, jobDataFile) {
+  await execFileAsync('git', ['init'], { cwd: workspace });
+  await execFileAsync('git', ['config', 'user.name', 'Runtime Test'], { cwd: workspace });
+  await execFileAsync('git', ['config', 'user.email', 'runtime@example.test'], { cwd: workspace });
+  await fs.writeFile(path.join(workspace, 'README.md'), 'runtime workspace\n', 'utf8');
+  await execFileAsync('git', ['add', 'README.md'], { cwd: workspace });
+  await execFileAsync('git', ['commit', '-m', 'test: seed runtime workspace'], { cwd: workspace });
+
+  const server = await startServer({ production: false, dataFile, jobDataFile, workspace });
+
+  try {
+    const writeRequest = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity('write MUTATE 런타임 변경을 생성해줘', server.baseUrl, 'git-write')),
+    });
+    const jobId = writeRequest.body.messages[0].match(/task-[\w-]+/)?.[0];
+    await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity(`approve ${jobId}`, server.baseUrl, 'git-approve')),
+    });
+    const completed = await waitForAgentJob(server.baseUrl, jobId);
+    assert(completed.status === 'completed', 'approved write job completes in an isolated Git workspace');
+
+    const commit = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity(`commit ${jobId} test: runtime agent change`, server.baseUrl, 'git-commit')),
+    });
+    assert(commit.body.messages[0].includes('커밋'), 'Teams commit command creates a Git commit');
+    const committed = (await execFileAsync('git', ['log', '-1', '--format=%s'], { cwd: workspace })).stdout.trim();
+    assert(committed === 'test: runtime agent change', 'Git commit message is preserved');
+  } finally {
+    await stopServer(server.child);
+  }
+}
+
+async function runRecoveryFlow(dataFile, jobDataFile) {
+  await fs.writeFile(
+    jobDataFile,
+    JSON.stringify([
+      {
+        id: 'task-recovery-check',
+        prompt: 'interrupted task',
+        mode: 'read-only',
+        status: 'running',
+        conversationId: 'recovery-conversation',
+        requesterId: 'recovery-user',
+        progress: ['Codex 작업을 시작했습니다.'],
+        createdAt: new Date().toISOString(),
+      },
+    ]),
+    'utf8',
+  );
+
+  const server = await startServer({ production: false, dataFile, jobDataFile });
+  try {
+    const result = await request(server.baseUrl, '/api/debug/agent-jobs');
+    const recovered = result.body.jobs.find((job) => job.id === 'task-recovery-check');
+    assert(recovered.status === 'failed', 'interrupted Codex jobs are marked failed after restart');
+    assert(recovered.error.includes('재시작'), 'restart recovery keeps a useful failure reason');
+  } finally {
+    await stopServer(server.child);
+  }
+}
+
 const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-sdk-runtime-'));
 const localDataFile = path.join(tempDir, 'local-items.json');
 const productionDataFile = path.join(tempDir, 'production-items.json');
@@ -337,12 +445,21 @@ const localJobDataFile = path.join(tempDir, 'local-agent-jobs.json');
 const productionJobDataFile = path.join(tempDir, 'production-agent-jobs.json');
 const sdkDataFile = path.join(tempDir, 'sdk-items.json');
 const sdkJobDataFile = path.join(tempDir, 'sdk-agent-jobs.json');
+const gitWorkspace = await fs.mkdtemp(path.join(tempDir, 'git-workspace-'));
+const gitDataFile = path.join(tempDir, 'git-items.json');
+const gitJobDataFile = path.join(tempDir, 'git-agent-jobs.json');
+const recoveryDataFile = path.join(tempDir, 'recovery-items.json');
+const recoveryJobDataFile = path.join(tempDir, 'recovery-agent-jobs.json');
 
 try {
   console.log('Runtime verification: local authenticated-bypass flow');
   await runLocalFlow(localDataFile, localJobDataFile);
   console.log('Runtime verification: Teams SDK Activity flow');
   await runTeamsSdkFlow(sdkDataFile, sdkJobDataFile);
+  console.log('Runtime verification: approved Git commit flow');
+  await runGitCommitFlow(gitWorkspace, gitDataFile, gitJobDataFile);
+  console.log('Runtime verification: interrupted job recovery');
+  await runRecoveryFlow(recoveryDataFile, recoveryJobDataFile);
   console.log('Runtime verification: production authentication guard');
   await runProductionAuthFlow(productionDataFile, productionJobDataFile);
   console.log('Runtime verification complete.');

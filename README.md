@@ -50,8 +50,10 @@ TEAMS_SKIP_AUTH=true npm run dev
 help
 run 저장소의 현재 구현 상태를 분석해줘
 status <작업 ID>
+continue <작업 ID> <추가 요청>
 write 테스트 보강 계획을 적용해줘
 approve <작업 ID>
+commit <작업 ID> 변경 내용을 커밋해줘
 cancel <작업 ID>
 ```
 
@@ -71,7 +73,7 @@ cancel <작업 ID>
 npm test
 ```
 
-`npm run test:runtime`만 실행하면 이미 빌드된 서버를 기준으로 런타임 테스트를 반복할 수 있습니다. 테스트는 로컬 인증 우회 흐름, 업무 CRUD, Bot 명령, 설치 welcome message, Teams SDK Activity 라우팅, 원격 Codex 작업·승인·outbox 전달과 production bearer token 거부 흐름을 모두 확인합니다.
+`npm run test:runtime`만 실행하면 이미 빌드된 서버를 기준으로 런타임 테스트를 반복할 수 있습니다. 테스트는 로컬 인증 우회 흐름, 업무 CRUD, Bot 명령, 설치 welcome message, Teams SDK Activity 라우팅, Codex thread 재개·취소·승인·Git commit·outbox 전달과 production bearer token 거부 흐름을 모두 확인합니다.
 
 `npm run check:types`는 별도로 TypeScript 타입 검사를 실행합니다. 실행 환경의 TypeScript CLI가 멈추는 경우에도 `npm run build`는 esbuild 산출물을 만들고 런타임 테스트를 계속할 수 있습니다.
 

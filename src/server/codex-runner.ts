@@ -27,20 +27,17 @@ export class CodexRunner {
     prompt: string;
     workspace: string;
     mode: AgentJobMode;
+    threadId?: string;
     onEvent?: (event: CodexRunEvent) => Promise<void> | void;
   }): Promise<CodexRunResult> {
     const command = process.env.CODEX_BIN ?? 'codex';
     const script = process.env.CODEX_SCRIPT;
-    const args = [
-      ...(script ? [script] : []),
-      'exec',
-      '--json',
-      '--sandbox',
-      options.mode,
-      '--cd',
-      options.workspace,
-      options.prompt,
-    ];
+    const args = [...(script ? [script] : []), 'exec'];
+    if (options.threadId) {
+      args.push('resume', options.threadId, '--json', options.prompt);
+    } else {
+      args.push('--json', '--sandbox', options.mode, '--cd', options.workspace, options.prompt);
+    }
 
     const child = spawn(command, args, {
       cwd: options.workspace,
@@ -55,6 +52,7 @@ export class CodexRunner {
     let eventCount = 0;
     let stdoutBuffer = '';
     let stderr = '';
+    let eventQueue = Promise.resolve();
 
     const handleLine = async (line: string): Promise<void> => {
       const trimmed = line.trim();
@@ -82,7 +80,9 @@ export class CodexRunner {
       stdoutBuffer += chunk;
       const lines = stdoutBuffer.split('\n');
       stdoutBuffer = lines.pop() ?? '';
-      void Promise.all(lines.map((line) => handleLine(line)));
+      for (const line of lines) {
+        eventQueue = eventQueue.then(() => handleLine(line));
+      }
     });
     child.stderr.on('data', (chunk: string) => {
       stderr += chunk;
@@ -94,6 +94,7 @@ export class CodexRunner {
     });
 
     if (stdoutBuffer.trim()) await handleLine(stdoutBuffer);
+    await eventQueue;
     this.processes.delete(options.jobId);
 
     if (exitCode !== 0) {

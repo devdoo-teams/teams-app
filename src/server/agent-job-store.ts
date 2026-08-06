@@ -18,8 +18,11 @@ export interface AgentJob {
   status: AgentJobStatus;
   conversationId: string;
   requesterId: string;
+  parentJobId?: string;
   threadId?: string;
   result?: string;
+  commitHash?: string;
+  commitMessage?: string;
   error?: string;
   progress: string[];
   createdAt: string;
@@ -51,6 +54,8 @@ export class AgentJobStore {
     mode: AgentJobMode;
     conversationId: string;
     requesterId: string;
+    parentJobId?: string;
+    threadId?: string;
   }): Promise<AgentJob> {
     const job: AgentJob = {
       id: `task-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`,
@@ -59,6 +64,8 @@ export class AgentJobStore {
       status: input.mode === 'workspace-write' ? 'awaiting_approval' : 'queued',
       conversationId: input.conversationId,
       requesterId: input.requesterId,
+      parentJobId: input.parentJobId,
+      threadId: input.threadId,
       progress: [],
       createdAt: new Date().toISOString(),
     };

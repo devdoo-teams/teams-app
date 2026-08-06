@@ -1,6 +1,7 @@
 import type { AgentJob, AgentJobMode } from './agent-job-store.js';
 import { AgentJobStore } from './agent-job-store.js';
 import { CodexRunner, type CodexRunEvent } from './codex-runner.js';
+import { GitService } from './git-service.js';
 
 type Notify = (conversationId: string, text: string) => Promise<void>;
 
@@ -10,6 +11,7 @@ export class AgentService {
     private readonly runner: CodexRunner,
     private readonly workspace: string,
     private readonly notify: Notify,
+    private readonly gitService: GitService,
   ) {}
 
   async initialize(): Promise<void> {
@@ -22,10 +24,27 @@ export class AgentService {
     mode: AgentJobMode;
     conversationId: string;
     requesterId: string;
+    parentJobId?: string;
+    threadId?: string;
   }): Promise<AgentJob> {
     const job = await this.store.create(input);
     if (job.mode === 'read-only') void this.execute(job);
     return job;
+  }
+
+  async continue(id: string, prompt: string): Promise<AgentJob | undefined> {
+    const previous = this.store.get(id);
+    if (!previous) return undefined;
+    if (!previous.threadId) return undefined;
+
+    return this.submit({
+      prompt,
+      mode: previous.mode,
+      conversationId: previous.conversationId,
+      requesterId: previous.requesterId,
+      parentJobId: previous.id,
+      threadId: previous.threadId,
+    });
   }
 
   async approve(id: string): Promise<AgentJob | undefined> {
@@ -72,6 +91,25 @@ export class AgentService {
     return this.store.countActive();
   }
 
+  async commit(id: string, message: string): Promise<AgentJob | undefined> {
+    const job = this.store.get(id);
+    if (!job) return undefined;
+    if (job.status !== 'completed') return job;
+
+    const commit = await this.gitService.commit(message);
+    if (!commit.committed) {
+      await this.store.update(id, { commitMessage: commit.message });
+      return this.store.get(id);
+    }
+
+    await this.store.update(id, {
+      commitHash: commit.hash,
+      commitMessage: commit.message,
+    });
+    await this.notify(job.conversationId, `작업 ${id}: ${commit.message}`);
+    return this.store.get(id);
+  }
+
   private async execute(job: AgentJob): Promise<void> {
     await this.store.update(job.id, {
       status: 'running',
@@ -85,6 +123,7 @@ export class AgentService {
         prompt: job.prompt,
         workspace: this.workspace,
         mode: job.mode,
+        threadId: job.threadId,
         onEvent: (event) => this.handleEvent(job, event),
       });
 
@@ -122,11 +161,13 @@ export class AgentService {
 
     if (event.type === 'turn.started') {
       await this.store.appendProgress(job.id, 'Codex가 작업을 분석하고 있습니다.');
+      await this.notify(job.conversationId, `작업 ${job.id}: Codex 분석을 시작했습니다.`);
       return;
     }
 
     if (event.type === 'item.started' && event.item?.type === 'command_execution') {
       await this.store.appendProgress(job.id, 'Codex가 저장소를 확인하고 있습니다.');
+      await this.notify(job.conversationId, `작업 ${job.id}: 저장소를 확인하고 있습니다.`);
     }
   }
 
