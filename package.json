@@ -18,6 +18,7 @@
     "test:troubleshooting": "tsx scripts/remote-troubleshooting-test.ts",
     "test:atomic-stores": "tsx scripts/atomic-json-store-test.ts",
     "test:genui-actions": "tsx scripts/genui-action-store-test.ts",
+    "test:agent-transitions": "tsx scripts/agent-service-transition-test.ts",
     "test:genui-contract": "tsx scripts/genui-contract-test.ts",
     "test:channels-shadow": "tsx scripts/channels-shadow-test.ts",
     "test:mcp-direct-factory": "tsx scripts/mcp-direct-factory-test.ts",

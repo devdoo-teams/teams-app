@@ -9,7 +9,12 @@ import { createCopilotExpressHandler } from '@copilotkit/runtime/v2/express';
 import { createUserAuthMiddleware } from './user-auth.js';
 import { ItemStore, MAX_ITEM_TITLE_LENGTH } from './item-store.js';
 import { AgentJobStore, type AgentJob, type AgentJobScope } from './agent-job-store.js';
-import { AgentService, type AgentNotification } from './agent-service.js';
+import {
+  AgentJobConflictError,
+  AgentService,
+  normalizeAgentPrompt,
+  type AgentNotification,
+} from './agent-service.js';
 import { CodexRunner } from './codex-runner.js';
 import { GitService } from './git-service.js';
 import { TeamsCodexAgent } from './copilot-agent.js';
@@ -143,7 +148,6 @@ type UserClaims = Record<string, unknown>;
 
 const GENUI_CARD_ACTIONS = ['approve', 'cancel', 'refresh', 'feedback'] as const satisfies readonly GenUiCardAction[];
 const inFlightGenUiActions = new Set<string>();
-const MAX_AGENT_PROMPT_LENGTH = 2_000;
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -159,16 +163,11 @@ function nonEmptyString(value: unknown, maxLength = 512): string | undefined {
 }
 
 function validatePrompt(value: unknown): { value?: string; error?: string } {
-  if (typeof value !== 'string') return { error: '작업 요청 내용을 입력하세요.' };
-  const normalized = value.trim();
-  if (!normalized) return { error: '작업 요청 내용을 입력하세요.' };
-  if (normalized.length > MAX_AGENT_PROMPT_LENGTH) {
-    return { error: `작업 요청은 ${MAX_AGENT_PROMPT_LENGTH}자 이내로 입력하세요.` };
+  try {
+    return { value: normalizeAgentPrompt(value) };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : '작업 요청을 처리할 수 없습니다.' };
   }
-  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(normalized)) {
-    return { error: '작업 요청에 허용되지 않는 제어 문자가 포함되어 있습니다.' };
-  }
-  return { value: normalized };
 }
 
 function validateItemTitle(value: unknown): { value?: string; error?: string } {
@@ -684,13 +683,22 @@ http.post('/api/agent-jobs/:id/approve', async (request: any, response: any) => 
     response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid job scope' });
     return;
   }
-  const job = await agentService.approve(request.params.id, resolved.scope);
-  if (!job) {
-    response.status(404).json({ error: 'approval target not found' });
-    return;
-  }
+  try {
+    const job = await agentService.approve(request.params.id, resolved.scope);
+    if (!job) {
+      response.status(404).json({ error: 'approval target not found' });
+      return;
+    }
 
-  response.json({ job });
+    response.json({ job });
+  } catch (error) {
+    if (error instanceof AgentJobConflictError) {
+      response.status(409).json({ error: error.message, job: error.job });
+      return;
+    }
+    console.error('Agent approval failed', error);
+    response.status(500).json({ error: 'approval could not be processed' });
+  }
 });
 http.post('/api/agent-jobs/:id/cancel', async (request: any, response: any) => {
   const resolved = restScope(request, response);
@@ -698,13 +706,22 @@ http.post('/api/agent-jobs/:id/cancel', async (request: any, response: any) => {
     response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid job scope' });
     return;
   }
-  const job = await agentService.cancel(request.params.id, resolved.scope);
-  if (!job) {
-    response.status(404).json({ error: 'cancellation target not found' });
-    return;
-  }
+  try {
+    const job = await agentService.cancelStrict(request.params.id, resolved.scope);
+    if (!job) {
+      response.status(404).json({ error: 'cancellation target not found' });
+      return;
+    }
 
-  response.json({ job });
+    response.json({ job });
+  } catch (error) {
+    if (error instanceof AgentJobConflictError) {
+      response.status(409).json({ error: error.message, job: error.job });
+      return;
+    }
+    console.error('Agent cancellation failed', error);
+    response.status(500).json({ error: 'cancellation could not be processed' });
+  }
 });
 
 function formatAgentJob(job: AgentJob): string {
@@ -799,6 +816,29 @@ function actionRejectionMessage(reason: string): string {
   }
 }
 
+function mutationConflictEnvelope(error: unknown, fallbackId = 'agent-mutation-error'): GenUiEnvelopeV1 {
+  if (error instanceof AgentJobConflictError) {
+    return genUi.error(error.message, `${error.action}-${error.job.id}-conflict`);
+  }
+  return genUi.error('작업 상태가 변경되어 요청을 처리하지 못했습니다. 최신 상태를 확인하세요.', fallbackId);
+}
+
+function replayedGenUiAction(action: GenUiCardAction, job: AgentJob | undefined): GenUiEnvelopeV1 {
+  if (!job) return genUi.error('작업을 찾을 수 없습니다.');
+  if (action === 'refresh') return genUi.jobStatus(job);
+  if (action === 'feedback') return genUi.answer('피드백을 이미 확인했습니다.', `feedback-${job.id}`);
+  if (action === 'approve' && ['queued', 'running', 'completed', 'failed'].includes(job.status)) {
+    return genUi.approvalAccepted(job);
+  }
+  if (action === 'cancel' && job.status === 'cancelled') {
+    return genUi.cancelled(job);
+  }
+  return mutationConflictEnvelope(
+    new AgentJobConflictError(action === 'approve' ? 'approve' : 'cancel', job),
+    `genui-${action}-replay-conflict`,
+  );
+}
+
 async function resolveGenUiAction(activity: any): Promise<GenUiEnvelopeV1> {
   const payload = readGenUiActionPayload(activity);
   if (!payload) {
@@ -827,9 +867,7 @@ async function resolveGenUiAction(activity: any): Promise<GenUiEnvelopeV1> {
 
   if (inFlightGenUiActions.has(actionKey)) {
     const job = agentService.get(payload.entityId, scope);
-    if (payload.action === 'cancel' && job) return genUi.cancelled(job);
-    if (payload.action === 'approve' && job) return genUi.approvalAccepted(job);
-    return genUi.jobStatus(job);
+    return job ? genUi.jobStatus(job) : genUi.error(`작업 ${payload.entityId}을 찾을 수 없습니다.`, `action-${payload.entityId}`);
   }
 
   inFlightGenUiActions.add(actionKey);
@@ -847,9 +885,7 @@ async function resolveGenUiAction(activity: any): Promise<GenUiEnvelopeV1> {
     if (!consumed.ok) {
       if (consumed.reason === 'consumed') {
         const job = agentService.get(payload.entityId, scope);
-        if (payload.action === 'cancel' && job) return genUi.cancelled(job);
-        if (payload.action === 'approve' && job) return genUi.approvalAccepted(job);
-        return genUi.jobStatus(job);
+        return replayedGenUiAction(payload.action, job);
       }
       return genUi.actionError(actionRejectionMessage(consumed.reason));
     }
@@ -861,7 +897,7 @@ async function resolveGenUiAction(activity: any): Promise<GenUiEnvelopeV1> {
         ? genUi.approvalAccepted(job)
         : genUi.error(`작업 ${payload.entityId}을 찾을 수 없습니다.`, `action-${payload.entityId}`);
     } else if (payload.action === 'cancel') {
-      const job = await agentService.cancel(payload.entityId, scope);
+      const job = await agentService.cancelStrict(payload.entityId, scope);
       envelope = job
         ? genUi.cancelled(job)
         : genUi.error(`작업 ${payload.entityId}을 찾을 수 없습니다.`, `action-${payload.entityId}`);
@@ -878,6 +914,9 @@ async function resolveGenUiAction(activity: any): Promise<GenUiEnvelopeV1> {
 
     return envelope;
   } catch (error) {
+    if (error instanceof AgentJobConflictError) {
+      return mutationConflictEnvelope(error);
+    }
     console.error('GenUI action failed', error);
     return genUi.error('카드 액션을 처리하지 못했습니다. 잠시 후 다시 시도하세요.');
   } finally {
@@ -1014,14 +1053,19 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
       await send('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', genUi.error('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', 'scope-missing'));
       return;
     }
-    const job = await agentService.approve(approveMatch[1], scope);
-    if (job) {
-      const responseText = `작업 ${job.id} 승인을 처리했습니다.\nstatus ${job.id}`;
-      const envelope = genUi.approvalAccepted(job);
-      await send(responseText, envelope);
-    } else {
-      const responseText = '승인할 작업을 찾을 수 없습니다.';
-      await send(responseText, genUi.error(responseText, 'approve-missing'));
+    try {
+      const job = await agentService.approve(approveMatch[1], scope);
+      if (job) {
+        const responseText = `작업 ${job.id} 승인을 처리했습니다.\nstatus ${job.id}`;
+        const envelope = genUi.approvalAccepted(job);
+        await send(responseText, envelope);
+      } else {
+        const responseText = '승인할 작업을 찾을 수 없습니다.';
+        await send(responseText, genUi.error(responseText, 'approve-missing'));
+      }
+    } catch (error) {
+      if (!(error instanceof AgentJobConflictError)) throw error;
+      await send(error.message, mutationConflictEnvelope(error, `approve-${approveMatch[1]}-conflict`));
     }
     return;
   }
@@ -1077,14 +1121,19 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
       await send('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', genUi.error('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', 'scope-missing'));
       return;
     }
-    const job = await agentService.cancel(cancelMatch[1], scope);
-    if (job) {
-      const responseText = `작업 ${job.id} 취소를 처리했습니다.\n상태: ${job.status}`;
-      const envelope = genUi.cancelled(job);
-      await send(responseText, envelope);
-    } else {
-      const responseText = '취소할 작업을 찾을 수 없습니다.';
-      await send(responseText, genUi.error(responseText, 'cancel-missing'));
+    try {
+      const job = await agentService.cancelStrict(cancelMatch[1], scope);
+      if (job) {
+        const responseText = `작업 ${job.id} 취소를 처리했습니다.\n상태: ${job.status}`;
+        const envelope = genUi.cancelled(job);
+        await send(responseText, envelope);
+      } else {
+        const responseText = '취소할 작업을 찾을 수 없습니다.';
+        await send(responseText, genUi.error(responseText, 'cancel-missing'));
+      }
+    } catch (error) {
+      if (!(error instanceof AgentJobConflictError)) throw error;
+      await send(error.message, mutationConflictEnvelope(error, `cancel-${cancelMatch[1]}-conflict`));
     }
     return;
   }

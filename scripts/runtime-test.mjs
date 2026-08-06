@@ -651,6 +651,27 @@ async function runLocalFlow(dataFile, jobDataFile) {
       body: JSON.stringify({ conversationId: 'runtime-copilot-write' }),
     });
     assert(cancelledApproval.response.status === 200 && cancelledApproval.body.job.status === 'cancelled', 'CopilotKit approval card can cancel a write job');
+    const staleCopilotCancel = await request(server.baseUrl, `/api/agent-jobs/${approvalJobId}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ conversationId: 'runtime-copilot-write' }),
+    });
+    assert(staleCopilotCancel.response.status === 409, 'REST returns 409 for a stale cancellation');
+    assert(staleCopilotCancel.body.job?.status === 'cancelled', 'stale REST cancellation returns the current scoped job state');
+
+    const restRaceRequest = await copilotRun(server.baseUrl, 'write REST approval race', 'runtime-rest-approval-race');
+    const restRaceArgs = restRaceRequest.events.find((event) => event.type === 'TOOL_CALL_ARGS' && event.delta.includes('jobId'));
+    const restRaceJobId = restRaceArgs ? JSON.parse(restRaceArgs.delta).jobId : '';
+    assert(Boolean(restRaceJobId), 'REST approval race has a scoped approval job');
+    const firstRestApproval = await request(server.baseUrl, `/api/agent-jobs/${restRaceJobId}/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ conversationId: 'runtime-rest-approval-race' }),
+    });
+    assert(firstRestApproval.response.status === 200, 'REST approval performs the single valid transition');
+    const staleRestApproval = await request(server.baseUrl, `/api/agent-jobs/${restRaceJobId}/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ conversationId: 'runtime-rest-approval-race' }),
+    });
+    assert(staleRestApproval.response.status === 409, 'REST returns 409 for a stale approval');
 
     const initial = await request(server.baseUrl, '/api/items');
     assert(initial.response.status === 200, 'local item list returns 200');
@@ -890,6 +911,27 @@ async function runLocalFlow(dataFile, jobDataFile) {
     assertCancelledCard(duplicateCancelInvoke.body.value, 'replayed cancel Action.Execute');
     const replayedJob = (await request(server.baseUrl, '/api/debug/agent-jobs')).body.jobs.find((job) => job.id === genUiCancelJobId);
     assert(replayedJob?.status === 'cancelled', 'replayed cancel does not execute the job again');
+
+    const conflictingApproveInvoke = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(genUiInvokeActivity(
+        server.baseUrl,
+        approvePayload,
+        'genui-conflicting-approve',
+        'runtime-conversation-genui-cancel',
+      )),
+    });
+    assert(conflictingApproveInvoke.response.status === 200, 'conflicting GenUI approval returns a safe invoke response');
+    assert(JSON.stringify(conflictingApproveInvoke.body.value).includes('업무 허브 오류'), 'conflicting GenUI approval renders an error card');
+    assert(JSON.stringify(conflictingApproveInvoke.body.value).includes('현재 상태'), 'conflicting GenUI approval explains the current state');
+
+    const conflictingNaturalApprove = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity(`approve ${genUiCancelJobId}`, server.baseUrl, 'genui-conflicting-natural-approve', 'runtime-conversation-genui-cancel')),
+    });
+    assert(conflictingNaturalApprove.response.status === 200, 'conflicting natural approval returns a Bot response');
+    assert(JSON.stringify(conflictingNaturalApprove.body.activities[0]).includes('업무 허브 오류'), 'conflicting natural approval renders a GenUI error');
+    assert(conflictingNaturalApprove.body.messages[0].includes('현재 상태'), 'conflicting natural approval does not claim success');
 
     const genUiSubmitRequest = await request(server.baseUrl, '/api/messages', {
       method: 'POST',

@@ -19,6 +19,11 @@ import {
   createWeatherToolEnvelope,
   getGenAiBadgeLabel,
 } from './genui/tool-adapters.js';
+import {
+  GENUI_SCHEMA_VERSION,
+  GenUiEnvelopeV1Schema,
+  type GenUiEnvelopeV1,
+} from '../shared/genui.js';
 
 type WeatherContext = {
   source: 'open-meteo' | 'demo';
@@ -84,6 +89,34 @@ type WeatherRenderProps = RenderToolProps<typeof weatherToolSchema>;
 type TaskRenderProps = RenderToolProps<typeof taskToolSchema>;
 type ApprovalRenderProps = RenderToolProps<typeof approvalToolSchema>;
 
+function createApprovalConflictEnvelope(jobId: string, prompt: string, message: string): GenUiEnvelopeV1 {
+  const safeId = jobId.trim().slice(0, 120) || 'copilot-approval-conflict';
+  const safePrompt = prompt.trim().slice(0, 2_000) || '쓰기 작업';
+  const safeMessage = message.trim().slice(0, 1_900) || '작업 상태가 변경되어 요청을 처리하지 못했습니다.';
+  const description = `${safeMessage}\n\n요청 작업: ${safePrompt}`.slice(0, 2_000);
+  return GenUiEnvelopeV1Schema.parse({
+    schemaVersion: GENUI_SCHEMA_VERSION,
+    kind: 'error',
+    status: 'error',
+    id: `${safeId}-conflict`,
+    correlationId: `${safeId}-conflict`,
+    title: '작업 상태 충돌',
+    summary: safeMessage,
+    sections: [{
+      type: 'status',
+      title: '최신 작업 상태 확인 필요',
+      status: 'conflict',
+      tone: 'danger',
+      description,
+    }],
+    actions: [],
+    citations: [],
+    aiGenerated: false,
+    fallbackText: safeMessage,
+    metadata: { source: 'copilotkit-approval', deterministic: true },
+  });
+}
+
 function WeatherToolCard({ status, parameters, result }: WeatherRenderProps) {
   const envelope = createWeatherToolEnvelope(parameters, status, result);
   return <GenUiCard envelope={envelope} theme="auto" className="copilot-tool-genui-card" />;
@@ -98,10 +131,13 @@ function ApprovalToolCard({ status, parameters }: ApprovalRenderProps) {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [resolvedAction, setResolvedAction] = useState<'approve' | 'cancel' | null>(null);
+  const [mutationError, setMutationError] = useState('');
   const chatConfiguration = useCopilotChatConfiguration();
   const jobId = parameters.jobId?.trim();
   const prompt = parameters.prompt?.trim();
-  const envelope = resolvedAction && jobId && prompt
+  const envelope = mutationError && jobId && prompt
+    ? createApprovalConflictEnvelope(jobId, prompt, mutationError)
+    : resolvedAction && jobId && prompt
     ? createApprovalResultEnvelope({ jobId, prompt }, resolvedAction, message)
     : createApprovalToolEnvelope(parameters, status);
 
@@ -117,6 +153,7 @@ function ApprovalToolCard({ status, parameters }: ApprovalRenderProps) {
     }
     setBusy(true);
     setResolvedAction(null);
+    setMutationError('');
     setMessage('처리 중…');
     try {
       const response = await apiFetch(`/api/agent-jobs/${encodeURIComponent(jobId)}/${action}`, {
@@ -125,11 +162,18 @@ function ApprovalToolCard({ status, parameters }: ApprovalRenderProps) {
         headers: { 'content-type': 'application/json' },
       });
       const body = (await response.json()) as { job?: { status?: string }; error?: string };
-      if (!response.ok) throw new Error(body.error || '작업을 처리하지 못했습니다.');
+      if (!response.ok) {
+        const errorMessage = body.error || '작업을 처리하지 못했습니다.';
+        setMutationError(errorMessage);
+        setMessage(errorMessage);
+        return;
+      }
       setMessage(`작업 상태: ${body.job?.status || action}`);
       setResolvedAction(action);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '작업을 처리하지 못했습니다.');
+      const errorMessage = error instanceof Error ? error.message : '작업을 처리하지 못했습니다.';
+      setMutationError(errorMessage);
+      setMessage(errorMessage);
     } finally {
       setBusy(false);
     }
@@ -138,7 +182,7 @@ function ApprovalToolCard({ status, parameters }: ApprovalRenderProps) {
   return (
     <div className="copilot-tool-genui-card">
       <GenUiCard envelope={envelope} theme="auto" />
-      {status === 'complete' && !resolvedAction && jobId && prompt && (
+      {status === 'complete' && !resolvedAction && !mutationError && jobId && prompt && (
         <div className="genui-card__actions-wrap" aria-label="쓰기 작업 승인 작업">
           <div className="genui-card__actions">
             <button className="genui-card__action genui-card__action--primary" disabled={busy} onClick={() => void resolve('approve')} type="button">
