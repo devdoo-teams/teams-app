@@ -26,6 +26,7 @@ import {
 const port = Number(process.env.PORT ?? 3978);
 const skipAuth = process.env.TEAMS_SKIP_AUTH === 'true';
 const skipOutbound = process.env.TEAMS_SKIP_OUTBOUND === 'true';
+const mcpEnabled = skipAuth || process.env.MCP_PUBLIC_ENABLED === 'true';
 const clientDist = path.resolve(process.cwd(), 'dist/client');
 const itemStore = new ItemStore(
   process.env.ITEM_STORE_PATH ?? path.resolve(process.cwd(), 'data/items.json'),
@@ -84,6 +85,21 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function envelopeText(envelope: GenUiEnvelopeV1): string {
   return envelope.fallbackText ?? envelope.summary ?? envelope.title ?? '요청 결과를 카드로 확인하세요.';
+}
+
+function prepareMcpZodCompatibility(): void {
+  // @modelcontextprotocol/sdk 1.x detects object schemas through `.shape`.
+  // The shared GenUI contract is a ZodEffects schema because it contains
+  // cross-field rules; expose its underlying object shape without weakening
+  // the original parse/safeParse validation.
+  const schema = GenUiEnvelopeV1Schema as any;
+  if (schema.shape === undefined && schema._def?.schema?.shape) {
+    Object.defineProperty(schema, 'shape', {
+      configurable: true,
+      enumerable: false,
+      value: schema._def.schema.shape,
+    });
+  }
 }
 
 async function deliverGenUiActivity(
@@ -179,7 +195,8 @@ http.get('/api/health', (_request: any, response: any) => {
         : 'not-configured',
     genUiMode,
     genUi: 'adaptive-cards',
-    mcp: '/mcp',
+    mcpEnabled,
+    mcp: mcpEnabled ? '/mcp' : 'disabled',
     timestamp: new Date().toISOString(),
   });
 });
@@ -296,9 +313,12 @@ http.delete('/api/items/:id', async (request: any, response: any) => {
 let agentService: AgentService;
 
 const notifyConversation = async (conversationId: string, text: string): Promise<void> => {
+  const cardSummary = text.length > 1_900
+    ? `${text.slice(0, 1_900)}\n(카드에서 일부 생략됨)`
+    : text;
   const envelope = genUiMode === 'legacy'
     ? undefined
-    : genUi.answer(text, `notification-${Date.now().toString(36)}`);
+    : genUi.answer(cardSummary, `notification-${Date.now().toString(36)}`);
   if (teamsApp && !skipOutbound) {
     await deliverGenUiActivity(
       (activity) => teamsApp.send(conversationId, activity),
@@ -324,15 +344,18 @@ agentService = new AgentService(
 );
 await agentService.initialize();
 
-const mcpRouter = createMcpGenUiRouter({
-  itemStore,
-  agentService,
-  getWeather,
-  sessionMode: process.env.MCP_SESSION_MODE === 'stateless' ? 'stateless' : 'stateful',
-  enableJsonResponse: true,
-  serverVersion: process.env.APP_VERSION ?? '1.0.0',
-});
-http.use('/mcp', mcpRouter);
+if (mcpEnabled) {
+  prepareMcpZodCompatibility();
+  const mcpRouter = createMcpGenUiRouter({
+    itemStore,
+    agentService,
+    getWeather,
+    sessionMode: process.env.MCP_SESSION_MODE === 'stateless' ? 'stateless' : 'stateful',
+    enableJsonResponse: true,
+    serverVersion: process.env.APP_VERSION ?? '1.0.0',
+  });
+  http.use('/mcp', mcpRouter);
+}
 
 const copilotRuntime = new CopilotRuntime({
   agents: {
@@ -471,10 +494,10 @@ function actionRejectionMessage(reason: string): string {
   }
 }
 
-async function handleGenUiAction(activity: any): Promise<ReturnType<typeof genUiInvokeResponse>> {
+async function resolveGenUiAction(activity: any): Promise<GenUiEnvelopeV1> {
   const payload = readGenUiActionPayload(activity);
   if (!payload) {
-    return genUiInvokeResponse(genUi.actionError('유효하지 않은 GenUI 카드 액션입니다.'));
+    return genUi.actionError('유효하지 않은 GenUI 카드 액션입니다.');
   }
 
   const conversationId = activity.conversation?.id ?? 'unknown-conversation';
@@ -489,7 +512,10 @@ async function handleGenUiAction(activity: any): Promise<ReturnType<typeof genUi
   ].join('|');
 
   if (inFlightGenUiActions.has(actionKey)) {
-    return genUiInvokeResponse(genUi.jobStatus(agentService.get(payload.entityId)));
+    const job = agentService.get(payload.entityId);
+    if (payload.action === 'cancel' && job) return genUi.cancelled(job);
+    if (payload.action === 'approve' && job) return genUi.approvalAccepted(job);
+    return genUi.jobStatus(job);
   }
 
   inFlightGenUiActions.add(actionKey);
@@ -505,9 +531,12 @@ async function handleGenUiAction(activity: any): Promise<ReturnType<typeof genUi
 
     if (!consumed.ok) {
       if (consumed.reason === 'consumed') {
-        return genUiInvokeResponse(genUi.jobStatus(agentService.get(payload.entityId)));
+        const job = agentService.get(payload.entityId);
+        if (payload.action === 'cancel' && job) return genUi.cancelled(job);
+        if (payload.action === 'approve' && job) return genUi.approvalAccepted(job);
+        return genUi.jobStatus(job);
       }
-      return genUiInvokeResponse(genUi.actionError(actionRejectionMessage(consumed.reason)));
+      return genUi.actionError(actionRejectionMessage(consumed.reason));
     }
 
     let envelope: GenUiEnvelopeV1;
@@ -532,13 +561,22 @@ async function handleGenUiAction(activity: any): Promise<ReturnType<typeof genUi
       envelope = genUi.answer('피드백을 확인했습니다. 결정형 처리 결과를 기록했습니다.', `feedback-${payload.entityId}`);
     }
 
-    return genUiInvokeResponse(envelope);
+    return envelope;
   } catch (error) {
     console.error('GenUI action failed', error);
-    return genUiInvokeResponse(genUi.error('카드 액션을 처리하지 못했습니다. 잠시 후 다시 시도하세요.'));
+    return genUi.error('카드 액션을 처리하지 못했습니다. 잠시 후 다시 시도하세요.');
   } finally {
     inFlightGenUiActions.delete(actionKey);
   }
+}
+
+async function handleGenUiAction(activity: any): Promise<ReturnType<typeof genUiInvokeResponse>> {
+  return genUiInvokeResponse(await resolveGenUiAction(activity));
+}
+
+async function handleGenUiSubmit(activity: any, send: BotSend): Promise<void> {
+  const envelope = await resolveGenUiAction(activity);
+  await send(envelopeText(envelope), envelope);
 }
 
 async function handleMessage(activity: any, send: BotSend): Promise<void> {
@@ -747,7 +785,15 @@ if (teamsApp) {
     await handleInstall(activity, runtimeSend);
   });
   teamsApp.on('message', async ({ activity, send }: any) => {
-    if (hasGenUiActionValue(activity)) {
+    if (activity?.type === 'message' && hasGenUiActionValue(activity)) {
+      const runtimeSend: BotSend = process.env.TEAMS_SKIP_OUTBOUND === 'true'
+        ? async () => {}
+        : createBotSender(send);
+      await handleGenUiSubmit(activity, runtimeSend);
+      return;
+    }
+
+    if (activity?.type === 'invoke' && hasGenUiActionValue(activity)) {
       return handleGenUiAction(activity);
     }
 
@@ -767,7 +813,16 @@ if (teamsApp) {
       return;
     }
 
-    if (hasGenUiActionValue(request.body)) {
+    if (request.body?.type === 'message' && hasGenUiActionValue(request.body)) {
+      const messages: string[] = [];
+      const activities: unknown[] = [];
+      const send = createBotSender(undefined, messages, activities);
+      await handleGenUiSubmit(request.body, send);
+      response.json({ messages, activities });
+      return;
+    }
+
+    if (request.body?.type === 'invoke' && hasGenUiActionValue(request.body)) {
       const invokeResponse = await handleGenUiAction(request.body);
       response.status(invokeResponse.status).json(invokeResponse.body);
       return;

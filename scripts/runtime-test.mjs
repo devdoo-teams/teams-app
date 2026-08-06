@@ -61,6 +61,112 @@ async function request(baseUrl, pathname, init = {}) {
   return { response, body };
 }
 
+function parseJsonOrSse(text) {
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    // Streamable HTTP may return an SSE response even when JSON responses are
+    // enabled. Decode the last JSON-RPC data event for the assertion.
+  }
+
+  const dataLines = trimmed
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice('data:'.length).trim())
+    .filter(Boolean);
+  for (let index = dataLines.length - 1; index >= 0; index -= 1) {
+    try {
+      return JSON.parse(dataLines[index]);
+    } catch {
+      // Continue until a valid JSON-RPC event is found.
+    }
+  }
+
+  return undefined;
+}
+
+async function mcpRequest(baseUrl, body, { sessionId, protocolVersion = '2025-11-25' } = {}) {
+  const headers = {
+    'content-type': 'application/json',
+    accept: 'application/json, text/event-stream',
+    'MCP-Protocol-Version': protocolVersion,
+  };
+  if (sessionId) headers['mcp-session-id'] = sessionId;
+
+  const response = await fetch(`${baseUrl}/mcp`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+  const text = await response.text();
+  return {
+    response,
+    body: parseJsonOrSse(text),
+    raw: text,
+    sessionId: response.headers.get('mcp-session-id') ?? sessionId,
+  };
+}
+
+function adaptiveCardFromActivity(activityValue) {
+  return activityValue?.attachments?.find(
+    (attachment) => attachment.contentType === 'application/vnd.microsoft.card.adaptive',
+  )?.content;
+}
+
+function assertAdaptiveCardActivity(activityValue, label) {
+  const card = adaptiveCardFromActivity(activityValue);
+  assert(card?.type === 'AdaptiveCard', `${label} returns an Adaptive Card activity`);
+  assert(card?.version === '1.5', `${label} uses Adaptive Card 1.5`);
+  assert(!JSON.stringify(card).includes('AI 생성 콘텐츠'), `${label} does not show an AI-generated label`);
+  assert(!('aiGenerated' in (card ?? {})), `${label} does not expose aiGenerated metadata`);
+  return card;
+}
+
+function assertCancelledCard(card, label) {
+  assert(card?.type === 'AdaptiveCard', `${label} returns an Adaptive Card`);
+  const serialized = JSON.stringify(card);
+  assert(serialized.includes('취소') || serialized.includes('cancelled'), `${label} returns a cancelled-state card`);
+}
+
+function actionPayloadFromCard(action) {
+  return action?.data ?? action?.fallback?.data;
+}
+
+function assertExactGenUiActionPayload(payload, label) {
+  const keys = Object.keys(payload ?? {}).sort();
+  assert(
+    JSON.stringify(keys) === JSON.stringify(['action', 'actionToken', 'correlationId', 'entityId', 'schemaVersion']),
+    `${label} has exactly the five GenUI action payload keys`,
+  );
+  assert(Object.values(payload ?? {}).every((value) => typeof value === 'string' && value.length > 0), `${label} payload values are non-empty strings`);
+}
+
+function genUiInvokeActivity(baseUrl, payload, suffix, conversationId) {
+  return {
+    ...activity('', baseUrl, suffix, conversationId),
+    type: 'invoke',
+    name: 'adaptiveCard/action',
+    value: {
+      action: {
+        type: 'Action.Execute',
+        verb: `genui.${payload.action}`,
+        data: payload,
+      },
+    },
+  };
+}
+
+function genUiSubmitActivity(baseUrl, payload, suffix, conversationId) {
+  return {
+    ...activity('', baseUrl, suffix, conversationId),
+    type: 'message',
+    value: payload,
+  };
+}
+
 async function copilotRun(baseUrl, prompt, threadId, context = []) {
   const result = await request(baseUrl, '/api/copilotkit/agent/default/run', {
     method: 'POST',
@@ -125,6 +231,7 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
       PORT: String(port),
       ITEM_STORE_PATH: dataFile,
       AGENT_JOB_STORE_PATH: jobDataFile,
+      GENUI_ACTION_STORE_PATH: `${jobDataFile}.genui-actions.json`,
       AGENT_WORKSPACE: workspace,
       CODEX_BIN: process.execPath,
       CODEX_SCRIPT: path.join(root, 'scripts/fake-codex.mjs'),
@@ -132,6 +239,7 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
       COPILOTKIT_DETERMINISTIC_MODE: production ? '' : 'true',
       TEAMS_USE_SDK: teamsSdk ? 'true' : 'false',
       TEAMS_SKIP_OUTBOUND: teamsSdk ? 'true' : 'false',
+      MCP_PUBLIC_ENABLED: 'false',
       ...(teamsSdk
         ? {
             BOT_CLIENT_ID: '00000000-0000-4000-8000-000000000001',
@@ -227,6 +335,49 @@ async function runLocalFlow(dataFile, jobDataFile) {
     assert(health.body.storage === 'file-json', 'local runtime reports file storage');
     assert(health.body.copilotKit === 'enabled', 'CopilotKit runtime is enabled');
     assert(health.body.genAI === 'deterministic-test', 'local runtime reports explicit deterministic test mode');
+    assert(health.body.genUiMode === 'hybrid', 'health reports the hybrid GenUI mode');
+    assert(health.body.genUi === 'adaptive-cards', 'health reports Adaptive Cards as the GenUI renderer');
+    assert(health.body.mcp === '/mcp' && health.body.mcpEnabled === true, 'local health exposes the explicitly local MCP route');
+
+    const initialize = await mcpRequest(server.baseUrl, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-11-25',
+        capabilities: {},
+        clientInfo: { name: 'teams-genui-runtime-test', version: '1.0.0' },
+      },
+    });
+    assert(initialize.response.status === 200, 'MCP initialize returns 200');
+    assert(Boolean(initialize.sessionId), 'MCP initialize returns mcp-session-id');
+    assert(initialize.body?.result?.protocolVersion, 'MCP initialize negotiates a protocol version');
+    const mcpProtocolVersion = initialize.body.result.protocolVersion;
+
+    const initialized = await mcpRequest(server.baseUrl, {
+      jsonrpc: '2.0',
+      method: 'notifications/initialized',
+      params: {},
+    }, { sessionId: initialize.sessionId, protocolVersion: mcpProtocolVersion });
+    assert([200, 202].includes(initialized.response.status), 'MCP notifications/initialized follows the session flow');
+
+    const toolsList = await mcpRequest(server.baseUrl, {
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/list',
+      params: {},
+    }, { sessionId: initialize.sessionId, protocolVersion: mcpProtocolVersion });
+    assert(toolsList.response.status === 200, 'MCP tools/list returns 200 with the session id');
+    assert(toolsList.body?.result?.tools?.some((tool) => tool.name === 'get_workspace_snapshot'), 'MCP tools/list exposes get_workspace_snapshot');
+
+    const workspaceSnapshot = await mcpRequest(server.baseUrl, {
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'tools/call',
+      params: { name: 'get_workspace_snapshot', arguments: { limit: 8 } },
+    }, { sessionId: initialize.sessionId, protocolVersion: mcpProtocolVersion });
+    assert(workspaceSnapshot.response.status === 200, 'MCP get_workspace_snapshot returns 200');
+    assert(workspaceSnapshot.body?.result?.structuredContent?.kind === 'task-list', 'MCP structuredContent returns the task-list GenUI envelope');
 
     const copilotInfo = await request(server.baseUrl, '/api/copilotkit/info');
     assert(copilotInfo.response.status === 200, 'CopilotKit info endpoint returns 200');
@@ -288,6 +439,7 @@ async function runLocalFlow(dataFile, jobDataFile) {
     });
     assert(weatherCommand.response.status === 200, 'Bot weather command completes locally');
     assert(weatherCommand.body.messages[0].includes('현재 기기 위치가 자동으로 전달되지 않습니다'), 'Bot weather command does not guess a location');
+    assertAdaptiveCardActivity(weatherCommand.body.activities[0], 'help/location weather fallback');
 
     const explicitWeatherCommand = await request(server.baseUrl, '/api/messages', {
       method: 'POST',
@@ -295,6 +447,7 @@ async function runLocalFlow(dataFile, jobDataFile) {
     });
     assert(explicitWeatherCommand.response.status === 200, 'Bot explicit weather command completes locally');
     assert(explicitWeatherCommand.body.messages[0].includes('날씨 위젯'), 'Bot explicit weather command returns widget summary');
+    assertAdaptiveCardActivity(explicitWeatherCommand.body.activities[0], 'explicit coordinate weather');
 
     const invalid = await request(server.baseUrl, '/api/items', {
       method: 'POST',
@@ -332,6 +485,7 @@ async function runLocalFlow(dataFile, jobDataFile) {
       body: JSON.stringify(activity('help', server.baseUrl, 'help')),
     });
     assert(help.response.status === 200, 'Bot help activity completes locally');
+    assertAdaptiveCardActivity(help.body.activities[0], 'help');
 
     const status = await request(server.baseUrl, '/api/messages', {
       method: 'POST',
@@ -344,6 +498,7 @@ async function runLocalFlow(dataFile, jobDataFile) {
       body: JSON.stringify(activity('list', server.baseUrl, 'list')),
     });
     assert(list.response.status === 200, 'Bot list activity completes locally');
+    assertAdaptiveCardActivity(list.body.activities[0], 'list');
 
     const install = await request(server.baseUrl, '/api/messages', {
       method: 'POST',
@@ -388,6 +543,10 @@ async function runLocalFlow(dataFile, jobDataFile) {
       readOnlyOutbox.body.messages.filter((message) => message.includes('필요한 도구를 실행하고 있습니다')).length === 1,
       'repeated tool events are deduplicated into one Teams progress notification',
     );
+    assert(
+      readOnlyOutbox.body.activities.some((activityValue) => Boolean(adaptiveCardFromActivity(activityValue))),
+      'proactive outbox notifications include an Adaptive Card activity',
+    );
 
     const naturalFollowUp = await request(server.baseUrl, '/api/messages', {
       method: 'POST',
@@ -423,6 +582,71 @@ async function runLocalFlow(dataFile, jobDataFile) {
     assert(cancelled.body.messages[0].includes('취소'), 'running Codex job can be cancelled');
     const cancelledJob = await waitForAgentJob(server.baseUrl, slowJobId);
     assert(cancelledJob.status === 'cancelled', 'cancelled Codex job stays cancelled');
+
+    const genUiCancelRequest = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity('write GenUI 취소 액션을 검증해줘', server.baseUrl, 'genui-cancel')),
+    });
+    const genUiCancelCard = assertAdaptiveCardActivity(genUiCancelRequest.body.activities[0], 'write approval');
+    const approveAction = genUiCancelCard.actions?.find((action) => action.verb === 'genui.approve');
+    const cancelAction = genUiCancelCard.actions?.find((action) => action.verb === 'genui.cancel');
+    const approvePayload = actionPayloadFromCard(approveAction);
+    const cancelPayload = actionPayloadFromCard(cancelAction);
+    assertExactGenUiActionPayload(approvePayload, 'approve');
+    assertExactGenUiActionPayload(cancelPayload, 'cancel');
+    assert(cancelPayload.action === 'cancel', 'cancel payload identifies the cancel action');
+    const genUiCancelJobId = cancelPayload.entityId;
+
+    const cancelInvoke = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(genUiInvokeActivity(
+        server.baseUrl,
+        cancelPayload,
+        'genui-cancel-invoke',
+        'runtime-conversation-genui-cancel',
+      )),
+    });
+    assert(cancelInvoke.response.status === 200 && cancelInvoke.body.statusCode === 200, 'cancel Action.Execute invoke returns the existing invoke response');
+    assertCancelledCard(cancelInvoke.body.value, 'cancel Action.Execute invoke');
+    const genUiCancelledJob = await waitForAgentJob(server.baseUrl, genUiCancelJobId);
+    assert(genUiCancelledJob.status === 'cancelled', 'cancel Action.Execute transitions the job to cancelled');
+
+    const duplicateCancelInvoke = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(genUiInvokeActivity(
+        server.baseUrl,
+        cancelPayload,
+        'genui-cancel-duplicate',
+        'runtime-conversation-genui-cancel',
+      )),
+    });
+    assert(duplicateCancelInvoke.response.status === 200, 'replayed cancel Action.Execute is accepted as an idempotent replay');
+    assertCancelledCard(duplicateCancelInvoke.body.value, 'replayed cancel Action.Execute');
+    const replayedJob = (await request(server.baseUrl, '/api/debug/agent-jobs')).body.jobs.find((job) => job.id === genUiCancelJobId);
+    assert(replayedJob?.status === 'cancelled', 'replayed cancel does not execute the job again');
+
+    const genUiSubmitRequest = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity('write GenUI Submit 전송을 검증해줘', server.baseUrl, 'genui-submit')),
+    });
+    const genUiSubmitCard = assertAdaptiveCardActivity(genUiSubmitRequest.body.activities[0], 'Action.Submit approval');
+    const submitApprovePayload = actionPayloadFromCard(
+      genUiSubmitCard.actions?.find((action) => action.verb === 'genui.approve'),
+    );
+    assertExactGenUiActionPayload(submitApprovePayload, 'Action.Submit approve');
+    const submitResult = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(genUiSubmitActivity(
+        server.baseUrl,
+        submitApprovePayload,
+        'genui-submit-approve',
+        'runtime-conversation-genui-submit',
+      )),
+    });
+    assert(submitResult.response.status === 200, 'Action.Submit message/value returns 200');
+    assertAdaptiveCardActivity(submitResult.body.activities[0], 'Action.Submit message/value');
+    const genUiSubmitJob = await waitForAgentJob(server.baseUrl, submitApprovePayload.entityId);
+    assert(genUiSubmitJob.status === 'completed', 'Action.Submit approval starts and completes the Codex job');
 
     const writeRequest = await request(server.baseUrl, '/api/messages', {
       method: 'POST',
@@ -479,6 +703,10 @@ async function runProductionAuthFlow(dataFile, jobDataFile) {
     const health = await request(server.baseUrl, '/api/health');
     assert(health.response.status === 200, 'production health endpoint returns 200');
     assert(health.body.auth === 'teams-authenticated', 'production does not use local auth bypass');
+    assert(health.body.mcp === 'disabled' && health.body.mcpEnabled === false, 'production disables MCP unless explicitly opted in');
+
+    const disabledMcp = await request(server.baseUrl, '/mcp');
+    assert(disabledMcp.response.status === 404, 'disabled production MCP route is not mounted');
 
     const withoutToken = await request(server.baseUrl, '/api/items');
     assert(withoutToken.response.status === 401, 'production API rejects requests without a bearer token');

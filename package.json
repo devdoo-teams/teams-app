@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server/index.ts",
-    "build": "npm run build:client && npm run build:server",
+    "build": "npm run build:client && npm run build:mcp && npm run build:server",
     "build:server": "node scripts/build-server.mjs",
     "build:client": "node scripts/build-client.mjs",
+    "build:mcp": "node scripts/build-mcp-widget.mjs",
     "start": "node dist/server/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "check:types": "npm run typecheck",
@@ -16,9 +17,10 @@
     "package:app": "node scripts/package-app.mjs",
     "test:troubleshooting": "tsx scripts/remote-troubleshooting-test.ts",
     "test:genui-actions": "tsx scripts/genui-action-store-test.ts",
+    "test:genui-contract": "tsx scripts/genui-contract-test.ts",
     "check": "npm run build:client && npm run validate:manifest",
     "test:runtime": "node scripts/runtime-test.mjs",
-    "test": "npm run check && npm run build && npm run test:troubleshooting && npm run test:genui-actions && npm run test:runtime"
+    "test": "npm run check && npm run build && npm run test:troubleshooting && npm run test:genui-contract && npm run test:genui-actions && npm run test:runtime"
   },
   "dependencies": {
     "@copilotkit/channels-teams": "0.7.3",
