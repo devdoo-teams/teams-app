@@ -1,4 +1,4 @@
-import { app as teamsApp, geoLocation } from '@microsoft/teams-js';
+import { app as teamsApp, geoLocation, location as teamsLocation } from '@microsoft/teams-js';
 import { FormEvent, useEffect, useRef, useState } from 'react';
 
 import { apiFetch, getLastAuthError, setAuthRequired } from './auth.js';
@@ -51,12 +51,12 @@ type WeatherResponse = {
 };
 
 const DEMO_COORDINATES = { latitude: 37.5665, longitude: 126.978 };
-type LocationSource = 'teams-native' | 'browser' | 'demo';
+type LocationSource = 'teams-native' | 'demo';
 type DeviceLocation = {
   latitude: number;
   longitude: number;
   accuracy?: number;
-  source: Exclude<LocationSource, 'demo'>;
+  source: 'teams-native';
 };
 
 export function App() {
@@ -75,6 +75,7 @@ export function App() {
   const [weatherError, setWeatherError] = useState('');
   const [locationSource, setLocationSource] = useState<LocationSource>('demo');
   const [locationAccuracy, setLocationAccuracy] = useState<number | null>(null);
+  const [teamsHost, setTeamsHost] = useState(false);
   const [teamsClientType, setTeamsClientType] = useState('');
   const teamsLocationReady = useRef<Promise<boolean> | null>(null);
 
@@ -91,15 +92,23 @@ export function App() {
   }
 
   async function initializeTeamsLocation(): Promise<boolean> {
-    if (typeof window === 'undefined' || window.parent === window) return false;
     if (!teamsLocationReady.current) {
       teamsLocationReady.current = (async () => {
         try {
-          if (!teamsApp.isInitialized()) await teamsApp.initialize();
+          if (!teamsApp.isInitialized()) {
+            await Promise.race([
+              teamsApp.initialize(),
+              new Promise<never>((_, reject) => {
+                window.setTimeout(() => reject(new Error('Teams 호스트 초기화 시간 초과')), 2_000);
+              }),
+            ]);
+          }
           const context = await teamsApp.getContext();
+          setTeamsHost(true);
           setTeamsClientType(context.app.host.clientType);
-          return geoLocation.isSupported();
+          return geoLocation.isSupported() || teamsLocation.isSupported();
         } catch {
+          setTeamsHost(false);
           return false;
         }
       })();
@@ -107,25 +116,27 @@ export function App() {
     return teamsLocationReady.current;
   }
 
-  function getBrowserLocation(): Promise<DeviceLocation> {
+  function getLegacyTeamsLocation(): Promise<DeviceLocation> {
     return new Promise((resolve, reject) => {
-      if (!navigator.geolocation) {
-        reject(new Error('이 브라우저에서는 위치 정보를 지원하지 않습니다.'));
-        return;
-      }
+      teamsLocation.getLocation(
+        { allowChooseLocation: false, showMap: false },
+        (locationError, location) => {
+          if (locationError) {
+            reject(new Error(locationError.message || 'Teams 레거시 위치 API를 사용할 수 없습니다.'));
+            return;
+          }
 
-      navigator.geolocation.getCurrentPosition(
-        (position) => resolve({
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-          accuracy: position.coords.accuracy,
-          source: 'browser',
-        }),
-        reject,
-        {
-        enableHighAccuracy: false,
-        maximumAge: 300_000,
-        timeout: 8_000,
+          if (!Number.isFinite(location?.latitude) || !Number.isFinite(location?.longitude)) {
+            reject(new Error('Teams가 유효한 위치를 반환하지 않았습니다.'));
+            return;
+          }
+
+          resolve({
+            latitude: location.latitude,
+            longitude: location.longitude,
+            accuracy: location.accuracy,
+            source: 'teams-native',
+          });
         },
       );
     });
@@ -133,9 +144,13 @@ export function App() {
 
   async function getCurrentDeviceLocation(): Promise<DeviceLocation> {
     const teamsLocationSupported = await initializeTeamsLocation();
-    let teamsLocationError = '';
+    if (!teamsLocationSupported) {
+      throw new Error('외부 브라우저에서는 Teams 앱 권한을 사용할 수 없습니다. 모바일 Teams에서 설치된 업무 허브 탭을 직접 열어주세요.');
+    }
 
-    if (teamsLocationSupported) {
+    const locationErrors: string[] = [];
+
+    if (geoLocation.isSupported()) {
       try {
         const hasPermission = await geoLocation.hasPermission();
         if (!hasPermission && !(await geoLocation.requestPermission())) {
@@ -154,18 +169,21 @@ export function App() {
           source: 'teams-native',
         };
       } catch (caught) {
-        teamsLocationError = caught instanceof Error ? caught.message : 'Teams 위치 API를 사용할 수 없습니다.';
+        locationErrors.push(caught instanceof Error ? caught.message : 'Teams 네이티브 위치 API를 사용할 수 없습니다.');
       }
     }
 
-    try {
-      return await getBrowserLocation();
-    } catch (caught) {
-      if (teamsLocationError) {
-        throw new Error(`${teamsLocationError} 모바일 Teams의 앱 권한에서 위치를 허용한 뒤 다시 시도하세요.`);
+    if (teamsLocation.isSupported()) {
+      try {
+        return await getLegacyTeamsLocation();
+      } catch (caught) {
+        locationErrors.push(caught instanceof Error ? caught.message : 'Teams 레거시 위치 API를 사용할 수 없습니다.');
       }
-      throw caught;
     }
+
+    throw new Error(
+      `${locationErrors.join(' ')} 모바일 Teams 설정에서 Teams 위치 권한을 허용한 뒤 다시 시도하세요.`,
+    );
   }
 
   async function loadWeather(useCurrentLocation: boolean): Promise<void> {
@@ -187,8 +205,10 @@ export function App() {
         demo = false;
         resolvedLocationSource = position.source;
         resolvedLocationAccuracy = position.accuracy ?? null;
-      } catch {
-        locationMessage = '현재 위치를 확인하지 못해 서울 데모 위치를 표시합니다. 모바일 Teams 앱 권한에서 위치를 허용한 뒤 다시 시도하세요.';
+      } catch (caught) {
+        locationMessage = caught instanceof Error
+          ? `${caught.message} 현재 카드는 서울 데모 위치이며, 현재 위치가 아닙니다.`
+          : 'Teams 네이티브 위치를 확인하지 못했습니다. 현재 카드는 서울 데모 위치이며, 현재 위치가 아닙니다.';
       }
     }
 
@@ -362,7 +382,9 @@ export function App() {
 
   const runtimeBadge = healthLoading
     ? '상태 확인 중'
-    : health?.auth === 'local-bypass'
+    : teamsHost
+      ? 'Teams 탭 · 네이티브 위치'
+      : health?.auth === 'local-bypass'
       ? '로컬 런타임'
       : health
         ? 'Teams 인증'
@@ -423,10 +445,10 @@ export function App() {
 
         <p className="weather-location-meta">
           {locationSource === 'teams-native'
-            ? `Teams ${teamsClientType === 'android' || teamsClientType === 'ios' ? '모바일' : '호스트'} 위치 권한 사용`
-            : locationSource === 'browser'
-              ? '브라우저 위치 권한 사용'
-              : '모바일에서 내 위치 사용을 눌러 위치를 확인하세요.'}
+            ? `Teams ${teamsClientType === 'android' || teamsClientType === 'ios' ? '모바일' : '호스트'} 네이티브 위치 권한 사용`
+            : teamsHost
+              ? 'Teams 앱 권한으로 현재 위치를 확인합니다. 카드는 아직 서울 데모 위치입니다.'
+              : '현재 위치 아님 · 모바일 Teams 앱에서 업무 허브 탭을 직접 열어주세요.'}
         </p>
 
         {weatherLoading ? (
@@ -461,7 +483,7 @@ export function App() {
             </div>
 
             <div className="weather-footer">
-              <span>{weather.source === 'demo' ? '서울 데모 데이터' : '실시간 위치 데이터'}</span>
+              <span>{weather.source === 'demo' ? '서울 데모 데이터 · 현재 위치 아님' : '실시간 Teams 위치 데이터'}</span>
               <span>좌표 {weather.location.latitude.toFixed(4)}, {weather.location.longitude.toFixed(4)}</span>
               {locationAccuracy !== null && <span>정확도 ±{Math.round(locationAccuracy)}m</span>}
               <span>{weather.location.timezone}</span>
