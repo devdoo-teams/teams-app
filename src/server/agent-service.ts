@@ -2,6 +2,7 @@ import type { AgentJob, AgentJobMode } from './agent-job-store.js';
 import { AgentJobStore } from './agent-job-store.js';
 import { CodexRunner, type CodexRunEvent } from './codex-runner.js';
 import { GitService } from './git-service.js';
+import { diagnoseRemoteAgentResult, formatRemoteTroubleshooting } from './remote-troubleshooting.js';
 
 type Notify = (conversationId: string, text: string) => Promise<void>;
 
@@ -141,6 +142,19 @@ export class AgentService {
 
       const latest = this.store.get(job.id);
       if (!latest || latest.status === 'cancelled') return;
+
+      const diagnostic = diagnoseRemoteAgentResult(result.finalMessage);
+      const diagnosticMessage = formatRemoteTroubleshooting(diagnostic);
+      if (diagnosticMessage) {
+        await this.store.update(job.id, {
+          status: 'failed',
+          error: diagnosticMessage,
+          finishedAt: new Date().toISOString(),
+        });
+        await this.store.appendProgress(job.id, `Codex 작업이 차단되었습니다: ${diagnostic.code}`);
+        await this.notify(job.conversationId, `작업 ${job.id}이 차단되었습니다.\n\n${diagnosticMessage}`);
+        return;
+      }
 
       await this.store.update(job.id, {
         status: 'completed',

@@ -286,6 +286,7 @@ async function runLocalFlow(dataFile, jobDataFile) {
     const completedReadOnly = await waitForAgentJob(server.baseUrl, readOnlyJobId);
     assert(completedReadOnly.status === 'completed', 'read-only Codex job completes');
     assert(completedReadOnly.result.includes('FAKE_CODEX_OK'), 'Codex JSONL result is persisted');
+    assert(completedReadOnly.result.includes('REMOTE TEAMS CODEX OPERATING RULES'), 'remote Codex receives troubleshooting guidance');
 
     const readOnlyOutbox = await request(server.baseUrl, '/api/debug/agent-outbox/runtime-conversation-agent-run');
     assert(

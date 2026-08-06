@@ -1,6 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 
 import type { AgentJobMode } from './agent-job-store.js';
+import { REMOTE_AGENT_GUIDANCE } from './remote-agent-guidance.js';
+import { diagnoseRemoteTroubleshooting, formatRemoteTroubleshooting } from './remote-troubleshooting.js';
 
 export interface CodexRunEvent {
   type?: string;
@@ -38,6 +40,10 @@ export class CodexRunner {
     } else {
       args.push('--json', '--sandbox', options.mode, '--cd', options.workspace, options.prompt);
     }
+
+    const enrichedPrompt = `${REMOTE_AGENT_GUIDANCE}\n\nUSER REQUEST:\n${options.prompt}`;
+    const promptIndex = args.findIndex((argument) => argument === options.prompt);
+    if (promptIndex >= 0) args[promptIndex] = enrichedPrompt;
 
     const child = spawn(command, args, {
       cwd: options.workspace,
@@ -121,7 +127,8 @@ export class CodexRunner {
 
     if (exitCode !== 0) {
       const reason = stderr.trim().split('\n').slice(-3).join('\n') || `Codex exited with code ${exitCode}`;
-      throw new Error(reason);
+      const diagnostic = formatRemoteTroubleshooting(diagnoseRemoteTroubleshooting(reason));
+      throw new Error(diagnostic ? `${reason}\n\n${diagnostic}` : reason);
     }
 
     return {

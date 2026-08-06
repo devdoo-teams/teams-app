@@ -14,9 +14,10 @@
     "check:deployment": "node scripts/validate-deployment-env.mjs",
     "validate:manifest": "node scripts/validate-manifest.mjs",
     "package:app": "node scripts/package-app.mjs",
+    "test:troubleshooting": "tsx scripts/remote-troubleshooting-test.ts",
     "check": "npm run build:client && npm run validate:manifest",
     "test:runtime": "node scripts/runtime-test.mjs",
-    "test": "npm run check && npm run build && npm run test:runtime"
+    "test": "npm run check && npm run build && npm run test:troubleshooting && npm run test:runtime"
   },
   "dependencies": {
     "@microsoft/teams-js": "^2.54.0",
