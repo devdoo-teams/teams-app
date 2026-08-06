@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 
 import express from 'express';
 import { CopilotRuntime } from '@copilotkit/runtime/v2';
@@ -24,9 +25,14 @@ import {
 } from '../shared/genui.js';
 
 const port = Number(process.env.PORT ?? 3978);
+const isProduction = process.env.NODE_ENV === 'production';
 const skipAuth = process.env.TEAMS_SKIP_AUTH === 'true';
 const skipOutbound = process.env.TEAMS_SKIP_OUTBOUND === 'true';
-const mcpEnabled = skipAuth || process.env.MCP_PUBLIC_ENABLED === 'true';
+const localDev = process.env.TEAMS_LOCAL_DEV === 'true';
+const publicHintNames = ['PUBLIC_BASE_URL', 'TAB_DOMAIN', 'BOT_DOMAIN', 'DEV_TUNNEL_ID'] as const;
+const publicHints = publicHintNames.filter((name) => Boolean(process.env[name]?.trim()));
+const safeLocal = skipAuth && localDev && !isProduction && publicHints.length === 0;
+const legacyPublicMcp = process.env.MCP_PUBLIC_ENABLED?.trim().toLowerCase() === 'true';
 const clientDist = path.resolve(process.cwd(), 'dist/client');
 const itemStore = new ItemStore(
   process.env.ITEM_STORE_PATH ?? path.resolve(process.cwd(), 'data/items.json'),
@@ -43,6 +49,22 @@ const useTeamsSdk = process.env.TEAMS_USE_SDK !== 'false' && botConfigured;
 const userAuthConfigured = Boolean(
   process.env.CLIENT_ID && process.env.TENANT_ID && process.env.APPLICATION_ID_URI,
 );
+const appVersion = (() => {
+  const configured = process.env.APP_VERSION?.trim();
+  if (configured) return configured;
+
+  try {
+    const manifest = JSON.parse(
+      readFileSync(path.resolve(process.cwd(), 'appPackage/manifest.json'), 'utf8'),
+    ) as { version?: unknown };
+    return typeof manifest.version === 'string' && manifest.version.trim()
+      ? manifest.version.trim()
+      : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+})();
+const mcpEnabled = safeLocal;
 const genUiMode = process.env.TEAMS_GENUI_MODE === 'legacy' || process.env.TEAMS_GENUI_MODE === 'channels-shadow'
   ? process.env.TEAMS_GENUI_MODE
   : 'hybrid';
@@ -51,7 +73,28 @@ const genUiActionStore = new GenUiActionStore(
 );
 const genUi = new GenUiResponseFactory(genUiActionStore);
 
-if (process.env.NODE_ENV === 'production' && skipAuth) {
+if (legacyPublicMcp) {
+  throw new Error('MCP_PUBLIC_ENABLED=true is no longer supported; MCP is local-only and requires the safe local gate.');
+}
+
+if (skipAuth && !safeLocal) {
+  const reason = isProduction
+    ? 'production mode'
+    : !localDev
+      ? 'TEAMS_LOCAL_DEV=true is required'
+      : `public deployment hints are set: ${publicHints.join(', ')}`;
+  throw new Error(`TEAMS_SKIP_AUTH=true is unsafe (${reason}).`);
+}
+
+if (isProduction && (!botConfigured || !useTeamsSdk)) {
+  throw new Error('Production requires BOT_CLIENT_ID, CLIENT_SECRET, TENANT_ID, and the Teams SDK runtime.');
+}
+
+if (isProduction && !userAuthConfigured) {
+  throw new Error('Production requires CLIENT_ID, TENANT_ID, and APPLICATION_ID_URI for user SSO.');
+}
+
+if (isProduction && skipAuth) {
   throw new Error('TEAMS_SKIP_AUTH must not be enabled in production.');
 }
 
@@ -231,20 +274,36 @@ if (useTeamsSdk) {
   http = express();
 }
 
+const loopbackOnly = safeLocal || process.env.TEAMS_BIND_HOST === '127.0.0.1';
+
+if (teamsApp && loopbackOnly) {
+  const adapter = http as any;
+  const server = adapter.server;
+  if (!server || typeof server.listen !== 'function') {
+    throw new Error('Local Teams SDK mode cannot prove loopback binding; refusing to start.');
+  }
+
+  // The current Teams ExpressAdapter exposes no host argument. Keep local SDK
+  // tests loopback-only until the adapter provides one; never fall back to a
+  // potentially public bind for a local test process.
+  adapter.start = async (listenPort: number | string) => new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(listenPort, '127.0.0.1', () => resolve());
+  });
+}
+
 http.use(express.json());
 
 http.get('/api/health', (_request: any, response: any) => {
   response.json({
     ok: true,
     service: 'teams-sdk-mvp',
-    version: '0.1.0',
+    version: appVersion,
     environment: process.env.NODE_ENV ?? 'development',
-    auth: skipAuth ? 'local-bypass' : 'teams-authenticated',
-    userAuth: skipAuth ? 'local-bypass' : userAuthConfigured ? 'entra-sso' : 'not-configured',
-    bot: teamsApp ? 'teams-sdk' : 'local-handler',
-    outbound: teamsApp ? (skipOutbound ? 'disabled' : 'teams-sdk') : 'local-outbox',
-    agent: process.env.CODEX_BIN ?? 'codex-cli',
-    agentWorkspace,
+    auth: safeLocal ? 'local-bypass' : teamsApp ? 'teams-authenticated' : 'not-configured',
+    userAuth: safeLocal ? 'local-bypass' : userAuthConfigured && userAuthValidator ? 'entra-sso' : 'not-configured',
+    bot: teamsApp ? 'teams-sdk' : safeLocal ? 'local-handler' : 'not-configured',
+    outbound: teamsApp ? (skipOutbound ? 'disabled' : 'teams-sdk') : safeLocal ? 'local-outbox' : 'not-configured',
     storage: 'file-json',
     copilotKit: 'enabled',
     copilotKitRuntime: '/api/copilotkit',
@@ -284,6 +343,14 @@ http.get('/api/items/:id', (request: any, response: any) => {
 
   response.json({ item });
 });
+
+http.use(
+  '/api/weather',
+  createUserAuthMiddleware({
+    allowUnauthenticated: skipAuth,
+    validator: userAuthValidator,
+  }),
+);
 
 http.get('/api/weather', async (request: any, response: any) => {
   const latitude = Number(request.query?.latitude);
@@ -412,7 +479,7 @@ if (mcpEnabled) {
     getWeather,
     sessionMode: process.env.MCP_SESSION_MODE === 'stateless' ? 'stateless' : 'stateful',
     enableJsonResponse: true,
-    serverVersion: process.env.APP_VERSION ?? '1.0.0',
+    serverVersion: appVersion,
   });
   http.use('/mcp', mcpRouter);
 }
@@ -998,6 +1065,10 @@ if (teamsApp) {
   await teamsApp.start(port);
 } else {
   await new Promise<void>((resolve) => {
+    if (loopbackOnly) {
+      http.listen(port, '127.0.0.1', () => resolve());
+      return;
+    }
     http.listen(port, () => resolve());
   });
 }

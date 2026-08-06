@@ -222,7 +222,7 @@ function installActivity(baseUrl, suffix) {
   };
 }
 
-async function startServer({ production, dataFile, jobDataFile, teamsSdk = false, workspace = root, codexTimeoutMs }) {
+async function startServer({ production, dataFile, jobDataFile, teamsSdk = false, workspace = root, codexTimeoutMs, extraEnv = {} }) {
   const port = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const command = process.execPath;
@@ -243,7 +243,9 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
       COPILOTKIT_DETERMINISTIC_MODE: production ? '' : 'true',
       TEAMS_USE_SDK: teamsSdk ? 'true' : 'false',
       TEAMS_SKIP_OUTBOUND: teamsSdk ? 'true' : 'false',
-      MCP_PUBLIC_ENABLED: 'false',
+      TEAMS_LOCAL_DEV: production ? 'false' : 'true',
+      TEAMS_BIND_HOST: '127.0.0.1',
+      MCP_PUBLIC_ENABLED: '',
       ...(teamsSdk
         ? {
             BOT_CLIENT_ID: '00000000-0000-4000-8000-000000000001',
@@ -255,6 +257,7 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
         : {}),
       ...(production ? { TEAMS_SKIP_AUTH: '' } : { TEAMS_SKIP_AUTH: 'true' }),
       ...(codexTimeoutMs ? { CODEX_TIMEOUT_MS: String(codexTimeoutMs) } : {}),
+      ...extraEnv,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -274,6 +277,87 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
     child.kill('SIGTERM');
     throw new Error(`${error.message}\n${output}`);
   }
+}
+
+async function expectStartupFailure(label, extraEnv, expectedMessage) {
+  const port = await getFreePort();
+  const child = spawn(process.execPath, [path.join(root, 'dist/server/index.js')], {
+    cwd: root,
+    env: {
+      ...process.env,
+      NODE_ENV: 'development',
+      PORT: String(port),
+      TEAMS_USE_SDK: 'false',
+      TEAMS_SKIP_AUTH: '',
+      TEAMS_LOCAL_DEV: 'false',
+      TEAMS_BIND_HOST: '127.0.0.1',
+      MCP_PUBLIC_ENABLED: '',
+      ...extraEnv,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  let output = '';
+  child.stdout.on('data', (chunk) => { output += chunk.toString(); });
+  child.stderr.on('data', (chunk) => { output += chunk.toString(); });
+
+  const result = await Promise.race([
+    new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal }))),
+    new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), 5_000)),
+  ]);
+
+  if (result.timeout) {
+    child.kill('SIGTERM');
+    assert(false, `${label} exits instead of starting`);
+    return;
+  }
+
+  assert(result.code !== 0, `${label} exits with a startup failure`);
+  assert(output.includes(expectedMessage), `${label} reports ${expectedMessage}`);
+}
+
+async function runStartupGateFlow() {
+  await expectStartupFailure(
+    'legacy public MCP configuration',
+    { MCP_PUBLIC_ENABLED: 'true' },
+    'MCP_PUBLIC_ENABLED=true',
+  );
+  await expectStartupFailure(
+    'auth bypass without local development gate',
+    { TEAMS_SKIP_AUTH: 'true', TEAMS_LOCAL_DEV: '' },
+    'TEAMS_LOCAL_DEV=true',
+  );
+  await expectStartupFailure(
+    'auth bypass with a public deployment hint',
+    { TEAMS_SKIP_AUTH: 'true', TEAMS_LOCAL_DEV: 'true', PUBLIC_BASE_URL: 'https://example.test' },
+    'public deployment hints',
+  );
+  await expectStartupFailure(
+    'production without Teams bot credentials',
+    {
+      NODE_ENV: 'production',
+      TEAMS_USE_SDK: 'false',
+      BOT_CLIENT_ID: '',
+      CLIENT_ID: '',
+      CLIENT_SECRET: '',
+      TENANT_ID: '',
+      APPLICATION_ID_URI: '',
+    },
+    'Production requires BOT_CLIENT_ID',
+  );
+  await expectStartupFailure(
+    'production without user SSO configuration',
+    {
+      NODE_ENV: 'production',
+      TEAMS_USE_SDK: 'true',
+      BOT_CLIENT_ID: '00000000-0000-4000-8000-000000000001',
+      CLIENT_ID: '',
+      CLIENT_SECRET: 'runtime-test-secret',
+      TENANT_ID: '00000000-0000-4000-8000-000000000003',
+      APPLICATION_ID_URI: '',
+    },
+    'Production requires CLIENT_ID',
+  );
 }
 
 async function waitForAgentJob(baseUrl, jobId) {
@@ -336,12 +420,17 @@ async function runLocalFlow(dataFile, jobDataFile) {
     const health = await request(server.baseUrl, '/api/health');
     assert(health.response.status === 200, 'local health endpoint returns 200');
     assert(health.body.auth === 'local-bypass', 'local runtime uses explicit auth bypass');
+    assert(health.body.userAuth === 'local-bypass', 'local health reports the user auth bypass truthfully');
+    assert(health.body.bot === 'local-handler', 'local health reports the local Bot handler truthfully');
+    assert(health.body.outbound === 'local-outbox', 'local health reports the local outbox truthfully');
+    assert(health.body.version === '1.0.6', 'health version comes from the Teams manifest');
+    assert(!('agent' in health.body) && !('agentWorkspace' in health.body), 'health does not expose agent binary or workspace paths');
     assert(health.body.storage === 'file-json', 'local runtime reports file storage');
     assert(health.body.copilotKit === 'enabled', 'CopilotKit runtime is enabled');
     assert(health.body.genAI === 'deterministic-test', 'local runtime reports explicit deterministic test mode');
     assert(health.body.genUiMode === 'hybrid', 'health reports the hybrid GenUI mode');
     assert(health.body.genUi === 'adaptive-cards', 'health reports Adaptive Cards as the GenUI renderer');
-    assert(health.body.mcp === '/mcp' && health.body.mcpEnabled === true, 'local health exposes the explicitly local MCP route');
+    assert(health.body.mcp === '/mcp' && health.body.mcpEnabled === true, 'local health exposes only the explicitly gated local MCP route');
 
     const initialize = await mcpRequest(server.baseUrl, {
       jsonrpc: '2.0',
@@ -816,12 +905,15 @@ async function runAgentTimeoutFlow(dataFile, jobDataFile) {
 }
 
 async function runProductionAuthFlow(dataFile, jobDataFile) {
-  const server = await startServer({ production: true, dataFile, jobDataFile });
+  const server = await startServer({ production: true, teamsSdk: true, dataFile, jobDataFile });
 
   try {
     const health = await request(server.baseUrl, '/api/health');
     assert(health.response.status === 200, 'production health endpoint returns 200');
     assert(health.body.auth === 'teams-authenticated', 'production does not use local auth bypass');
+    assert(health.body.userAuth === 'entra-sso', 'production health reports Entra SSO only when configured');
+    assert(health.body.bot === 'teams-sdk', 'production health reports the Teams SDK Bot');
+    assert(health.body.version === '1.0.6', 'production health reports the Teams manifest version');
     assert(health.body.mcp === 'disabled' && health.body.mcpEnabled === false, 'production disables MCP unless explicitly opted in');
 
     const disabledMcp = await request(server.baseUrl, '/mcp');
@@ -829,6 +921,9 @@ async function runProductionAuthFlow(dataFile, jobDataFile) {
 
     const withoutToken = await request(server.baseUrl, '/api/items');
     assert(withoutToken.response.status === 401, 'production API rejects requests without a bearer token');
+
+    const weatherWithoutToken = await request(server.baseUrl, '/api/weather?latitude=37.5665&longitude=126.978&mode=demo');
+    assert(weatherWithoutToken.response.status === 401, 'production weather API rejects requests without a bearer token');
 
     const invalidToken = await request(server.baseUrl, '/api/items', {
       headers: { authorization: 'Bearer definitely-invalid' },
@@ -965,6 +1060,8 @@ const timeoutDataFile = path.join(tempDir, 'timeout-items.json');
 const timeoutJobDataFile = path.join(tempDir, 'timeout-agent-jobs.json');
 
 try {
+  console.log('Runtime verification: local-auth and public-MCP startup gates');
+  await runStartupGateFlow();
   console.log('Runtime verification: local authenticated-bypass flow');
   await runLocalFlow(localDataFile, localJobDataFile);
   console.log('Runtime verification: Teams SDK Activity flow');

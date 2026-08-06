@@ -40,7 +40,7 @@ TypeScript + React + Express + Microsoft Teams SDK 기반의 내부용 Teams 앱
 ```bash
 npm install
 npm run check
-TEAMS_SKIP_AUTH=true npm run dev
+TEAMS_LOCAL_DEV=true TEAMS_SKIP_AUTH=true npm run dev
 ```
 
 실행 후 다음 주소를 확인합니다.
@@ -52,7 +52,7 @@ TEAMS_SKIP_AUTH=true npm run dev
 - CopilotKit 런타임 정보: http://localhost:3978/api/copilotkit/info
 - Teams 메시지 엔드포인트: http://localhost:3978/api/messages
 
-`TEAMS_SKIP_AUTH=true`는 로컬 탭 API의 사용자 인증만 우회하는 개발용 설정입니다. `BOT_CLIENT_ID`, `CLIENT_SECRET`, `TENANT_ID`가 있으면 Teams SDK Bot은 계속 실행되어 실제 Teams 메시지 outbound를 테스트할 수 있습니다. `TEAMS_SKIP_OUTBOUND=true`를 별도로 설정한 경우에만 비동기 진행·완료 메시지를 로컬 outbox에 보관합니다. 운영에서는 `TEAMS_SKIP_AUTH`를 제거하고 탭 API도 Entra SSO로 보호합니다.
+`TEAMS_SKIP_AUTH=true`는 `TEAMS_LOCAL_DEV=true`와 함께 사용하고, `NODE_ENV=production`이 아니며 `PUBLIC_BASE_URL`, `TAB_DOMAIN`, `BOT_DOMAIN`, `DEV_TUNNEL_ID`가 모두 비어 있는 로컬 개발에서만 허용됩니다. 이 안전한 로컬 게이트가 열릴 때만 MCP가 loopback 서버에 연결됩니다. `BOT_CLIENT_ID`, `CLIENT_SECRET`, `TENANT_ID`가 있으면 Teams SDK Bot은 계속 실행되어 실제 Teams 메시지 라우팅을 테스트할 수 있습니다. `TEAMS_SKIP_OUTBOUND=true`를 별도로 설정한 경우에만 비동기 진행·완료 메시지를 로컬 outbox에 보관합니다. 운영에서는 `TEAMS_SKIP_AUTH`와 `TEAMS_LOCAL_DEV`를 제거하고 Teams Bot 자격 증명과 Entra SSO를 모두 구성해야 합니다. 예전 `MCP_PUBLIC_ENABLED=true` 설정은 지원하지 않으며 시작 시 거부됩니다.
 
 CopilotKit 채팅은 `OPENAI_API_KEY`가 설정된 경우에만 실제 GenAI 경로를 사용합니다. 선택적으로 `OPENAI_MODEL`(기본 `gpt-4o-mini`)과 OpenAI-compatible `OPENAI_BASE_URL`을 지정할 수 있습니다. 키가 없는 운영 프로세스는 결정형 응답으로 위장하지 않고 GenAI 설정 오류를 반환합니다. `COPILOTKIT_DETERMINISTIC_MODE=true`는 자동 테스트 전용이며 운영에서 사용하면 안 됩니다.
 
@@ -102,7 +102,7 @@ CopilotKit 런타임 검증은 `/api/copilotkit/info` 검색, 업무 현황·날
 
 ## 인증과 저장소
 
-Teams 탭이 초기화되면 TeamsJS `authentication.getAuthToken()`으로 받은 bearer token을 `/api/items` 요청에 전달합니다. 서버는 운영 모드에서 탭/SSO용 `CLIENT_ID`, `TENANT_ID`, `APPLICATION_ID_URI`를 기준으로 Microsoft Entra 토큰을 검증하고, Bot 메시지 발신에는 별도의 `BOT_CLIENT_ID`와 `CLIENT_SECRET`를 사용합니다. 로컬 개발에서만 `TEAMS_SKIP_AUTH=true`로 이 검증을 우회합니다.
+Teams 탭이 초기화되면 TeamsJS `authentication.getAuthToken()`으로 받은 bearer token을 `/api/items` 요청에 전달합니다. 서버는 운영 모드에서 탭/SSO용 `CLIENT_ID`, `TENANT_ID`, `APPLICATION_ID_URI`를 기준으로 Microsoft Entra 토큰을 검증하고, Bot 메시지 발신에는 별도의 `BOT_CLIENT_ID`와 `CLIENT_SECRET`를 사용합니다. 로컬 개발에서만 `TEAMS_LOCAL_DEV=true TEAMS_SKIP_AUTH=true`로 이 검증을 우회합니다.
 
 현재 업무 저장소는 `data/items.json`입니다. 이 파일은 로컬 MVP의 재시작 검증을 위해 사용하며 Git에는 포함하지 않습니다. 여러 인스턴스 운영이나 감사 로그가 필요한 단계에서는 SQL/managed database로 교체해야 합니다.
 
@@ -131,7 +131,7 @@ npm run package:app
 
 `APPLICATION_ID_URI`는 Microsoft Entra 앱 등록의 `Expose an API`에 표시되는 실제 Application ID URI를 사용해야 합니다. 이 값은 manifest의 `webApplicationInfo.resource`로 들어갑니다.
 
-Teams 탭 SSO에서는 `TAB_DOMAIN`이 Microsoft Entra 테넌트에서 검증된 공개 HTTPS 도메인이어야 하며, `APPLICATION_ID_URI`는 반드시 `api://<TAB_DOMAIN>/<CLIENT_ID>`와 같아야 합니다. Dev Tunnel의 임시 호스트가 테넌트 검증 도메인이 아니면 Teams 화면은 열리지만 SSO 토큰 발급은 시작되지 않습니다. 이 경우에는 로컬 개발용 `TEAMS_SKIP_AUTH=true`로 기능을 확인하고, 운영 전환 시 검증된 도메인으로 패키지를 다시 생성합니다.
+Teams 탭 SSO에서는 `TAB_DOMAIN`이 Microsoft Entra 테넌트에서 검증된 공개 HTTPS 도메인이어야 하며, `APPLICATION_ID_URI`는 반드시 `api://<TAB_DOMAIN>/<CLIENT_ID>`와 같아야 합니다. Dev Tunnel의 임시 호스트가 테넌트 검증 도메인이 아니면 Teams 화면은 열리지만 SSO 토큰 발급은 시작되지 않습니다. 이 경우에는 공개 힌트를 비운 로컬 환경에서 `TEAMS_LOCAL_DEV=true TEAMS_SKIP_AUTH=true`로 기능을 확인하고, 운영 전환 시 검증된 도메인으로 패키지를 다시 생성합니다.
 
 ## Teams에서 실행
 
