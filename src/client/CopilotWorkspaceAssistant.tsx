@@ -1,5 +1,6 @@
 import {
   CopilotChat,
+  useCopilotChatConfiguration,
   useAgentContext,
   useRenderTool,
 } from '@copilotkit/react-core/v2';
@@ -132,12 +133,22 @@ function TaskToolCard({ status, parameters }: TaskRenderProps) {
 function ApprovalToolCard({ status, parameters }: ApprovalRenderProps) {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const chatConfiguration = useCopilotChatConfiguration();
 
   async function resolve(action: 'approve' | 'cancel'): Promise<void> {
+    const conversationId = chatConfiguration?.threadId;
+    if (!conversationId) {
+      setMessage('Copilot 대화 context가 없어 작업을 처리할 수 없습니다. 채팅을 다시 연 뒤 시도하세요.');
+      return;
+    }
     setBusy(true);
     setMessage('처리 중…');
     try {
-      const response = await apiFetch(`/api/agent-jobs/${parameters.jobId}/${action}`, { method: 'POST' });
+      const response = await apiFetch(`/api/agent-jobs/${parameters.jobId}/${action}`, {
+        method: 'POST',
+        body: JSON.stringify({ conversationId }),
+        headers: { 'content-type': 'application/json' },
+      });
       const body = (await response.json()) as { job?: { status?: string }; error?: string };
       if (!response.ok) throw new Error(body.error || '작업을 처리하지 못했습니다.');
       setMessage(`작업 상태: ${body.job?.status || action}`);

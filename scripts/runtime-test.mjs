@@ -144,9 +144,9 @@ function assertExactGenUiActionPayload(payload, label) {
   assert(Object.values(payload ?? {}).every((value) => typeof value === 'string' && value.length > 0), `${label} payload values are non-empty strings`);
 }
 
-function genUiInvokeActivity(baseUrl, payload, suffix, conversationId) {
+function genUiInvokeActivity(baseUrl, payload, suffix, conversationId, identity = {}) {
   return {
-    ...activity('', baseUrl, suffix, conversationId),
+    ...activity('', baseUrl, suffix, conversationId, identity),
     type: 'invoke',
     name: 'adaptiveCard/action',
     value: {
@@ -159,9 +159,9 @@ function genUiInvokeActivity(baseUrl, payload, suffix, conversationId) {
   };
 }
 
-function genUiSubmitActivity(baseUrl, payload, suffix, conversationId) {
+function genUiSubmitActivity(baseUrl, payload, suffix, conversationId, identity = {}) {
   return {
-    ...activity('', baseUrl, suffix, conversationId),
+    ...activity('', baseUrl, suffix, conversationId, identity),
     type: 'message',
     value: payload,
   };
@@ -190,15 +190,18 @@ async function copilotRun(baseUrl, prompt, threadId, context = []) {
   return { ...result, events };
 }
 
-function activity(text, baseUrl, suffix, conversationId = `runtime-conversation-${suffix}`) {
+function activity(text, baseUrl, suffix, conversationId = `runtime-conversation-${suffix}`, identity = {}) {
+  const userId = identity.userId ?? 'runtime-user';
+  const tenantId = identity.tenantId ?? 'runtime-tenant';
   return {
     type: 'message',
     id: `runtime-${suffix}`,
     timestamp: new Date().toISOString(),
     serviceUrl: baseUrl,
     channelId: 'msteams',
-    from: { id: 'runtime-user', name: 'Runtime Test User' },
-    conversation: { id: conversationId },
+    from: { id: userId, name: 'Runtime Test User' },
+    conversation: { id: conversationId, tenantId },
+    channelData: { tenant: { id: tenantId } },
     recipient: { id: 'runtime-bot', name: 'Teams SDK MVP' },
     text,
   };
@@ -213,7 +216,8 @@ function installActivity(baseUrl, suffix) {
     serviceUrl: baseUrl,
     channelId: 'msteams',
     from: { id: 'runtime-user', name: 'Runtime Test User' },
-    conversation: { id: `runtime-conversation-${suffix}`, conversationType: 'personal' },
+    conversation: { id: `runtime-conversation-${suffix}`, conversationType: 'personal', tenantId: 'runtime-tenant' },
+    channelData: { tenant: { id: 'runtime-tenant' } },
     recipient: { id: 'runtime-bot', name: 'Teams SDK MVP' },
   };
 }
@@ -422,7 +426,10 @@ async function runLocalFlow(dataFile, jobDataFile) {
     assert(Boolean(approvalJobId), 'CopilotKit write request returns an approval job id');
     const awaitingApproval = await waitForAgentStatus(server.baseUrl, approvalJobId, 'awaiting_approval');
     assert(awaitingApproval.mode === 'workspace-write', 'CopilotKit write request preserves approval boundary');
-    const cancelledApproval = await request(server.baseUrl, `/api/agent-jobs/${approvalJobId}/cancel`, { method: 'POST' });
+    const cancelledApproval = await request(server.baseUrl, `/api/agent-jobs/${approvalJobId}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ conversationId: 'runtime-copilot-write' }),
+    });
     assert(cancelledApproval.response.status === 200 && cancelledApproval.body.job.status === 'cancelled', 'CopilotKit approval card can cancel a write job');
 
     const initial = await request(server.baseUrl, '/api/items');
@@ -561,7 +568,7 @@ async function runLocalFlow(dataFile, jobDataFile) {
 
     const continued = await request(server.baseUrl, '/api/messages', {
       method: 'POST',
-      body: JSON.stringify(activity(`continue ${readOnlyJobId} 같은 thread에서 한 줄로 이어서 확인해줘`, server.baseUrl, 'agent-continue')),
+      body: JSON.stringify(activity(`continue ${readOnlyJobId} 같은 thread에서 한 줄로 이어서 확인해줘`, server.baseUrl, 'agent-continue', 'runtime-conversation-agent-run')),
     });
     const continuedJobId = continued.body.messages[0].match(/task-[\w-]+/)?.[0];
     assert(continued.body.messages[0].includes('이전 Codex thread'), 'Teams can continue a previous Codex thread');
@@ -577,7 +584,7 @@ async function runLocalFlow(dataFile, jobDataFile) {
     await waitForAgentStatus(server.baseUrl, slowJobId, 'running');
     const cancelled = await request(server.baseUrl, '/api/messages', {
       method: 'POST',
-      body: JSON.stringify(activity(`cancel ${slowJobId}`, server.baseUrl, 'agent-cancel-command')),
+      body: JSON.stringify(activity(`cancel ${slowJobId}`, server.baseUrl, 'agent-cancel-command', 'runtime-conversation-agent-cancel')),
     });
     assert(cancelled.body.messages[0].includes('취소'), 'running Codex job can be cancelled');
     const cancelledJob = await waitForAgentJob(server.baseUrl, slowJobId);
@@ -657,13 +664,125 @@ async function runLocalFlow(dataFile, jobDataFile) {
 
     const approved = await request(server.baseUrl, '/api/messages', {
       method: 'POST',
-      body: JSON.stringify(activity(`approve ${writeJobId}`, server.baseUrl, 'agent-approve')),
+      body: JSON.stringify(activity(`approve ${writeJobId}`, server.baseUrl, 'agent-approve', 'runtime-conversation-agent-write')),
     });
     assert(approved.body.messages[0].includes('승인'), 'workspace-write job can be approved from Teams');
 
     const completedWrite = await waitForAgentJob(server.baseUrl, writeJobId);
     assert(completedWrite.status === 'completed', 'approved workspace-write job completes');
     assert(completedWrite.mode === 'workspace-write', 'approved job preserves write mode');
+
+    // Scope regression: every externally reachable job operation must behave
+    // like not-found outside requester + conversation + tenant. The debug
+    // endpoint below is local-only evidence and is never used as an app API.
+    const scopeConversationId = 'runtime-scope-conversation';
+    const scopeOwner = { userId: 'scope-owner', tenantId: 'scope-tenant' };
+    const scopedWriteRequest = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity('write scope regression approval', server.baseUrl, 'scope-owner-write', scopeConversationId, scopeOwner)),
+    });
+    const scopedWriteJobId = scopedWriteRequest.body.messages[0].match(/task-[\w-]+/)?.[0];
+    assert(Boolean(scopedWriteJobId), 'scope regression creates a scoped approval job');
+    const scopedWriteBefore = await waitForAgentStatus(server.baseUrl, scopedWriteJobId, 'awaiting_approval');
+    assert(scopedWriteBefore.tenantId === 'scope-tenant', 'new jobs persist tenantId');
+
+    const unauthorizedScopes = [
+      { label: 'second user', conversationId: scopeConversationId, identity: { userId: 'scope-other-user', tenantId: 'scope-tenant' } },
+      { label: 'second conversation', conversationId: 'runtime-scope-other-conversation', identity: scopeOwner },
+      { label: 'wrong tenant', conversationId: scopeConversationId, identity: { userId: 'scope-owner', tenantId: 'scope-other-tenant' } },
+    ];
+    for (const unauthorized of unauthorizedScopes) {
+      const statusResult = await request(server.baseUrl, '/api/messages', {
+        method: 'POST',
+        body: JSON.stringify(activity(`status ${scopedWriteJobId}`, server.baseUrl, `scope-${unauthorized.label}-status`, unauthorized.conversationId, unauthorized.identity)),
+      });
+      const listResult = await request(server.baseUrl, '/api/messages', {
+        method: 'POST',
+        body: JSON.stringify(activity('list', server.baseUrl, `scope-${unauthorized.label}-list`, unauthorized.conversationId, unauthorized.identity)),
+      });
+      assert(JSON.stringify(statusResult.body).includes('찾을 수 없습니다'), `${unauthorized.label} gets not-found for job status`);
+      assert(!JSON.stringify(listResult.body).includes(scopedWriteJobId), `${unauthorized.label} cannot list the job`);
+
+      for (const [command, label] of [
+        [`approve ${scopedWriteJobId}`, 'approve'],
+        [`cancel ${scopedWriteJobId}`, 'cancel'],
+        [`continue ${scopedWriteJobId} unauthorized continuation`, 'continue'],
+        [`commit ${scopedWriteJobId} unauthorized commit`, 'commit'],
+      ]) {
+        const mutation = await request(server.baseUrl, '/api/messages', {
+          method: 'POST',
+          body: JSON.stringify(activity(command, server.baseUrl, `scope-${unauthorized.label}-${label}`, unauthorized.conversationId, unauthorized.identity)),
+        });
+        assert(!JSON.stringify(mutation.body).includes(scopedWriteJobId), `${unauthorized.label} cannot ${label} the job`);
+      }
+    }
+
+    const rightfulStatus = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity(`status ${scopedWriteJobId}`, server.baseUrl, 'scope-owner-status', scopeConversationId, scopeOwner)),
+    });
+    assert(JSON.stringify(rightfulStatus.body).includes(scopedWriteJobId), 'rightful scope can read job status');
+    const rightfulList = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity('list', server.baseUrl, 'scope-owner-list', scopeConversationId, scopeOwner)),
+    });
+    assert(JSON.stringify(rightfulList.body).includes(scopedWriteJobId), 'rightful scope can list its job');
+    const rightfulCancel = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity(`cancel ${scopedWriteJobId}`, server.baseUrl, 'scope-owner-cancel', scopeConversationId, scopeOwner)),
+    });
+    assert(rightfulCancel.body.messages[0].includes('취소'), 'rightful scope can cancel its job');
+    assert((await waitForAgentStatus(server.baseUrl, scopedWriteJobId, 'cancelled')).status === 'cancelled', 'unauthorized mutations did not change the job before rightful cancel');
+
+    const missingConversationRest = await request(server.baseUrl, `/api/agent-jobs/${scopedWriteJobId}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ requesterId: 'scope-owner' }),
+    });
+    assert(missingConversationRest.response.status === 400, 'REST job mutation rejects missing conversationId');
+    const forgedRequesterRest = await request(server.baseUrl, `/api/agent-jobs/${scopedWriteJobId}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ conversationId: scopeConversationId, requesterId: 'scope-owner' }),
+    });
+    assert(forgedRequesterRest.response.status === 404, 'REST ignores caller-supplied requesterId and returns not-found');
+
+    const cardConversationId = 'runtime-scope-card-conversation';
+    const cardOwner = { userId: 'scope-card-owner', tenantId: 'scope-card-tenant' };
+    const cardCreate = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity('write scoped card approval', server.baseUrl, 'scope-card-create', cardConversationId, cardOwner)),
+    });
+    const card = assertAdaptiveCardActivity(cardCreate.body.activities[0], 'scoped card approval');
+    const cardApprovePayload = actionPayloadFromCard(card.actions?.find((action) => action.verb === 'genui.approve'));
+    assertExactGenUiActionPayload(cardApprovePayload, 'scoped card approve');
+    const cardAttack = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(genUiInvokeActivity(
+        server.baseUrl,
+        cardApprovePayload,
+        'scope-card-attack',
+        cardConversationId,
+        { userId: 'scope-card-other-user', tenantId: 'scope-card-tenant' },
+      )),
+    });
+    assert(JSON.stringify(cardAttack.body.value).includes('찾을 수 없습니다'), 'card action from another user is not-found');
+    assert((await waitForAgentStatus(server.baseUrl, cardApprovePayload.entityId, 'awaiting_approval')).status === 'awaiting_approval', 'unauthorized card action does not mutate the job');
+    const cardTenantAttack = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(genUiInvokeActivity(
+        server.baseUrl,
+        cardApprovePayload,
+        'scope-card-tenant-attack',
+        cardConversationId,
+        { userId: 'scope-card-owner', tenantId: 'scope-card-other-tenant' },
+      )),
+    });
+    assert(JSON.stringify(cardTenantAttack.body.value).includes('찾을 수 없습니다'), 'card action from another tenant is not-found');
+    const cardApproved = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(genUiInvokeActivity(server.baseUrl, cardApprovePayload, 'scope-card-owner-approve', cardConversationId, cardOwner)),
+    });
+    assert(cardApproved.response.status === 200, 'rightful card action remains usable');
+    assert((await waitForAgentJob(server.baseUrl, cardApprovePayload.entityId)).status === 'completed', 'rightful card approval completes the job');
 
     const persisted = JSON.parse(await fs.readFile(dataFile, 'utf8'));
     assert(Array.isArray(persisted) && persisted.length === 2, 'isolated JSON store persists final state');
@@ -772,14 +891,14 @@ async function runGitCommitFlow(workspace, dataFile, jobDataFile) {
     const jobId = writeRequest.body.messages[0].match(/task-[\w-]+/)?.[0];
     await request(server.baseUrl, '/api/messages', {
       method: 'POST',
-      body: JSON.stringify(activity(`approve ${jobId}`, server.baseUrl, 'git-approve')),
+      body: JSON.stringify(activity(`approve ${jobId}`, server.baseUrl, 'git-approve', 'runtime-conversation-git-write')),
     });
     const completed = await waitForAgentJob(server.baseUrl, jobId);
     assert(completed.status === 'completed', 'approved write job completes in an isolated Git workspace');
 
     const commit = await request(server.baseUrl, '/api/messages', {
       method: 'POST',
-      body: JSON.stringify(activity(`commit ${jobId} test: runtime agent change`, server.baseUrl, 'git-commit')),
+      body: JSON.stringify(activity(`commit ${jobId} test: runtime agent change`, server.baseUrl, 'git-commit', 'runtime-conversation-git-write')),
     });
     assert(commit.body.messages[0].includes('커밋'), 'Teams commit command creates a Git commit');
     const committed = (await execFileAsync('git', ['log', '-1', '--format=%s'], { cwd: workspace })).stdout.trim();
@@ -813,6 +932,18 @@ async function runRecoveryFlow(dataFile, jobDataFile) {
     const recovered = result.body.jobs.find((job) => job.id === 'task-recovery-check');
     assert(recovered.status === 'failed', 'interrupted Codex jobs are marked failed after restart');
     assert(recovered.error.includes('재시작'), 'restart recovery keeps a useful failure reason');
+    const legacyStatus = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity('status task-recovery-check', server.baseUrl, 'legacy-status')),
+    });
+    assert(JSON.stringify(legacyStatus.body).includes('찾을 수 없습니다'), 'legacy jobs without tenantId are not readable through scoped commands');
+    const legacyCancel = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity('cancel task-recovery-check', server.baseUrl, 'legacy-cancel')),
+    });
+    assert(!JSON.stringify(legacyCancel.body).includes('task-recovery-check'), 'legacy jobs without tenantId cannot be mutated through scoped commands');
+    const afterLegacyAttempt = (await request(server.baseUrl, '/api/debug/agent-jobs')).body.jobs.find((job) => job.id === 'task-recovery-check');
+    assert(afterLegacyAttempt.status === 'failed', 'legacy mutation attempt leaves recovered job unchanged');
   } finally {
     await stopServer(server.child);
   }

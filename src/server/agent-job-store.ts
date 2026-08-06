@@ -11,6 +11,12 @@ export type AgentJobStatus =
   | 'failed'
   | 'cancelled';
 
+export interface AgentJobScope {
+  requesterId: string;
+  conversationId: string;
+  tenantId: string;
+}
+
 export interface AgentJob {
   id: string;
   prompt: string;
@@ -18,6 +24,8 @@ export interface AgentJob {
   status: AgentJobStatus;
   conversationId: string;
   requesterId: string;
+  /** Missing only on legacy records; scoped access deliberately rejects them. */
+  tenantId?: string;
   parentJobId?: string;
   threadId?: string;
   result?: string;
@@ -52,8 +60,7 @@ export class AgentJobStore {
   async create(input: {
     prompt: string;
     mode: AgentJobMode;
-    conversationId: string;
-    requesterId: string;
+    scope: AgentJobScope;
     parentJobId?: string;
     threadId?: string;
   }): Promise<AgentJob> {
@@ -62,8 +69,9 @@ export class AgentJobStore {
       prompt: input.prompt,
       mode: input.mode,
       status: input.mode === 'workspace-write' ? 'awaiting_approval' : 'queued',
-      conversationId: input.conversationId,
-      requesterId: input.requesterId,
+      conversationId: input.scope.conversationId,
+      requesterId: input.scope.requesterId,
+      tenantId: input.scope.tenantId,
       parentJobId: input.parentJobId,
       threadId: input.threadId,
       progress: [],
@@ -75,24 +83,28 @@ export class AgentJobStore {
     return job;
   }
 
-  get(id: string): AgentJob | undefined {
-    return this.jobs.find((job) => job.id === id);
+  get(id: string, scope: AgentJobScope): AgentJob | undefined {
+    return this.jobs.find((job) => job.id === id && matchesScope(job, scope));
   }
 
-  list(limit = 10): AgentJob[] {
-    return this.jobs.slice(0, limit);
+  list(scope: AgentJobScope, limit = 10): AgentJob[] {
+    return this.jobs.filter((job) => matchesScope(job, scope)).slice(0, limit);
   }
 
-  latestCompletedWithThread(conversationId: string): AgentJob | undefined {
+  latestCompletedWithThread(scope: AgentJobScope): AgentJob | undefined {
     return this.jobs.find((job) =>
-      job.conversationId === conversationId &&
+      matchesScope(job, scope) &&
       job.status === 'completed' &&
       Boolean(job.threadId),
     );
   }
 
-  async update(id: string, patch: Partial<AgentJob>): Promise<AgentJob | undefined> {
-    const job = this.get(id);
+  async update(
+    id: string,
+    scope: AgentJobScope,
+    patch: Partial<Omit<AgentJob, keyof AgentJobScope>>,
+  ): Promise<AgentJob | undefined> {
+    const job = this.get(id, scope);
     if (!job) return undefined;
 
     Object.assign(job, patch);
@@ -100,8 +112,8 @@ export class AgentJobStore {
     return job;
   }
 
-  async appendProgress(id: string, message: string): Promise<AgentJob | undefined> {
-    const job = this.get(id);
+  async appendProgress(id: string, scope: AgentJobScope, message: string): Promise<AgentJob | undefined> {
+    const job = this.get(id, scope);
     if (!job) return undefined;
 
     if (job.progress.at(-1) === message) return job;
@@ -111,7 +123,25 @@ export class AgentJobStore {
     return job;
   }
 
-  countActive(): number {
+  countActive(scope: AgentJobScope): number {
+    return this.jobs.filter((job) =>
+      matchesScope(job, scope) &&
+      (job.status === 'queued' || job.status === 'awaiting_approval' || job.status === 'running'),
+    ).length;
+  }
+
+  /** Local-only MCP/debug reader. Never use this from an authenticated request path. */
+  getLocalOnly(id: string): AgentJob | undefined {
+    return this.jobs.find((job) => job.id === id);
+  }
+
+  /** Local-only MCP/debug reader. Never use this from an authenticated request path. */
+  listLocalOnly(limit = 10): AgentJob[] {
+    return this.jobs.slice(0, limit);
+  }
+
+  /** Local-only MCP/debug reader. Never use this from an authenticated request path. */
+  countActiveLocalOnly(): number {
     return this.jobs.filter((job) =>
       job.status === 'queued' || job.status === 'awaiting_approval' || job.status === 'running',
     ).length;
@@ -137,4 +167,13 @@ export class AgentJobStore {
     this.writeChain = this.writeChain.then(() => fs.writeFile(this.filePath, snapshot, 'utf8'));
     await this.writeChain;
   }
+}
+
+function matchesScope(job: AgentJob, scope: AgentJobScope): boolean {
+  // Legacy records without tenantId are intentionally inaccessible through all
+  // scoped reads and mutations; startup recovery is the only admin operation.
+  return typeof job.tenantId === 'string'
+    && job.requesterId === scope.requesterId
+    && job.conversationId === scope.conversationId
+    && job.tenantId === scope.tenantId;
 }

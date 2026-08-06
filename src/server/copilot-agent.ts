@@ -10,6 +10,7 @@ import {
 import { Observable, type Subscriber } from 'rxjs';
 
 import { AgentService } from './agent-service.js';
+import type { AgentJobScope } from './agent-job-store.js';
 import { ItemStore } from './item-store.js';
 import { DEMO_COORDINATES, formatWeatherMessage, getWeather, type WeatherResponse } from './weather-service.js';
 
@@ -38,6 +39,8 @@ type ApprovalToolArgs = {
   prompt: string;
   action: 'approve' | 'cancel';
 };
+
+type CopilotIdentity = Pick<AgentJobScope, 'requesterId' | 'tenantId'>;
 
 type OpenAIMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -188,8 +191,8 @@ function formatTasks(tasks: TaskToolArgs): string {
   return `현재 업무 ${tasks.total}개 · 진행 중 ${tasks.open}개 · 완료 ${tasks.done}개\n\n${body}`;
 }
 
-function formatJobs(agentService: AgentService): string {
-  const jobs = agentService.list(5);
+function formatJobs(agentService: AgentService, scope: AgentJobScope): string {
+  const jobs = agentService.list(scope, 5);
   if (jobs.length === 0) return 'Codex 작업이 없습니다.';
   return jobs.map((job) => `- ${job.id}: ${job.status}`).join('\n');
 }
@@ -198,6 +201,7 @@ export class TeamsCodexAgent extends AbstractAgent {
   constructor(
     private readonly itemStore: ItemStore,
     private readonly agentService: AgentService,
+    private readonly identity: CopilotIdentity,
   ) {
     super({
       agentId: AGENT_ID,
@@ -206,7 +210,7 @@ export class TeamsCodexAgent extends AbstractAgent {
   }
 
   override clone(): TeamsCodexAgent {
-    return new TeamsCodexAgent(this.itemStore, this.agentService);
+    return new TeamsCodexAgent(this.itemStore, this.agentService, this.identity);
   }
 
   override async getCapabilities(): Promise<AgentCapabilities> {
@@ -247,6 +251,7 @@ export class TeamsCodexAgent extends AbstractAgent {
   override run(input: RunAgentInput): Observable<BaseEvent> {
     return new Observable<BaseEvent>((subscriber) => {
       let activeJobId: string | undefined;
+      const scope = this.scopeForInput(input);
       let cancelled = false;
 
       const execute = async (): Promise<void> => {
@@ -291,7 +296,7 @@ export class TeamsCodexAgent extends AbstractAgent {
 
       return () => {
         cancelled = true;
-        if (activeJobId) void this.agentService.cancel(activeJobId);
+        if (activeJobId) void this.agentService.cancel(activeJobId, scope);
       };
     });
   }
@@ -337,9 +342,7 @@ export class TeamsCodexAgent extends AbstractAgent {
       ...getOpenAIConversation(input),
     ];
     let toolChoice: { type: 'function'; function: { name: string } } | 'auto' = forcedToolChoice(prompt);
-    const requesterId = typeof input.forwardedProps?.userId === 'string'
-      ? input.forwardedProps.userId
-      : 'copilotkit-user';
+    const scope = this.scopeForInput(input);
 
     for (let attempt = 0; attempt < 4; attempt += 1) {
       if (isCancelled()) return '';
@@ -375,7 +378,7 @@ export class TeamsCodexAgent extends AbstractAgent {
           input,
           subscriber,
           setActiveJobId,
-          requesterId,
+          scope,
         );
         messages.push({ role: 'tool', tool_call_id: toolCall.id, content: result });
       }
@@ -423,7 +426,7 @@ export class TeamsCodexAgent extends AbstractAgent {
     input: RunAgentInput,
     subscriber: Subscriber<BaseEvent>,
     setActiveJobId: (id: string) => void,
-    requesterId: string,
+    scope: AgentJobScope,
   ): Promise<string> {
     if (name === 'showWeatherCard') {
       const contextWeather = parseContextValue(input, '날씨');
@@ -452,8 +455,7 @@ export class TeamsCodexAgent extends AbstractAgent {
       const job = await this.agentService.submit({
         prompt: requestedPrompt,
         mode: 'workspace-write',
-        conversationId: input.threadId,
-        requesterId,
+        scope,
         notify: false,
       });
       setActiveJobId(job.id);
@@ -474,10 +476,7 @@ export class TeamsCodexAgent extends AbstractAgent {
   ): Promise<string> {
     const prompt = getMessageText(input);
     const normalized = prompt.toLowerCase();
-    const threadId = input.threadId;
-    const requesterId = typeof input.forwardedProps?.userId === 'string'
-      ? input.forwardedProps.userId
-      : 'copilotkit-user';
+    const scope = this.scopeForInput(input);
 
     if (!prompt) return '요청 내용을 입력해 주세요.';
 
@@ -502,7 +501,7 @@ export class TeamsCodexAgent extends AbstractAgent {
     }
 
     if (/^(status|상태|진행 상태)/i.test(normalized)) {
-      return `활성 Codex 작업 ${this.agentService.countActive()}개\n\n${formatJobs(this.agentService)}`;
+      return `활성 Codex 작업 ${this.agentService.countActive(scope)}개\n\n${formatJobs(this.agentService, scope)}`;
     }
 
     if (/^(write|파일|수정|변경|작성|생성)/i.test(normalized)) {
@@ -510,8 +509,7 @@ export class TeamsCodexAgent extends AbstractAgent {
       const job = await this.agentService.submit({
         prompt: requestedPrompt,
         mode: 'workspace-write',
-        conversationId: threadId,
-        requesterId,
+        scope,
         notify: false,
       });
       const approval: ApprovalToolArgs = { jobId: job.id, prompt: requestedPrompt, action: 'approve' };
@@ -519,30 +517,40 @@ export class TeamsCodexAgent extends AbstractAgent {
       return `쓰기 작업 ${job.id}이 승인 대기 중입니다.\n\nTeams Bot에서 “approve ${job.id}”를 보내거나 아래 승인 흐름을 사용하세요.`;
     }
 
-    const previous = this.agentService.latestCompletedForConversation(threadId);
+    const previous = this.agentService.latestCompletedForConversation(scope);
     const onProgress = async (message: string): Promise<void> => {
       if (!isCancelled()) this.emitText(subscriber, `⏳ ${message}`);
     };
     const job = previous
-      ? await this.agentService.continue(previous.id, prompt, { notify: false, onProgress })
+      ? await this.agentService.continue(previous.id, prompt, scope, { notify: false, onProgress })
       : await this.agentService.submit({
         prompt,
         mode: 'read-only',
-        conversationId: threadId,
-        requesterId,
+        scope,
         notify: false,
         onProgress,
       });
 
     if (!job) throw new Error('Codex 작업을 생성하지 못했습니다.');
     setActiveJobId(job.id);
-    const completed = await this.agentService.waitForTerminal(job.id);
+    const completed = await this.agentService.waitForTerminal(job.id, scope);
 
     if (completed.status === 'completed') {
       return completed.result || `작업 ${completed.id}이 완료되었습니다.`;
     }
 
     return `작업 ${completed.id}이 ${completed.status} 상태입니다.\n\n${completed.error || completed.progress.at(-1) || '추가 확인이 필요합니다.'}`;
+  }
+
+  private scopeForInput(input: RunAgentInput): AgentJobScope {
+    if (!this.identity.requesterId || !this.identity.tenantId || !input.threadId) {
+      throw new Error('validated Copilot identity and thread are required');
+    }
+    return {
+      requesterId: this.identity.requesterId,
+      conversationId: input.threadId,
+      tenantId: this.identity.tenantId,
+    };
   }
 
   private emitTool(

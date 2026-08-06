@@ -6,7 +6,7 @@ import { createCopilotExpressHandler } from '@copilotkit/runtime/v2/express';
 
 import { createUserAuthMiddleware } from './user-auth.js';
 import { ItemStore } from './item-store.js';
-import { AgentJobStore, type AgentJob } from './agent-job-store.js';
+import { AgentJobStore, type AgentJob, type AgentJobScope } from './agent-job-store.js';
 import { AgentService } from './agent-service.js';
 import { CodexRunner } from './codex-runner.js';
 import { GitService } from './git-service.js';
@@ -74,6 +74,8 @@ type GenUiActionPayload = {
   actionToken: string;
 };
 
+type UserClaims = Record<string, unknown>;
+
 const GENUI_CARD_ACTIONS = ['approve', 'cancel', 'refresh', 'feedback'] as const satisfies readonly GenUiCardAction[];
 const inFlightGenUiActions = new Set<string>();
 
@@ -81,6 +83,64 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
+}
+
+function nonEmptyString(value: unknown, maxLength = 512): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  if (!normalized || normalized.length > maxLength || /[\u0000-\u001f\u007f]/.test(normalized)) return undefined;
+  return normalized;
+}
+
+function activityScope(activity: any): AgentJobScope | undefined {
+  const requesterId = nonEmptyString(activity?.from?.id);
+  const conversationId = nonEmptyString(activity?.conversation?.id);
+  const tenantId = nonEmptyString(activity?.conversation?.tenantId)
+    ?? nonEmptyString(activity?.channelData?.tenant?.id);
+  if (!requesterId || !conversationId || !tenantId) return undefined;
+  return { requesterId, conversationId, tenantId };
+}
+
+function localRestScope(): AgentJobScope {
+  return { requesterId: 'local-user', conversationId: '', tenantId: 'local-tenant' };
+}
+
+function restConversationId(request: any): { conversationId?: string; error?: string } {
+  const bodyConversationId = nonEmptyString(request.body?.conversationId);
+  const headerValue = Array.isArray(request.headers?.['x-conversation-id'])
+    ? request.headers['x-conversation-id'][0]
+    : request.headers?.['x-conversation-id'];
+  const headerConversationId = nonEmptyString(headerValue);
+  if (bodyConversationId && headerConversationId && bodyConversationId !== headerConversationId) {
+    return { error: 'conversationId must match the x-conversation-id header' };
+  }
+  const conversationId = bodyConversationId ?? headerConversationId;
+  return conversationId ? { conversationId } : { error: 'conversationId is required' };
+}
+
+function restScope(request: any, response: any): { scope?: AgentJobScope; status?: number; error?: string } {
+  const claims = asRecord(response.locals?.user) as UserClaims | undefined;
+  const requesterId = nonEmptyString(claims?.oid) ?? nonEmptyString(claims?.sub);
+  const tenantId = nonEmptyString(claims?.tid);
+  const conversation = restConversationId(request);
+  if (conversation.error) return { status: 400, error: conversation.error };
+
+  // Local deterministic tests have no token validator. Use a fixed server-side
+  // principal; production always requires validated oid/sub and tid claims.
+  if (skipAuth && !claims) {
+    return { scope: { ...localRestScope(), conversationId: conversation.conversationId! } };
+  }
+  if (!requesterId || !tenantId) return { status: 401, error: 'validated user identity is required' };
+  return { scope: { requesterId, tenantId, conversationId: conversation.conversationId! } };
+}
+
+function copilotIdentity(request: any, response: any): { requesterId: string; tenantId: string } | undefined {
+  const claims = asRecord(response.locals?.user) as UserClaims | undefined;
+  const requesterId = nonEmptyString(claims?.oid) ?? nonEmptyString(claims?.sub);
+  const tenantId = nonEmptyString(claims?.tid);
+  if (requesterId && tenantId) return { requesterId, tenantId };
+  if (skipAuth && !claims) return { requesterId: 'local-user', tenantId: 'local-tenant' };
+  return undefined;
 }
 
 function envelopeText(envelope: GenUiEnvelopeV1): string {
@@ -358,8 +418,13 @@ if (mcpEnabled) {
 }
 
 const copilotRuntime = new CopilotRuntime({
-  agents: {
-    default: new TeamsCodexAgent(itemStore, agentService),
+  agents: ({ request }) => {
+    const requesterId = request.headers.get('x-validated-user-id');
+    const tenantId = request.headers.get('x-validated-tenant-id');
+    if (!requesterId || !tenantId) throw new Error('validated Copilot identity is required');
+    return {
+      default: new TeamsCodexAgent(itemStore, agentService, { requesterId, tenantId }),
+    };
   },
 });
 
@@ -370,6 +435,19 @@ http.use(
     validator: userAuthValidator,
   }),
 );
+http.use('/api/copilotkit', (request: any, response: any, next: any) => {
+  const identity = copilotIdentity(request, response);
+  if (!identity) {
+    response.status(401).json({ error: 'validated user identity is required' });
+    return;
+  }
+  // These headers are written only after the auth middleware and are consumed
+  // by the request-scoped Copilot agent factory; client forwardedProps are not
+  // an identity source.
+  request.headers['x-validated-user-id'] = identity.requesterId;
+  request.headers['x-validated-tenant-id'] = identity.tenantId;
+  next();
+});
 http.use(createCopilotExpressHandler({
   runtime: copilotRuntime,
   basePath: '/api/copilotkit',
@@ -384,7 +462,12 @@ http.use(
   }),
 );
 http.post('/api/agent-jobs/:id/approve', async (request: any, response: any) => {
-  const job = await agentService.approve(request.params.id);
+  const resolved = restScope(request, response);
+  if (!resolved.scope) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid job scope' });
+    return;
+  }
+  const job = await agentService.approve(request.params.id, resolved.scope);
   if (!job) {
     response.status(404).json({ error: 'approval target not found' });
     return;
@@ -393,7 +476,12 @@ http.post('/api/agent-jobs/:id/approve', async (request: any, response: any) => 
   response.json({ job });
 });
 http.post('/api/agent-jobs/:id/cancel', async (request: any, response: any) => {
-  const job = await agentService.cancel(request.params.id);
+  const resolved = restScope(request, response);
+  if (!resolved.scope) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid job scope' });
+    return;
+  }
+  const job = await agentService.cancel(request.params.id, resolved.scope);
   if (!job) {
     response.status(404).json({ error: 'cancellation target not found' });
     return;
@@ -500,19 +588,28 @@ async function resolveGenUiAction(activity: any): Promise<GenUiEnvelopeV1> {
     return genUi.actionError('유효하지 않은 GenUI 카드 액션입니다.');
   }
 
-  const conversationId = activity.conversation?.id ?? 'unknown-conversation';
-  const requesterId = activity.from?.id ?? 'unknown-user';
+  const scope = activityScope(activity);
+  if (!scope) return genUi.actionError('카드 액션에 사용자·대화·테넌트 정보가 없습니다.');
+  const { conversationId, requesterId, tenantId } = scope;
   const actionKey = [
     requesterId,
     conversationId,
+    tenantId,
     payload.entityId,
     payload.correlationId,
     payload.action,
     payload.actionToken,
   ].join('|');
 
+  if (payload.action === 'approve' || payload.action === 'cancel' || payload.action === 'refresh') {
+    // Fail closed before consuming the idempotency grant. A mismatched user,
+    // conversation, or tenant therefore cannot even mutate the action store.
+    const scopedJob = agentService.get(payload.entityId, scope);
+    if (!scopedJob) return genUi.error(`작업 ${payload.entityId}을 찾을 수 없습니다.`, `action-${payload.entityId}`);
+  }
+
   if (inFlightGenUiActions.has(actionKey)) {
-    const job = agentService.get(payload.entityId);
+    const job = agentService.get(payload.entityId, scope);
     if (payload.action === 'cancel' && job) return genUi.cancelled(job);
     if (payload.action === 'approve' && job) return genUi.approvalAccepted(job);
     return genUi.jobStatus(job);
@@ -531,7 +628,7 @@ async function resolveGenUiAction(activity: any): Promise<GenUiEnvelopeV1> {
 
     if (!consumed.ok) {
       if (consumed.reason === 'consumed') {
-        const job = agentService.get(payload.entityId);
+        const job = agentService.get(payload.entityId, scope);
         if (payload.action === 'cancel' && job) return genUi.cancelled(job);
         if (payload.action === 'approve' && job) return genUi.approvalAccepted(job);
         return genUi.jobStatus(job);
@@ -541,17 +638,17 @@ async function resolveGenUiAction(activity: any): Promise<GenUiEnvelopeV1> {
 
     let envelope: GenUiEnvelopeV1;
     if (payload.action === 'approve') {
-      const job = await agentService.approve(payload.entityId);
+      const job = await agentService.approve(payload.entityId, scope);
       envelope = job
         ? genUi.approvalAccepted(job)
         : genUi.error(`작업 ${payload.entityId}을 찾을 수 없습니다.`, `action-${payload.entityId}`);
     } else if (payload.action === 'cancel') {
-      const job = await agentService.cancel(payload.entityId);
+      const job = await agentService.cancel(payload.entityId, scope);
       envelope = job
         ? genUi.cancelled(job)
         : genUi.error(`작업 ${payload.entityId}을 찾을 수 없습니다.`, `action-${payload.entityId}`);
     } else if (payload.action === 'refresh') {
-      const job = agentService.get(payload.entityId);
+      const job = agentService.get(payload.entityId, scope);
       if (job?.status === 'awaiting_approval') {
         envelope = await genUi.approval(job);
       } else {
@@ -582,8 +679,7 @@ async function handleGenUiSubmit(activity: any, send: BotSend): Promise<void> {
 async function handleMessage(activity: any, send: BotSend): Promise<void> {
   const userText = activity.text?.replace(/<at>.*?<\/at>/gi, '').trim() || '';
   const normalizedText = userText.toLowerCase();
-  const conversationId = activity.conversation?.id ?? 'unknown-conversation';
-  const requesterId = activity.from?.id ?? 'unknown-user';
+  const scope = activityScope(activity);
 
   if (normalizedText === 'help') {
     const responseText = '사용 가능한 명령: help, weather [위도 경도], status, list, run <작업>, continue <작업 ID> <추가 요청>, write <작업>, approve <작업 ID>, commit <작업 ID> [메시지], cancel <작업 ID>';
@@ -625,24 +721,32 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
   }
 
   if (normalizedText === 'status' || normalizedText.startsWith('status ')) {
+    if (!scope) {
+      await send('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', genUi.error('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', 'scope-missing'));
+      return;
+    }
     const jobId = userText.split(/\s+/)[1];
     if (jobId) {
-      const job = agentService.get(jobId);
+      const job = agentService.get(jobId, scope);
       const responseText = job ? formatAgentJob(job) : `작업 ${jobId}을 찾을 수 없습니다.`;
       await send(responseText, job ? genUi.jobStatus(job) : genUi.error(responseText, `status-${jobId}`));
       return;
     }
 
     const openCount = itemStore.countOpen();
-    const responseText = `현재 진행 중인 업무는 ${openCount}개이며, 에이전트 활성 작업은 ${agentService.countActive()}개입니다.`;
-    const envelope = genUi.status(openCount, agentService.countActive());
+    const responseText = `현재 진행 중인 업무는 ${openCount}개이며, 에이전트 활성 작업은 ${agentService.countActive(scope)}개입니다.`;
+    const envelope = genUi.status(openCount, agentService.countActive(scope));
     await send(responseText, envelope);
     return;
   }
 
   if (normalizedText === 'list') {
+    if (!scope) {
+      await send('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', genUi.error('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', 'scope-missing'));
+      return;
+    }
     const openItems = itemStore.list().filter((item) => item.status === 'open').slice(0, 8);
-    const jobs = agentService.list(5);
+    const jobs = agentService.list(scope, 5);
     const itemText = openItems.length === 0
       ? '진행 중인 업무가 없습니다.'
       : `진행 중인 업무:\n${openItems.map((item) => `- ${item.title}`).join('\n')}`;
@@ -656,12 +760,15 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
 
   const commandMatch = userText.match(/^(run|write)\s+([\s\S]+)$/i);
   if (commandMatch) {
+    if (!scope) {
+      await send('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', genUi.error('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', 'scope-missing'));
+      return;
+    }
     const mode = commandMatch[1].toLowerCase() === 'write' ? 'workspace-write' : 'read-only';
     const job = await agentService.submit({
       prompt: commandMatch[2].trim(),
       mode,
-      conversationId,
-      requesterId,
+      scope,
     });
 
     if (mode === 'workspace-write') {
@@ -678,7 +785,11 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
 
   const approveMatch = userText.match(/^approve\s+(task-[\w-]+)$/i);
   if (approveMatch) {
-    const job = await agentService.approve(approveMatch[1]);
+    if (!scope) {
+      await send('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', genUi.error('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', 'scope-missing'));
+      return;
+    }
+    const job = await agentService.approve(approveMatch[1], scope);
     if (job) {
       const responseText = `작업 ${job.id} 승인을 처리했습니다.\nstatus ${job.id}`;
       const envelope = genUi.approvalAccepted(job);
@@ -692,7 +803,11 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
 
   const continueMatch = userText.match(/^continue\s+(task-[\w-]+)\s+([\s\S]+)$/i);
   if (continueMatch) {
-    const job = await agentService.continue(continueMatch[1], continueMatch[2].trim());
+    if (!scope) {
+      await send('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', genUi.error('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', 'scope-missing'));
+      return;
+    }
+    const job = await agentService.continue(continueMatch[1], continueMatch[2].trim(), scope);
     if (job) {
       const responseText = `작업 ${job.id}이 이전 Codex thread에서 이어집니다.\nstatus ${job.id}`;
       const envelope = genUi.continued(job);
@@ -706,8 +821,12 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
 
   const commitMatch = userText.match(/^commit\s+(task-[\w-]+)(?:\s+([\s\S]+))?$/i);
   if (commitMatch) {
+    if (!scope) {
+      await send('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', genUi.error('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', 'scope-missing'));
+      return;
+    }
     const commitMessage = commitMatch[2]?.trim() || `feat: apply Teams task ${commitMatch[1]}`;
-    const job = await agentService.commit(commitMatch[1], commitMessage);
+    const job = await agentService.commit(commitMatch[1], commitMessage, scope);
     if (!job) {
       const responseText = '커밋할 작업을 찾을 수 없습니다.';
       await send(responseText, genUi.error(responseText, 'commit-missing'));
@@ -724,7 +843,11 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
 
   const cancelMatch = userText.match(/^cancel\s+(task-[\w-]+)$/i);
   if (cancelMatch) {
-    const job = await agentService.cancel(cancelMatch[1]);
+    if (!scope) {
+      await send('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', genUi.error('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', 'scope-missing'));
+      return;
+    }
+    const job = await agentService.cancel(cancelMatch[1], scope);
     if (job) {
       const responseText = `작업 ${job.id} 취소를 처리했습니다.\n상태: ${job.status}`;
       const envelope = genUi.cancelled(job);
@@ -737,9 +860,13 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
   }
 
   if (userText) {
-    const previous = agentService.latestCompletedForConversation(conversationId);
+    if (!scope) {
+      await send('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', genUi.error('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', 'scope-missing'));
+      return;
+    }
+    const previous = agentService.latestCompletedForConversation(scope);
     if (previous) {
-      const continued = await agentService.continue(previous.id, userText);
+      const continued = await agentService.continue(previous.id, userText, scope);
       if (continued) {
         const responseText = `이전 Codex 대화를 이어서 작업 ${continued.id}을 시작했습니다.\nstatus ${continued.id}`;
         const envelope = genUi.continued(continued);
@@ -751,8 +878,7 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
     const job = await agentService.submit({
       prompt: userText,
       mode: 'read-only',
-      conversationId,
-      requesterId,
+      scope,
     });
     const responseText = `자연어 작업 ${job.id}을 읽기 전용으로 시작했습니다.\nstatus ${job.id}`;
     const envelope = genUi.naturalLanguageStarted(job);
@@ -849,7 +975,7 @@ if (teamsApp) {
 
 if (skipAuth) {
   http.get('/api/debug/agent-jobs', (_request: any, response: any) => {
-    response.json({ jobs: agentService.list(50) });
+    response.json({ jobs: agentService.listLocalOnly(50) });
   });
 
   http.get('/api/debug/agent-outbox/:conversationId', (request: any, response: any) => {

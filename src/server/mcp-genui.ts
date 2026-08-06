@@ -36,7 +36,10 @@ type WeatherLookup = (
 ) => Promise<WeatherResponse>;
 
 type ItemStoreReader = Pick<ItemStore, 'list' | 'summary'>;
-type AgentServiceReader = Pick<AgentService, 'get' | 'list' | 'countActive'>;
+// MCP is still an explicitly local-only reader in this slice. Its route is
+// disabled by default in production; the next security slice must remove the
+// unauthenticated opt-in before exposing it publicly.
+type AgentServiceReader = Pick<AgentService, 'getLocalOnly' | 'listLocalOnly' | 'countActiveLocalOnly'>;
 
 export interface McpGenUiDependencies {
   itemStore: ItemStoreReader;
@@ -171,7 +174,7 @@ function errorResult(message: string): CallToolResult {
 function workspaceEnvelope(deps: McpGenUiDependencies, limit = 8): GenUiEnvelopeV1 {
   const items = deps.itemStore.list();
   const summary = deps.itemStore.summary();
-  const jobs = deps.agentService.list(limit);
+  const jobs = deps.agentService.listLocalOnly(limit);
   const openItems = items.filter((item) => item.status === 'open').slice(0, limit);
   const activeJobs = jobs.filter((job) =>
     job.status === 'queued' || job.status === 'running' || job.status === 'awaiting_approval',
@@ -381,8 +384,8 @@ function registerTools(server: McpServer, options: McpGenUiServerOptions): void 
     },
     async ({ jobId, limit }) => {
       const selected = jobId
-        ? options.agentService.get(jobId)
-        : options.agentService.list(limit ?? 8)[0];
+        ? options.agentService.getLocalOnly(jobId)
+        : options.agentService.listLocalOnly(limit ?? 8)[0];
       const envelope = jobEnvelope(selected, limit ?? 8);
       return resultForEnvelope(envelope, fallbackTextOf(envelope));
     },
