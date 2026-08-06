@@ -6,6 +6,8 @@ export type Item = {
   status: 'open' | 'done';
 };
 
+export const MAX_ITEM_TITLE_LENGTH = 400;
+
 const seedItems: Item[] = [
   { id: 1, title: 'Teams SDK 연결 확인', status: 'done' },
   { id: 2, title: '첫 번째 업무 항목 만들기', status: 'open' },
@@ -40,8 +42,9 @@ export class ItemStore {
   }
 
   async add(title: string): Promise<Item> {
+    const normalizedTitle = assertItemTitle(title);
     const nextId = this.items.reduce((largest, item) => Math.max(largest, item.id), 0) + 1;
-    const item: Item = { id: nextId, title, status: 'open' };
+    const item: Item = { id: nextId, title: normalizedTitle, status: 'open' };
     this.items.unshift(item);
     await this.persist();
     return { ...item };
@@ -51,7 +54,7 @@ export class ItemStore {
     const item = this.items.find((candidate) => candidate.id === id);
     if (!item) return null;
 
-    item.title = title;
+    item.title = assertItemTitle(title);
     await this.persist();
     return { ...item };
   }
@@ -103,4 +106,16 @@ function isItem(value: unknown): value is Item {
 
 function isFileNotFound(error: unknown): error is NodeJS.ErrnoException {
   return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT');
+}
+
+function assertItemTitle(title: string): string {
+  const normalized = typeof title === 'string' ? title.trim() : '';
+  if (!normalized) throw new RangeError('title is required');
+  if (normalized.length > MAX_ITEM_TITLE_LENGTH) {
+    throw new RangeError(`title must be ${MAX_ITEM_TITLE_LENGTH} characters or fewer`);
+  }
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(normalized)) {
+    throw new RangeError('title contains unsupported control characters');
+  }
+  return normalized;
 }

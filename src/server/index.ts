@@ -1,12 +1,13 @@
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
+import { isIP } from 'node:net';
 
 import express from 'express';
 import { CopilotRuntime } from '@copilotkit/runtime/v2';
 import { createCopilotExpressHandler } from '@copilotkit/runtime/v2/express';
 
 import { createUserAuthMiddleware } from './user-auth.js';
-import { ItemStore } from './item-store.js';
+import { ItemStore, MAX_ITEM_TITLE_LENGTH } from './item-store.js';
 import { AgentJobStore, type AgentJob, type AgentJobScope } from './agent-job-store.js';
 import { AgentService, type AgentNotification } from './agent-service.js';
 import { CodexRunner } from './codex-runner.js';
@@ -19,6 +20,7 @@ import { createAdaptiveCardActivity, createTextFallbackActivity, renderGenUiCard
 import { createMcpGenUiRouter, type McpGenUiRouter } from './mcp-genui.js';
 import { ChannelsShadowMonitor } from './channels-shadow-monitor.js';
 import { renderChannelsShadow } from './copilot-channels-shadow.js';
+import { acquireStoreProcessLease, type StoreProcessLease } from './process-lease.js';
 import {
   GENUI_ACTION_PAYLOAD_KEYS,
   GENUI_SCHEMA_VERSION,
@@ -38,11 +40,14 @@ const legacyPublicMcp = process.env.MCP_PUBLIC_ENABLED?.trim().toLowerCase() ===
 const fileJsonMultiWorker = numericEnvGreaterThan('WEB_CONCURRENCY', 1)
   || numericEnvGreaterThan('NODE_APP_INSTANCE', 0);
 const clientDist = path.resolve(process.cwd(), 'dist/client');
+const itemStorePath = process.env.ITEM_STORE_PATH ?? path.resolve(process.cwd(), 'data/items.json');
+const agentJobStorePath = process.env.AGENT_JOB_STORE_PATH ?? path.resolve(process.cwd(), 'data/agent-jobs.json');
+const genUiActionStorePath = process.env.GENUI_ACTION_STORE_PATH ?? path.resolve(process.cwd(), 'data/genui-actions.json');
 const itemStore = new ItemStore(
-  process.env.ITEM_STORE_PATH ?? path.resolve(process.cwd(), 'data/items.json'),
+  itemStorePath,
 );
 const agentJobStore = new AgentJobStore(
-  process.env.AGENT_JOB_STORE_PATH ?? path.resolve(process.cwd(), 'data/agent-jobs.json'),
+  agentJobStorePath,
 );
 const codexRunner = new CodexRunner();
 const agentWorkspace = path.resolve(process.env.AGENT_WORKSPACE ?? process.cwd());
@@ -73,7 +78,7 @@ const genUiMode = process.env.TEAMS_GENUI_MODE === 'legacy' || process.env.TEAMS
   ? process.env.TEAMS_GENUI_MODE
   : 'hybrid';
 const genUiActionStore = new GenUiActionStore(
-  process.env.GENUI_ACTION_STORE_PATH ?? path.resolve(process.cwd(), 'data/genui-actions.json'),
+  genUiActionStorePath,
 );
 const genUi = new GenUiResponseFactory(genUiActionStore);
 const channelsShadowMonitor = new ChannelsShadowMonitor();
@@ -107,6 +112,14 @@ if (isProduction && skipAuth) {
   throw new Error('TEAMS_SKIP_AUTH must not be enabled in production.');
 }
 
+let storeProcessLease: StoreProcessLease | undefined;
+storeProcessLease = await acquireStoreProcessLease([
+  itemStorePath,
+  agentJobStorePath,
+  genUiActionStorePath,
+]);
+process.once('exit', () => storeProcessLease?.releaseSync());
+
 await itemStore.initialize();
 await genUiActionStore.initialize();
 
@@ -130,6 +143,7 @@ type UserClaims = Record<string, unknown>;
 
 const GENUI_CARD_ACTIONS = ['approve', 'cancel', 'refresh', 'feedback'] as const satisfies readonly GenUiCardAction[];
 const inFlightGenUiActions = new Set<string>();
+const MAX_AGENT_PROMPT_LENGTH = 2_000;
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -142,6 +156,32 @@ function nonEmptyString(value: unknown, maxLength = 512): string | undefined {
   const normalized = value.trim();
   if (!normalized || normalized.length > maxLength || /[\u0000-\u001f\u007f]/.test(normalized)) return undefined;
   return normalized;
+}
+
+function validatePrompt(value: unknown): { value?: string; error?: string } {
+  if (typeof value !== 'string') return { error: '작업 요청 내용을 입력하세요.' };
+  const normalized = value.trim();
+  if (!normalized) return { error: '작업 요청 내용을 입력하세요.' };
+  if (normalized.length > MAX_AGENT_PROMPT_LENGTH) {
+    return { error: `작업 요청은 ${MAX_AGENT_PROMPT_LENGTH}자 이내로 입력하세요.` };
+  }
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(normalized)) {
+    return { error: '작업 요청에 허용되지 않는 제어 문자가 포함되어 있습니다.' };
+  }
+  return { value: normalized };
+}
+
+function validateItemTitle(value: unknown): { value?: string; error?: string } {
+  if (typeof value !== 'string') return { error: 'title is required' };
+  const normalized = value.trim();
+  if (!normalized) return { error: 'title is required' };
+  if (normalized.length > MAX_ITEM_TITLE_LENGTH) {
+    return { error: `title must be ${MAX_ITEM_TITLE_LENGTH} characters or fewer` };
+  }
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(normalized)) {
+    return { error: 'title contains unsupported control characters' };
+  }
+  return { value: normalized };
 }
 
 function activityScope(activity: any): AgentJobScope | undefined {
@@ -217,6 +257,41 @@ function adaptiveCardFromActivity(activity: unknown): Record<string, unknown> | 
 
 function jsonBytes(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value), 'utf8');
+}
+
+function isDirectLoopbackRequest(request: any): boolean {
+  const hostHeader = typeof request.headers?.host === 'string' ? request.headers.host.trim() : '';
+  if (!isLoopbackHost(hostHeader)) return false;
+
+  const forwardedHeader = Object.keys(request.headers ?? {}).some((name) => (
+    name.toLowerCase() === 'forwarded' || name.toLowerCase().startsWith('x-forwarded-')
+  ));
+  if (forwardedHeader) return false;
+
+  return isLoopbackAddress(request.socket?.remoteAddress);
+}
+
+function isLoopbackHost(value: string): boolean {
+  if (!value || value.includes(',') || /\s/.test(value)) return false;
+  if (value.startsWith('[')) {
+    const closingBracket = value.indexOf(']');
+    if (closingBracket === -1) return false;
+    const address = value.slice(1, closingBracket);
+    const port = value.slice(closingBracket + 1);
+    return address === '::1' && (port === '' || /^:\d{1,5}$/.test(port));
+  }
+
+  const separator = value.lastIndexOf(':');
+  const address = separator === -1 ? value : value.slice(0, separator);
+  const port = separator === -1 ? '' : value.slice(separator + 1);
+  if (address !== 'localhost' && address !== '127.0.0.1') return false;
+  return port === '' || /^\d{1,5}$/.test(port);
+}
+
+function isLoopbackAddress(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const normalized = value.startsWith('::ffff:') ? value.slice('::ffff:'.length) : value;
+  return normalized === '::1' || (isIP(normalized) === 4 && normalized === '127.0.0.1');
 }
 
 /** Render Channels only for comparison; the native card remains the delivered activity. */
@@ -332,6 +407,19 @@ if (teamsApp && loopbackOnly) {
 
 http.use(express.json());
 
+if (safeLocal) {
+  // The auth bypass is intentionally usable only through a direct loopback
+  // request. Host and proxy-header checks happen before every route so a Dev
+  // Tunnel/reverse proxy cannot expose the local APIs by accident.
+  http.use((request: any, response: any, next: any) => {
+    if (!isDirectLoopbackRequest(request)) {
+      response.status(403).json({ error: 'local development endpoints require a direct loopback request' });
+      return;
+    }
+    next();
+  });
+}
+
 http.get('/api/health', (_request: any, response: any) => {
   response.json({
     ok: true,
@@ -425,27 +513,27 @@ http.get('/termsOfUse', (_request: any, response: any) => {
 });
 
 http.post('/api/items', async (request: any, response: any) => {
-  const title = typeof request.body?.title === 'string' ? request.body.title.trim() : '';
+  const titleResult = validateItemTitle(request.body?.title);
 
-  if (!title) {
-    response.status(400).json({ error: 'title is required' });
+  if (titleResult.error) {
+    response.status(400).json({ error: titleResult.error });
     return;
   }
 
-  const item = await itemStore.add(title);
+  const item = await itemStore.add(titleResult.value!);
   response.status(201).json({ item });
 });
 
 http.put('/api/items/:id', async (request: any, response: any) => {
   const id = Number(request.params.id);
-  const title = typeof request.body?.title === 'string' ? request.body.title.trim() : '';
+  const titleResult = validateItemTitle(request.body?.title);
 
-  if (!title) {
-    response.status(400).json({ error: 'title is required' });
+  if (titleResult.error) {
+    response.status(400).json({ error: titleResult.error });
     return;
   }
 
-  const item = await itemStore.update(id, title);
+  const item = await itemStore.update(id, titleResult.value!);
   if (!item) {
     response.status(404).json({ error: 'item not found' });
     return;
@@ -523,29 +611,28 @@ if (mcpEnabled) {
   http.use('/mcp', mcpRouter);
 }
 
-if (mcpRouter) {
-  let shutdownPromise: Promise<void> | undefined;
-  const handleSignal = (signal: NodeJS.Signals): void => {
-    if (shutdownPromise) return;
-    shutdownPromise = (async () => {
-      try {
-        await mcpRouter?.close();
-      } finally {
-        // Removing both handlers before re-sending the signal restores Node's
-        // default termination behavior after MCP cleanup and prevents signal
-        // listeners from accumulating during repeated local restarts.
-        process.removeListener('SIGINT', handleSigint);
-        process.removeListener('SIGTERM', handleSigterm);
-        process.exitCode = signal === 'SIGINT' ? 130 : 143;
-        process.kill(process.pid, signal);
-      }
-    })();
-  };
-  const handleSigint = (): void => handleSignal('SIGINT');
-  const handleSigterm = (): void => handleSignal('SIGTERM');
-  process.once('SIGINT', handleSigint);
-  process.once('SIGTERM', handleSigterm);
-}
+let shutdownPromise: Promise<void> | undefined;
+const handleSignal = (signal: NodeJS.Signals): void => {
+  if (shutdownPromise) return;
+  shutdownPromise = (async () => {
+    try {
+      await mcpRouter?.close();
+    } finally {
+      await storeProcessLease?.release();
+      // Removing both handlers before re-sending the signal restores Node's
+      // default termination behavior after MCP cleanup and prevents signal
+      // listeners from accumulating during repeated local restarts.
+      process.removeListener('SIGINT', handleSigint);
+      process.removeListener('SIGTERM', handleSigterm);
+      process.exitCode = signal === 'SIGINT' ? 130 : 143;
+      process.kill(process.pid, signal);
+    }
+  })();
+};
+const handleSigint = (): void => handleSignal('SIGINT');
+const handleSigterm = (): void => handleSignal('SIGTERM');
+process.once('SIGINT', handleSigint);
+process.once('SIGTERM', handleSigterm);
 
 const copilotRuntime = new CopilotRuntime({
   agents: ({ request }) => {
@@ -808,7 +895,9 @@ async function handleGenUiSubmit(activity: any, send: BotSend): Promise<void> {
 }
 
 async function handleMessage(activity: any, send: BotSend): Promise<void> {
-  const userText = activity.text?.replace(/<at>.*?<\/at>/gi, '').trim() || '';
+  const userText = typeof activity.text === 'string'
+    ? activity.text.replace(/<at>.*?<\/at>/gi, '').trim()
+    : '';
   const normalizedText = userText.toLowerCase();
   const scope = activityScope(activity);
 
@@ -896,8 +985,13 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
       return;
     }
     const mode = commandMatch[1].toLowerCase() === 'write' ? 'workspace-write' : 'read-only';
+    const promptResult = validatePrompt(commandMatch[2]);
+    if (promptResult.error) {
+      await send(promptResult.error, genUi.error(promptResult.error, `${mode}-prompt-invalid`));
+      return;
+    }
     const job = await agentService.submit({
-      prompt: commandMatch[2].trim(),
+      prompt: promptResult.value!,
       mode,
       scope,
     });
@@ -938,7 +1032,12 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
       await send('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', genUi.error('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', 'scope-missing'));
       return;
     }
-    const job = await agentService.continue(continueMatch[1], continueMatch[2].trim(), scope);
+    const promptResult = validatePrompt(continueMatch[2]);
+    if (promptResult.error) {
+      await send(promptResult.error, genUi.error(promptResult.error, 'continue-prompt-invalid'));
+      return;
+    }
+    const job = await agentService.continue(continueMatch[1], promptResult.value!, scope);
     if (job) {
       const responseText = `작업 ${job.id}이 이전 Codex thread에서 이어집니다.\nstatus ${job.id}`;
       const envelope = genUi.continued(job);
@@ -995,9 +1094,14 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
       await send('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', genUi.error('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', 'scope-missing'));
       return;
     }
+    const promptResult = validatePrompt(userText);
+    if (promptResult.error) {
+      await send(promptResult.error, genUi.error(promptResult.error, 'natural-language-prompt-invalid'));
+      return;
+    }
     const previous = agentService.latestCompletedForConversation(scope);
     if (previous) {
-      const continued = await agentService.continue(previous.id, userText, scope);
+      const continued = await agentService.continue(previous.id, promptResult.value!, scope);
       if (continued) {
         const responseText = `이전 Codex 대화를 이어서 작업 ${continued.id}을 시작했습니다.\nstatus ${continued.id}`;
         const envelope = genUi.continued(continued);
@@ -1007,7 +1111,7 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
     }
 
     const job = await agentService.submit({
-      prompt: userText,
+      prompt: promptResult.value!,
       mode: 'read-only',
       scope,
     });

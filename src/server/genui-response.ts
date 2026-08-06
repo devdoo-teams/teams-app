@@ -17,27 +17,102 @@ export type GenUiNotification = AgentNotification;
 
 export type GenUiJobAction = 'approve' | 'cancel';
 
+const JOB_STATUSES = ['queued', 'awaiting_approval', 'running', 'completed', 'failed', 'cancelled'] as const;
+type SafeJobStatus = (typeof JOB_STATUSES)[number];
+
+function recordOf(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function fieldOf(job: AgentJob, name: string): unknown {
+  return recordOf(job)[name];
+}
+
+function displayText(value: unknown, maxLength: number, fallback = ''): string {
+  const raw = typeof value === 'string' ? value : value === undefined || value === null ? '' : String(value);
+  const normalized = raw.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '�').trim();
+  if (!normalized) return fallback;
+  if (normalized.length <= maxLength) return normalized;
+  const suffix = '…';
+  return `${normalized.slice(0, Math.max(1, maxLength - suffix.length))}${suffix}`;
+}
+
+function safeJobId(job: AgentJob): string {
+  return displayText(fieldOf(job, 'id'), 200, 'unknown-job');
+}
+
+function safeItemId(item: Item): string {
+  const value = item && typeof item.id === 'number' && Number.isSafeInteger(item.id)
+    ? String(item.id)
+    : displayText(item?.id, 120, 'unknown-item');
+  return value || 'unknown-item';
+}
+
+function safeJobPrompt(job: AgentJob): string {
+  return displayText(fieldOf(job, 'prompt'), 2_000, '(작업 설명 없음)');
+}
+
+function safeJobListLabel(job: AgentJob): string {
+  return displayText(fieldOf(job, 'prompt'), 400, '(작업 설명 없음)');
+}
+
+function safeJobStatus(job: AgentJob): SafeJobStatus | 'unknown' {
+  const value = fieldOf(job, 'status');
+  return typeof value === 'string' && JOB_STATUSES.includes(value as SafeJobStatus) ? value as SafeJobStatus : 'unknown';
+}
+
+function safeJobMode(job: AgentJob): string {
+  const mode = fieldOf(job, 'mode');
+  return mode === 'workspace-write' || mode === 'read-only' ? mode : 'unknown';
+}
+
+function safeJobProgress(job: AgentJob): string[] {
+  const progress = fieldOf(job, 'progress');
+  if (!Array.isArray(progress)) return [];
+  return progress
+    .filter((message): message is string => typeof message === 'string')
+    .slice(-8)
+    .map((message) => displayText(message, 400, '진행 기록 없음'));
+}
+
+function safeJobResult(job: AgentJob): string {
+  return displayText(fieldOf(job, 'result'), 3_800);
+}
+
+function safeJobError(job: AgentJob): string {
+  return displayText(fieldOf(job, 'error'), 1_900);
+}
+
 function jobFallback(job: AgentJob): string {
   const lines = [
-    `작업 ID: ${job.id}`,
-    `상태: ${job.status}`,
-    `권한: ${job.mode}`,
+    `작업 ID: ${safeJobId(job)}`,
+    `상태: ${safeJobStatus(job)}`,
+    `권한: ${safeJobMode(job)}`,
   ];
 
-  if (job.threadId) lines.push(`Codex thread: ${job.threadId}`);
-  if (job.commitHash) lines.push(`Git commit: ${job.commitHash}`);
-  if (job.commitMessage && !job.commitHash) lines.push(`Git: ${job.commitMessage}`);
-  if (job.progress.length > 0) lines.push(`최근 진행: ${job.progress[job.progress.length - 1]}`);
-  if (job.error) lines.push(`오류: ${job.error}`);
-  if (job.result) lines.push(`결과:\n${job.result.slice(0, 5000)}`);
-  return lines.join('\n');
+  const threadId = displayText(fieldOf(job, 'threadId'), 200);
+  const commitHash = displayText(fieldOf(job, 'commitHash'), 200);
+  const commitMessage = displayText(fieldOf(job, 'commitMessage'), 1_000);
+  const progress = safeJobProgress(job);
+  const error = safeJobError(job);
+  const result = safeJobResult(job);
+  if (threadId) lines.push(`Codex thread: ${threadId}`);
+  if (commitHash) lines.push(`Git commit: ${commitHash}`);
+  if (commitMessage && !commitHash) lines.push(`Git: ${commitMessage}`);
+  if (progress.length > 0) lines.push(`최근 진행: ${progress.at(-1)}`);
+  if (error) lines.push(`오류: ${error}`);
+  if (result) lines.push(`결과:\n${result}`);
+  return compactNotification(lines.join('\n'), 4_000);
 }
 
 function stateForJob(job: AgentJob): GenUiState {
-  if (job.status === 'awaiting_approval') return 'approval';
-  if (job.status === 'completed') return 'complete';
-  if (job.status === 'failed') return 'error';
-  if (job.status === 'queued' || job.status === 'running') return 'loading';
+  const status = safeJobStatus(job);
+  if (status === 'awaiting_approval') return 'approval';
+  if (status === 'completed') return 'complete';
+  if (status === 'failed') return 'error';
+  if (status === 'queued' || status === 'running') return 'loading';
   return 'ready';
 }
 
@@ -63,17 +138,22 @@ export class GenUiResponseFactory {
       actions: [],
       citations: [],
       ...input,
+      id: displayText(input.id, 200, 'genui-response'),
+      title: displayText(input.title, 240),
+      summary: input.summary === undefined ? undefined : displayText(input.summary, 2_000),
+      fallbackText: displayText(input.fallbackText, 4_000, '요청 결과를 확인하세요.'),
     });
   }
 
   answer(text: string, id = `answer-${randomUUID()}`): GenUiEnvelopeV1 {
+    const safeText = displayText(text, 2_000, '요청 결과를 확인하세요.');
     return this.create({
       kind: 'answer',
       id,
       title: '업무 허브',
-      summary: text,
-      sections: [{ type: 'text', text }],
-      fallbackText: text,
+      summary: safeText,
+      sections: [{ type: 'text', text: safeText }],
+      fallbackText: safeText,
       metadata: { source: 'teams-bot', deterministic: true },
     });
   }
@@ -175,17 +255,18 @@ export class GenUiResponseFactory {
   }
 
   list(items: Item[], jobs: AgentJob[]): GenUiEnvelopeV1 {
-    const openItems = items.filter((item) => item.status === 'open').slice(0, 8);
-    const itemText = openItems.length === 0 ? '진행 중인 업무가 없습니다.' : `진행 중인 업무:\n${openItems.map((item) => `- ${item.title}`).join('\n')}`;
-    const jobText = jobs.length === 0 ? '에이전트 작업이 없습니다.' : `최근 에이전트 작업:\n${jobs.map((job) => `- ${job.id}: ${job.status}`).join('\n')}`;
+    const openItems = (Array.isArray(items) ? items : []).filter((item) => item?.status === 'open').slice(0, 8);
+    const recentJobs = (Array.isArray(jobs) ? jobs : []).filter(Boolean).slice(0, 5);
+    const itemText = openItems.length === 0 ? '진행 중인 업무가 없습니다.' : `진행 중인 업무:\n${openItems.map((item) => `- ${displayText(item.title, 400, '(제목 없음)')}`).join('\n')}`;
+    const jobText = recentJobs.length === 0 ? '에이전트 작업이 없습니다.' : `최근 에이전트 작업:\n${recentJobs.map((job) => `- ${safeJobId(job)}: ${safeJobStatus(job)}`).join('\n')}`;
     return this.create({
       kind: 'task-list',
       id: 'workspace-list',
       title: '업무 목록',
-      summary: `${openItems.length}개 업무 · ${jobs.length}개 최근 Codex 작업`,
+      summary: `${openItems.length}개 업무 · ${recentJobs.length}개 최근 Codex 작업`,
       sections: [
-        { type: 'list', title: '진행 중인 업무', items: openItems.map((item) => ({ id: String(item.id), label: item.title, status: item.status })) },
-        { type: 'list', title: '최근 Codex 작업', items: jobs.map((job) => ({ id: job.id, label: job.prompt, status: job.status })) },
+        { type: 'list', title: '진행 중인 업무', items: openItems.map((item) => ({ id: safeItemId(item), label: displayText(item.title, 400, '(제목 없음)'), status: 'open' })) },
+        { type: 'list', title: '최근 Codex 작업', items: recentJobs.map((job) => ({ id: safeJobId(job), label: safeJobListLabel(job), status: safeJobStatus(job) })) },
       ],
       fallbackText: `${itemText}\n\n${jobText}`,
       metadata: { source: 'teams-bot', deterministic: true },
@@ -194,16 +275,21 @@ export class GenUiResponseFactory {
 
   jobStatus(job: AgentJob | undefined): GenUiEnvelopeV1 {
     if (!job) return this.error('작업을 찾을 수 없습니다.');
-    const text = `작업 ${job.id}: ${job.status}`;
+    const jobId = safeJobId(job);
+    const jobStatus = safeJobStatus(job);
+    const progress = safeJobProgress(job);
+    const error = safeJobError(job);
+    const result = safeJobResult(job);
+    const text = `작업 ${jobId}: ${jobStatus}`;
     return this.create({
       kind: 'job-status',
-      id: job.id,
+      id: jobId,
       status: stateForJob(job),
       title: 'Codex 작업 상태',
       summary: text,
       sections: [
-        { type: 'status', status: job.status, description: [job.error, job.result, job.progress.at(-1)].filter(Boolean).join('\n') },
-        { type: 'list', title: '최근 진행 기록', items: job.progress.slice(-8).map((message, index) => ({ id: `${job.id}-${index}`, label: message })) },
+        { type: 'status', status: jobStatus, description: [error, result, progress.at(-1)].filter(Boolean).join('\n').slice(0, 2_000) },
+        { type: 'list', title: '최근 진행 기록', items: progress.map((message, index) => ({ id: `${jobId}-${index}`.slice(0, 120), label: message })) },
       ],
       fallbackText: jobFallback(job),
       metadata: { source: 'teams-bot', deterministic: true },
@@ -211,10 +297,12 @@ export class GenUiResponseFactory {
   }
 
   async approval(job: AgentJob): Promise<GenUiEnvelopeV1> {
-    if (!job.tenantId) throw new Error(`Cannot issue a GenUI approval grant without tenantId: ${job.id}`);
+    const jobId = safeJobId(job);
+    const prompt = safeJobPrompt(job);
+    if (!job.tenantId) throw new Error(`Cannot issue a GenUI approval grant without tenantId: ${jobId}`);
     const correlationId = randomUUID();
     const common = {
-      entityId: job.id,
+      entityId: jobId,
       correlationId,
       conversationId: job.conversationId,
       requesterId: job.requesterId,
@@ -223,19 +311,19 @@ export class GenUiResponseFactory {
     const approveToken = await this.actionStore.issue({ ...common, action: 'approve' });
     const cancelToken = await this.actionStore.issue({ ...common, action: 'cancel' });
     const actions: GenUiAction[] = [
-      { action: 'approve', label: '승인', entityId: job.id, correlationId, actionToken: approveToken, style: 'positive' },
-      { action: 'cancel', label: '취소', entityId: job.id, correlationId, actionToken: cancelToken, style: 'destructive' },
+      { action: 'approve', label: '승인', entityId: jobId, correlationId, actionToken: approveToken, style: 'positive' },
+      { action: 'cancel', label: '취소', entityId: jobId, correlationId, actionToken: cancelToken, style: 'destructive' },
     ];
-    const text = `쓰기 작업 ${job.id}이 승인 대기 중입니다. 승인하면 Codex가 작업을 실행합니다.`;
+    const text = `쓰기 작업 ${jobId}이 승인 대기 중입니다. 승인하면 Codex가 작업을 실행합니다.`;
     return GenUiEnvelopeV1Schema.parse({
       ...this.create({
         kind: 'approval',
-        id: job.id,
+        id: jobId,
         status: 'approval',
         title: '쓰기 작업 승인 필요',
         summary: text,
-        sections: [{ type: 'status', title: '승인 경계', status: 'awaiting_approval', description: job.prompt }],
-        fallbackText: `${text}\napprove ${job.id} 또는 cancel ${job.id}`,
+        sections: [{ type: 'status', title: '승인 경계', status: 'awaiting_approval', description: prompt }],
+        fallbackText: `${text}\napprove ${jobId} 또는 cancel ${jobId}`,
         actions,
         metadata: { source: 'teams-bot', deterministic: true },
       }),
@@ -244,56 +332,62 @@ export class GenUiResponseFactory {
   }
 
   approvalAccepted(job: AgentJob): GenUiEnvelopeV1 {
-    const text = `작업 ${job.id} 승인을 처리했습니다.\nstatus ${job.id}`;
+    const jobId = safeJobId(job);
+    const jobStatus = safeJobStatus(job);
+    const text = `작업 ${jobId} 승인을 처리했습니다.\nstatus ${jobId}`;
     return this.create({
       kind: 'job-status',
-      id: job.id,
+      id: jobId,
       status: stateForJob(job),
       title: '쓰기 작업 승인 처리',
       summary: text,
-      sections: [{ type: 'status', title: '승인 결과', status: job.status, description: job.prompt }],
+      sections: [{ type: 'status', title: '승인 결과', status: jobStatus, description: safeJobPrompt(job) }],
       fallbackText: text,
       metadata: { source: 'teams-bot', deterministic: true },
     });
   }
 
   cancelled(job: AgentJob): GenUiEnvelopeV1 {
-    const text = `작업 ${job.id} 취소를 처리했습니다.\n상태: ${job.status}`;
+    const jobId = safeJobId(job);
+    const jobStatus = safeJobStatus(job);
+    const text = `작업 ${jobId} 취소를 처리했습니다.\n상태: ${jobStatus}`;
     return this.create({
       kind: 'result',
-      id: job.id,
-      status: job.status === 'cancelled' ? 'complete' : stateForJob(job),
+      id: jobId,
+      status: jobStatus === 'cancelled' ? 'complete' : stateForJob(job),
       title: '작업 취소 결과',
       summary: text,
-      sections: [{ type: 'status', title: '취소 결과', status: job.status, description: job.prompt }],
+      sections: [{ type: 'status', title: '취소 결과', status: jobStatus, description: safeJobPrompt(job) }],
       fallbackText: text,
       metadata: { source: 'teams-bot', deterministic: true },
     });
   }
 
   continued(job: AgentJob): GenUiEnvelopeV1 {
-    const text = `작업 ${job.id}이 이전 Codex thread에서 이어집니다.\nstatus ${job.id}`;
+    const jobId = safeJobId(job);
+    const text = `작업 ${jobId}이 이전 Codex thread에서 이어집니다.\nstatus ${jobId}`;
     return this.create({
       kind: 'job-status',
-      id: job.id,
+      id: jobId,
       status: 'loading',
       title: 'Codex 대화 이어서 실행',
       summary: text,
-      sections: [{ type: 'status', title: '재개 결과', status: job.status, description: job.prompt }],
+      sections: [{ type: 'status', title: '재개 결과', status: safeJobStatus(job), description: safeJobPrompt(job) }],
       fallbackText: text,
       metadata: { source: 'teams-bot', deterministic: true },
     });
   }
 
   naturalLanguageStarted(job: AgentJob): GenUiEnvelopeV1 {
-    const text = `자연어 작업 ${job.id}을 읽기 전용으로 시작했습니다.\nstatus ${job.id}`;
+    const jobId = safeJobId(job);
+    const text = `자연어 작업 ${jobId}을 읽기 전용으로 시작했습니다.\nstatus ${jobId}`;
     return this.create({
       kind: 'job-status',
-      id: job.id,
+      id: jobId,
       status: 'loading',
       title: '자연어 Codex 작업 시작',
       summary: text,
-      sections: [{ type: 'status', title: '작업 요청', status: job.status, description: job.prompt }],
+      sections: [{ type: 'status', title: '작업 요청', status: safeJobStatus(job), description: safeJobPrompt(job) }],
       fallbackText: text,
       metadata: { source: 'teams-bot', deterministic: true },
     });
@@ -301,16 +395,18 @@ export class GenUiResponseFactory {
 
   commitResult(job: AgentJob | undefined, missing = false): GenUiEnvelopeV1 {
     if (!job) return this.error('커밋할 작업을 찾을 수 없습니다.');
+    const jobId = safeJobId(job);
+    const jobStatus = safeJobStatus(job);
     const text = missing
-      ? `작업 ${job.id}은 아직 커밋할 수 없습니다. 현재 상태: ${job.status}`
-      : job.commitMessage || '커밋할 변경이 없습니다.';
+      ? `작업 ${jobId}은 아직 커밋할 수 없습니다. 현재 상태: ${jobStatus}`
+      : displayText(fieldOf(job, 'commitMessage'), 1_900, '커밋할 변경이 없습니다.');
     return this.create({
       kind: missing ? 'error' : 'result',
-      id: job.id,
+      id: jobId,
       status: missing ? 'error' : 'complete',
       title: missing ? '커밋 대기 중' : '커밋 결과',
       summary: text,
-      sections: [{ type: 'status', title: 'Git 결과', status: job.status, description: text }],
+      sections: [{ type: 'status', title: 'Git 결과', status: jobStatus, description: text }],
       fallbackText: text,
       metadata: { source: 'teams-bot', deterministic: true },
     });
@@ -321,10 +417,11 @@ export class GenUiResponseFactory {
   }
 
   started(job: AgentJob): GenUiEnvelopeV1 {
-    const text = `${job.mode === 'workspace-write' ? '쓰기' : '읽기 전용'} Codex 작업 ${job.id}을 시작했습니다. status ${job.id}로 진행 상태를 확인할 수 있습니다.`;
+    const jobId = safeJobId(job);
+    const text = `${safeJobMode(job) === 'workspace-write' ? '쓰기' : '읽기 전용'} Codex 작업 ${jobId}을 시작했습니다. status ${jobId}로 진행 상태를 확인할 수 있습니다.`;
     return this.create({
-      kind: 'job-status', id: job.id, status: 'loading', title: 'Codex 작업 시작', summary: text,
-      sections: [{ type: 'status', status: job.status, description: job.prompt }], fallbackText: text,
+      kind: 'job-status', id: jobId, status: 'loading', title: 'Codex 작업 시작', summary: text,
+      sections: [{ type: 'status', status: safeJobStatus(job), description: safeJobPrompt(job) }], fallbackText: text,
       metadata: { source: 'teams-bot', deterministic: true },
     });
   }
@@ -340,13 +437,15 @@ export class GenUiResponseFactory {
       : notification.kind === 'error'
         ? 'error'
         : 'complete';
-    const summary = compactNotification(notification.message, 1_900);
-    const fallbackText = compactNotification(notification.message, 4_000);
+    const jobId = safeJobId(notification.job);
+    const message = displayText(notification.message, 4_000, '작업 상태가 업데이트되었습니다.');
+    const summary = compactNotification(message, 1_900);
+    const fallbackText = compactNotification(message, 4_000);
     const sectionStatus = notification.phase === 'blocked'
       ? 'blocked'
       : notification.phase === 'cancelled'
         ? 'cancelled'
-        : notification.job.status;
+        : safeJobStatus(notification.job);
     const title = notification.kind === 'progress'
       ? 'Codex 작업 진행'
       : notification.kind === 'cancelled'
@@ -356,13 +455,13 @@ export class GenUiResponseFactory {
           : notification.phase === 'commit' ? 'Git 커밋 결과' : 'Codex 작업 완료';
     return this.create({
       kind,
-      id: notification.job.id,
+      id: jobId,
       status,
       title,
       summary,
       sections: [{ type: 'status', title: '작업 상태', status: sectionStatus, description: summary }],
       fallbackText,
-      metadata: { source: 'agent-service', event: notification.phase, deterministic: true },
+      metadata: { source: 'agent-service', event: displayText(notification.phase, 64, 'unknown'), deterministic: true },
     });
   }
 
@@ -371,9 +470,10 @@ export class GenUiResponseFactory {
   }
 
   error(message: string, id = 'error'): GenUiEnvelopeV1 {
+    const safeMessage = displayText(message, 1_900, '요청을 처리하지 못했습니다.');
     return this.create({
-      kind: 'error', id, status: 'error', title: '업무 허브 오류', summary: message,
-      sections: [{ type: 'status', status: 'error', description: message }], fallbackText: message,
+      kind: 'error', id, status: 'error', title: '업무 허브 오류', summary: safeMessage,
+      sections: [{ type: 'status', status: 'error', description: safeMessage }], fallbackText: safeMessage,
       metadata: { source: 'teams-bot', deterministic: true },
     });
   }

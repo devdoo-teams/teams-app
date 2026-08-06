@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { execFile } from 'node:child_process';
+import http from 'node:http';
 import { promisify } from 'node:util';
 import fs from 'node:fs/promises';
 import net from 'node:net';
@@ -59,6 +60,34 @@ async function request(baseUrl, pathname, init = {}) {
     // Keep non-JSON error bodies readable.
   }
   return { response, body };
+}
+
+async function rawRequest(baseUrl, pathname, headers = {}) {
+  const target = new URL(`${baseUrl}${pathname}`);
+  return new Promise((resolve, reject) => {
+    const request = http.request({
+      hostname: target.hostname,
+      port: Number(target.port),
+      path: `${target.pathname}${target.search}`,
+      method: 'GET',
+      headers,
+    }, (response) => {
+      let text = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => { text += chunk; });
+      response.on('end', () => {
+        let body = text;
+        try {
+          body = JSON.parse(text);
+        } catch {
+          // Keep non-JSON error bodies readable.
+        }
+        resolve({ response, body });
+      });
+    });
+    request.once('error', reject);
+    request.end();
+  });
 }
 
 function parseJsonOrSse(text) {
@@ -316,6 +345,74 @@ async function expectStartupFailure(label, extraEnv, expectedMessage) {
   assert(output.includes(expectedMessage), `${label} reports ${expectedMessage}`);
 }
 
+async function expectStoreLeaseConflict(dataFile, jobDataFile) {
+  const port = await getFreePort();
+  const child = spawn(process.execPath, [path.join(root, 'dist/server/index.js')], {
+    cwd: root,
+    env: {
+      ...process.env,
+      NODE_ENV: 'development',
+      PORT: String(port),
+      ITEM_STORE_PATH: dataFile,
+      AGENT_JOB_STORE_PATH: jobDataFile,
+      GENUI_ACTION_STORE_PATH: `${jobDataFile}.genui-actions.json`,
+      AGENT_WORKSPACE: root,
+      CODEX_BIN: process.execPath,
+      CODEX_SCRIPT: path.join(root, 'scripts/fake-codex.mjs'),
+      WEATHER_MODE: 'demo',
+      COPILOTKIT_DETERMINISTIC_MODE: 'true',
+      TEAMS_USE_SDK: 'false',
+      TEAMS_SKIP_OUTBOUND: 'true',
+      TEAMS_SKIP_AUTH: 'true',
+      TEAMS_LOCAL_DEV: 'true',
+      TEAMS_BIND_HOST: '127.0.0.1',
+      MCP_PUBLIC_ENABLED: '',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  let output = '';
+  child.stdout.on('data', (chunk) => { output += chunk.toString(); });
+  child.stderr.on('data', (chunk) => { output += chunk.toString(); });
+  const result = await Promise.race([
+    new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal }))),
+    new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), 5_000)),
+  ]);
+
+  if (result.timeout) {
+    child.kill('SIGTERM');
+    assert(false, 'second server using the same stores exits instead of waiting for the lease');
+    return;
+  }
+
+  assert(result.code !== 0, 'second server using the same stores is rejected');
+  assert(output.includes('file-json store is already leased'), 'store lease conflict is deterministic and credential-free');
+}
+
+async function runStoreLeaseFlow(dataFile, jobDataFile) {
+  const first = await startServer({ production: false, dataFile, jobDataFile });
+  try {
+    await expectStoreLeaseConflict(dataFile, jobDataFile);
+  } finally {
+    await stopServer(first.child);
+  }
+
+  const afterGracefulRelease = await startServer({ production: false, dataFile, jobDataFile });
+  await stopServer(afterGracefulRelease.child);
+
+  const crashed = await startServer({ production: false, dataFile, jobDataFile });
+  crashed.child.kill('SIGKILL');
+  await new Promise((resolve) => crashed.child.once('exit', resolve));
+
+  const afterStaleReclaim = await startServer({ production: false, dataFile, jobDataFile });
+  try {
+    const health = await request(afterStaleReclaim.baseUrl, '/api/health');
+    assert(health.response.status === 200, 'a restarted server reclaims only the dead process lease');
+  } finally {
+    await stopServer(afterStaleReclaim.child);
+  }
+}
+
 async function runStartupGateFlow() {
   await expectStartupFailure(
     'legacy public MCP configuration',
@@ -445,7 +542,7 @@ async function runLocalFlow(dataFile, jobDataFile) {
   const server = await startServer({ production: false, dataFile, jobDataFile });
 
   try {
-    const health = await request(server.baseUrl, '/api/health');
+  const health = await request(server.baseUrl, '/api/health');
     assert(health.response.status === 200, 'local health endpoint returns 200');
     assert(health.body.auth === 'local-bypass', 'local runtime uses explicit auth bypass');
     assert(health.body.userAuth === 'local-bypass', 'local health reports the user auth bypass truthfully');
@@ -460,6 +557,11 @@ async function runLocalFlow(dataFile, jobDataFile) {
     assert(health.body.genUi === 'adaptive-cards', 'health reports Adaptive Cards as the GenUI renderer');
     assert(health.body.channelsShadow?.enabled === false, 'hybrid health disables Channels shadow diagnostics');
     assert(health.body.mcp === '/mcp' && health.body.mcpEnabled === true, 'local health exposes only the explicitly gated local MCP route');
+
+    const publicHost = await rawRequest(server.baseUrl, '/api/health', { host: 'public.example.test' });
+    assert(publicHost.response.statusCode === 403, 'safe local mode rejects a public Host header');
+    const forwarded = await rawRequest(server.baseUrl, '/api/health', { 'x-forwarded-host': 'public.example.test' });
+    assert(forwarded.response.statusCode === 403, 'safe local mode rejects forwarded proxy headers');
 
     const initialize = await mcpRequest(server.baseUrl, {
       jsonrpc: '2.0',
@@ -579,6 +681,28 @@ async function runLocalFlow(dataFile, jobDataFile) {
       body: JSON.stringify({ title: '   ' }),
     });
     assert(invalid.response.status === 400, 'empty item titles are rejected');
+
+    const oversizedItem = await request(server.baseUrl, '/api/items', {
+      method: 'POST',
+      body: JSON.stringify({ title: 'x'.repeat(5_000) }),
+    });
+    assert(oversizedItem.response.status === 400, 'oversized REST item titles return a deterministic 4xx');
+    assert(oversizedItem.body.error.includes('400'), 'oversized REST item titles report the useful bound');
+
+    for (const [label, command] of [
+      ['write', `write ${'x'.repeat(3_000)}`],
+      ['run', `run ${'x'.repeat(3_000)}`],
+      ['continue', `continue task-missing ${'x'.repeat(3_000)}`],
+      ['natural', 'x'.repeat(3_000)],
+    ]) {
+      const oversizedPrompt = await request(server.baseUrl, '/api/messages', {
+        method: 'POST',
+        body: JSON.stringify(activity(command, server.baseUrl, `oversized-${label}`)),
+      });
+      assert(oversizedPrompt.response.status === 200, `${label} oversized prompt returns a Bot response instead of HTTP 500`);
+      assert(oversizedPrompt.body.messages[0].includes('2000'), `${label} oversized prompt reports the useful bound`);
+      assertAdaptiveCardActivity(oversizedPrompt.body.activities[0], `${label} oversized prompt error`);
+    }
 
     const created = await request(server.baseUrl, '/api/items', {
       method: 'POST',
@@ -1134,6 +1258,13 @@ async function runGitCommitFlow(workspace, dataFile, jobDataFile) {
 
 async function runRecoveryFlow(dataFile, jobDataFile) {
   await fs.writeFile(
+    dataFile,
+    JSON.stringify([
+      { id: 77, title: 'legacy item '.repeat(500), status: 'open' },
+    ]),
+    'utf8',
+  );
+  await fs.writeFile(
     jobDataFile,
     JSON.stringify([
       {
@@ -1146,6 +1277,18 @@ async function runRecoveryFlow(dataFile, jobDataFile) {
         progress: ['Codex 작업을 시작했습니다.'],
         createdAt: new Date().toISOString(),
       },
+      {
+        id: 'task-legacy-long',
+        prompt: 'legacy prompt '.repeat(250),
+        mode: 'read-only',
+        status: 'completed',
+        conversationId: 'recovery-conversation',
+        requesterId: 'recovery-user',
+        tenantId: 'runtime-tenant',
+        progress: ['legacy progress '.repeat(400)],
+        result: 'legacy result '.repeat(400),
+        createdAt: new Date().toISOString(),
+      },
     ]),
     'utf8',
   );
@@ -1156,6 +1299,24 @@ async function runRecoveryFlow(dataFile, jobDataFile) {
     const recovered = result.body.jobs.find((job) => job.id === 'task-recovery-check');
     assert(recovered.status === 'failed', 'interrupted Codex jobs are marked failed after restart');
     assert(recovered.error.includes('재시작'), 'restart recovery keeps a useful failure reason');
+    const legacyList = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity('list', server.baseUrl, 'legacy-long-list', 'recovery-conversation', {
+        userId: 'recovery-user',
+        tenantId: 'runtime-tenant',
+      })),
+    });
+    assert(legacyList.response.status === 200, 'legacy oversized item/job data still renders a GenUI list');
+    assertAdaptiveCardActivity(legacyList.body.activities[0], 'legacy oversized item/job list');
+    const legacyLongStatus = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity('status task-legacy-long', server.baseUrl, 'legacy-long-status', 'recovery-conversation', {
+        userId: 'recovery-user',
+        tenantId: 'runtime-tenant',
+      })),
+    });
+    assert(legacyLongStatus.response.status === 200, 'legacy oversized job data still renders a GenUI status card');
+    assertAdaptiveCardActivity(legacyLongStatus.body.activities[0], 'legacy oversized job status');
     const legacyStatus = await request(server.baseUrl, '/api/messages', {
       method: 'POST',
       body: JSON.stringify(activity('status task-recovery-check', server.baseUrl, 'legacy-status')),
@@ -1189,12 +1350,16 @@ const timeoutDataFile = path.join(tempDir, 'timeout-items.json');
 const timeoutJobDataFile = path.join(tempDir, 'timeout-agent-jobs.json');
 const channelsShadowDataFile = path.join(tempDir, 'channels-shadow-items.json');
 const channelsShadowJobDataFile = path.join(tempDir, 'channels-shadow-agent-jobs.json');
+const leaseDataFile = path.join(tempDir, 'lease-items.json');
+const leaseJobDataFile = path.join(tempDir, 'lease-agent-jobs.json');
 
 try {
   console.log('Runtime verification: local-auth and public-MCP startup gates');
   await runStartupGateFlow();
   console.log('Runtime verification: local authenticated-bypass flow');
   await runLocalFlow(localDataFile, localJobDataFile);
+  console.log('Runtime verification: file store process lease flow');
+  await runStoreLeaseFlow(leaseDataFile, leaseJobDataFile);
   console.log('Runtime verification: Channels shadow comparison flow');
   await runChannelsShadowFlow(channelsShadowDataFile, channelsShadowJobDataFile);
   console.log('Runtime verification: Teams SDK Activity flow');
