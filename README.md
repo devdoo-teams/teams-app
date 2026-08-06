@@ -134,6 +134,8 @@ Teams 탭 SSO에서는 `TAB_DOMAIN`이 Microsoft Entra 테넌트에서 검증된
 
 실제 Teams sideload에는 public HTTPS 터널과 Teams 앱 등록이 필요합니다.
 
+Teams 앱 변경 요청은 구현·로컬 검증 후 새 버전의 패키지를 생성하고 실제 업로드해야 합니다. 업로드가 끝나면 로컬 테스트 프로세스를 종료하고 `TEAMS_SKIP_AUTH`·`TEAMS_SKIP_OUTBOUND`가 없는 공개 Teams SDK 프로세스로 전환한 뒤, 공개 `/api/health`와 실제 Teams 메시지 왕복을 확인하고서야 Teams 완료 메시지를 보냅니다. 이 순서는 저장소 전역 지침인 [`AGENTS.md`](AGENTS.md)와 [Teams 릴리스 워크플로우](docs/teams-release-workflow.md)에 고정되어 있습니다.
+
 ```bash
 npm install -g @microsoft/teams.cli
 teams login
