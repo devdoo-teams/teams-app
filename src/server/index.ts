@@ -190,21 +190,6 @@ function envelopeText(envelope: GenUiEnvelopeV1): string {
   return envelope.fallbackText ?? envelope.summary ?? envelope.title ?? '요청 결과를 카드로 확인하세요.';
 }
 
-function prepareMcpZodCompatibility(): void {
-  // @modelcontextprotocol/sdk 1.x detects object schemas through `.shape`.
-  // The shared GenUI contract is a ZodEffects schema because it contains
-  // cross-field rules; expose its underlying object shape without weakening
-  // the original parse/safeParse validation.
-  const schema = GenUiEnvelopeV1Schema as any;
-  if (schema.shape === undefined && schema._def?.schema?.shape) {
-    Object.defineProperty(schema, 'shape', {
-      configurable: true,
-      enumerable: false,
-      value: schema._def.schema.shape,
-    });
-  }
-}
-
 async function deliverGenUiActivity(
   deliver: ((activity: unknown) => Promise<unknown>) | undefined,
   text: string,
@@ -472,7 +457,6 @@ agentService = new AgentService(
 await agentService.initialize();
 
 if (mcpEnabled) {
-  prepareMcpZodCompatibility();
   const mcpRouter = createMcpGenUiRouter({
     itemStore,
     agentService,

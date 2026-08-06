@@ -20,6 +20,7 @@ import type { WeatherResponse } from './weather-service.js';
 // layer and is outside this subtask's write allow-list.
 import {
   GENUI_SCHEMA_VERSION,
+  GenUiEnvelopeV1BaseSchema,
   GenUiEnvelopeV1Schema,
   type GenUiEnvelopeV1,
   type GenUiKind,
@@ -323,7 +324,7 @@ function registerTools(server: McpServer, options: McpGenUiServerOptions): void 
       title: 'Get workspace snapshot',
       description: 'Use this when the user asks for the current Teams workspace tasks or active Codex jobs. This is a deterministic read-only data tool; it never invents an LLM answer.',
       inputSchema: workspaceInputSchema,
-      outputSchema: GenUiEnvelopeV1Schema,
+      outputSchema: GenUiEnvelopeV1BaseSchema,
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -345,7 +346,7 @@ function registerTools(server: McpServer, options: McpGenUiServerOptions): void 
       title: 'Get weather',
       description: 'Use this when the user supplies device coordinates or explicitly provided coordinates and asks for current weather. Do not infer GPS, a city, or a default location in this tool.',
       inputSchema: weatherInputSchema,
-      outputSchema: GenUiEnvelopeV1Schema,
+      outputSchema: GenUiEnvelopeV1BaseSchema,
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -373,7 +374,7 @@ function registerTools(server: McpServer, options: McpGenUiServerOptions): void 
       title: 'Get Codex job status',
       description: 'Use this when the user asks for a Codex job status. If jobId is omitted, return a deterministic list of recent jobs.',
       inputSchema: jobInputSchema,
-      outputSchema: GenUiEnvelopeV1Schema,
+      outputSchema: GenUiEnvelopeV1BaseSchema,
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -398,7 +399,7 @@ function registerTools(server: McpServer, options: McpGenUiServerOptions): void 
       title: 'Render workspace response',
       description: 'Use this after a data tool has produced a GenUiEnvelopeV1 when the user needs the interactive MCP App view. It only renders supplied structured data and never calls an LLM or fetches hidden data.',
       inputSchema: renderInputSchema,
-      outputSchema: GenUiEnvelopeV1Schema,
+      outputSchema: GenUiEnvelopeV1BaseSchema,
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,

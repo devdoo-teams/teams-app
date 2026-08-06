@@ -178,7 +178,7 @@ export const GenUiMetadataSchema = z.record(
   message: 'metadata supports at most 16 keys',
 });
 
-export const GenUiEnvelopeV1Schema = z.object({
+export const GenUiEnvelopeV1BaseSchema = z.object({
   schemaVersion: z.literal(GENUI_SCHEMA_VERSION),
   kind: GenUiKindSchema,
   status: GenUiStateSchema.default('ready'),
@@ -192,7 +192,9 @@ export const GenUiEnvelopeV1Schema = z.object({
   aiGenerated: z.boolean().default(false),
   fallbackText: z.string().min(1).max(4_000).optional(),
   metadata: GenUiMetadataSchema.default({}),
-}).strict().superRefine((value, context) => {
+}).strict();
+
+export const GenUiEnvelopeV1Schema = GenUiEnvelopeV1BaseSchema.superRefine((value, context) => {
   if (!value.aiGenerated && value.citations.length > 0) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
@@ -208,6 +210,10 @@ export const GenUiEnvelopeV1Schema = z.object({
     });
   }
 });
+
+// Keep the MCP tool output schema as a plain ZodObject. Semantic and
+// cross-field validation remains in GenUiEnvelopeV1Schema.parse/safeParse;
+// MCP's tool registration only needs the object shape for JSON Schema export.
 
 export type GenUiKind = z.infer<typeof GenUiKindSchema>;
 export type GenUiState = z.infer<typeof GenUiStateSchema>;
