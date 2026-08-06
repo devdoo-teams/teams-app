@@ -61,7 +61,7 @@ async function request(baseUrl, pathname, init = {}) {
   return { response, body };
 }
 
-function activity(text, baseUrl, suffix) {
+function activity(text, baseUrl, suffix, conversationId = `runtime-conversation-${suffix}`) {
   return {
     type: 'message',
     id: `runtime-${suffix}`,
@@ -69,7 +69,7 @@ function activity(text, baseUrl, suffix) {
     serviceUrl: baseUrl,
     channelId: 'msteams',
     from: { id: 'runtime-user', name: 'Runtime Test User' },
-    conversation: { id: `runtime-conversation-${suffix}` },
+    conversation: { id: conversationId },
     recipient: { id: 'runtime-bot', name: 'Teams SDK MVP' },
     text,
   };
@@ -271,6 +271,21 @@ async function runLocalFlow(dataFile, jobDataFile) {
       readOnlyOutbox.body.messages.some((message) => message.includes('분석을 시작했습니다')),
       'Codex progress is delivered before the final result',
     );
+    assert(
+      readOnlyOutbox.body.messages.some((message) => message.includes('완료되었습니다')),
+      'Codex completion notification is delivered to the conversation',
+    );
+
+    const naturalFollowUp = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity('같은 대화에서 한 줄로 이어서 확인해줘', server.baseUrl, 'agent-follow-up', 'runtime-conversation-agent-run')),
+    });
+    const naturalFollowUpJobId = naturalFollowUp.body.messages[0].match(/task-[\w-]+/)?.[0];
+    assert(naturalFollowUp.body.messages[0].includes('이전 Codex 대화'), 'Natural Teams replies continue the latest Codex thread');
+    const completedNaturalFollowUp = await waitForAgentJob(server.baseUrl, naturalFollowUpJobId);
+    assert(completedNaturalFollowUp.status === 'completed', 'Natural Codex follow-up completes');
+    assert(completedNaturalFollowUp.parentJobId === readOnlyJobId, 'Natural follow-up keeps the parent task link');
+    assert(completedNaturalFollowUp.threadId === completedReadOnly.threadId, 'Natural follow-up reuses the Codex thread');
 
     const continued = await request(server.baseUrl, '/api/messages', {
       method: 'POST',

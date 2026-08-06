@@ -83,6 +83,14 @@ export class AgentJobStore {
     return this.jobs.slice(0, limit);
   }
 
+  latestCompletedWithThread(conversationId: string): AgentJob | undefined {
+    return this.jobs.find((job) =>
+      job.conversationId === conversationId &&
+      job.status === 'completed' &&
+      Boolean(job.threadId),
+    );
+  }
+
   async update(id: string, patch: Partial<AgentJob>): Promise<AgentJob | undefined> {
     const job = this.get(id);
     if (!job) return undefined;

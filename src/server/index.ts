@@ -11,6 +11,7 @@ import { GitService } from './git-service.js';
 
 const port = Number(process.env.PORT ?? 3978);
 const skipAuth = process.env.TEAMS_SKIP_AUTH === 'true';
+const skipOutbound = process.env.TEAMS_SKIP_OUTBOUND === 'true';
 const clientDist = path.resolve(process.cwd(), 'dist/client');
 const itemStore = new ItemStore(
   process.env.ITEM_STORE_PATH ?? path.resolve(process.cwd(), 'data/items.json'),
@@ -78,6 +79,7 @@ http.get('/api/health', (_request: any, response: any) => {
     auth: skipAuth ? 'local-bypass' : 'teams-authenticated',
     userAuth: skipAuth ? 'local-bypass' : userAuthConfigured ? 'entra-sso' : 'not-configured',
     bot: teamsApp ? 'teams-sdk' : 'local-handler',
+    outbound: teamsApp ? (skipOutbound ? 'disabled' : 'teams-sdk') : 'local-outbox',
     agent: process.env.CODEX_BIN ?? 'codex-cli',
     agentWorkspace,
     storage: 'file-json',
@@ -172,7 +174,7 @@ http.delete('/api/items/:id', async (request: any, response: any) => {
 });
 
 const notifyConversation = async (conversationId: string, text: string): Promise<void> => {
-  if (teamsApp && !skipAuth) {
+  if (teamsApp && !skipOutbound) {
     await teamsApp.send(conversationId, { type: 'message', text });
     return;
   }
@@ -304,6 +306,15 @@ async function handleMessage(activity: any, send: (text: string) => Promise<void
   }
 
   if (text) {
+    const previous = agentService.latestCompletedForConversation(conversationId);
+    if (previous) {
+      const continued = await agentService.continue(previous.id, text);
+      if (continued) {
+        await send(`이전 Codex 대화를 이어서 작업 ${continued.id}을 시작했습니다.\nstatus ${continued.id}`);
+        return;
+      }
+    }
+
     const job = await agentService.submit({
       prompt: text,
       mode: 'read-only',

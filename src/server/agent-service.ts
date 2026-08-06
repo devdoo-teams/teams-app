@@ -87,6 +87,10 @@ export class AgentService {
     return this.store.list(limit);
   }
 
+  latestCompletedForConversation(conversationId: string): AgentJob | undefined {
+    return this.store.latestCompletedWithThread(conversationId);
+  }
+
   countActive(): number {
     return this.store.countActive();
   }

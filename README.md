@@ -18,6 +18,7 @@ TypeScript + React + Express + Microsoft Teams SDK 기반의 내부용 Teams 앱
 - Teams SDK `/api/messages` 메시지 핸들러 (`help`, `status`, `list` 명령 포함)
 - Teams SDK `/api/messages` `status` 명령으로 진행 중 업무 수 확인
 - Teams에서 Codex CLI 읽기 전용 작업을 시작하고 작업 ID로 상태 조회
+- 같은 Teams 대화의 자연어 후속 답장을 마지막 완료 Codex thread에 자동 연결
 - `write` 작업의 승인·취소 흐름과 Codex JSONL 결과 영속 저장
 - Codex 완료·실패 결과의 Teams proactive message 전송
 - Teams SDK `install.add` 설치 이벤트 welcome message와 명령 안내
@@ -40,7 +41,7 @@ TEAMS_SKIP_AUTH=true npm run dev
 - API: http://localhost:3978/api/items
 - Teams 메시지 엔드포인트: http://localhost:3978/api/messages
 
-`TEAMS_SKIP_AUTH=true`는 로컬 탭 API의 사용자 인증만 우회하는 개발용 설정입니다. `BOT_CLIENT_ID`, `CLIENT_SECRET`, `TENANT_ID`가 있으면 Teams SDK Bot은 계속 실행되어 실제 Teams 메시지 outbound를 테스트할 수 있습니다. 운영에서는 이 값을 제거하고 탭 API도 Entra SSO로 보호합니다.
+`TEAMS_SKIP_AUTH=true`는 로컬 탭 API의 사용자 인증만 우회하는 개발용 설정입니다. `BOT_CLIENT_ID`, `CLIENT_SECRET`, `TENANT_ID`가 있으면 Teams SDK Bot은 계속 실행되어 실제 Teams 메시지 outbound를 테스트할 수 있습니다. `TEAMS_SKIP_OUTBOUND=true`를 별도로 설정한 경우에만 비동기 진행·완료 메시지를 로컬 outbox에 보관합니다. 운영에서는 `TEAMS_SKIP_AUTH`를 제거하고 탭 API도 Entra SSO로 보호합니다.
 
 ## Teams 원격 Codex 작업
 
@@ -51,6 +52,7 @@ help
 run 저장소의 현재 구현 상태를 분석해줘
 status <작업 ID>
 continue <작업 ID> <추가 요청>
+방금 결과를 더 자세히 설명해줘
 write 테스트 보강 계획을 적용해줘
 approve <작업 ID>
 commit <작업 ID> 변경 내용을 커밋해줘
