@@ -403,7 +403,7 @@ function registerTools(server: McpServer, options: McpGenUiServerOptions): void 
     'render_workspace_response',
     {
       title: 'Render workspace response',
-      description: 'Use this after a data tool has produced a GenUiEnvelopeV1 when the user needs the interactive MCP App view. It only renders supplied structured data and never calls an LLM or fetches hidden data.',
+      description: 'Use this after a data tool has produced a GenUiEnvelopeV1 when the user needs the read-only MCP App view. It only renders supplied structured data, never calls an LLM or fetches hidden data, and rejects every envelope action (including feedback); interactive actions belong to the Teams host.',
       inputSchema: renderInputSchema,
       outputSchema: GenUiEnvelopeV1BaseSchema,
       annotations: {
@@ -425,6 +425,10 @@ function registerTools(server: McpServer, options: McpGenUiServerOptions): void 
         return errorResult('render_workspace_response에는 유효한 GenUiEnvelopeV1이 필요합니다. 데이터 도구를 먼저 호출하세요.');
       }
 
+      if (parsed.data.actions.length > 0) {
+        return errorResult('MCP GenUI 위젯은 읽기 전용입니다. action 또는 feedback이 포함된 envelope는 Teams 호스트에서만 렌더링할 수 있습니다.');
+      }
+
       return resultForEnvelope(parsed.data, fallbackTextOf(parsed.data));
     },
   );
@@ -437,7 +441,7 @@ export function createMcpGenUiServer(options: McpGenUiServerOptions): McpGenUiSe
       version: options.serverVersion ?? '1.0.0',
     },
     {
-      instructions: 'This MCP App renders structured workspace data. It is not the Teams mobile iframe and cannot read Teams GPS directly.',
+      instructions: 'This MCP App renders structured workspace data in a read-only widget. render_workspace_response rejects every envelope action, including feedback; interactive actions must be handled by the Teams host. It is not the Teams mobile iframe and cannot read Teams GPS directly.',
     },
   );
 
@@ -448,7 +452,7 @@ export function createMcpGenUiServer(options: McpGenUiServerOptions): McpGenUiSe
     'Teams Workspace GenUI',
     MCP_GENUI_RESOURCE_URI,
     {
-      description: 'Portable MCP Apps widget for rendering GenUiEnvelopeV1. This resource is for MCP hosts such as ChatGPT or Codex, not the Teams mobile tab iframe.',
+      description: 'Portable read-only MCP Apps widget for rendering action-free GenUiEnvelopeV1 data. This resource is for MCP hosts such as ChatGPT or Codex, not the Teams mobile tab iframe; interactive actions are rejected by render_workspace_response.',
       mimeType: MCP_GENUI_RESOURCE_MIME_TYPE,
       _meta: {
         ui: {

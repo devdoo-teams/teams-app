@@ -107,6 +107,28 @@ assert.equal(card.type, 'AdaptiveCard');
 assert.equal(card.version, '1.5');
 assert.equal(card.msteams.width, 'Full');
 assert.ok(card.body.every((element) => element.type !== 'TextBlock' || element.wrap === true));
+const statusLabels: Record<string, string> = {
+  loading: '로딩 중',
+  ready: '준비 완료',
+  empty: '데이터 없음',
+  error: '오류',
+  approval: '승인 필요',
+  complete: '완료',
+};
+for (const [status, label] of Object.entries(statusLabels)) {
+  const statusEnvelope = GenUiEnvelopeV1Schema.parse({
+    ...nonAiEnvelope,
+    id: `status-${status}`,
+    status,
+    sections: [{ type: 'status', label: '상태', status, description: '상태 접근성 계약' }],
+    actions: [],
+  });
+  const statusCard = renderGenUiCard(statusEnvelope);
+  const serializedStatusCard = JSON.stringify(statusCard);
+  assert.ok(serializedStatusCard.includes(`상태 · ${label}`), `${status}: native card renders canonical status badge`);
+  assert.equal(statusCard.speak, `상태: ${label}`, `${status}: card has accessible spoken status`);
+  assert.equal(serializedStatusCard.includes(`세부 상태: ${status}`), false, `${status}: matching status section is not duplicated`);
+}
 assert.equal(card.actions?.length, GENUI_ACTIONS.length - 1);
 assert.ok(!JSON.stringify(card).includes('AI 생성 콘텐츠'));
 assert.ok(!JSON.stringify(card).includes('https://learn.microsoft.com'));

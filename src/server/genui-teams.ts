@@ -9,6 +9,7 @@ import {
   type GenUiItem,
   type GenUiScalar,
   type GenUiSection,
+  type GenUiState,
 } from '../shared/genui.js';
 
 export type AdaptiveCardElement = Record<string, unknown>;
@@ -20,6 +21,7 @@ export interface TeamsAdaptiveCard {
   version: '1.5';
   body: AdaptiveCardElement[];
   actions?: AdaptiveCardAction[];
+  speak?: string;
   msteams: { width: 'Full' };
 }
 
@@ -81,6 +83,32 @@ function weatherIcon(icon: string | undefined): string {
   }
 }
 
+const STATUS_PRESENTATION: Record<GenUiState, {
+  label: string;
+  color: 'Accent' | 'Good' | 'Warning' | 'Attention';
+}> = {
+  loading: { label: '로딩 중', color: 'Accent' },
+  ready: { label: '준비 완료', color: 'Good' },
+  empty: { label: '데이터 없음', color: 'Warning' },
+  error: { label: '오류', color: 'Attention' },
+  approval: { label: '승인 필요', color: 'Warning' },
+  complete: { label: '완료', color: 'Good' },
+};
+
+function renderStatusBadge(status: GenUiState): AdaptiveCardElement {
+  const presentation = STATUS_PRESENTATION[status];
+  return {
+    type: 'Container',
+    style: 'emphasis',
+    spacing: 'Small',
+    items: [textBlock(`상태 · ${presentation.label}`, {
+      color: presentation.color,
+      size: 'Small',
+      weight: 'Bolder',
+    })],
+  };
+}
+
 function weatherElements(section: Extract<GenUiSection, { type: 'weather' }>): AdaptiveCardElement[] {
   const temperature = section.temperature === undefined ? undefined : `${section.temperature.toFixed(1)}°C`;
   const details: GenUiFact[] = [];
@@ -110,7 +138,7 @@ function weatherElements(section: Extract<GenUiSection, { type: 'weather' }>): A
   ];
 }
 
-function sectionElements(section: GenUiSection): AdaptiveCardElement[] {
+function sectionElements(section: GenUiSection, canonicalStatus?: GenUiState): AdaptiveCardElement[] {
   switch (section.type) {
     case 'text':
       return [
@@ -142,13 +170,15 @@ function sectionElements(section: GenUiSection): AdaptiveCardElement[] {
       ];
     case 'status':
       return [
-        textBlock(`상태: ${section.status}`, { color: 'Accent', weight: 'Bolder' }),
+        ...(section.status !== canonicalStatus
+          ? [textBlock(`세부 상태: ${section.status}`, { color: 'Accent', weight: 'Bolder' })]
+          : []),
         ...(section.description ? [textBlock(section.description, { isSubtle: true })] : []),
       ];
   }
 }
 
-function renderSection(section: GenUiSection): AdaptiveCardElement {
+function renderSection(section: GenUiSection, canonicalStatus: GenUiState): AdaptiveCardElement {
   const heading = section.title ?? section.label;
   return {
     type: 'Container',
@@ -157,7 +187,7 @@ function renderSection(section: GenUiSection): AdaptiveCardElement {
     items: [
       ...(heading ? [textBlock(heading, { weight: 'Bolder', color: 'Accent' })] : []),
       ...(section.description && section.type !== 'status' ? [textBlock(section.description, { isSubtle: true })] : []),
-      ...sectionElements(section),
+      ...sectionElements(section, canonicalStatus),
     ],
   };
 }
@@ -203,7 +233,10 @@ export function renderGenUiCard(input: GenUiEnvelopeV1): TeamsAdaptiveCard {
   if (envelope.summary) body.push(textBlock(envelope.summary, { color: 'Default' }));
   if (envelope.aiGenerated) body.push(textBlock('AI 생성 콘텐츠', { isSubtle: true, color: 'Accent' }));
 
-  body.push(...envelope.sections.map(renderSection));
+  // The envelope status is the canonical host-level state. Render it directly
+  // so mobile Teams users can understand the card without expanding a section.
+  body.push(renderStatusBadge(envelope.status));
+  body.push(...envelope.sections.map((section) => renderSection(section, envelope.status)));
 
   if (envelope.aiGenerated && envelope.citations.length > 0) {
     body.push(textBlock('출처', { weight: 'Bolder', color: 'Accent', spacing: 'Medium', separator: true }));
@@ -219,12 +252,13 @@ export function renderGenUiCard(input: GenUiEnvelopeV1): TeamsAdaptiveCard {
     $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
     version: '1.5',
     msteams: { width: 'Full' },
+    speak: `상태: ${STATUS_PRESENTATION[envelope.status].label}`,
     body,
     ...(envelope.actions.length > 0 ? { actions: envelope.actions.map(renderAction) } : {}),
   };
 }
 
-function sectionText(section: GenUiSection): string[] {
+function sectionText(section: GenUiSection, canonicalStatus?: GenUiState): string[] {
   switch (section.type) {
     case 'text':
       return [section.text ?? section.content, section.value === undefined ? undefined : scalarText(section.value)].filter((value): value is string => Boolean(value));
@@ -248,7 +282,10 @@ function sectionText(section: GenUiSection): string[] {
     case 'progress':
       return [`진행률: ${section.progress}%`];
     case 'status':
-      return [`상태: ${section.status}`, section.description].filter((value): value is string => Boolean(value));
+      return [
+        section.status === canonicalStatus ? undefined : `세부 상태: ${section.status}`,
+        section.description,
+      ].filter((value): value is string => Boolean(value));
   }
 }
 
@@ -269,7 +306,7 @@ export function genUiTextFallback(input: GenUiEnvelopeV1): string {
     const heading = section.title ?? section.label;
     if (heading) lines.push(heading);
     if (section.description && section.type !== 'status') lines.push(section.description);
-    lines.push(...sectionText(section));
+    lines.push(...sectionText(section, envelope.status));
   }
   if (envelope.aiGenerated && envelope.citations.length > 0) {
     lines.push('출처:');

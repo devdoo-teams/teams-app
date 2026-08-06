@@ -152,6 +152,44 @@ async function verifyProtocol(label: string, baseUrl: string): Promise<void> {
     'task-list',
     `${label}: get_workspace_snapshot returns a GenUI envelope`,
   );
+
+  const secretActionToken = 'untrusted-secret-action-token';
+  const untrustedCitation = 'https://untrusted.example.invalid/private';
+  const rejected = await mcpRequest(baseUrl, {
+    jsonrpc: '2.0',
+    id: 4,
+    method: 'tools/call',
+    params: {
+      name: 'render_workspace_response',
+      arguments: {
+        envelope: {
+          schemaVersion: '1',
+          kind: 'answer',
+          status: 'ready',
+          id: 'untrusted-envelope',
+          correlationId: 'untrusted-correlation',
+          sections: [{ type: 'text', text: '읽기 전용 경계 테스트' }],
+          actions: [{
+            action: 'feedback',
+            label: '외부 입력',
+            entityId: 'untrusted-entity',
+            correlationId: 'untrusted-correlation',
+            actionToken: secretActionToken,
+          }],
+          aiGenerated: true,
+          citations: [{ title: '외부 출처', url: untrustedCitation }],
+          fallbackText: '읽기 전용 경계 테스트',
+        },
+      },
+    },
+  }, initialize.sessionId);
+  assert.equal(rejected.response.status, 200, `${label}: action-bearing render is a JSON-RPC tool error, not an HTTP failure`);
+  assert.equal(rejected.body?.result?.isError, true, `${label}: action-bearing render is rejected as a tool error`);
+  assert.equal(rejected.body?.result?.structuredContent?.kind, 'error', `${label}: rejection returns an error envelope`);
+  assert.deepEqual(rejected.body?.result?.structuredContent?.actions, [], `${label}: rejection envelope has no actions`);
+  const rejectedJson = JSON.stringify(rejected.body);
+  assert.equal(rejectedJson.includes(secretActionToken), false, `${label}: rejected action token is not echoed`);
+  assert.equal(rejectedJson.includes(untrustedCitation), false, `${label}: rejected citation URL is not echoed`);
 }
 
 async function verifyDirectServerFactory(): Promise<void> {
