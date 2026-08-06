@@ -31,7 +31,7 @@ function job(status: AgentJob['status'] = 'completed', prompt = '저장소를 �
   };
 }
 
-function createAgentServiceFake(): AgentService {
+function createAgentServiceFake(terminalJob = job()): AgentService {
   const submitted: AgentJob[] = [];
   const service = {
     countActive: () => 0,
@@ -43,7 +43,7 @@ function createAgentServiceFake(): AgentService {
       return created;
     },
     continue: async () => undefined,
-    waitForTerminal: async () => job(),
+    waitForTerminal: async () => terminalJob,
   } as unknown as AgentService;
   return service;
 }
@@ -125,6 +125,12 @@ async function main(): Promise<void> {
     assert.equal(unsupported.envelope.kind, 'job-status');
     assert.equal(unsupported.envelope.aiGenerated, false);
     assert.match(unsupported.text, /테스트 작업이 완료되었습니다/);
+
+    const failed = await engine.run(await createInput(itemStore, createAgentServiceFake(job('failed')), '저장소를 분석해줘'));
+    assert.equal(failed.envelope.status, 'error');
+
+    const running = await engine.run(await createInput(itemStore, createAgentServiceFake(job('running')), '저장소를 분석해줘'));
+    assert.equal(running.envelope.status, 'loading');
 
     console.log('deterministic response engine tests passed');
   } finally {

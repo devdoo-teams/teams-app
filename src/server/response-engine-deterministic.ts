@@ -120,7 +120,15 @@ function envelope(input: {
   });
 }
 
-function jobEnvelope(job: AgentJob, text: string, status: GenUiEnvelopeV1['status'] = 'complete'): GenUiEnvelopeV1 {
+function envelopeStatusForJob(job: AgentJob): GenUiEnvelopeV1['status'] {
+  if (job.status === 'awaiting_approval') return 'approval';
+  if (job.status === 'completed') return 'complete';
+  if (job.status === 'failed') return 'error';
+  if (job.status === 'queued' || job.status === 'running') return 'loading';
+  return 'ready';
+}
+
+function jobEnvelope(job: AgentJob, text: string, status = envelopeStatusForJob(job)): GenUiEnvelopeV1 {
   return envelope({
     kind: 'job-status',
     id: job.id,
