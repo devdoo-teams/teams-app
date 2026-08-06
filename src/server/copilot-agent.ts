@@ -12,6 +12,8 @@ import { Observable, type Subscriber } from 'rxjs';
 import { AgentService } from './agent-service.js';
 import type { AgentJobScope } from './agent-job-store.js';
 import { ItemStore } from './item-store.js';
+import { DeterministicResponseEngine } from './response-engine-deterministic.js';
+import { ResponseEngineRouter } from './response-engine.js';
 import { DEMO_COORDINATES, formatWeatherMessage, getWeather, type WeatherResponse } from './weather-service.js';
 
 const AGENT_ID = 'default';
@@ -198,6 +200,10 @@ function formatJobs(agentService: AgentService, scope: AgentJobScope): string {
 }
 
 export class TeamsCodexAgent extends AbstractAgent {
+  private readonly responseEngineRouter = new ResponseEngineRouter([
+    new DeterministicResponseEngine(),
+  ]);
+
   constructor(
     private readonly itemStore: ItemStore,
     private readonly agentService: AgentService,
@@ -474,72 +480,19 @@ export class TeamsCodexAgent extends AbstractAgent {
     setActiveJobId: (id: string) => void,
     isCancelled: () => boolean,
   ): Promise<string> {
-    const prompt = getMessageText(input);
-    const normalized = prompt.toLowerCase();
-    const scope = this.scopeForInput(input);
-
-    if (!prompt) return '요청 내용을 입력해 주세요.';
-
-    if (/^(help|도움|사용법|명령)/i.test(normalized)) {
-      return 'CopilotKit 데모 명령\n\n- 현재 업무 목록 보여줘\n- 현재 위치 날씨 보여줘\n- Codex 작업 상태 알려줘\n- 저장소를 분석해줘\n- write로 파일 변경 작업을 요청하면 승인 카드가 표시됩니다.';
-    }
-
-    if (/(업무|할 일|task).*(목록|리스트|보여|확인)|^(list|업무 목록)$/i.test(normalized)) {
-      const tasks = compactTasks(this.itemStore);
-      this.emitTool(subscriber, 'showTaskCard', tasks, formatTasks(tasks));
-      return formatTasks(tasks);
-    }
-
-    if (/(날씨|weather)/i.test(normalized)) {
-      const contextWeather = parseContextValue(input, '날씨');
-      const weather = contextWeather?.location && contextWeather?.current
-        ? contextWeather as WeatherResponse
-        : await getWeather(DEMO_COORDINATES.latitude, DEMO_COORDINATES.longitude, { demo: true });
-      const toolArgs = compactWeather(weather);
-      this.emitTool(subscriber, 'showWeatherCard', toolArgs, formatWeatherMessage(weather, weather.source === 'demo'));
-      return `${formatWeatherMessage(weather, weather.source === 'demo')}\n\n탭의 “내 위치 사용” 버튼을 누르면 Teams 모바일 위치 권한으로 실시간 위치를 갱신할 수 있습니다.`;
-    }
-
-    if (/^(status|상태|진행 상태)/i.test(normalized)) {
-      return `활성 Codex 작업 ${this.agentService.countActive(scope)}개\n\n${formatJobs(this.agentService, scope)}`;
-    }
-
-    if (/^(write|파일|수정|변경|작성|생성)/i.test(normalized)) {
-      const requestedPrompt = prompt.replace(/^(write|파일(?:을|이)?\s*(?:변경|수정)?|수정|변경|작성|생성)\s*/i, '').trim() || '요청한 변경 작업';
-      const job = await this.agentService.submit({
-        prompt: requestedPrompt,
-        mode: 'workspace-write',
-        scope,
-        notify: false,
-      });
-      const approval: ApprovalToolArgs = { jobId: job.id, prompt: requestedPrompt, action: 'approve' };
-      this.emitTool(subscriber, 'workspaceApproval', approval, `승인 대기 중인 작업 ${job.id}`);
-      return `쓰기 작업 ${job.id}이 승인 대기 중입니다.\n\nTeams Bot에서 “approve ${job.id}”를 보내거나 아래 승인 흐름을 사용하세요.`;
-    }
-
-    const previous = this.agentService.latestCompletedForConversation(scope);
-    const onProgress = async (message: string): Promise<void> => {
-      if (!isCancelled()) this.emitText(subscriber, `⏳ ${message}`);
-    };
-    const job = previous
-      ? await this.agentService.continue(previous.id, prompt, scope, { notify: false, onProgress })
-      : await this.agentService.submit({
-        prompt,
-        mode: 'read-only',
-        scope,
-        notify: false,
-        onProgress,
-      });
-
-    if (!job) throw new Error('Codex 작업을 생성하지 못했습니다.');
-    setActiveJobId(job.id);
-    const completed = await this.agentService.waitForTerminal(job.id, scope);
-
-    if (completed.status === 'completed') {
-      return completed.result || `작업 ${completed.id}이 완료되었습니다.`;
-    }
-
-    return `작업 ${completed.id}이 ${completed.status} 상태입니다.\n\n${completed.error || completed.progress.at(-1) || '추가 확인이 필요합니다.'}`;
+    const output = await this.responseEngineRouter.run({
+      mode: 'deterministic',
+      prompt: getMessageText(input),
+      request: input,
+      scope: this.scopeForInput(input),
+      itemStore: this.itemStore,
+      agentService: this.agentService,
+      onText: (text) => this.emitText(subscriber, text),
+      onTool: (tool) => this.emitTool(subscriber, tool.name, tool.args as WeatherToolArgs | TaskToolArgs | ApprovalToolArgs, tool.result),
+      setActiveJobId,
+      isCancelled,
+    });
+    return output.text;
   }
 
   private scopeForInput(input: RunAgentInput): AgentJobScope {
