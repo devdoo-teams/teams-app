@@ -35,8 +35,22 @@ export type ApprovalToolParameters = {
   action: 'approve' | 'cancel';
 };
 
+export type GenAiRuntimeStatus = 'openai-configured' | 'not-configured' | 'deterministic-test';
+
+export function getGenAiBadgeLabel(genAI: GenAiRuntimeStatus | undefined): string {
+  if (genAI === 'openai-configured') return 'GenAI 연결됨';
+  if (genAI === 'deterministic-test') return '테스트 모드';
+  return '설정 필요';
+}
+
 type WeatherToolParametersInput = Partial<WeatherToolParameters>;
-type TaskToolParametersInput = Partial<TaskToolParameters>;
+type TaskToolItemInput = Partial<TaskToolParameters['items'][number]>;
+type TaskToolParametersInput = {
+  items?: TaskToolItemInput[];
+  total?: number;
+  open?: number;
+  done?: number;
+};
 type ApprovalToolParametersInput = Partial<ApprovalToolParameters>;
 type ApprovalResultParameters = Pick<ApprovalToolParameters, 'jobId' | 'prompt'>;
 
@@ -80,10 +94,89 @@ function normalizedCount(value: number | undefined): number | undefined {
   return finite === undefined ? undefined : Math.min(MAX_SAFE_COUNT, Math.max(0, Math.trunc(finite)));
 }
 
-function normalizedItemId(value: number, index: number, title: string): string | number {
-  if (!Number.isFinite(value)) return `item-${index + 1}-${stableHash(title)}`;
-  if (Number.isSafeInteger(value)) return value;
-  return boundedText(String(value), 120) ?? `item-${index + 1}-${stableHash(title)}`;
+function normalizedItemId(value: number | undefined, index: number, title: string): string | number {
+  const finite = finiteNumber(value);
+  if (finite === undefined) return `item-${index + 1}-${stableHash(title)}`;
+  if (Number.isSafeInteger(finite)) return finite;
+  return boundedText(String(finite), 120) ?? `item-${index + 1}-${stableHash(title)}`;
+}
+
+function isValidCount(value: number | undefined): boolean {
+  return typeof value === 'number'
+    && Number.isSafeInteger(value)
+    && value >= 0;
+}
+
+function isValidWeatherParameters(parameters: WeatherToolParametersInput): boolean {
+  const temperature = finiteNumber(parameters.temperature);
+  const apparentTemperature = finiteNumber(parameters.apparentTemperature);
+  const humidity = finiteNumber(parameters.humidity);
+  const windSpeed = finiteNumber(parameters.windSpeed);
+  const precipitation = finiteNumber(parameters.precipitation);
+
+  return Boolean(boundedText(parameters.location, 200))
+    && temperature !== undefined
+    && apparentTemperature !== undefined
+    && humidity !== undefined
+    && windSpeed !== undefined
+    && precipitation !== undefined
+    && Boolean(boundedText(parameters.condition, 120))
+    && Boolean(boundedText(parameters.source, 120))
+    && temperature >= -273.15
+    && temperature <= 1_000
+    && apparentTemperature >= -273.15
+    && apparentTemperature <= 1_000
+    && humidity >= 0
+    && humidity <= 100
+    && windSpeed >= 0
+    && precipitation >= 0;
+}
+
+function isValidTaskParameters(parameters: TaskToolParametersInput): boolean {
+  if (!Array.isArray(parameters.items)
+    || !isValidCount(parameters.total)
+    || !isValidCount(parameters.open)
+    || !isValidCount(parameters.done)) {
+    return false;
+  }
+
+  return parameters.items.every((item) => Boolean(item)
+    && typeof item.id === 'number'
+    && Number.isSafeInteger(item.id)
+    && Boolean(boundedText(item.title, 400))
+    && (item.status === 'open' || item.status === 'done'));
+}
+
+function isValidApprovalParameters(parameters: ApprovalToolParametersInput): boolean {
+  return Boolean(boundedText(parameters.jobId, 120))
+    && Boolean(boundedText(parameters.prompt, 2_000))
+    && (parameters.action === 'approve' || parameters.action === 'cancel');
+}
+
+function invalidToolResultEnvelope(toolName: string, reason: string): GenUiEnvelopeV1 {
+  const detail = boundedText(reason, 500) ?? '필수 도구 결과가 없습니다.';
+  const id = boundedId(`copilot-${toolName}-adapter-error`, 'copilot-adapter-error');
+  return GenUiEnvelopeV1Schema.parse({
+    schemaVersion: GENUI_SCHEMA_VERSION,
+    kind: 'error',
+    status: 'error',
+    id,
+    correlationId: id,
+    title: '도구 결과 오류',
+    summary: `${toolName} 도구 결과를 표시할 수 없습니다.`,
+    sections: [{
+      type: 'status',
+      title: '도구 결과 검증',
+      status: 'invalid_tool_result',
+      tone: 'danger',
+      description: detail,
+    }],
+    actions: [],
+    citations: [],
+    aiGenerated: false,
+    fallbackText: '도구 결과를 안전하게 표시할 수 없습니다. 다시 시도하세요.',
+    metadata: { source: 'copilotkit-tool', deterministic: true },
+  });
 }
 
 function baseEnvelope(input: {
@@ -111,21 +204,7 @@ function baseEnvelope(input: {
     metadata: { source: 'copilotkit-tool', deterministic: true },
   });
   if (parsed.success) return parsed.data;
-  return GenUiEnvelopeV1Schema.parse({
-    schemaVersion: GENUI_SCHEMA_VERSION,
-    kind: 'error',
-    status: 'error',
-    id: 'copilot-adapter-error',
-    correlationId: 'copilot-adapter-error',
-    title: '도구 결과 오류',
-    summary: '도구 결과를 안전하게 표시할 수 없습니다.',
-    sections: [{ type: 'status', status: 'invalid_tool_result' }],
-    actions: [],
-    citations: [],
-    aiGenerated: false,
-    fallbackText: '도구 결과를 안전하게 표시할 수 없습니다.',
-    metadata: { source: 'copilotkit-tool', deterministic: true },
-  });
+  return invalidToolResultEnvelope('unknown', 'GenUI envelope schema validation failed.');
 }
 
 export function createWeatherToolEnvelope(
@@ -133,6 +212,10 @@ export function createWeatherToolEnvelope(
   status: ToolRenderStatus,
   result?: string,
 ): GenUiEnvelopeV1 {
+  if (status === 'complete' && !isValidWeatherParameters(parameters)) {
+    return invalidToolResultEnvelope('weather', '날씨 결과의 위치·온도·상태·출처 또는 수치 범위가 올바르지 않습니다.');
+  }
+
   const location = boundedText(parameters.location, 200) ?? '현재 위치';
   const temperature = clampedNumber(parameters.temperature, -273.15, 1_000);
   const apparentTemperature = clampedNumber(parameters.apparentTemperature, -273.15, 1_000);
@@ -141,8 +224,7 @@ export function createWeatherToolEnvelope(
   const precipitation = clampedNumber(parameters.precipitation, 0, 100_000);
   const condition = boundedText(parameters.condition, 120);
   const source = boundedText(parameters.source, 120);
-  const hasCompleteWeather = temperature !== undefined && condition !== undefined;
-  const effectiveStatus = status === 'complete' && hasCompleteWeather ? 'ready' : 'loading';
+  const effectiveStatus = status === 'complete' ? 'ready' : 'loading';
   const id = boundedId(`copilot-weather-${location}`, 'copilot-weather');
   const summary = effectiveStatus === 'ready'
     ? `${location} · ${temperature!.toFixed(1)}°C · ${condition}`
@@ -177,6 +259,10 @@ export function createTaskToolEnvelope(
   parameters: TaskToolParametersInput,
   status: ToolRenderStatus,
 ): GenUiEnvelopeV1 {
+  if (status === 'complete' && !isValidTaskParameters(parameters)) {
+    return invalidToolResultEnvelope('task-list', '업무 목록의 항목·카운트·상태가 올바르지 않습니다.');
+  }
+
   const id = 'copilot-task-list';
   const items = Array.isArray(parameters.items) ? parameters.items : [];
   const openItems = items.filter((item) => item.status === 'open').slice(0, 8).map((item, index) => {
@@ -190,8 +276,7 @@ export function createTaskToolEnvelope(
   const total = normalizedCount(parameters.total);
   const open = normalizedCount(parameters.open);
   const done = normalizedCount(parameters.done);
-  const hasCompleteTaskData = total !== undefined && open !== undefined && done !== undefined;
-  const effectiveStatus = status === 'complete' && hasCompleteTaskData ? 'ready' : 'loading';
+  const effectiveStatus = status === 'complete' ? 'ready' : 'loading';
   const summary = effectiveStatus === 'ready'
     ? `${total}개 전체 · ${open}개 진행 중 · ${done}개 완료`
     : '업무 목록을 준비하고 있습니다.';
@@ -223,10 +308,14 @@ export function createApprovalToolEnvelope(
   parameters: ApprovalToolParametersInput,
   status: ToolRenderStatus,
 ): GenUiEnvelopeV1 {
+  if (status === 'complete' && !isValidApprovalParameters(parameters)) {
+    return invalidToolResultEnvelope('approval', '승인 결과의 작업 ID·설명·작업 유형이 올바르지 않습니다.');
+  }
+
   const rawJobId = parameters.jobId?.trim();
   const jobId = boundedText(rawJobId, 120) ?? 'copilot-approval';
   const prompt = boundedText(parameters.prompt, 2_000) ?? '승인 작업 정보를 준비하고 있습니다.';
-  const isReady = status === 'complete' && Boolean(rawJobId && parameters.prompt?.trim());
+  const isReady = status === 'complete';
   const summary = isReady
     ? `쓰기 작업 ${jobId}이 승인 대기 중입니다.`
     : '승인 카드를 준비하고 있습니다.';

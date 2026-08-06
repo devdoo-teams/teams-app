@@ -1,9 +1,12 @@
 import { app as teamsApp, geoLocation, location as teamsLocation } from '@microsoft/teams-js';
-import { CopilotKit } from '@copilotkit/react-core/v2';
-import { FormEvent, useEffect, useRef, useState } from 'react';
+import { FormEvent, Suspense, lazy, useEffect, useRef, useState } from 'react';
 
-import { CopilotWorkspaceAssistant } from './CopilotWorkspaceAssistant.js';
-import { apiFetch, getCachedAuthHeaders, getLastAuthError, setAuthRequired } from './auth.js';
+import { apiFetch, getLastAuthError, setAuthRequired } from './auth.js';
+
+const LazyCopilotWorkspaceRuntime = lazy(async () => {
+  const module = await import('./CopilotWorkspaceAssistant.js');
+  return { default: module.CopilotWorkspaceRuntime };
+});
 
 type Item = {
   id: number;
@@ -69,6 +72,39 @@ type TeamsLocationRuntime = {
   geoLocationSupported: boolean;
 };
 
+function createAbortError(): Error {
+  const error = new Error('Weather request aborted');
+  error.name = 'AbortError';
+  return error;
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw createAbortError();
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+function waitForAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(createAbortError());
+
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(createAbortError());
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 export function App() {
   const [items, setItems] = useState<Item[]>([]);
   const [title, setTitle] = useState('');
@@ -90,14 +126,18 @@ export function App() {
   const [teamsHostName, setTeamsHostName] = useState('');
   const [copilotReady, setCopilotReady] = useState(false);
   const teamsLocationReady = useRef<Promise<TeamsLocationRuntime> | null>(null);
+  const deviceLocationRequest = useRef<Promise<DeviceLocation> | null>(null);
+  const weatherRequestGeneration = useRef(0);
+  const weatherAbortController = useRef<AbortController | null>(null);
+  const mountedRef = useRef(false);
 
-  async function requestWeather(latitude: number, longitude: number) {
+  async function requestWeather(latitude: number, longitude: number, signal: AbortSignal) {
     const query = new URLSearchParams({
       latitude: String(latitude),
       longitude: String(longitude),
     });
 
-    const response = await apiFetch(`/api/weather?${query.toString()}`);
+    const response = await apiFetch(`/api/weather?${query.toString()}`, { signal });
     if (!response.ok) throw new Error('날씨 정보를 불러오지 못했습니다.');
     return (await response.json()) as WeatherResponse;
   }
@@ -133,9 +173,11 @@ export function App() {
             // geoLocation is preview and may not be exposed by the current host.
           }
 
-          setTeamsHost(true);
-          setTeamsClientType(clientType);
-          setTeamsHostName(hostName);
+          if (mountedRef.current) {
+            setTeamsHost(true);
+            setTeamsClientType(clientType);
+            setTeamsHostName(hostName);
+          }
 
           return {
             available: true,
@@ -145,9 +187,11 @@ export function App() {
             geoLocationSupported,
           };
         } catch {
-          setTeamsHost(false);
-          setTeamsClientType('');
-          setTeamsHostName('');
+          if (mountedRef.current) {
+            setTeamsHost(false);
+            setTeamsClientType('');
+            setTeamsHostName('');
+          }
           return {
             available: false,
             clientType: '',
@@ -233,7 +277,7 @@ export function App() {
     });
   }
 
-  async function getCurrentDeviceLocation(): Promise<DeviceLocation> {
+  async function resolveCurrentDeviceLocation(): Promise<DeviceLocation> {
     const locationErrors: string[] = [];
 
     const runtime = await initializeTeamsLocation();
@@ -293,11 +337,36 @@ export function App() {
     );
   }
 
+  function getCurrentDeviceLocation(signal: AbortSignal): Promise<DeviceLocation> {
+    throwIfAborted(signal);
+
+    if (!deviceLocationRequest.current) {
+      const request = resolveCurrentDeviceLocation();
+      const trackedRequest = request.finally(() => {
+        if (deviceLocationRequest.current === trackedRequest) deviceLocationRequest.current = null;
+      });
+      deviceLocationRequest.current = trackedRequest;
+    }
+
+    return waitForAbort(deviceLocationRequest.current, signal);
+  }
+
   async function loadWeather(useCurrentLocation: boolean): Promise<void> {
+    weatherAbortController.current?.abort();
+    const controller = new AbortController();
+    weatherAbortController.current = controller;
+    const generation = weatherRequestGeneration.current + 1;
+    weatherRequestGeneration.current = generation;
+    const isCurrentRequest = () => mountedRef.current
+      && !controller.signal.aborted
+      && weatherRequestGeneration.current === generation;
+
+    if (!mountedRef.current) return;
     setWeatherLoading(true);
     setWeatherError('');
 
     if (!useCurrentLocation) {
+      if (!isCurrentRequest()) return;
       setWeather(null);
       setLocationSource('demo');
       setLocationAccuracy(null);
@@ -312,12 +381,14 @@ export function App() {
     let resolvedLocationAccuracy: number | null;
 
     try {
-      const position = await getCurrentDeviceLocation();
+      const position = await getCurrentDeviceLocation(controller.signal);
+      if (!isCurrentRequest()) return;
       latitude = position.latitude;
       longitude = position.longitude;
       resolvedLocationSource = position.source;
       resolvedLocationAccuracy = position.accuracy ?? null;
     } catch (caught) {
+      if (!isCurrentRequest() || isAbortError(caught)) return;
       setWeather(null);
       setLocationSource('demo');
       setLocationAccuracy(null);
@@ -329,12 +400,14 @@ export function App() {
     }
 
     try {
-      const result = await requestWeather(latitude, longitude);
+      const result = await requestWeather(latitude, longitude, controller.signal);
+      if (!isCurrentRequest()) return;
       setWeather(result);
       setLocationSource(resolvedLocationSource);
       setLocationAccuracy(resolvedLocationAccuracy);
       setWeatherError('');
     } catch (caught) {
+      if (!isCurrentRequest() || isAbortError(caught)) return;
       setWeather(null);
       setLocationSource('demo');
       setLocationAccuracy(null);
@@ -342,7 +415,10 @@ export function App() {
         ? caught.message
         : '실시간 날씨를 불러오지 못했습니다.');
     } finally {
-      setWeatherLoading(false);
+      if (isCurrentRequest()) {
+        setWeatherLoading(false);
+        if (weatherAbortController.current === controller) weatherAbortController.current = null;
+      }
     }
   }
 
@@ -395,9 +471,19 @@ export function App() {
   }
 
   useEffect(() => {
-    void refreshRuntime().finally(() => setCopilotReady(true));
+    mountedRef.current = true;
+    void refreshRuntime().finally(() => {
+      if (mountedRef.current) setCopilotReady(true);
+    });
     void initializeTeamsLocation();
     void loadWeather(true);
+
+    return () => {
+      mountedRef.current = false;
+      weatherRequestGeneration.current += 1;
+      weatherAbortController.current?.abort();
+      weatherAbortController.current = null;
+    };
   }, []);
 
   const visibleItems = items.filter((item) => filter === 'all' || item.status === filter);
@@ -737,24 +823,16 @@ export function App() {
   if (!copilotReady) return dashboard;
 
   return (
-    <CopilotKit
-      agent="default"
-      enableInspector={false}
-      headers={getCachedAuthHeaders}
-      onError={(event) => console.warn('CopilotKit runtime error', event.error)}
-      properties={{ surface: 'teams-tab', host: teamsHostName || 'browser' }}
-      runtimeUrl="/api/copilotkit"
-      useSingleEndpoint={false}
-    >
-      {dashboard}
-      <div className="shell copilot-shell">
-        <CopilotWorkspaceAssistant
-          health={health ? { ok: health.ok, bot: health.bot, userAuth: health.userAuth, genAI: health.genAI } : null}
-          items={items}
-          summary={summary}
-          weather={weather}
-        />
-      </div>
-    </CopilotKit>
+    <Suspense fallback={dashboard}>
+      <LazyCopilotWorkspaceRuntime
+        health={health ? { ok: health.ok, bot: health.bot, userAuth: health.userAuth, genAI: health.genAI } : null}
+        items={items}
+        summary={summary}
+        teamsHostName={teamsHostName}
+        weather={weather}
+      >
+        {dashboard}
+      </LazyCopilotWorkspaceRuntime>
+    </Suspense>
   );
 }

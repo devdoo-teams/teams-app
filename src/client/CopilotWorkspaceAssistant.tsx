@@ -1,14 +1,15 @@
 import {
+  CopilotKit,
   CopilotChat,
   useCopilotChatConfiguration,
   useAgentContext,
   useRenderTool,
 } from '@copilotkit/react-core/v2';
 import type { RenderToolProps } from '@copilotkit/react-core/v2/headless';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { z } from 'zod';
 
-import { apiFetch } from './auth.js';
+import { apiFetch, getCachedAuthHeaders } from './auth.js';
 import { GenUiCard } from './genui/GenUiCard.js';
 import './genui/genui.css';
 import {
@@ -16,6 +17,7 @@ import {
   createApprovalToolEnvelope,
   createTaskToolEnvelope,
   createWeatherToolEnvelope,
+  getGenAiBadgeLabel,
 } from './genui/tool-adapters.js';
 
 type WeatherContext = {
@@ -154,12 +156,14 @@ function ApprovalToolCard({ status, parameters }: ApprovalRenderProps) {
   );
 }
 
-export function CopilotWorkspaceAssistant(props: {
+export type CopilotWorkspaceAssistantProps = {
   weather: WeatherContext | null;
   items: WorkspaceItem[];
   summary: { total: number; open: number; done: number };
   health: WorkspaceHealth | null;
-}) {
+};
+
+export function CopilotWorkspaceAssistant(props: CopilotWorkspaceAssistantProps) {
   useAgentContext({
     description: '현재 Teams 업무 허브 날씨 위젯 상태',
     value: props.weather ?? { status: 'location-not-resolved' },
@@ -197,7 +201,7 @@ export function CopilotWorkspaceAssistant(props: {
           <h2>업무 도우미</h2>
           <p>모델이 선택한 도구 결과를 날씨·업무·승인 카드로 표시합니다.</p>
         </div>
-        <span className="copilot-live-badge"><span aria-hidden="true" />{props.health?.genAI === 'openai-configured' ? 'GenAI 연결됨' : 'GenAI 설정 필요'}</span>
+        <span className="copilot-live-badge"><span aria-hidden="true" />{getGenAiBadgeLabel(props.health?.genAI)}</span>
       </div>
       <CopilotChat
         agentId="default"
@@ -209,5 +213,29 @@ export function CopilotWorkspaceAssistant(props: {
         className="copilot-chat"
       />
     </section>
+  );
+}
+
+export function CopilotWorkspaceRuntime(props: CopilotWorkspaceAssistantProps & {
+  children: ReactNode;
+  teamsHostName: string;
+}) {
+  const { children, teamsHostName, ...assistantProps } = props;
+
+  return (
+    <CopilotKit
+      agent="default"
+      enableInspector={false}
+      headers={getCachedAuthHeaders}
+      onError={(event) => console.warn('CopilotKit runtime error', event.error)}
+      properties={{ surface: 'teams-tab', host: teamsHostName || 'browser' }}
+      runtimeUrl="/api/copilotkit"
+      useSingleEndpoint={false}
+    >
+      {children}
+      <div className="shell copilot-shell">
+        <CopilotWorkspaceAssistant {...assistantProps} />
+      </div>
+    </CopilotKit>
   );
 }
