@@ -1,81 +1,15 @@
 import { useId } from 'react';
-import './genui.css';
+import {
+  isSafeGenUiUrl,
+  type GenUiAction,
+  type GenUiCitation,
+  type GenUiEnvelopeV1,
+  type GenUiKind,
+  type GenUiSection,
+  type GenUiState,
+} from '../../shared/genui.js';
 
-/**
- * This local contract is intentionally compatible with the planned
- * `src/shared/genui.ts` type. Once that shared module exists, these types can
- * be replaced with a type-only import without changing the renderer API.
- */
-export type GenUiKind =
-  | 'answer'
-  | 'weather'
-  | 'task-list'
-  | 'job-status'
-  | 'approval'
-  | 'result'
-  | 'error';
-
-export type GenUiState = 'loading' | 'ready' | 'empty' | 'error' | 'approval' | 'complete';
 export type GenUiTheme = 'light' | 'dark' | 'auto';
-export type GenUiTone = 'neutral' | 'info' | 'success' | 'warning' | 'danger';
-
-export type GenUiItem = {
-  id?: string | number;
-  label?: string;
-  title?: string;
-  value?: string | number | null;
-  description?: string;
-  status?: string;
-  tone?: GenUiTone;
-};
-
-export type GenUiSection = {
-  id?: string;
-  label?: string;
-  title?: string;
-  value?: string | number | null;
-  unit?: string;
-  description?: string;
-  content?: string;
-  icon?: string;
-  status?: string;
-  tone?: GenUiTone;
-  type?: 'text' | 'metric' | 'list' | 'progress' | 'status';
-  progress?: number;
-  items?: GenUiItem[];
-};
-
-export type GenUiAction = {
-  id: string;
-  label: string;
-  action?: string;
-  kind?: 'primary' | 'secondary' | 'danger' | 'ghost';
-  /** `type` is accepted for forward compatibility with card action schemas. */
-  type?: 'primary' | 'secondary' | 'danger' | 'ghost';
-  disabled?: boolean;
-  payload?: Record<string, unknown>;
-};
-
-export type GenUiCitation = {
-  title: string;
-  url: string;
-  snippet?: string;
-};
-
-export type GenUiEnvelopeV1 = {
-  kind: GenUiKind;
-  id?: string;
-  correlationId?: string;
-  title?: string;
-  summary?: string;
-  sections?: GenUiSection[];
-  actions?: GenUiAction[];
-  citations?: GenUiCitation[];
-  aiGenerated?: boolean;
-  fallbackText?: string;
-  /** Optional state field used by streaming and long-running job renderers. */
-  status?: GenUiState;
-};
 
 export type GenUiActionHandler = (
   action: GenUiAction,
@@ -127,11 +61,6 @@ function resolveState(envelope: GenUiEnvelopeV1 | null | undefined): GenUiState 
   return 'ready';
 }
 
-function displayValue(value: string | number | null | undefined, unit?: string): string {
-  if (value === null || value === undefined || value === '') return '';
-  return `${String(value)}${unit ? ` ${unit}` : ''}`;
-}
-
 function clampProgress(progress: number): number {
   return Math.min(100, Math.max(0, Math.round(progress)));
 }
@@ -141,15 +70,16 @@ function hasText(value: string | undefined): boolean {
 }
 
 function sectionHasContent(section: GenUiSection): boolean {
-  return Boolean(
-    hasText(section.label)
-      || hasText(section.title)
-      || (section.value !== null && section.value !== undefined)
-      || hasText(section.description)
-      || hasText(section.content)
-      || section.progress !== undefined
-      || section.items?.length,
-  );
+  if (hasText(section.label) || hasText(section.title) || hasText(section.description)) return true;
+  switch (section.type) {
+    case 'text': return Boolean(hasText(section.text) || hasText(section.content) || section.value !== undefined);
+    case 'facts': return Boolean(section.facts?.length || section.value !== undefined);
+    case 'stats': return section.stats.length > 0;
+    case 'weather': return Boolean(section.location || section.temperature !== undefined || section.condition);
+    case 'list': return section.items.length > 0;
+    case 'progress': return true;
+    case 'status': return true;
+  }
 }
 
 function isFeedbackAction(action: GenUiAction): boolean {
@@ -160,47 +90,44 @@ function isFeedbackAction(action: GenUiAction): boolean {
     || identifier.includes('helpful');
 }
 
-function defaultFeedbackActions(): GenUiAction[] {
+function defaultFeedbackActions(envelope: GenUiEnvelopeV1): GenUiAction[] {
   return [
     {
       id: 'feedback-positive',
       action: 'feedback',
-      kind: 'ghost',
       label: '도움이 됐어요',
-      payload: { value: 'positive' },
+      entityId: envelope.id,
+      correlationId: envelope.correlationId,
+      actionToken: 'ui-feedback-positive',
+      style: 'default',
     },
     {
       id: 'feedback-negative',
       action: 'feedback',
-      kind: 'ghost',
       label: '개선이 필요해요',
-      payload: { value: 'negative' },
+      entityId: envelope.id,
+      correlationId: envelope.correlationId,
+      actionToken: 'ui-feedback-negative',
+      style: 'default',
     },
   ];
 }
 
-function isSafeCitationUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
-  } catch {
-    return false;
-  }
+function displayScalar(value: string | number | boolean | null | undefined, unit?: string): string {
+  if (value === null || value === undefined || value === '') return '';
+  return `${String(value)}${unit ? ` ${unit}` : ''}`;
 }
 
 function SectionBlock({ section, index }: { section: GenUiSection; index: number }) {
   const heading = section.title || section.label;
   const sectionId = `genui-section-${section.id ?? index}`;
-  const progress = section.progress === undefined ? null : clampProgress(section.progress);
-  const hasItems = Boolean(section.items?.length);
-  const hasEmptyItems = Array.isArray(section.items) && section.items.length === 0;
+  const progress = section.type === 'progress' ? clampProgress(section.progress) : null;
 
   return (
     <section className="genui-card__section" aria-labelledby={heading ? sectionId : undefined}>
       {heading && (
         <div className="genui-card__section-heading">
           <h3 id={sectionId} className="genui-card__section-title">
-            {section.icon && <span aria-hidden="true">{section.icon}</span>}
             {heading}
           </h3>
           {section.status && (
@@ -211,17 +138,39 @@ function SectionBlock({ section, index }: { section: GenUiSection; index: number
         </div>
       )}
 
-      {section.value !== null && section.value !== undefined && (
-        <p className="genui-card__metric">
-          <strong>{displayValue(section.value)}</strong>
-          {section.unit && <span>{section.unit}</span>}
-        </p>
+      {section.description && <p className="genui-card__section-copy">{section.description}</p>}
+
+      {section.type === 'text' && (
+        <>
+          {(section.text || section.content) && <p className="genui-card__section-copy">{section.text || section.content}</p>}
+          {section.value !== undefined && <p className="genui-card__metric"><strong>{displayScalar(section.value)}</strong></p>}
+        </>
       )}
 
-      {(hasText(section.description) || hasText(section.content)) && (
-        <p className="genui-card__section-copy">
-          {section.description || section.content}
-        </p>
+      {(section.type === 'facts' || section.type === 'stats') && (
+        <dl className="genui-card__facts">
+          {(section.type === 'facts' ? section.facts ?? [] : section.stats).map((fact, factIndex) => (
+            <div key={fact.id ?? `${sectionId}-fact-${factIndex}`}>
+              <dt>{fact.label}</dt>
+              <dd>{displayScalar(fact.value, fact.unit)}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+
+      {section.type === 'weather' && (
+        <dl className="genui-card__facts">
+          {[
+            ['위치', section.location],
+            ['현재', section.temperature === undefined ? undefined : `${section.temperature.toFixed(1)}°C ${section.condition ?? ''}`.trim()],
+            ['체감', section.apparentTemperature === undefined ? undefined : `${section.apparentTemperature.toFixed(1)}°C`],
+            ['습도', section.humidity === undefined ? undefined : `${Math.round(section.humidity)}%`],
+            ['바람', section.windSpeed === undefined ? undefined : `${section.windSpeed.toFixed(1)}km/h`],
+            ['강수', section.precipitation === undefined ? undefined : `${section.precipitation.toFixed(1)}mm`],
+          ].filter((fact): fact is [string, string] => typeof fact[1] === 'string' && fact[1].length > 0).map(([label, value]) => (
+            <div key={`${sectionId}-${label}`}><dt>{label}</dt><dd>{value}</dd></div>
+          ))}
+        </dl>
       )}
 
       {progress !== null && (
@@ -243,10 +192,10 @@ function SectionBlock({ section, index }: { section: GenUiSection; index: number
         </div>
       )}
 
-      {(hasItems || hasEmptyItems) && (
+      {section.type === 'list' && (
         <ul className="genui-card__item-list">
-          {hasItems ? section.items!.map((item, itemIndex) => {
-            const itemTitle = item.title || item.label || `항목 ${itemIndex + 1}`;
+          {section.items.length > 0 ? section.items.map((item, itemIndex) => {
+            const itemTitle = item.label || `항목 ${itemIndex + 1}`;
             return (
               <li className="genui-card__item" key={String(item.id ?? `${sectionId}-${itemIndex}`)}>
                 <span className="genui-card__item-marker" aria-hidden="true">•</span>
@@ -254,8 +203,8 @@ function SectionBlock({ section, index }: { section: GenUiSection; index: number
                   <span className="genui-card__item-title">{itemTitle}</span>
                   {item.description && <span className="genui-card__item-description">{item.description}</span>}
                 </span>
-                {item.value !== null && item.value !== undefined && (
-                  <span className="genui-card__item-value">{displayValue(item.value)}</span>
+                {item.value !== undefined && (
+                  <span className="genui-card__item-value">{displayScalar(item.value)}</span>
                 )}
                 {item.status && (
                   <span className={`genui-card__status genui-card__status--${item.tone ?? 'neutral'}`}>
@@ -268,6 +217,10 @@ function SectionBlock({ section, index }: { section: GenUiSection; index: number
             <li className="genui-card__empty-item">표시할 항목이 없습니다.</li>
           )}
         </ul>
+      )}
+
+      {section.type === 'status' && (
+        <p className="genui-card__section-copy">{section.status}</p>
       )}
     </section>
   );
@@ -284,7 +237,11 @@ function ActionButton({
   onAction?: GenUiActionHandler;
   envelope: GenUiEnvelopeV1;
 }) {
-  const actionKind = action.kind ?? action.type ?? 'secondary';
+  const actionKind = action.style === 'positive'
+    ? 'primary'
+    : action.style === 'destructive'
+      ? 'danger'
+      : 'secondary';
   return (
     <button
       className={`genui-card__action genui-card__action--${actionKind}`}
@@ -312,7 +269,7 @@ function ActionBar({
   const feedbackActions = aiGenerated
     ? actions.filter(isFeedbackAction).length > 0
       ? actions.filter(isFeedbackAction)
-      : defaultFeedbackActions()
+      : defaultFeedbackActions(envelope)
     : [];
 
   if (regularActions.length === 0 && feedbackActions.length === 0) return null;
@@ -325,7 +282,7 @@ function ActionBar({
             <ActionButton
               key={action.id}
               action={action}
-              disabled={Boolean(action.disabled) || !onAction}
+              disabled={!onAction}
               envelope={envelope}
               onAction={onAction}
             />
@@ -339,7 +296,7 @@ function ActionBar({
             <ActionButton
               key={action.id}
               action={action}
-              disabled={Boolean(action.disabled) || !onAction}
+              disabled={!onAction}
               envelope={envelope}
               onAction={onAction}
             />
@@ -360,7 +317,7 @@ function CitationList({ citations }: { citations: GenUiCitation[] }) {
       <ul>
         {validCitations.map((citation, index) => (
           <li key={`${citation.url}-${index}`}>
-            {isSafeCitationUrl(citation.url) ? (
+            {isSafeGenUiUrl(citation.url) ? (
               <a href={citation.url} target="_blank" rel="noreferrer">
                 {citation.title}
               </a>
@@ -466,4 +423,3 @@ export function GenUiCard({
     </article>
   );
 }
-

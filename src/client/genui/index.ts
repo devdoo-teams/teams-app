@@ -1,14 +1,20 @@
+import './genui.css';
+
 export { GenUiCard } from './GenUiCard.js';
 export type {
-  GenUiAction,
   GenUiActionHandler,
   GenUiCardProps,
+  GenUiTheme,
+} from './GenUiCard.js';
+
+export type {
+  GenUiAction,
   GenUiCitation,
   GenUiEnvelopeV1,
+  GenUiFact,
   GenUiItem,
   GenUiKind,
   GenUiSection,
   GenUiState,
-  GenUiTheme,
   GenUiTone,
-} from './GenUiCard.js';
+} from '../../shared/genui.js';

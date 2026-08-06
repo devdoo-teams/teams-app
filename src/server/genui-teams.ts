@@ -2,8 +2,11 @@ import {
   GENUI_ACTION_PAYLOAD_KEYS,
   GENUI_SCHEMA_VERSION,
   GenUiEnvelopeV1Schema,
+  isSafeGenUiUrl,
   type GenUiAction,
   type GenUiEnvelopeV1,
+  type GenUiFact,
+  type GenUiItem,
   type GenUiScalar,
   type GenUiSection,
 } from '../shared/genui.js';
@@ -38,81 +41,124 @@ function scalarText(value: GenUiScalar): string {
   return String(value);
 }
 
+function textBlock(text: string, extra: AdaptiveCardElement = {}): AdaptiveCardElement {
+  return {
+    type: 'TextBlock',
+    text,
+    wrap: true,
+    spacing: 'Small',
+    ...extra,
+  };
+}
+
+function factSet(facts: GenUiFact[]): AdaptiveCardElement {
+  return {
+    type: 'FactSet',
+    facts: facts.map((fact) => ({
+      title: fact.label,
+      value: `${scalarText(fact.value)}${fact.unit ? ` ${fact.unit}` : ''}`,
+    })),
+    spacing: 'Small',
+  };
+}
+
+function itemElements(items: GenUiItem[]): AdaptiveCardElement[] {
+  return items.map((item) => {
+    const value = item.value === undefined ? '' : `: ${scalarText(item.value)}`;
+    const status = item.status ? ` (${item.status})` : '';
+    return textBlock(`• ${item.label}${value}${status}`, { spacing: 'Small' });
+  });
+}
+
+function weatherIcon(icon: string | undefined): string {
+  switch (icon) {
+    case 'rain': return '🌧️';
+    case 'cloud': return '☁️';
+    case 'fog': return '🌫️';
+    case 'snow': return '❄️';
+    case 'storm': return '⛈️';
+    default: return '☀️';
+  }
+}
+
+function weatherElements(section: Extract<GenUiSection, { type: 'weather' }>): AdaptiveCardElement[] {
+  const temperature = section.temperature === undefined ? undefined : `${section.temperature.toFixed(1)}°C`;
+  const details: GenUiFact[] = [];
+  if (section.apparentTemperature !== undefined) details.push({ label: '체감', value: section.apparentTemperature, unit: '°C' });
+  if (section.humidity !== undefined) details.push({ label: '습도', value: section.humidity, unit: '%' });
+  if (section.windSpeed !== undefined) details.push({ label: '바람', value: section.windSpeed, unit: 'km/h' });
+  if (section.precipitation !== undefined) details.push({ label: '강수', value: section.precipitation, unit: 'mm' });
+
+  return [
+    {
+      type: 'ColumnSet',
+      columns: [
+        { type: 'Column', width: 'auto', items: [textBlock(weatherIcon(section.icon), { size: 'ExtraLarge' })] },
+        {
+          type: 'Column',
+          width: 'stretch',
+          items: [
+            ...(temperature ? [textBlock(temperature, { size: 'ExtraLarge', weight: 'Bolder', color: 'Accent' })] : []),
+            ...(section.condition ? [textBlock(section.condition, { isSubtle: true })] : []),
+          ],
+        },
+      ],
+      spacing: 'Small',
+    },
+    ...(details.length > 0 ? [factSet(details)] : []),
+    ...(section.location ? [textBlock(`${section.location}${section.source ? ` · ${section.source}` : ''}`, { isSubtle: true })] : []),
+  ];
+}
+
 function sectionElements(section: GenUiSection): AdaptiveCardElement[] {
-  const elements: AdaptiveCardElement[] = [];
-
-  if (section.label) {
-    elements.push({
-      type: 'TextBlock',
-      text: section.label,
-      weight: 'Bolder',
-      color: 'Accent',
-      wrap: true,
-      spacing: 'Small',
-    });
+  switch (section.type) {
+    case 'text':
+      return [
+        ...(section.text || section.content ? [textBlock(section.text ?? section.content ?? '')] : []),
+        ...(section.value !== undefined ? [textBlock(scalarText(section.value))] : []),
+      ];
+    case 'facts':
+      return [
+        ...(section.value !== undefined ? [textBlock(scalarText(section.value))] : []),
+        ...(section.facts && section.facts.length > 0 ? [factSet(section.facts)] : []),
+      ];
+    case 'stats':
+      return [factSet(section.stats)];
+    case 'weather':
+      return weatherElements(section);
+    case 'list':
+      return section.items.length > 0 ? itemElements(section.items) : [textBlock('표시할 항목이 없습니다.', { isSubtle: true })];
+    case 'progress':
+      return [
+        textBlock(`진행률: ${section.progress}%`, { color: 'Accent', weight: 'Bolder' }),
+        {
+          type: 'ColumnSet',
+          columns: [
+            { type: 'Column', width: Math.max(1, section.progress), items: [{ type: 'Container', minHeight: '8px', style: 'accent' }] },
+            { type: 'Column', width: Math.max(1, 100 - section.progress), items: [{ type: 'Container', minHeight: '8px', style: 'default' }] },
+          ],
+          spacing: 'Small',
+        },
+      ];
+    case 'status':
+      return [
+        textBlock(`상태: ${section.status}`, { color: 'Accent', weight: 'Bolder' }),
+        ...(section.description ? [textBlock(section.description, { isSubtle: true })] : []),
+      ];
   }
-
-  if (section.value !== undefined) {
-    elements.push({
-      type: 'TextBlock',
-      text: scalarText(section.value),
-      wrap: true,
-      spacing: 'Small',
-    });
-  }
-
-  if (section.description) {
-    elements.push({
-      type: 'TextBlock',
-      text: section.description,
-      wrap: true,
-      isSubtle: true,
-      spacing: 'Small',
-    });
-  }
-
-  if (section.status) {
-    elements.push({
-      type: 'TextBlock',
-      text: `상태: ${section.status}`,
-      wrap: true,
-      color: 'Default',
-      spacing: 'Small',
-    });
-  }
-
-  if (section.progress !== undefined) {
-    elements.push({
-      type: 'TextBlock',
-      text: `진행률: ${Math.round(section.progress * 100)}%`,
-      wrap: true,
-      color: 'Accent',
-      spacing: 'Small',
-    });
-  }
-
-  if (section.items) {
-    for (const item of section.items) {
-      const value = item.value === undefined ? '' : `: ${scalarText(item.value)}`;
-      const status = item.status ? ` (${item.status})` : '';
-      elements.push({
-        type: 'TextBlock',
-        text: `• ${item.label}${value}${status}`,
-        wrap: true,
-        spacing: 'Small',
-      });
-    }
-  }
-
-  return elements;
 }
 
 function renderSection(section: GenUiSection): AdaptiveCardElement {
+  const heading = section.title ?? section.label;
   return {
     type: 'Container',
     spacing: 'Medium',
     separator: true,
-    items: sectionElements(section),
+    items: [
+      ...(heading ? [textBlock(heading, { weight: 'Bolder', color: 'Accent' })] : []),
+      ...(section.description && section.type !== 'status' ? [textBlock(section.description, { isSubtle: true })] : []),
+      ...sectionElements(section),
+    ],
   };
 }
 
@@ -130,7 +176,7 @@ function renderAction(action: GenUiAction): AdaptiveCardAction {
   const payload = actionPayload(action);
   return {
     type: 'Action.Execute',
-    id: action.id,
+    ...(action.id ? { id: action.id } : {}),
     title: action.label,
     verb: `genui.${action.action}`,
     data: payload,
@@ -153,69 +199,18 @@ export function renderGenUiCard(input: GenUiEnvelopeV1): TeamsAdaptiveCard {
   const envelope = GenUiEnvelopeV1Schema.parse(input);
   const body: AdaptiveCardElement[] = [];
 
-  if (envelope.title) {
-    body.push({
-      type: 'TextBlock',
-      text: envelope.title,
-      size: 'Large',
-      weight: 'Bolder',
-      color: 'Accent',
-      wrap: true,
-      maxLines: 4,
-    });
-  }
-
-  if (envelope.summary) {
-    body.push({
-      type: 'TextBlock',
-      text: envelope.summary,
-      wrap: true,
-      color: 'Default',
-      spacing: 'Small',
-    });
-  }
-
-  if (envelope.aiGenerated) {
-    body.push({
-      type: 'TextBlock',
-      text: 'AI 생성 콘텐츠',
-      isSubtle: true,
-      color: 'Accent',
-      wrap: true,
-      spacing: 'Small',
-    });
-  }
+  if (envelope.title) body.push(textBlock(envelope.title, { size: 'Large', weight: 'Bolder', color: 'Accent', maxLines: 4 }));
+  if (envelope.summary) body.push(textBlock(envelope.summary, { color: 'Default' }));
+  if (envelope.aiGenerated) body.push(textBlock('AI 생성 콘텐츠', { isSubtle: true, color: 'Accent' }));
 
   body.push(...envelope.sections.map(renderSection));
 
   if (envelope.aiGenerated && envelope.citations.length > 0) {
-    body.push({
-      type: 'TextBlock',
-      text: '출처',
-      weight: 'Bolder',
-      color: 'Accent',
-      wrap: true,
-      spacing: 'Medium',
-      separator: true,
-    });
+    body.push(textBlock('출처', { weight: 'Bolder', color: 'Accent', spacing: 'Medium', separator: true }));
     for (const citation of envelope.citations) {
-      body.push({
-        type: 'TextBlock',
-        text: citationText(citation.title, citation.url),
-        wrap: true,
-        isSubtle: true,
-        spacing: 'Small',
-      });
-      if (citation.snippet) {
-        body.push({
-          type: 'TextBlock',
-          text: citation.snippet,
-          wrap: true,
-          isSubtle: true,
-          spacing: 'None',
-          maxLines: 3,
-        });
-      }
+      if (!isSafeGenUiUrl(citation.url)) continue;
+      body.push(textBlock(citationText(citation.title, citation.url), { isSubtle: true }));
+      if (citation.snippet) body.push(textBlock(citation.snippet, { isSubtle: true, maxLines: 3, spacing: 'None' }));
     }
   }
 
@@ -225,8 +220,36 @@ export function renderGenUiCard(input: GenUiEnvelopeV1): TeamsAdaptiveCard {
     version: '1.5',
     msteams: { width: 'Full' },
     body,
-    actions: envelope.actions.map(renderAction),
+    ...(envelope.actions.length > 0 ? { actions: envelope.actions.map(renderAction) } : {}),
   };
+}
+
+function sectionText(section: GenUiSection): string[] {
+  switch (section.type) {
+    case 'text':
+      return [section.text ?? section.content, section.value === undefined ? undefined : scalarText(section.value)].filter((value): value is string => Boolean(value));
+    case 'facts':
+      return [
+        section.value === undefined ? undefined : scalarText(section.value),
+        ...(section.facts ?? []).map((fact) => `${fact.label}: ${scalarText(fact.value)}${fact.unit ? ` ${fact.unit}` : ''}`),
+      ].filter((value): value is string => Boolean(value));
+    case 'stats':
+      return section.stats.map((fact) => `${fact.label}: ${scalarText(fact.value)}${fact.unit ? ` ${fact.unit}` : ''}`);
+    case 'weather':
+      return [
+        section.location,
+        section.temperature === undefined ? undefined : `${section.temperature.toFixed(1)}°C${section.condition ? ` · ${section.condition}` : ''}`,
+        section.apparentTemperature === undefined ? undefined : `체감 ${section.apparentTemperature.toFixed(1)}°C`,
+        section.humidity === undefined ? undefined : `습도 ${Math.round(section.humidity)}%`,
+        section.windSpeed === undefined ? undefined : `바람 ${section.windSpeed.toFixed(1)}km/h`,
+      ].filter((value): value is string => Boolean(value));
+    case 'list':
+      return section.items.map((item) => `- ${item.label}${item.value === undefined ? '' : `: ${scalarText(item.value)}`}`);
+    case 'progress':
+      return [`진행률: ${section.progress}%`];
+    case 'status':
+      return [`상태: ${section.status}`, section.description].filter((value): value is string => Boolean(value));
+  }
 }
 
 export function createAdaptiveCardAttachment(input: GenUiEnvelopeV1): TeamsAdaptiveCardAttachment {
@@ -238,29 +261,21 @@ export function createAdaptiveCardAttachment(input: GenUiEnvelopeV1): TeamsAdapt
 
 export function genUiTextFallback(input: GenUiEnvelopeV1): string {
   const envelope = GenUiEnvelopeV1Schema.parse(input);
-  if (envelope.fallbackText) return envelope.fallbackText;
-
   const lines: string[] = [];
   if (envelope.title) lines.push(envelope.title);
   if (envelope.summary) lines.push(envelope.summary);
+  lines.push(`상태: ${envelope.status}`);
   for (const section of envelope.sections) {
-    const label = section.label ? `${section.label}: ` : '';
-    if (section.value !== undefined) lines.push(`${label}${scalarText(section.value)}`);
-    if (section.description) lines.push(section.description);
-    if (section.status) lines.push(`${label}상태: ${section.status}`);
-    if (section.items) {
-      lines.push(...section.items.map((item) => {
-        const value = item.value === undefined ? '' : `: ${scalarText(item.value)}`;
-        return `- ${item.label}${value}`;
-      }));
-    }
+    const heading = section.title ?? section.label;
+    if (heading) lines.push(heading);
+    if (section.description && section.type !== 'status') lines.push(section.description);
+    lines.push(...sectionText(section));
   }
   if (envelope.aiGenerated && envelope.citations.length > 0) {
     lines.push('출처:');
-    lines.push(...envelope.citations.map((citation) => `${citation.title}: ${citation.url}`));
+    lines.push(...envelope.citations.filter((citation) => isSafeGenUiUrl(citation.url)).map((citation) => `${citation.title}: ${citation.url}`));
   }
-
-  return lines.join('\n') || '요청 결과를 카드로 확인하세요.';
+  return envelope.fallbackText ?? (lines.join('\n') || '요청 결과를 카드로 확인하세요.');
 }
 
 export function createAdaptiveCardActivity(input: GenUiEnvelopeV1): TeamsMessageActivity {

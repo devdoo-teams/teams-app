@@ -18,7 +18,13 @@ import type { WeatherResponse } from './weather-service.js';
 // than recreated here so Teams cards, the MCP widget, and the CopilotKit tab
 // cannot silently drift apart. The shared file is supplied by the integration
 // layer and is outside this subtask's write allow-list.
-import type { GenUiEnvelopeV1 } from '../shared/genui.js';
+import {
+  GENUI_SCHEMA_VERSION,
+  GenUiEnvelopeV1Schema,
+  type GenUiEnvelopeV1,
+  type GenUiKind,
+  type GenUiState,
+} from '../shared/genui.js';
 
 export const MCP_GENUI_RESOURCE_URI = 'ui://teams-workspace/v1/genui.html';
 export const MCP_GENUI_RESOURCE_MIME_TYPE = 'text/html;profile=mcp-app';
@@ -65,35 +71,21 @@ export type McpGenUiRouter = Router & {
   close(): Promise<void>;
 };
 
-type EnvelopeKind = 'task-list' | 'weather' | 'job-status' | 'result' | 'error';
+type EnvelopeKind = Extract<GenUiKind, 'task-list' | 'weather' | 'job-status' | 'result' | 'error'>;
 
 type EnvelopeInput = {
   kind: EnvelopeKind;
   id: string;
-  title: string;
-  summary: string;
+  title?: string;
+  summary?: string;
   sections: Array<Record<string, unknown>>;
-  fallbackText: string;
+  fallbackText?: string;
   actions?: Array<Record<string, unknown>>;
   citations?: Array<Record<string, unknown>>;
   aiGenerated?: boolean;
   metadata?: Record<string, unknown>;
+  status?: GenUiState;
 };
-
-const envelopeSchema = z.object({
-  kind: z.enum(['answer', 'weather', 'task-list', 'job-status', 'approval', 'result', 'error']),
-  id: z.string().optional(),
-  correlationId: z.string().optional(),
-  title: z.string().optional(),
-  summary: z.string().optional(),
-  sections: z.array(z.record(z.unknown())).optional(),
-  actions: z.array(z.record(z.unknown())).optional(),
-  citations: z.array(z.record(z.unknown())).optional(),
-  aiGenerated: z.boolean().optional(),
-  fallbackText: z.string().optional(),
-  status: z.enum(['loading', 'ready', 'empty', 'error', 'approval', 'complete']).optional(),
-  metadata: z.record(z.unknown()).optional(),
-}).passthrough();
 
 const workspaceInputSchema = z.object({
   limit: z.number().int().min(1).max(20).optional(),
@@ -128,19 +120,17 @@ function jobToSectionItem(job: AgentJob): Record<string, unknown> {
     id: job.id,
     label: job.prompt,
     status: job.status,
-    progress: job.progress.slice(-4),
-    finishedAt: job.finishedAt,
+    description: job.finishedAt ? `완료 시각: ${job.finishedAt}` : undefined,
   };
 }
 
 function createEnvelope(input: EnvelopeInput): GenUiEnvelopeV1 {
-  // The cast is deliberately limited to this boundary. The canonical type and
-  // its validator live in src/shared/genui.ts; this adapter only maps existing
-  // store/service data into that contract.
-  return {
+  return GenUiEnvelopeV1Schema.parse({
+    schemaVersion: GENUI_SCHEMA_VERSION,
     kind: input.kind,
     id: input.id,
     correlationId: randomUUID(),
+    status: input.status ?? (input.kind === 'result' ? 'complete' : input.kind === 'error' ? 'error' : 'ready'),
     title: input.title,
     summary: input.summary,
     sections: input.sections,
@@ -149,27 +139,33 @@ function createEnvelope(input: EnvelopeInput): GenUiEnvelopeV1 {
     aiGenerated: input.aiGenerated ?? false,
     fallbackText: input.fallbackText,
     ...(input.metadata ? { metadata: input.metadata } : {}),
-    status: input.kind === 'result' ? 'complete' : input.kind === 'error' ? 'error' : 'ready',
-  } as GenUiEnvelopeV1;
+  });
 }
 
 function resultForEnvelope(envelope: GenUiEnvelopeV1, text: string): CallToolResult {
+  const parsed = GenUiEnvelopeV1Schema.parse(envelope);
   return {
     content: [{ type: 'text', text }],
-    structuredContent: envelope as unknown as Record<string, unknown>,
+    structuredContent: Object.fromEntries(Object.entries(parsed)),
   };
 }
 
 function fallbackTextOf(envelope: GenUiEnvelopeV1): string {
-  const value = (envelope as unknown as Record<string, unknown>).fallbackText;
-  return typeof value === 'string' ? value : '';
+  return envelope.fallbackText ?? '';
 }
 
 function errorResult(message: string): CallToolResult {
-  return {
-    isError: true,
-    content: [{ type: 'text', text: message }],
-  };
+  const envelope = createEnvelope({
+    kind: 'error',
+    id: 'mcp-error',
+    title: 'MCP GenUI 오류',
+    summary: message,
+    sections: [{ type: 'status', label: '오류', status: 'error', description: message }],
+    fallbackText: message,
+    status: 'error',
+    metadata: { source: 'mcp', deterministic: true },
+  });
+  return { ...resultForEnvelope(envelope, message), isError: true };
 }
 
 function workspaceEnvelope(deps: McpGenUiDependencies, limit = 8): GenUiEnvelopeV1 {
@@ -197,7 +193,7 @@ function workspaceEnvelope(deps: McpGenUiDependencies, limit = 8): GenUiEnvelope
       {
         type: 'stats',
         title: '업무 요약',
-        fields: [
+        stats: [
           { label: '전체', value: summary.total },
           { label: '진행 중', value: summary.open },
           { label: '완료', value: summary.done },
@@ -272,16 +268,17 @@ function jobEnvelope(job: AgentJob | undefined, limit = 8): GenUiEnvelopeV1 {
     sections: [
       {
         type: 'status',
-        id: job.id,
         status: job.status,
-        mode: job.mode,
-        createdAt: job.createdAt,
-        startedAt: job.startedAt,
-        finishedAt: job.finishedAt,
-        threadId: job.threadId,
-        commitHash: job.commitHash,
-        error: clip(job.error),
-        result: clip(job.result),
+        description: [
+          `모드: ${job.mode}`,
+          `생성: ${job.createdAt}`,
+          job.startedAt ? `시작: ${job.startedAt}` : undefined,
+          job.finishedAt ? `완료: ${job.finishedAt}` : undefined,
+          job.threadId ? `스레드: ${job.threadId}` : undefined,
+          job.commitHash ? `커밋: ${job.commitHash}` : undefined,
+          clip(job.error),
+          clip(job.result),
+        ].filter(Boolean).join('\n'),
       },
       {
         type: 'list',
@@ -300,10 +297,6 @@ function jobEnvelope(job: AgentJob | undefined, limit = 8): GenUiEnvelopeV1 {
     ].filter(Boolean).join('\n\n'),
     metadata: { source: 'teams-workspace', deterministic: true },
   });
-}
-
-function isEnvelope(value: unknown): value is GenUiEnvelopeV1 {
-  return envelopeSchema.safeParse(value).success;
 }
 
 async function resolveWidgetHtml(options: McpGenUiServerOptions): Promise<string> {
@@ -327,7 +320,7 @@ function registerTools(server: McpServer, options: McpGenUiServerOptions): void 
       title: 'Get workspace snapshot',
       description: 'Use this when the user asks for the current Teams workspace tasks or active Codex jobs. This is a deterministic read-only data tool; it never invents an LLM answer.',
       inputSchema: workspaceInputSchema,
-      outputSchema: envelopeSchema,
+      outputSchema: GenUiEnvelopeV1Schema,
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -349,7 +342,7 @@ function registerTools(server: McpServer, options: McpGenUiServerOptions): void 
       title: 'Get weather',
       description: 'Use this when the user supplies device coordinates or explicitly provided coordinates and asks for current weather. Do not infer GPS, a city, or a default location in this tool.',
       inputSchema: weatherInputSchema,
-      outputSchema: envelopeSchema,
+      outputSchema: GenUiEnvelopeV1Schema,
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -377,7 +370,7 @@ function registerTools(server: McpServer, options: McpGenUiServerOptions): void 
       title: 'Get Codex job status',
       description: 'Use this when the user asks for a Codex job status. If jobId is omitted, return a deterministic list of recent jobs.',
       inputSchema: jobInputSchema,
-      outputSchema: envelopeSchema,
+      outputSchema: GenUiEnvelopeV1Schema,
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -402,7 +395,7 @@ function registerTools(server: McpServer, options: McpGenUiServerOptions): void 
       title: 'Render workspace response',
       description: 'Use this after a data tool has produced a GenUiEnvelopeV1 when the user needs the interactive MCP App view. It only renders supplied structured data and never calls an LLM or fetches hidden data.',
       inputSchema: renderInputSchema,
-      outputSchema: envelopeSchema,
+      outputSchema: GenUiEnvelopeV1Schema,
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -417,11 +410,12 @@ function registerTools(server: McpServer, options: McpGenUiServerOptions): void 
       },
     },
     async ({ envelope }) => {
-      if (!isEnvelope(envelope)) {
+      const parsed = GenUiEnvelopeV1Schema.safeParse(envelope);
+      if (!parsed.success) {
         return errorResult('render_workspace_response에는 유효한 GenUiEnvelopeV1이 필요합니다. 데이터 도구를 먼저 호출하세요.');
       }
 
-      return resultForEnvelope(envelope, fallbackTextOf(envelope));
+      return resultForEnvelope(parsed.data, fallbackTextOf(parsed.data));
     },
   );
 }
