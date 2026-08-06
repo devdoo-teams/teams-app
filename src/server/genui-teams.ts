@@ -9,6 +9,7 @@ import {
   type GenUiItem,
   type GenUiScalar,
   type GenUiSection,
+  type GenUiSectionType,
   type GenUiState,
 } from '../shared/genui.js';
 
@@ -35,6 +36,31 @@ export interface TeamsMessageActivity {
   text?: string;
   attachments?: TeamsAdaptiveCardAttachment[];
   attachmentLayout?: 'list';
+}
+
+/**
+ * The bounded, payload-free semantic identity used by host shadow diagnostics.
+ * Keep this deliberately smaller than the GenUI envelope: it must not retain
+ * IDs, text, URLs, tokens, identity, or arbitrary payload values.
+ */
+export const MAX_GENUI_SEMANTIC_SECTION_TYPES = 32;
+
+export interface GenUiSemanticSignature {
+  readonly kind: GenUiEnvelopeV1['kind'];
+  readonly status: GenUiState;
+  readonly sectionTypes: readonly GenUiSectionType[];
+}
+
+export function createGenUiSemanticSignature(
+  kind: GenUiEnvelopeV1['kind'],
+  status: GenUiState,
+  sectionTypes: readonly GenUiSectionType[],
+): GenUiSemanticSignature {
+  return {
+    kind,
+    status,
+    sectionTypes: sectionTypes.slice(0, MAX_GENUI_SEMANTIC_SECTION_TYPES),
+  };
 }
 
 function scalarText(value: GenUiScalar): string {
@@ -225,8 +251,10 @@ function citationText(title: string, url: string): string {
   return `[${safeTitle}](${url})`;
 }
 
-export function renderGenUiCard(input: GenUiEnvelopeV1): TeamsAdaptiveCard {
-  const envelope = GenUiEnvelopeV1Schema.parse(input);
+function renderGenUiCardFromEnvelope(
+  envelope: GenUiEnvelopeV1,
+  renderedSectionTypes: GenUiSectionType[],
+): TeamsAdaptiveCard {
   const body: AdaptiveCardElement[] = [];
 
   if (envelope.title) body.push(textBlock(envelope.title, { size: 'Large', weight: 'Bolder', color: 'Accent', maxLines: 4 }));
@@ -236,7 +264,11 @@ export function renderGenUiCard(input: GenUiEnvelopeV1): TeamsAdaptiveCard {
   // The envelope status is the canonical host-level state. Render it directly
   // so mobile Teams users can understand the card without expanding a section.
   body.push(renderStatusBadge(envelope.status));
-  body.push(...envelope.sections.map((section) => renderSection(section, envelope.status)));
+  body.push(...envelope.sections.map((section) => {
+    const renderedSection = renderSection(section, envelope.status);
+    renderedSectionTypes.push(section.type);
+    return renderedSection;
+  }));
 
   if (envelope.aiGenerated && envelope.citations.length > 0) {
     body.push(textBlock('출처', { weight: 'Bolder', color: 'Accent', spacing: 'Medium', separator: true }));
@@ -256,6 +288,34 @@ export function renderGenUiCard(input: GenUiEnvelopeV1): TeamsAdaptiveCard {
     body,
     ...(envelope.actions.length > 0 ? { actions: envelope.actions.map(renderAction) } : {}),
   };
+}
+
+export interface GenUiCardRenderResult {
+  readonly card: TeamsAdaptiveCard;
+  readonly semanticSignature: GenUiSemanticSignature;
+}
+
+/**
+ * Render the native Teams card and capture its semantic signature from the
+ * same section traversal that produced the card body.
+ */
+export function renderGenUiCardDiagnostic(input: GenUiEnvelopeV1): GenUiCardRenderResult {
+  const envelope = GenUiEnvelopeV1Schema.parse(input);
+  const renderedSectionTypes: GenUiSectionType[] = [];
+  const card = renderGenUiCardFromEnvelope(envelope, renderedSectionTypes);
+  return {
+    card,
+    semanticSignature: createGenUiSemanticSignature(
+      envelope.kind,
+      envelope.status,
+      renderedSectionTypes,
+    ),
+  };
+}
+
+/** Keep the existing public renderer API compatible. */
+export function renderGenUiCard(input: GenUiEnvelopeV1): TeamsAdaptiveCard {
+  return renderGenUiCardDiagnostic(input).card;
 }
 
 function sectionText(section: GenUiSection, canonicalStatus?: GenUiState): string[] {

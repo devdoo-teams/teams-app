@@ -1197,8 +1197,16 @@ async function runChannelsShadowFlow(dataFile, jobDataFile) {
     assert(diagnostics.failureCount === 0, 'successful shadow comparisons have no render failures');
     assert(diagnostics.budgetFailures === 0, 'native and shadow cards stay within the Teams budget');
     assert(diagnostics.actionCountMismatches === 0, 'native and shadow action counts match');
+    assert(diagnostics.kindMismatches === 0, 'native and shadow kinds match');
+    assert(diagnostics.statusMismatches === 0, 'native and shadow statuses match');
+    assert(diagnostics.orderedSectionTypeMismatches === 0, 'native and shadow ordered section types match');
+    assert(diagnostics.deliveredCardMismatches === 0, 'delivered native cards match diagnostic native renders');
     assert(typeof diagnostics.lastNativeBytes === 'number' && typeof diagnostics.lastShadowBytes === 'number', 'health exposes only native/shadow byte aggregates');
     assert(diagnostics.lastWithinBudget === true, 'health reports the last comparison within budget');
+    assert(diagnostics.lastKindMatch === true, 'health reports the last kind comparison');
+    assert(diagnostics.lastStatusMatch === true, 'health reports the last status comparison');
+    assert(diagnostics.lastOrderedSectionTypesMatch === true, 'health reports the last ordered section comparison');
+    assert(diagnostics.lastDeliveredCardMatch === true, 'health reports the last delivered-card comparison');
     const healthSerialized = JSON.stringify(diagnostics);
     assert(!healthSerialized.includes('task-') && !healthSerialized.includes('token') && !healthSerialized.includes('conversation'), 'shadow health metrics expose no IDs, tokens, or conversation data');
   } finally {

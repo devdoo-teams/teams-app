@@ -22,6 +22,7 @@ import {
   GENUI_SCHEMA_VERSION,
   GenUiEnvelopeV1Schema,
   isSafeGenUiUrl,
+  type GenUiSectionType,
   type GenUiAction,
   type GenUiEnvelopeV1,
   type GenUiFact,
@@ -29,6 +30,10 @@ import {
   type GenUiScalar,
   type GenUiSection,
 } from '../shared/genui.js';
+import {
+  createGenUiSemanticSignature,
+  type GenUiSemanticSignature,
+} from './genui-teams.js';
 
 export const CHANNELS_SHADOW_RENDERER = 'copilotkit-channels-shadow';
 export const TEAMS_CARD_BUDGET_BYTES = 28 * 1024;
@@ -45,6 +50,7 @@ export interface ChannelsShadowResult {
   plainText: string;
   payloadBytes: number;
   diagnostics: ChannelsShadowDiagnostics;
+  semanticSignature: GenUiSemanticSignature;
 }
 
 interface ShadowActionValue {
@@ -226,21 +232,44 @@ function citationSection(envelope: GenUiEnvelopeV1): ChannelNode | undefined {
 }
 
 /** Convert the shared envelope into CopilotKit's provider-neutral Channels IR. */
-export function envelopeToChannelsIR(input: GenUiEnvelopeV1): ChannelNode[] {
+interface ChannelsIRRenderResult {
+  ir: ChannelNode[];
+  semanticSignature: GenUiSemanticSignature;
+}
+
+function envelopeToChannelsIRDiagnostic(input: GenUiEnvelopeV1): ChannelsIRRenderResult {
   const envelope = GenUiEnvelopeV1Schema.parse(input);
+  const renderedSectionTypes: GenUiSectionType[] = [];
   const title = envelope.title?.trim() || `업무 허브 · ${KIND_LABELS[envelope.kind]}`;
+  const renderedSections = envelope.sections.flatMap((section) => {
+    const nodes = renderSection(section);
+    if (nodes.length > 0) renderedSectionTypes.push(section.type);
+    return nodes;
+  });
+  const citations = citationSection(envelope);
   const children: BotChildren[] = [
     Header({ children: title }),
     Context({ children: `상태: ${envelope.status} · ${CHANNELS_SHADOW_RENDERER} · 사용자에게 전송하지 않음` }),
     ...(envelope.summary?.trim() ? [Section({ children: envelope.summary })] : []),
-    ...envelope.sections.flatMap(renderSection),
-    ...(citationSection(envelope) ? [citationSection(envelope) as ChannelNode] : []),
+    ...renderedSections,
+    ...(citations ? [citations] : []),
     ...(envelope.actions.length > 0
       ? [Actions({ children: envelope.actions.map((action, index) => shadowButton(action, index, envelope)) })]
       : []),
   ];
 
-  return renderToIR(Message({ children }));
+  return {
+    ir: renderToIR(Message({ children })),
+    semanticSignature: createGenUiSemanticSignature(
+      envelope.kind,
+      envelope.status,
+      renderedSectionTypes,
+    ),
+  };
+}
+
+export function envelopeToChannelsIR(input: GenUiEnvelopeV1): ChannelNode[] {
+  return envelopeToChannelsIRDiagnostic(input).ir;
 }
 
 function cardBytes(card: AdaptiveCard): number {
@@ -296,14 +325,15 @@ function fitTeamsBudget(card: AdaptiveCard): AdaptiveCard {
 /** Render a comparison-only Teams Adaptive Card shadow; it never sends activity. */
 export function renderChannelsShadow(input: GenUiEnvelopeV1): ChannelsShadowResult {
   const envelope = GenUiEnvelopeV1Schema.parse(input);
-  const ir = envelopeToChannelsIR(envelope);
-  const card = fitTeamsBudget(renderAdaptiveCard(ir));
+  const irResult = envelopeToChannelsIRDiagnostic(envelope);
+  const card = fitTeamsBudget(renderAdaptiveCard(irResult.ir));
   const payloadBytes = cardBytes(card);
 
   return {
     card,
-    plainText: collectPlainText(ir),
+    plainText: collectPlainText(irResult.ir),
     payloadBytes,
+    semanticSignature: irResult.semanticSignature,
     diagnostics: {
       missingTitle: !envelope.title?.trim(),
       missingSummary: !envelope.summary?.trim(),

@@ -22,7 +22,12 @@ import { TeamsCodexAgent } from './copilot-agent.js';
 import { formatWeatherMessage, getWeather } from './weather-service.js';
 import { GenUiActionStore, type GenUiActionName } from './genui-action-store.js';
 import { GenUiResponseFactory } from './genui-response.js';
-import { createAdaptiveCardActivity, createTextFallbackActivity, renderGenUiCard } from './genui-teams.js';
+import {
+  createAdaptiveCardActivity,
+  createTextFallbackActivity,
+  renderGenUiCard,
+  renderGenUiCardDiagnostic,
+} from './genui-teams.js';
 import { createMcpGenUiRouter, type McpGenUiRouter } from './mcp-genui.js';
 import { ChannelsShadowMonitor } from './channels-shadow-monitor.js';
 import { renderChannelsShadow } from './copilot-channels-shadow.js';
@@ -325,6 +330,7 @@ function recordChannelsShadowComparison(envelope: GenUiEnvelopeV1, nativeActivit
 
   try {
     const nativeCard = adaptiveCardFromActivity(nativeActivity);
+    const nativeDiagnostic = renderGenUiCardDiagnostic(envelope);
     const shadow = renderChannelsShadow(envelope);
     const nativeActions = nativeCard?.actions;
     channelsShadowMonitor.record({
@@ -333,6 +339,10 @@ function recordChannelsShadowComparison(envelope: GenUiEnvelopeV1, nativeActivit
       shadowActionCount: shadow.diagnostics.actionCount,
       shadowBytes: shadow.payloadBytes,
       shadowWithinBudget: shadow.diagnostics.withinTeamsBudget,
+      nativeSignature: nativeDiagnostic.semanticSignature,
+      shadowSignature: shadow.semanticSignature,
+      deliveredCardMatchesNative: Boolean(nativeCard)
+        && JSON.stringify(nativeCard) === JSON.stringify(nativeDiagnostic.card),
     });
   } catch {
     // Diagnostics must never affect delivery. Do not log payloads or identifiers.

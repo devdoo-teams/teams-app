@@ -14,6 +14,7 @@ import {
   renderChannelsShadow,
 } from '../src/server/copilot-channels-shadow.js';
 import { ChannelsShadowMonitor } from '../src/server/channels-shadow-monitor.js';
+import { renderGenUiCardDiagnostic } from '../src/server/genui-teams.js';
 
 const baseAction = (action: (typeof GENUI_ACTIONS)[number], index: number) => ({
   id: `action-${index}`,
@@ -69,6 +70,17 @@ assert.ok(JSON.stringify(ir).includes('fields'));
 assert.ok(JSON.stringify(ir).includes('actions'));
 assert.ok(JSON.stringify(ir).includes(CHANNELS_SHADOW_RENDERER));
 
+const nativeDiagnostic = renderGenUiCardDiagnostic(envelope);
+assert.deepEqual(nativeDiagnostic.semanticSignature, {
+  kind: envelope.kind,
+  status: envelope.status,
+  sectionTypes: envelope.sections.map((section) => section.type),
+});
+assert.deepEqual(
+  Object.keys(nativeDiagnostic.card.actions?.[0]?.data ?? {}).sort(),
+  ['action', 'actionToken', 'correlationId', 'entityId', 'schemaVersion'],
+);
+
 for (const kind of GENUI_KINDS) {
   const result = renderChannelsShadow(GenUiEnvelopeV1Schema.parse({ ...envelope, kind }));
   assert.equal(result.card.type, 'AdaptiveCard');
@@ -85,6 +97,7 @@ assert.deepEqual(
 );
 
 const result = renderChannelsShadow(envelope);
+assert.deepEqual(result.semanticSignature, nativeDiagnostic.semanticSignature);
 const actions = result.card.actions ?? [];
 assert.equal(actions.length, 6);
 assert.equal(actions[0]?.type, 'Action.Submit');
@@ -143,6 +156,9 @@ monitor.record({
   shadowActionCount: result.diagnostics.actionCount,
   shadowBytes: result.payloadBytes,
   shadowWithinBudget: result.diagnostics.withinTeamsBudget,
+  nativeSignature: nativeDiagnostic.semanticSignature,
+  shadowSignature: result.semanticSignature,
+  deliveredCardMatchesNative: true,
 });
 monitor.recordFailure();
 assert.deepEqual(monitor.snapshot(), {
@@ -151,9 +167,63 @@ assert.deepEqual(monitor.snapshot(), {
   failureCount: 1,
   budgetFailures: 0,
   actionCountMismatches: 1,
+  kindMismatches: 0,
+  statusMismatches: 0,
+  orderedSectionTypeMismatches: 0,
+  deliveredCardMismatches: 0,
   lastNativeBytes: result.payloadBytes,
   lastShadowBytes: result.payloadBytes,
   lastWithinBudget: true,
+  lastKindMatch: true,
+  lastStatusMatch: true,
+  lastOrderedSectionTypesMatch: true,
+  lastDeliveredCardMatch: true,
 });
+
+const deliberateMismatchMonitor = new ChannelsShadowMonitor();
+deliberateMismatchMonitor.record({
+  nativeActionCount: 1,
+  nativeBytes: 100,
+  shadowActionCount: 1,
+  shadowBytes: 100,
+  shadowWithinBudget: true,
+  nativeSignature: {
+    kind: 'answer',
+    status: 'ready',
+    sectionTypes: ['text', 'facts'],
+  },
+  shadowSignature: {
+    kind: 'weather',
+    status: 'error',
+    sectionTypes: ['facts', 'text'],
+  },
+  deliveredCardMatchesNative: false,
+});
+assert.deepEqual(deliberateMismatchMonitor.snapshot(), {
+  enabled: true,
+  renderCount: 1,
+  failureCount: 0,
+  budgetFailures: 0,
+  actionCountMismatches: 0,
+  kindMismatches: 1,
+  statusMismatches: 1,
+  orderedSectionTypeMismatches: 1,
+  deliveredCardMismatches: 1,
+  lastNativeBytes: 100,
+  lastShadowBytes: 100,
+  lastWithinBudget: true,
+  lastKindMatch: false,
+  lastStatusMatch: false,
+  lastOrderedSectionTypesMatch: false,
+  lastDeliveredCardMatch: false,
+});
+
+const privateHealthShape = JSON.stringify(deliberateMismatchMonitor.snapshot());
+assert(!privateHealthShape.includes('answer'));
+assert(!privateHealthShape.includes('weather'));
+assert(!privateHealthShape.includes('text'));
+assert(!privateHealthShape.includes('facts'));
+assert(!privateHealthShape.includes('token'));
+assert(!privateHealthShape.includes('https://'));
 
 console.log(`Channels shadow tests passed: ${GENUI_KINDS.length} kinds, ${GENUI_SECTION_TYPES.length} sections, ${GENUI_ACTIONS.length} actions, ${result.payloadBytes} bytes.`);
