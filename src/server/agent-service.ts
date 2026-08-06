@@ -5,19 +5,22 @@ import { GitService } from './git-service.js';
 import { diagnoseRemoteAgentResult, formatRemoteTroubleshooting } from './remote-troubleshooting.js';
 
 type Notify = (conversationId: string, text: string) => Promise<void>;
+type ProgressListener = (message: string) => Promise<void> | void;
 
 type ProgressState = {
   notifiedKeys: Set<string>;
   pendingAgentMessage?: string;
+  notify: boolean;
+  onProgress?: ProgressListener;
 };
 
 export class AgentService {
   constructor(
     private readonly store: AgentJobStore,
     private readonly runner: CodexRunner,
-  private readonly workspace: string,
-  private readonly notify: Notify,
-  private readonly gitService: GitService,
+    private readonly workspace: string,
+    private readonly notify: Notify,
+    private readonly gitService: GitService,
   ) {}
 
   private readonly progressStates = new Map<string, ProgressState>();
@@ -34,13 +37,21 @@ export class AgentService {
     requesterId: string;
     parentJobId?: string;
     threadId?: string;
+    notify?: boolean;
+    onProgress?: ProgressListener;
   }): Promise<AgentJob> {
     const job = await this.store.create(input);
-    if (job.mode === 'read-only') void this.execute(job);
+    if (job.mode === 'read-only') {
+      void this.execute(job, input.notify !== false, input.onProgress);
+    }
     return job;
   }
 
-  async continue(id: string, prompt: string): Promise<AgentJob | undefined> {
+  async continue(
+    id: string,
+    prompt: string,
+    options: { notify?: boolean; onProgress?: ProgressListener } = {},
+  ): Promise<AgentJob | undefined> {
     const previous = this.store.get(id);
     if (!previous) return undefined;
     if (!previous.threadId) return undefined;
@@ -52,7 +63,48 @@ export class AgentService {
       requesterId: previous.requesterId,
       parentJobId: previous.id,
       threadId: previous.threadId,
+      notify: options.notify,
+      onProgress: options.onProgress,
     });
+  }
+
+  async runForCopilot(input: {
+    prompt: string;
+    conversationId: string;
+    requesterId: string;
+    onProgress?: ProgressListener;
+    timeoutMs?: number;
+  }): Promise<AgentJob> {
+    const job = await this.submit({
+      prompt: input.prompt,
+      mode: 'read-only',
+      conversationId: input.conversationId,
+      requesterId: input.requesterId,
+      notify: false,
+      onProgress: input.onProgress,
+    });
+
+    return this.waitForTerminal(job.id, input.timeoutMs);
+  }
+
+  async waitForTerminal(id: string, timeoutMs = 10 * 60 * 1000): Promise<AgentJob> {
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      const job = this.store.get(id);
+      if (!job) throw new Error(`작업 ${id}을 찾을 수 없습니다.`);
+
+      if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled' || job.status === 'awaiting_approval') {
+        return job;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+
+    await this.cancel(id);
+    const job = this.store.get(id);
+    if (!job) throw new Error(`작업 ${id}을 찾을 수 없습니다.`);
+    return job;
   }
 
   async approve(id: string): Promise<AgentJob | undefined> {
@@ -61,7 +113,7 @@ export class AgentService {
 
     await this.store.update(id, { status: 'queued', error: undefined });
     const refreshed = this.store.get(id);
-    if (refreshed) void this.execute(refreshed);
+    if (refreshed) void this.execute(refreshed, true);
     return refreshed;
   }
 
@@ -122,8 +174,8 @@ export class AgentService {
     return this.store.get(id);
   }
 
-  private async execute(job: AgentJob): Promise<void> {
-    this.progressStates.set(job.id, { notifiedKeys: new Set() });
+  private async execute(job: AgentJob, shouldNotify: boolean, onProgress?: ProgressListener): Promise<void> {
+    this.progressStates.set(job.id, { notifiedKeys: new Set(), notify: shouldNotify, onProgress });
     await this.store.update(job.id, {
       status: 'running',
       startedAt: new Date().toISOString(),
@@ -152,7 +204,7 @@ export class AgentService {
           finishedAt: new Date().toISOString(),
         });
         await this.store.appendProgress(job.id, `Codex 작업이 차단되었습니다: ${diagnostic.code}`);
-        await this.notify(job.conversationId, `작업 ${job.id}이 차단되었습니다.\n\n${diagnosticMessage}`);
+        await this.notifyIfEnabled(job, `작업 ${job.id}이 차단되었습니다.\n\n${diagnosticMessage}`);
         return;
       }
 
@@ -163,7 +215,7 @@ export class AgentService {
         finishedAt: new Date().toISOString(),
       });
       await this.store.appendProgress(job.id, `Codex 작업 완료 (${result.eventCount}개 이벤트).`);
-      await this.notify(job.conversationId, this.formatCompletion(job.id, result.finalMessage));
+      await this.notifyIfEnabled(job, this.formatCompletion(job.id, result.finalMessage));
     } catch (error: any) {
       const latest = this.store.get(job.id);
       if (!latest || latest.status === 'cancelled') return;
@@ -175,14 +227,14 @@ export class AgentService {
         finishedAt: new Date().toISOString(),
       });
       await this.store.appendProgress(job.id, 'Codex 작업이 실패했습니다.');
-      await this.notify(job.conversationId, `작업 ${job.id}이 실패했습니다.\n\n${message}`);
+      await this.notifyIfEnabled(job, `작업 ${job.id}이 실패했습니다.\n\n${message}`);
     } finally {
       this.progressStates.delete(job.id);
     }
   }
 
   private async handleEvent(job: AgentJob, event: CodexRunEvent): Promise<void> {
-    const state = this.progressStates.get(job.id) ?? { notifiedKeys: new Set<string>() };
+    const state = this.progressStates.get(job.id) ?? { notifiedKeys: new Set<string>(), notify: true };
     this.progressStates.set(job.id, state);
 
     if (event.type === 'thread.started' && event.thread_id) {
@@ -224,7 +276,8 @@ export class AgentService {
     if (state.notifiedKeys.has(key)) return;
     state.notifiedKeys.add(key);
     await this.store.appendProgress(job.id, `Codex 업데이트: ${compact}`);
-    await this.notify(job.conversationId, `작업 ${job.id}: Codex 업데이트\n\n${compact}`);
+    await state.onProgress?.(`Codex 업데이트: ${compact}`);
+    await this.notifyIfEnabled(job, `작업 ${job.id}: Codex 업데이트\n\n${compact}`);
   }
 
   private async publishProgress(
@@ -237,7 +290,13 @@ export class AgentService {
     if (state.notifiedKeys.has(key)) return;
     state.notifiedKeys.add(key);
     await this.store.appendProgress(job.id, storedMessage);
-    await this.notify(job.conversationId, `작업 ${job.id}: ${notification}`);
+    await state.onProgress?.(storedMessage);
+    await this.notifyIfEnabled(job, `작업 ${job.id}: ${notification}`);
+  }
+
+  private async notifyIfEnabled(job: AgentJob, message: string): Promise<void> {
+    const state = this.progressStates.get(job.id);
+    if (state?.notify !== false) await this.notify(job.conversationId, message);
   }
 
   private formatCompletion(id: string, result: string): string {

@@ -18,6 +18,7 @@ await build({
   outdir: assetsDir,
   entryNames: 'main',
   sourcemap: true,
+  loader: { '.css': 'css', '.woff': 'file', '.woff2': 'file', '.ttf': 'file' },
   logLevel: 'info',
 });
 

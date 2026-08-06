@@ -61,6 +61,29 @@ async function request(baseUrl, pathname, init = {}) {
   return { response, body };
 }
 
+async function copilotRun(baseUrl, prompt, threadId, context = []) {
+  const result = await request(baseUrl, '/api/copilotkit/agent/default/run', {
+    method: 'POST',
+    body: JSON.stringify({
+      threadId,
+      runId: `${threadId}-run`,
+      messages: [{ id: `${threadId}-user`, role: 'user', content: prompt }],
+      tools: [],
+      context,
+      state: {},
+    }),
+  });
+
+  const events = typeof result.body === 'string'
+    ? result.body
+      .split('\n')
+      .filter((line) => line.startsWith('data: '))
+      .map((line) => JSON.parse(line.slice('data: '.length)))
+    : [];
+
+  return { ...result, events };
+}
+
 function activity(text, baseUrl, suffix, conversationId = `runtime-conversation-${suffix}`) {
   return {
     type: 'message',
@@ -201,6 +224,53 @@ async function runLocalFlow(dataFile, jobDataFile) {
     assert(health.response.status === 200, 'local health endpoint returns 200');
     assert(health.body.auth === 'local-bypass', 'local runtime uses explicit auth bypass');
     assert(health.body.storage === 'file-json', 'local runtime reports file storage');
+    assert(health.body.copilotKit === 'enabled', 'CopilotKit runtime is enabled');
+
+    const copilotInfo = await request(server.baseUrl, '/api/copilotkit/info');
+    assert(copilotInfo.response.status === 200, 'CopilotKit info endpoint returns 200');
+    assert(copilotInfo.body.agents.default.description.includes('Teams 업무 허브'), 'CopilotKit discovers the Teams agent');
+
+    const copilotTasks = await copilotRun(server.baseUrl, '현재 업무 목록 보여줘', 'runtime-copilot-tasks');
+    assert(copilotTasks.response.status === 200, 'CopilotKit task request returns 200');
+    assert(copilotTasks.events.some((event) => event.type === 'TOOL_CALL_START' && event.toolCallName === 'showTaskCard'), 'CopilotKit renders the task card tool');
+    assert(copilotTasks.events.some((event) => event.type === 'RUN_FINISHED' && event.outcome?.type === 'success'), 'CopilotKit task request finishes successfully');
+
+    const copilotWeather = await copilotRun(
+      server.baseUrl,
+      '현재 위치 날씨 보여줘',
+      'runtime-copilot-weather',
+      [{
+        description: '현재 Teams 업무 허브 날씨 위젯 상태',
+        value: JSON.stringify({
+          source: 'open-meteo',
+          location: { name: '테스트 위치', latitude: 35, longitude: 128, timezone: 'Asia/Seoul' },
+          current: {
+            temperature: 19.5,
+            apparentTemperature: 20.1,
+            humidity: 48,
+            precipitation: 0,
+            windSpeed: 4.2,
+            condition: '맑음',
+            icon: 'sun',
+          },
+        }),
+      }],
+    );
+    const weatherArgs = copilotWeather.events.find((event) => event.type === 'TOOL_CALL_ARGS');
+    assert(weatherArgs?.delta.includes('19.5'), 'CopilotKit weather tool uses the live tab context');
+
+    const copilotCodex = await copilotRun(server.baseUrl, '저장소의 현재 구현 상태를 분석해줘', 'runtime-copilot-codex');
+    assert(copilotCodex.events.some((event) => event.type === 'TEXT_MESSAGE_CONTENT' && event.delta.includes('Codex')), 'CopilotKit streams Codex progress messages');
+    assert(copilotCodex.events.some((event) => event.type === 'RUN_FINISHED'), 'CopilotKit Codex request finishes');
+
+    const copilotWrite = await copilotRun(server.baseUrl, 'write 테스트 파일 변경 계획을 검토해줘', 'runtime-copilot-write');
+    const approvalArgs = copilotWrite.events.find((event) => event.type === 'TOOL_CALL_ARGS' && event.delta.includes('jobId'));
+    const approvalJobId = approvalArgs ? JSON.parse(approvalArgs.delta).jobId : '';
+    assert(Boolean(approvalJobId), 'CopilotKit write request returns an approval job id');
+    const awaitingApproval = await waitForAgentStatus(server.baseUrl, approvalJobId, 'awaiting_approval');
+    assert(awaitingApproval.mode === 'workspace-write', 'CopilotKit write request preserves approval boundary');
+    const cancelledApproval = await request(server.baseUrl, `/api/agent-jobs/${approvalJobId}/cancel`, { method: 'POST' });
+    assert(cancelledApproval.response.status === 200 && cancelledApproval.body.job.status === 'cancelled', 'CopilotKit approval card can cancel a write job');
 
     const initial = await request(server.baseUrl, '/api/items');
     assert(initial.response.status === 200, 'local item list returns 200');

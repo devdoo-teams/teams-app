@@ -17,7 +17,7 @@ await build({
   entryNames: 'index',
   sourcemap: true,
   banner: {
-    js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
+    js: "import { createRequire as __teamsCreateRequire } from 'node:module'; const require = __teamsCreateRequire(import.meta.url);",
   },
   logLevel: 'info',
 });

@@ -20,12 +20,15 @@
     "test": "npm run check && npm run build && npm run test:troubleshooting && npm run test:runtime"
   },
   "dependencies": {
+    "@copilotkit/react-core": "^1.66.2",
+    "@copilotkit/runtime": "^1.66.2",
     "@microsoft/teams-js": "^2.54.0",
     "@microsoft/teams.apps": "^2.0.15",
     "esbuild": "^0.28.1",
     "express": "^5.1.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/express": "^5.0.5",

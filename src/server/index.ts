@@ -1,6 +1,8 @@
 import path from 'node:path';
 
 import express from 'express';
+import { CopilotRuntime } from '@copilotkit/runtime/v2';
+import { createCopilotExpressHandler } from '@copilotkit/runtime/v2/express';
 
 import { createUserAuthMiddleware } from './user-auth.js';
 import { ItemStore } from './item-store.js';
@@ -8,6 +10,7 @@ import { AgentJobStore, type AgentJob } from './agent-job-store.js';
 import { AgentService } from './agent-service.js';
 import { CodexRunner } from './codex-runner.js';
 import { GitService } from './git-service.js';
+import { TeamsCodexAgent } from './copilot-agent.js';
 import { formatWeatherMessage, getWeather } from './weather-service.js';
 
 const port = Number(process.env.PORT ?? 3978);
@@ -84,6 +87,8 @@ http.get('/api/health', (_request: any, response: any) => {
     agent: process.env.CODEX_BIN ?? 'codex-cli',
     agentWorkspace,
     storage: 'file-json',
+    copilotKit: 'enabled',
+    copilotKitRuntime: '/api/copilotkit',
     timestamp: new Date().toISOString(),
   });
 });
@@ -216,6 +221,51 @@ const agentService = new AgentService(
   gitService,
 );
 await agentService.initialize();
+
+const copilotRuntime = new CopilotRuntime({
+  agents: {
+    default: new TeamsCodexAgent(itemStore, agentService),
+  },
+});
+
+http.use(
+  '/api/copilotkit',
+  createUserAuthMiddleware({
+    allowUnauthenticated: skipAuth,
+    validator: userAuthValidator,
+  }),
+);
+http.use(createCopilotExpressHandler({
+  runtime: copilotRuntime,
+  basePath: '/api/copilotkit',
+  cors: false,
+}));
+
+http.use(
+  '/api/agent-jobs',
+  createUserAuthMiddleware({
+    allowUnauthenticated: skipAuth,
+    validator: userAuthValidator,
+  }),
+);
+http.post('/api/agent-jobs/:id/approve', async (request: any, response: any) => {
+  const job = await agentService.approve(request.params.id);
+  if (!job) {
+    response.status(404).json({ error: 'approval target not found' });
+    return;
+  }
+
+  response.json({ job });
+});
+http.post('/api/agent-jobs/:id/cancel', async (request: any, response: any) => {
+  const job = await agentService.cancel(request.params.id);
+  if (!job) {
+    response.status(404).json({ error: 'cancellation target not found' });
+    return;
+  }
+
+  response.json({ job });
+});
 
 function formatAgentJob(job: AgentJob): string {
   const lines = [

@@ -1,7 +1,9 @@
 import { app as teamsApp, geoLocation, location as teamsLocation } from '@microsoft/teams-js';
+import { CopilotKit } from '@copilotkit/react-core/v2';
 import { FormEvent, useEffect, useRef, useState } from 'react';
 
-import { apiFetch, getLastAuthError, setAuthRequired } from './auth.js';
+import { CopilotWorkspaceAssistant } from './CopilotWorkspaceAssistant.js';
+import { apiFetch, getCachedAuthHeaders, getLastAuthError, setAuthRequired } from './auth.js';
 
 type Item = {
   id: number;
@@ -26,6 +28,7 @@ type HealthResponse = {
   bot: 'teams-sdk' | 'local-handler';
   storage: string;
   timestamp: string;
+  copilotKit: 'enabled' | 'disabled';
 };
 
 type WeatherResponse = {
@@ -85,6 +88,7 @@ export function App() {
   const [teamsHost, setTeamsHost] = useState(false);
   const [teamsClientType, setTeamsClientType] = useState('');
   const [teamsHostName, setTeamsHostName] = useState('');
+  const [copilotReady, setCopilotReady] = useState(false);
   const teamsLocationReady = useRef<Promise<TeamsLocationRuntime> | null>(null);
 
   async function requestWeather(latitude: number, longitude: number, demo: boolean) {
@@ -395,7 +399,7 @@ export function App() {
   }
 
   useEffect(() => {
-    void refreshRuntime();
+    void refreshRuntime().finally(() => setCopilotReady(true));
     void initializeTeamsLocation();
     void loadWeather(false);
   }, []);
@@ -494,7 +498,7 @@ export function App() {
         ? 'Teams 인증'
         : '연결 확인 필요';
 
-  return (
+  const dashboard = (
     <main className="shell">
       <header className="hero">
         <div>
@@ -726,7 +730,31 @@ export function App() {
         )}
       </section>
 
-      <footer>Teams SDK · TypeScript · React · Express</footer>
+      <footer>Teams SDK · TypeScript · React · Express · CopilotKit</footer>
     </main>
+  );
+
+  if (!copilotReady) return dashboard;
+
+  return (
+    <CopilotKit
+      agent="default"
+      enableInspector={false}
+      headers={getCachedAuthHeaders}
+      onError={(event) => console.warn('CopilotKit runtime error', event.error)}
+      properties={{ surface: 'teams-tab', host: teamsHostName || 'browser' }}
+      runtimeUrl="/api/copilotkit"
+      useSingleEndpoint={false}
+    >
+      {dashboard}
+      <div className="shell copilot-shell">
+        <CopilotWorkspaceAssistant
+          health={health ? { ok: health.ok, bot: health.bot, userAuth: health.userAuth } : null}
+          items={items}
+          summary={summary}
+          weather={weather}
+        />
+      </div>
+    </CopilotKit>
   );
 }

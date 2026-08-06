@@ -18,6 +18,37 @@ h2 { font-size: 1.35rem; }
 .badge { background: #e9f8ef; border: 1px solid #bce8ca; border-radius: 999px; color: #18794e; font-size: 0.8rem; font-weight: 700; padding: 9px 13px; white-space: nowrap; }
 .badge.warning { background: #fff4e5; border-color: #f9d8a6; color: #b54708; }
 .panel { background: #fff; border: 1px solid #e6e9f0; border-radius: 20px; box-shadow: 0 16px 50px rgba(37, 52, 89, 0.08); padding: 28px; }
+.copilot-shell { padding-top: 0; }
+.copilot-panel { background: #fff; border: 1px solid #e0e3f2; border-radius: 20px; box-shadow: 0 16px 50px rgba(37, 52, 89, 0.1); overflow: hidden; }
+.copilot-panel-heading { align-items: flex-start; background: linear-gradient(135deg, #292d70 0%, #6264a7 62%, #8588d0 100%); color: #fff; display: flex; justify-content: space-between; gap: 18px; padding: 24px 28px 20px; }
+.copilot-panel-heading h2 { color: #fff; }
+.copilot-panel-heading p:not(.eyebrow) { color: rgba(255, 255, 255, 0.76); margin: 9px 0 0; }
+.copilot-panel-heading .eyebrow { color: rgba(255, 255, 255, 0.74); }
+.copilot-live-badge { align-items: center; background: rgba(255, 255, 255, 0.15); border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 999px; display: inline-flex; font-size: 0.76rem; font-weight: 800; gap: 7px; padding: 8px 11px; white-space: nowrap; }
+.copilot-live-badge span { background: #a8f0bc; border-radius: 50%; box-shadow: 0 0 0 4px rgba(168, 240, 188, 0.16); height: 7px; width: 7px; }
+.copilot-chat { height: 520px; min-height: 420px; }
+.copilot-chat [data-copilot-chat-input] { border-color: #dfe2f0; }
+.copilot-tool-card { background: #f7f8ff; border: 1px solid #dfe2f5; border-radius: 14px; color: #25274b; margin: 10px 0; padding: 14px; }
+.copilot-tool-loading { color: #667085; font-size: 0.86rem; }
+.copilot-tool-title { align-items: center; display: flex; font-size: 0.9rem; font-weight: 800; gap: 8px; }
+.copilot-tool-title > span:first-child { align-items: center; background: #6264a7; border-radius: 50%; color: #fff; display: inline-flex; font-size: 0.75rem; height: 22px; justify-content: center; width: 22px; }
+.copilot-tool-title small { color: #667085; font-size: 0.74rem; font-weight: 600; margin-left: auto; }
+.copilot-weather-summary { align-items: baseline; display: flex; gap: 9px; margin: 14px 0 10px; }
+.copilot-weather-summary strong { font-size: 2rem; letter-spacing: -0.06em; }
+.copilot-weather-summary span { color: #6264a7; font-weight: 750; }
+.copilot-weather-stats { color: #667085; display: flex; flex-wrap: wrap; font-size: 0.78rem; gap: 7px 12px; }
+.copilot-tool-result { color: #8a93a6; display: block; font-size: 0.74rem; margin-top: 11px; }
+.copilot-tool-details { color: #667085; font-size: 0.75rem; margin-top: 8px; }
+.copilot-tool-details pre { max-height: 140px; overflow: auto; white-space: pre-wrap; }
+.copilot-task-summary { align-items: baseline; display: flex; gap: 7px; margin: 13px 0 8px; }
+.copilot-task-summary strong { color: #34366f; font-size: 1.2rem; }
+.copilot-task-summary span { color: #667085; font-size: 0.75rem; margin-right: 9px; }
+.copilot-task-card ul { color: #667085; font-size: 0.82rem; margin: 7px 0 0; padding-left: 18px; }
+.copilot-task-card li + li { margin-top: 4px; }
+.copilot-approval-card { background: #fff9ed; border-color: #f5ddb2; }
+.copilot-approval-card p { color: #667085; font-size: 0.84rem; margin: 12px 0; }
+.copilot-approval-actions { display: flex; gap: 8px; }
+.copilot-approval-actions button { min-height: 38px; padding: 8px 12px; }
 .runtime-panel { background: #eef2ff; border: 1px solid #dce2ff; border-radius: 14px; display: grid; gap: 12px; grid-template-columns: repeat(5, 1fr); margin-bottom: 18px; padding: 14px 16px; }
 .runtime-panel div { display: flex; flex-direction: column; gap: 4px; }
 .runtime-panel span { color: #667085; font-size: 0.75rem; }
@@ -84,6 +115,9 @@ footer { color: #98a2b3; font-size: 0.78rem; padding-top: 20px; text-align: cent
   .summary-grid { grid-template-columns: 1fr; }
   .runtime-panel { grid-template-columns: repeat(2, 1fr); }
   .weather-widget { padding: 20px; }
+  .copilot-panel-heading { display: block; padding: 20px; }
+  .copilot-live-badge { margin-top: 16px; }
+  .copilot-chat { height: 560px; min-height: 500px; }
   .weather-heading { display: block; }
   .weather-heading .secondary { margin-top: 16px; width: 100%; }
   .weather-stats { grid-template-columns: repeat(2, 1fr); }

@@ -25,6 +25,10 @@ TypeScript + React + Express + Microsoft Teams SDK 기반의 내부용 Teams 앱
 - Teams SDK `install.add` 설치 이벤트 welcome message와 명령 안내
 - 런타임 상태 패널과 서버 health 확인
 - 위치 권한 기반 날씨 위젯과 `날씨`/`weather` Bot 명령
+- CopilotKit v2 `CopilotChat` 기반 Teams 탭 업무 도우미
+- AG-UI 스트리밍 에이전트와 `useAgentContext` 기반 업무·날씨 컨텍스트 전달
+- CopilotKit `useRenderTool` 기반 업무 현황·날씨·workspace-write 승인 카드
+- `POST /api/copilotkit/agent/default/run` CopilotKit REST/SSE 런타임
 - Teams 모바일 HTML5 Geolocation 위치 조회 및 구형 호스트용 TeamsJS 위치 API fallback
 - Teams 앱 manifest `devicePermissions: ["geolocation"]` 선언
 - 환경 템플릿 기반 Teams manifest
@@ -44,6 +48,7 @@ TEAMS_SKIP_AUTH=true npm run dev
 - 상태: http://localhost:3978/api/health
 - API: http://localhost:3978/api/items
 - 날씨 데모: http://localhost:3978/api/weather?latitude=37.5665&longitude=126.978&mode=demo
+- CopilotKit 런타임 정보: http://localhost:3978/api/copilotkit/info
 - Teams 메시지 엔드포인트: http://localhost:3978/api/messages
 
 `TEAMS_SKIP_AUTH=true`는 로컬 탭 API의 사용자 인증만 우회하는 개발용 설정입니다. `BOT_CLIENT_ID`, `CLIENT_SECRET`, `TENANT_ID`가 있으면 Teams SDK Bot은 계속 실행되어 실제 Teams 메시지 outbound를 테스트할 수 있습니다. `TEAMS_SKIP_OUTBOUND=true`를 별도로 설정한 경우에만 비동기 진행·완료 메시지를 로컬 outbox에 보관합니다. 운영에서는 `TEAMS_SKIP_AUTH`를 제거하고 탭 API도 Entra SSO로 보호합니다.
@@ -87,6 +92,8 @@ npm test
 ```
 
 `npm run test:runtime`만 실행하면 이미 빌드된 서버를 기준으로 런타임 테스트를 반복할 수 있습니다. 테스트는 로컬 인증 우회 흐름, 업무 CRUD, Bot 명령, 설치 welcome message, Teams SDK Activity 라우팅, Codex thread 재개·취소·승인·Git commit·outbox 전달과 production bearer token 거부 흐름을 모두 확인합니다.
+
+CopilotKit 런타임 검증은 `/api/copilotkit/info` 검색, 업무 현황·날씨 tool event, Codex 진행 스트림, workspace-write 승인 경계와 승인 카드 취소까지 포함합니다. Teams 탭의 CopilotKit 클라이언트는 REST/SSE 전송을 명시해 `/info`와 `/agent/default/run` 엔드포인트를 사용합니다.
 
 `npm run check:types`는 별도로 TypeScript 타입 검사를 실행합니다. 실행 환경의 TypeScript CLI가 멈추는 경우에도 `npm run build`는 esbuild 산출물을 만들고 런타임 테스트를 계속할 수 있습니다.
 
