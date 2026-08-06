@@ -19,10 +19,11 @@
     "test:atomic-stores": "tsx scripts/atomic-json-store-test.ts",
     "test:genui-actions": "tsx scripts/genui-action-store-test.ts",
     "test:genui-contract": "tsx scripts/genui-contract-test.ts",
+    "test:channels-shadow": "tsx scripts/channels-shadow-test.ts",
     "test:mcp-direct-factory": "tsx scripts/mcp-direct-factory-test.ts",
     "check": "npm run build:client && npm run validate:manifest",
     "test:runtime": "node scripts/runtime-test.mjs",
-    "test": "npm run check && npm run build && npm run test:troubleshooting && npm run test:atomic-stores && npm run test:genui-contract && npm run test:genui-actions && npm run test:mcp-direct-factory && npm run test:runtime"
+    "test": "npm run check && npm run build && npm run test:troubleshooting && npm run test:atomic-stores && npm run test:genui-contract && npm run test:channels-shadow && npm run test:genui-actions && npm run test:mcp-direct-factory && npm run test:runtime"
   },
   "dependencies": {
     "@copilotkit/channels-teams": "0.7.3",
@@ -33,6 +34,7 @@
     "@microsoft/teams.apps": "^2.0.15",
     "@modelcontextprotocol/ext-apps": "1.7.5",
     "@modelcontextprotocol/sdk": "1.30.0",
+    "@opentelemetry/api-logs": "0.214.0",
     "esbuild": "^0.28.1",
     "express": "^5.1.0",
     "react": "^19.2.8",

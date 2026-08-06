@@ -458,6 +458,7 @@ async function runLocalFlow(dataFile, jobDataFile) {
     assert(health.body.genAI === 'deterministic-test', 'local runtime reports explicit deterministic test mode');
     assert(health.body.genUiMode === 'hybrid', 'health reports the hybrid GenUI mode');
     assert(health.body.genUi === 'adaptive-cards', 'health reports Adaptive Cards as the GenUI renderer');
+    assert(health.body.channelsShadow?.enabled === false, 'hybrid health disables Channels shadow diagnostics');
     assert(health.body.mcp === '/mcp' && health.body.mcpEnabled === true, 'local health exposes only the explicitly gated local MCP route');
 
     const initialize = await mcpRequest(server.baseUrl, {
@@ -912,6 +913,81 @@ async function runLocalFlow(dataFile, jobDataFile) {
   }
 }
 
+async function runChannelsShadowFlow(dataFile, jobDataFile) {
+  const server = await startServer({
+    production: false,
+    dataFile,
+    jobDataFile,
+    extraEnv: { TEAMS_GENUI_MODE: 'channels-shadow' },
+  });
+
+  try {
+    const initialHealth = await request(server.baseUrl, '/api/health');
+    assert(initialHealth.response.status === 200, 'Channels shadow health endpoint returns 200');
+    assert(initialHealth.body.genUiMode === 'channels-shadow', 'runtime selects the Channels shadow mode');
+    assert(initialHealth.body.channelsShadow?.enabled === true, 'Channels shadow diagnostics are enabled only in shadow mode');
+    assert(initialHealth.body.channelsShadow.renderCount === 0, 'Channels shadow diagnostics start empty');
+
+    const help = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity('help', server.baseUrl, 'channels-shadow-help')),
+    });
+    const helpCard = assertAdaptiveCardActivity(help.body.activities[0], 'Channels shadow help');
+    const helpSerialized = JSON.stringify(help.body.activities[0]);
+    assert(!helpSerialized.includes('copilotkit-channels-shadow'), 'delivered help activity omits the shadow renderer marker');
+    assert(!helpSerialized.includes('"shadow":true'), 'delivered help activity omits shadow-only action data');
+    assert((helpCard.actions?.length ?? 0) === 0, 'help keeps the native card action set unchanged');
+
+    const approval = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity('write Channels shadow approval', server.baseUrl, 'channels-shadow-approval')),
+    });
+    const approvalCard = assertAdaptiveCardActivity(approval.body.activities[0], 'Channels shadow approval');
+    const approvalSerialized = JSON.stringify(approval.body.activities[0]);
+    assert(!approvalSerialized.includes('copilotkit-channels-shadow'), 'delivered approval activity omits the shadow renderer marker');
+    assert(!approvalSerialized.includes('"shadow":true'), 'delivered approval activity omits shadow-only action data');
+    const approvalPayload = actionPayloadFromCard(
+      approvalCard.actions?.find((action) => action.verb === 'genui.approve'),
+    );
+    assertExactGenUiActionPayload(approvalPayload, 'Channels shadow native approval');
+
+    const shadowPayload = {
+      ...approvalPayload,
+      shadow: true,
+      renderer: 'copilotkit-channels-shadow',
+    };
+    const shadowAction = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...genUiSubmitActivity(
+          server.baseUrl,
+          shadowPayload,
+          'channels-shadow-action',
+          'runtime-conversation-channels-shadow-approval',
+        ),
+      }),
+    });
+    assert(shadowAction.response.status === 200, 'shadow action payload is handled without crashing delivery');
+    assert(JSON.stringify(shadowAction.body).includes('유효하지 않은 GenUI 카드 액션'), 'shadow action payload is rejected');
+    const approvalJobId = approvalPayload.entityId;
+    const approvalJob = (await request(server.baseUrl, '/api/debug/agent-jobs')).body.jobs.find((job) => job.id === approvalJobId);
+    assert(approvalJob?.status === 'awaiting_approval', 'rejected shadow action payload does not mutate the approval job');
+
+    const health = await request(server.baseUrl, '/api/health');
+    const diagnostics = health.body.channelsShadow;
+    assert(diagnostics.renderCount >= 2, 'native help and approval deliveries increment shadow render count');
+    assert(diagnostics.failureCount === 0, 'successful shadow comparisons have no render failures');
+    assert(diagnostics.budgetFailures === 0, 'native and shadow cards stay within the Teams budget');
+    assert(diagnostics.actionCountMismatches === 0, 'native and shadow action counts match');
+    assert(typeof diagnostics.lastNativeBytes === 'number' && typeof diagnostics.lastShadowBytes === 'number', 'health exposes only native/shadow byte aggregates');
+    assert(diagnostics.lastWithinBudget === true, 'health reports the last comparison within budget');
+    const healthSerialized = JSON.stringify(diagnostics);
+    assert(!healthSerialized.includes('task-') && !healthSerialized.includes('token') && !healthSerialized.includes('conversation'), 'shadow health metrics expose no IDs, tokens, or conversation data');
+  } finally {
+    await stopServer(server.child);
+  }
+}
+
 async function runAgentTimeoutFlow(dataFile, jobDataFile) {
   const server = await startServer({ production: false, dataFile, jobDataFile, codexTimeoutMs: 300 });
 
@@ -1090,12 +1166,16 @@ const recoveryDataFile = path.join(tempDir, 'recovery-items.json');
 const recoveryJobDataFile = path.join(tempDir, 'recovery-agent-jobs.json');
 const timeoutDataFile = path.join(tempDir, 'timeout-items.json');
 const timeoutJobDataFile = path.join(tempDir, 'timeout-agent-jobs.json');
+const channelsShadowDataFile = path.join(tempDir, 'channels-shadow-items.json');
+const channelsShadowJobDataFile = path.join(tempDir, 'channels-shadow-agent-jobs.json');
 
 try {
   console.log('Runtime verification: local-auth and public-MCP startup gates');
   await runStartupGateFlow();
   console.log('Runtime verification: local authenticated-bypass flow');
   await runLocalFlow(localDataFile, localJobDataFile);
+  console.log('Runtime verification: Channels shadow comparison flow');
+  await runChannelsShadowFlow(channelsShadowDataFile, channelsShadowJobDataFile);
   console.log('Runtime verification: Teams SDK Activity flow');
   await runTeamsSdkFlow(sdkDataFile, sdkJobDataFile);
   console.log('Runtime verification: approved Git commit flow');

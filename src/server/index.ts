@@ -17,6 +17,8 @@ import { GenUiActionStore, type GenUiActionName } from './genui-action-store.js'
 import { GenUiResponseFactory } from './genui-response.js';
 import { createAdaptiveCardActivity, createTextFallbackActivity, renderGenUiCard } from './genui-teams.js';
 import { createMcpGenUiRouter, type McpGenUiRouter } from './mcp-genui.js';
+import { ChannelsShadowMonitor } from './channels-shadow-monitor.js';
+import { renderChannelsShadow } from './copilot-channels-shadow.js';
 import {
   GENUI_ACTION_PAYLOAD_KEYS,
   GENUI_SCHEMA_VERSION,
@@ -74,6 +76,7 @@ const genUiActionStore = new GenUiActionStore(
   process.env.GENUI_ACTION_STORE_PATH ?? path.resolve(process.cwd(), 'data/genui-actions.json'),
 );
 const genUi = new GenUiResponseFactory(genUiActionStore);
+const channelsShadowMonitor = new ChannelsShadowMonitor();
 
 if (legacyPublicMcp) {
   throw new Error('MCP_PUBLIC_ENABLED=true is no longer supported; MCP is local-only and requires the safe local gate.');
@@ -196,6 +199,47 @@ function envelopeText(envelope: GenUiEnvelopeV1): string {
   return envelope.fallbackText ?? envelope.summary ?? envelope.title ?? '요청 결과를 카드로 확인하세요.';
 }
 
+function adaptiveCardFromActivity(activity: unknown): Record<string, unknown> | undefined {
+  if (!activity || typeof activity !== 'object') return undefined;
+  const attachments = (activity as { attachments?: unknown }).attachments;
+  if (!Array.isArray(attachments)) return undefined;
+  const attachment = attachments.find((candidate) => (
+    candidate
+    && typeof candidate === 'object'
+    && (candidate as { contentType?: unknown }).contentType === 'application/vnd.microsoft.card.adaptive'
+  ));
+  if (!attachment || typeof attachment !== 'object') return undefined;
+  const content = (attachment as { content?: unknown }).content;
+  return content && typeof content === 'object' && !Array.isArray(content)
+    ? content as Record<string, unknown>
+    : undefined;
+}
+
+function jsonBytes(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value), 'utf8');
+}
+
+/** Render Channels only for comparison; the native card remains the delivered activity. */
+function recordChannelsShadowComparison(envelope: GenUiEnvelopeV1, nativeActivity: unknown): void {
+  if (genUiMode !== 'channels-shadow') return;
+
+  try {
+    const nativeCard = adaptiveCardFromActivity(nativeActivity);
+    const shadow = renderChannelsShadow(envelope);
+    const nativeActions = nativeCard?.actions;
+    channelsShadowMonitor.record({
+      nativeActionCount: Array.isArray(nativeActions) ? nativeActions.length : 0,
+      nativeBytes: nativeCard ? jsonBytes(nativeCard) : 0,
+      shadowActionCount: shadow.diagnostics.actionCount,
+      shadowBytes: shadow.payloadBytes,
+      shadowWithinBudget: shadow.diagnostics.withinTeamsBudget,
+    });
+  } catch {
+    // Diagnostics must never affect delivery. Do not log payloads or identifiers.
+    channelsShadowMonitor.recordFailure();
+  }
+}
+
 async function deliverGenUiActivity(
   deliver: ((activity: unknown) => Promise<unknown>) | undefined,
   text: string,
@@ -207,6 +251,8 @@ async function deliverGenUiActivity(
   const activity = normalized && genUiMode !== 'legacy'
     ? createAdaptiveCardActivity(normalized)
     : { type: 'message', text };
+
+  if (normalized) recordChannelsShadowComparison(normalized, activity);
 
   try {
     await deliver(activity);
@@ -228,6 +274,7 @@ function createBotSender(
       : { type: 'message', text };
 
     if (messages) {
+      if (normalized) recordChannelsShadowComparison(normalized, activity);
       messages.push(text);
       activities?.push(activity);
       return;
@@ -305,6 +352,9 @@ http.get('/api/health', (_request: any, response: any) => {
         : 'not-configured',
     genUiMode,
     genUi: 'adaptive-cards',
+    channelsShadow: genUiMode === 'channels-shadow'
+      ? channelsShadowMonitor.snapshot()
+      : { enabled: false },
     mcpEnabled,
     mcp: mcpEnabled ? '/mcp' : 'disabled',
     timestamp: new Date().toISOString(),
