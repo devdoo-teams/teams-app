@@ -58,6 +58,13 @@ type DeviceLocation = {
   accuracy?: number;
   source: 'browser' | 'teams-native';
 };
+type TeamsLocationRuntime = {
+  available: boolean;
+  clientType: string;
+  hostName: string;
+  legacyLocationSupported: boolean;
+  geoLocationSupported: boolean;
+};
 
 export function App() {
   const [items, setItems] = useState<Item[]>([]);
@@ -77,7 +84,8 @@ export function App() {
   const [locationAccuracy, setLocationAccuracy] = useState<number | null>(null);
   const [teamsHost, setTeamsHost] = useState(false);
   const [teamsClientType, setTeamsClientType] = useState('');
-  const teamsLocationReady = useRef<Promise<boolean> | null>(null);
+  const [teamsHostName, setTeamsHostName] = useState('');
+  const teamsLocationReady = useRef<Promise<TeamsLocationRuntime> | null>(null);
 
   async function requestWeather(latitude: number, longitude: number, demo: boolean) {
     const query = new URLSearchParams({
@@ -91,9 +99,9 @@ export function App() {
     return (await response.json()) as WeatherResponse;
   }
 
-  async function initializeTeamsLocation(): Promise<boolean> {
+  async function initializeTeamsLocation(): Promise<TeamsLocationRuntime> {
     if (!teamsLocationReady.current) {
-      teamsLocationReady.current = (async () => {
+      const initializationAttempt = (async (): Promise<TeamsLocationRuntime> => {
         try {
           if (!teamsApp.isInitialized()) {
             await Promise.race([
@@ -103,16 +111,62 @@ export function App() {
               }),
             ]);
           }
+
           const context = await teamsApp.getContext();
+          const clientType = context.app?.host?.clientType ?? '';
+          const hostName = context.app?.host?.name ?? '';
+          let legacyLocationSupported = false;
+          let geoLocationSupported = false;
+
+          try {
+            legacyLocationSupported = teamsLocation.isSupported();
+          } catch {
+            // The SDK can still be initialized on hosts that do not expose this capability.
+          }
+
+          try {
+            geoLocationSupported = geoLocation.isSupported();
+          } catch {
+            // geoLocation is preview and may not be exposed by the current host.
+          }
+
           setTeamsHost(true);
-          setTeamsClientType(context.app.host.clientType);
-          return geoLocation.isSupported() || teamsLocation.isSupported();
+          setTeamsClientType(clientType);
+          setTeamsHostName(hostName);
+
+          return {
+            available: true,
+            clientType,
+            hostName,
+            legacyLocationSupported,
+            geoLocationSupported,
+          };
         } catch {
           setTeamsHost(false);
-          return false;
+          setTeamsClientType('');
+          setTeamsHostName('');
+          return {
+            available: false,
+            clientType: '',
+            hostName: '',
+            legacyLocationSupported: false,
+            geoLocationSupported: false,
+          };
         }
       })();
+
+      const retryableInitialization = initializationAttempt.then((runtime) => {
+        // A local preview or a transient host handshake failure must not poison
+        // every later tap. Successful Teams capability discovery is cached;
+        // unavailable results are retried on the next explicit user action.
+        if (!runtime.available && teamsLocationReady.current === retryableInitialization) {
+          teamsLocationReady.current = null;
+        }
+        return runtime;
+      });
+      teamsLocationReady.current = retryableInitialization;
     }
+
     return teamsLocationReady.current;
   }
 
@@ -165,13 +219,13 @@ export function App() {
         },
         (error) => {
           const message = error.code === 1
-            ? '위치 권한이 거부되었습니다. Teams 탭 메뉴의 앱 권한에서 위치를 허용한 뒤 탭을 다시 로드하세요.'
+            ? '위치 권한이 거부되었습니다. Teams 탭의 앱 권한에서 위치를 허용하고, iPhone 설정의 개인정보 보호 및 보안 > 위치 서비스 > Teams도 “앱 사용 중”으로 설정한 뒤 다시 시도하세요.'
             : error.code === 3
               ? '위치 확인 시간이 초과되었습니다. 잠시 후 다시 시도하세요.'
-              : '브라우저 위치를 확인하지 못했습니다. Teams 앱 권한을 확인하세요.';
+              : '브라우저 위치를 확인하지 못했습니다. Teams 앱 권한과 iPhone 위치 서비스를 확인하세요.';
           reject(new Error(message));
         },
-        { enableHighAccuracy: false, maximumAge: 300_000, timeout: 8_000 },
+        { enableHighAccuracy: false, maximumAge: 300_000, timeout: 12_000 },
       );
     });
   }
@@ -179,21 +233,33 @@ export function App() {
   async function getCurrentDeviceLocation(): Promise<DeviceLocation> {
     const locationErrors: string[] = [];
 
-    // The current Teams client guidance recommends HTML5 Geolocation for tabs.
-    // TeamsJS native APIs remain as a compatibility fallback for older hosts.
-    try {
-      return await getBrowserLocation();
-    } catch (caught) {
-      locationErrors.push(caught instanceof Error ? caught.message : 'HTML5 위치 API를 사용할 수 없습니다.');
-    }
+    const runtime = await initializeTeamsLocation();
+    const isAppleMobile = runtime.clientType === 'ios' || runtime.clientType === 'ipados';
 
-    const teamsLocationSupported = await initializeTeamsLocation();
-    if (!teamsLocationSupported) {
-      throw new Error(locationErrors.join(' '));
-    }
-
-    if (geoLocation.isSupported()) {
+    async function tryProvider(name: string, provider: () => Promise<DeviceLocation>): Promise<DeviceLocation | null> {
       try {
+        return await provider();
+      } catch (caught) {
+        locationErrors.push(caught instanceof Error ? `${name}: ${caught.message}` : `${name}: 위치를 확인하지 못했습니다.`);
+        return null;
+      }
+    }
+
+    // The legacy Teams location API is deprecated, but it is the native path
+    // still exposed by some iOS Teams hosts. Prefer it there, then fall back
+    // to browser geolocation for New Teams and unsupported hosts.
+    if (isAppleMobile && runtime.legacyLocationSupported) {
+      const nativeLocation = await tryProvider('Teams iPhone 위치', getLegacyTeamsLocation);
+      if (nativeLocation) return nativeLocation;
+    }
+
+    const browserLocation = await tryProvider('HTML5 위치', getBrowserLocation);
+    if (browserLocation) return browserLocation;
+
+    // geoLocation is a preview API. Use it only after the standards-based path
+    // has failed and only when the host explicitly reports support.
+    if (runtime.geoLocationSupported) {
+      const geoLocationResult = await tryProvider('Teams geoLocation', async () => {
         const hasPermission = await geoLocation.hasPermission();
         if (!hasPermission && !(await geoLocation.requestPermission())) {
           throw new Error('Teams 위치 권한이 거부되었습니다.');
@@ -210,21 +276,17 @@ export function App() {
           accuracy: location.accuracy,
           source: 'teams-native',
         };
-      } catch (caught) {
-        locationErrors.push(caught instanceof Error ? caught.message : 'Teams 네이티브 위치 API를 사용할 수 없습니다.');
-      }
+      });
+      if (geoLocationResult) return geoLocationResult;
     }
 
-    if (teamsLocation.isSupported()) {
-      try {
-        return await getLegacyTeamsLocation();
-      } catch (caught) {
-        locationErrors.push(caught instanceof Error ? caught.message : 'Teams 레거시 위치 API를 사용할 수 없습니다.');
-      }
+    if (runtime.legacyLocationSupported) {
+      const nativeLocation = await tryProvider('Teams 위치', getLegacyTeamsLocation);
+      if (nativeLocation) return nativeLocation;
     }
 
     throw new Error(
-      `${locationErrors.join(' ')} 모바일 Teams 설정에서 Teams 위치 권한을 허용한 뒤 다시 시도하세요.`,
+      `${locationErrors.join(' ')} Teams 앱 권한과 iPhone 위치 서비스를 확인한 뒤 다시 시도하세요.`,
     );
   }
 
@@ -490,9 +552,9 @@ export function App() {
           {locationSource === 'browser'
             ? 'HTML5 위치 권한 사용 · Teams 앱 권한에서 위치를 허용해야 합니다.'
             : locationSource === 'teams-native'
-            ? `Teams ${teamsClientType === 'android' || teamsClientType === 'ios' ? '모바일' : '호스트'} 네이티브 위치 권한 사용`
+            ? `Teams ${teamsClientType === 'android' || teamsClientType === 'ios' || teamsClientType === 'ipados' ? '모바일' : '호스트'} 네이티브 위치 권한 사용`
             : teamsHost
-              ? 'Teams 앱 권한에서 위치를 허용한 뒤 내 위치 사용을 누르세요.'
+              ? `${teamsHostName || 'Teams'} 호스트 · 앱 권한에서 위치를 허용한 뒤 내 위치 사용을 누르세요.`
               : '현재 위치 아님 · Teams 모바일 탭에서 앱 권한을 허용한 뒤 내 위치 사용을 누르세요.'}
         </p>
 

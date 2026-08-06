@@ -48,10 +48,21 @@ if (!values.APPLICATION_ID_URI.startsWith('api://') || /[<>$]|\$\{\{/.test(value
 
 const expectedApplicationIdUri = `api://${values.TAB_DOMAIN}/${values.CLIENT_ID}`;
 if (values.APPLICATION_ID_URI !== expectedApplicationIdUri) {
-  console.error(
-    `APPLICATION_ID_URI must match the Teams tab origin: expected ${expectedApplicationIdUri}.`,
-  );
-  process.exit(1);
+  const registeredClientUri = `api://${values.CLIENT_ID}`;
+  const isDevTunnel = values.TAB_DOMAIN.endsWith('.devtunnels.ms');
+
+  if (isDevTunnel && values.APPLICATION_ID_URI === registeredClientUri) {
+    console.warn(
+      `APPLICATION_ID_URI uses the registered Entra URI (${registeredClientUri}). ` +
+        `For production SSO, configure the app registration URI as ${expectedApplicationIdUri}.`,
+    );
+  } else {
+    console.error(
+      `APPLICATION_ID_URI must match the Teams tab origin: expected ${expectedApplicationIdUri}. ` +
+        `The registered fallback is only accepted for a Dev Tunnel: ${registeredClientUri}.`,
+    );
+    process.exit(1);
+  }
 }
 
 const placeholderPattern = /demo\.example\.com|11111111-1111-1111-1111-111111111111|22222222-2222-2222-2222-222222222222|33333333-3333-3333-3333-333333333333|\$\{\{/i;

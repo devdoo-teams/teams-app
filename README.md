@@ -48,7 +48,7 @@ TEAMS_SKIP_AUTH=true npm run dev
 
 `TEAMS_SKIP_AUTH=true`는 로컬 탭 API의 사용자 인증만 우회하는 개발용 설정입니다. `BOT_CLIENT_ID`, `CLIENT_SECRET`, `TENANT_ID`가 있으면 Teams SDK Bot은 계속 실행되어 실제 Teams 메시지 outbound를 테스트할 수 있습니다. `TEAMS_SKIP_OUTBOUND=true`를 별도로 설정한 경우에만 비동기 진행·완료 메시지를 로컬 outbox에 보관합니다. 운영에서는 `TEAMS_SKIP_AUTH`를 제거하고 탭 API도 Entra SSO로 보호합니다.
 
-모바일 Teams 탭에서는 `내 위치 사용` 버튼을 눌러 HTML5 Geolocation 권한을 요청합니다. 최신 Teams 클라이언트 권고에 맞춰 HTML5 위치를 먼저 사용하고, 구형 호스트에서만 TeamsJS 위치 API를 fallback으로 시도합니다. 위치가 거부되면 Teams 탭 메뉴의 `앱 권한`에서 위치를 허용한 뒤 탭을 다시 로드해야 하며, 위치 권한을 새로 선언한 뒤에는 버전이 올라간 Teams 앱 패키지를 다시 업로드해야 합니다. 위치를 얻지 못한 경우 서울 카드는 현재 위치가 아닌 데모 데이터로 명시됩니다.
+모바일 Teams 탭에서는 `내 위치 사용` 버튼을 눌러 위치를 요청합니다. iPhone/iPad Teams 호스트에서 구형 네이티브 TeamsJS 위치 API가 지원되면 먼저 사용하고, 실패하거나 지원되지 않으면 HTML5 Geolocation을 시도합니다. New Teams·웹에서는 HTML5 위치를 먼저 사용하며, 호스트가 명시적으로 지원할 때만 TeamsJS `geoLocation` Preview API를 보조 경로로 사용합니다. 위치가 거부되면 Teams 탭 메뉴의 `앱 권한`에서 위치를 허용하고, iPhone 설정의 개인정보 보호 및 보안 > 위치 서비스 > Teams도 `앱 사용 중`으로 설정한 뒤 다시 시도해야 합니다. 위치 권한을 새로 선언한 뒤에는 버전이 올라간 Teams 앱 패키지를 다시 업로드해야 합니다. 위치를 얻지 못한 경우 서울 카드는 현재 위치가 아닌 데모 데이터로 명시됩니다.
 
 모바일 구현 참고: [Teams 모바일 탭 설계](https://learn.microsoft.com/en-us/microsoftteams/platform/tabs/design/tabs?tabs=mobile), [Teams 모바일 앱 모범 사례](https://learn.microsoft.com/en-us/microsoftteams/platform/resources/teams-mobile-best-practices), [Teams 위치 기능](https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/device-capabilities/location-capability), [Teams 브라우저 장치 권한](https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/device-capabilities/browser-device-permissions).
 
