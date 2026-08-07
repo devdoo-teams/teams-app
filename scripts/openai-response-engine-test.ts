@@ -78,11 +78,19 @@ function queueFetch(responses: Array<Response | Error | 'timeout'>): {
 }
 
 function toolResponse(name: string, args = '{}'): Response {
+  return toolCallsResponse([{ name, args }]);
+}
+
+function toolCallsResponse(calls: Array<{ name: string; args?: string }>): Response {
   return response({
     choices: [{
       message: {
         content: null,
-        tool_calls: [{ id: `call-${name}`, type: 'function', function: { name, arguments: args } }],
+        tool_calls: calls.map((call, index) => ({
+          id: `call-${call.name}-${index}`,
+          type: 'function',
+          function: { name: call.name, arguments: call.args ?? '{}' },
+        })),
       },
     }],
   });
@@ -167,6 +175,8 @@ async function main(): Promise<void> {
     assert.equal(weather.envelope.aiGenerated, true);
     assert.deepEqual(weatherTools, ['showWeatherCard']);
     assert.equal(weatherFetch.calls.length, 2);
+    const weatherFollowUpRequest = JSON.parse(String(weatherFetch.calls[1]?.init?.body));
+    assert.equal(weatherFollowUpRequest.messages[0].role, 'system');
 
     const taskFetch = queueFetch([toolResponse('showTaskCard'), textResponse('업무 목록을 확인했습니다.')]);
     const taskTools: string[] = [];
@@ -191,6 +201,22 @@ async function main(): Promise<void> {
       approvalService.submitted.map(({ prompt, mode }) => ({ prompt, mode })),
       [{ prompt: '설정 파일을 수정해줘', mode: 'workspace-write' }],
     );
+
+    const partialService = createAgentServiceFake();
+    const partialFetch = queueFetch([toolCallsResponse([
+      { name: 'workspaceApproval', args: JSON.stringify({ prompt: '부분 실행 금지' }) },
+      { name: 'deleteEverything' },
+    ])]);
+    const partial = await new OpenAIResponseEngine({ apiKey: 'partial-secret', fetchImpl: partialFetch.fetch })
+      .run(await createInput(itemStore, partialService, '여러 도구를 호출해줘'));
+    assert.equal(partial.envelope.kind, 'error');
+    assert.equal(partialService.submitted.length, 0, 'invalid tool calls must be rejected before side effects');
+
+    const missingWeatherFetch = queueFetch([toolResponse('showWeatherCard')]);
+    const missingWeather = await new OpenAIResponseEngine({ apiKey: 'location-secret', fetchImpl: missingWeatherFetch.fetch })
+      .run(await createInput(itemStore, createAgentServiceFake(), '현재 날씨 알려줘'));
+    assert.equal(missingWeather.envelope.kind, 'error');
+    assert.match(missingWeather.text, /현재 위치 날씨 컨텍스트/);
 
     for (const malformedArguments of ['{"unexpected":true}', '{not-json']) {
       const malformedFetch = queueFetch([toolResponse('showTaskCard', malformedArguments)]);
@@ -220,6 +246,11 @@ async function main(): Promise<void> {
     assert.equal(providerError.envelope.kind, 'error');
     assert.equal(providerError.envelope.aiGenerated, false);
     assert.doesNotMatch(JSON.stringify(providerError), /secret-provider-detail|error-secret/);
+
+    const invalidConfig = await new OpenAIResponseEngine({ apiKey: 'config-secret', baseUrl: 'not-a-url' })
+      .run(await createInput(itemStore, createAgentServiceFake(), '설정 오류 테스트'));
+    assert.equal(invalidConfig.envelope.kind, 'error');
+    assert.doesNotMatch(invalidConfig.text, /configuration|config-secret/);
 
     process.env.OPENAI_MODEL = 'test-model';
     process.env.OPENAI_BASE_URL = 'https://provider.example/v1/';

@@ -77,7 +77,7 @@ type ApprovalToolArgs = {
 };
 
 class OpenAIProviderError extends Error {
-  constructor(readonly code: 'configuration' | 'timeout' | 'network' | 'http' | 'response' | 'tool' | 'cancelled') {
+  constructor(readonly code: 'configuration' | 'timeout' | 'network' | 'http' | 'response' | 'tool' | 'location' | 'cancelled') {
     super(code);
     this.name = 'OpenAIProviderError';
   }
@@ -231,6 +231,7 @@ function providerErrorOutput(error: unknown): ResponseEngineOutput {
     }
     if (error.code === 'timeout') return errorOutput('GenAI 응답 시간이 초과되었습니다. 잠시 후 다시 시도하세요.', 'openai-timeout');
     if (error.code === 'tool') return errorOutput('GenAI가 유효하지 않은 도구 요청을 반환했습니다. 요청을 다시 시도하세요.', 'openai-invalid-tool');
+    if (error.code === 'location') return errorOutput('현재 위치 날씨 컨텍스트가 없습니다. 탭의 “내 위치 사용” 버튼을 눌러 위치 권한을 허용한 뒤 다시 시도하세요.', 'openai-location-required');
     if (error.code === 'http') return errorOutput('GenAI 제공자에 연결할 수 없습니다. 서버 설정과 제공자 상태를 확인하세요.', 'openai-provider-http');
     if (error.code === 'response') return errorOutput('GenAI 제공자의 응답 형식을 확인할 수 없습니다. 잠시 후 다시 시도하세요.', 'openai-invalid-response');
     return errorOutput('GenAI 제공자 요청에 실패했습니다. 잠시 후 다시 시도하세요.', 'openai-provider-error');
@@ -395,10 +396,10 @@ export class OpenAIResponseEngine implements ResponseEngine {
 
   async run(input: ResponseEngineInput): Promise<ResponseEngineOutput> {
     if (input.isCancelled?.()) return cancelledOutput();
-    const config = this.readConfig();
-    if (!config.apiKey) return providerErrorOutput(new OpenAIProviderError('configuration'));
 
     try {
+      const config = this.readConfig();
+      if (!config.apiKey) return providerErrorOutput(new OpenAIProviderError('configuration'));
       let messages = buildMessages(input);
       let toolEvents: ResponseToolEvent[] = [];
       let toolChoice: { type: 'function'; function: { name: string } } | 'auto' = forcedToolChoice(input.prompt);
@@ -419,12 +420,19 @@ export class OpenAIResponseEngine implements ResponseEngine {
         }
 
         if (attempt > 0) throw new OpenAIProviderError('tool');
+        const validatedToolCalls = assistant.toolCalls.map((toolCall) => {
+          const args = parseArguments(toolCall);
+          if (toolCall.function.name === 'showWeatherCard' && !isLiveWeather(contextValue(input, '날씨'))) {
+            throw new OpenAIProviderError('location');
+          }
+          return { toolCall, args };
+        });
         messages = [
           ...messages,
           { role: 'assistant', content: assistant.content || null, tool_calls: assistant.toolCalls },
         ];
-        for (const toolCall of assistant.toolCalls) {
-          const event = await this.executeTool(toolCall, input);
+        for (const { toolCall, args } of validatedToolCalls) {
+          const event = await this.executeTool(toolCall, input, args);
           toolEvents = [...toolEvents, event];
           input.onTool?.(event);
           messages.push({ role: 'tool', tool_call_id: toolCall.id, content: event.result });
@@ -475,7 +483,9 @@ export class OpenAIResponseEngine implements ResponseEngine {
         },
         body: JSON.stringify({
           model: config.model,
-          messages: messages.slice(-MAX_CONVERSATION_MESSAGES - 1),
+          messages: messages[0]?.role === 'system'
+            ? [messages[0], ...messages.slice(1).slice(-MAX_CONVERSATION_MESSAGES)]
+            : messages.slice(-MAX_CONVERSATION_MESSAGES),
           tools: LLM_TOOLS,
           tool_choice: toolChoice,
           parallel_tool_calls: false,
@@ -503,11 +513,14 @@ export class OpenAIResponseEngine implements ResponseEngine {
     }
   }
 
-  private async executeTool(toolCall: OpenAIToolCall, input: ResponseEngineInput): Promise<ResponseToolEvent> {
-    const args = parseArguments(toolCall);
+  private async executeTool(
+    toolCall: OpenAIToolCall,
+    input: ResponseEngineInput,
+    args: Record<string, unknown>,
+  ): Promise<ResponseToolEvent> {
     if (toolCall.function.name === 'showWeatherCard') {
       const contextWeather = contextValue(input, '날씨');
-      if (!isLiveWeather(contextWeather)) throw new OpenAIProviderError('tool');
+      if (!isLiveWeather(contextWeather)) throw new OpenAIProviderError('location');
       const weather = contextWeather;
       return {
         name: 'showWeatherCard',
