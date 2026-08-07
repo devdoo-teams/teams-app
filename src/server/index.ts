@@ -96,6 +96,8 @@ const genUiActionStore = new GenUiActionStore(
 );
 const genUi = new GenUiResponseFactory(genUiActionStore);
 const channelsShadowMonitor = new ChannelsShadowMonitor();
+const openAiConfigured = Boolean(process.env.OPENAI_API_KEY?.trim());
+const openAiModel = process.env.OPENAI_MODEL?.trim() || 'gpt-4o-mini';
 
 if (legacyPublicMcp) {
   throw new Error('MCP_PUBLIC_ENABLED=true is no longer supported; MCP is local-only and requires the safe local gate.');
@@ -480,9 +482,14 @@ http.get('/api/health', (_request: any, response: any) => {
     copilotKitRuntime: '/api/copilotkit',
     genAI: process.env.COPILOTKIT_DETERMINISTIC_MODE === 'true'
       ? 'deterministic-test'
-      : process.env.OPENAI_API_KEY?.trim()
+      : openAiConfigured
         ? 'openai-configured'
         : 'not-configured',
+    genAIProvider: {
+      provider: 'openai',
+      configured: openAiConfigured,
+      model: openAiModel.slice(0, 120),
+    },
     genUiMode,
     genUi: 'adaptive-cards',
     channelsShadow: genUiMode === 'channels-shadow'
