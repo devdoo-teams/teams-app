@@ -17,6 +17,36 @@
 
 ## 순서
 
+### 0. 명령어 우선 기계 게이트
+
+화면 잠금·Computer Use·인앱 브라우저의 가용 여부와 무관하게 반복 검사를 먼저 실행한다.
+
+```bash
+npm run release:preflight   # typecheck 60s, test 300s, deployment 30s
+npm run release:package     # 새 ZIP, 내부 manifest, SHA-256
+npm run release:public      # 공개 /api/health와 /tabs/home
+# 또는 위 세 단계를 순서대로 한 번에 실행
+npm run release:gate
+```
+
+게이트는 하위 명령어의 출력·종료 코드·제한시간을 기록한다. timeout 또는 비정상 종료는 `BLOCKED`로 보고하고, 프로세스 그룹만 정리한다. 공개 서버·Dev Tunnel·기존 로그인 탭은 이 과정에서 종료하지 않는다. `release:public`이 HTTP 200을 확인하기 전에는 Teams UI 검증이나 완료 메시지로 넘어가지 않는다.
+
+`release:public`은 `--url`을 우선 사용하고, 없으면 `TEAMS_PUBLIC_URL`, `PUBLIC_BASE_URL`, `.env.runtime`의 `TAB_DOMAIN` 순서로 현재 공개 origin을 해석한다. 별도 URL을 매번 복사해 넣지 않아도 되지만, 실제 `portUri`가 바뀌면 `.env.runtime`을 먼저 갱신하고 패키지·업로드 절차를 다시 시작한다. 운영 `typecheck`는 `tsconfig.release.json`의 작은 vendor type stub으로 선언 그래프 폭주를 차단하며, 실제 패키지 선언을 별도로 진단할 때만 `npm run typecheck:vendor`를 사용한다.
+
+클라이언트는 `dist/client`를 선삭제하지 않고 임시 디렉터리에서 성공적으로 만든 뒤 교체한다. CopilotKit v2 대형 번들에서 현재 Node 24 + esbuild API의 source map 생성이 무기한 대기하는 회귀가 있으므로 운영 빌드 source map은 끈다. 이 문제를 다시 만나도 제한시간 게이트가 공개 산출물을 비우지 않은 채 중단되어야 한다.
+
+기계 게이트가 통과해도 다음 UI 게이트는 별도다.
+
+| 상태 | 의미 |
+| --- | --- |
+| `COMMAND_ONLY` | 소스·패키지·공개 HTTP까지만 확인됨 |
+| `PORTAL_UPLOAD_UNVERIFIED` | 새 ZIP 업로드/게시 버전을 아직 화면에서 확인하지 못함 |
+| `INSTALLED_VERSION_UNVERIFIED` | 실제 Teams 설치본이 ZIP 버전인지 확인하지 못함 |
+| `DESKTOP_UNVERIFIED` | Teams 데스크톱 접근성 트리·스크린샷·왕복을 확인하지 못함 |
+| `MOBILE_UNVERIFIED` | iOS WebView·위치 권한·모바일 왕복을 확인하지 못함 |
+
+화면이 잠겨 있으면 `COMMAND_ONLY` 단계는 진행하고, 네이티브 UI 단계만 해당 상태로 보류한다. 잠금 해제·비밀번호·Auth 앱 승인·파일 선택을 자동화하거나 우회하지 않는다.
+
 ### 1. 구현과 로컬 검증
 
 - 사용자의 요청사항을 코드·매니페스트·문서에 반영한다.

@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@ag-ui/core": ["types/release-stubs/ag-ui-core.d.ts"],
+      "@ag-ui/client": ["types/release-stubs/ag-ui-client.d.ts"],
+      "@copilotkit/react-core/v2": ["types/release-stubs/copilotkit-react-core-v2.d.ts"],
+      "@copilotkit/react-core/v2/headless": ["types/release-stubs/copilotkit-react-core-v2-headless.d.ts"],
+      "@copilotkit/runtime/v2": ["types/release-stubs/copilotkit-runtime-v2.d.ts"],
+      "@copilotkit/runtime/v2/express": ["types/release-stubs/copilotkit-runtime-v2-express.d.ts"],
+      "@copilotkit/channels-ui": ["types/release-stubs/copilotkit-channels-ui.d.ts"],
+      "@copilotkit/channels-teams": ["types/release-stubs/copilotkit-channels-teams.d.ts"],
+      "@microsoft/teams.apps": ["types/release-stubs/microsoft-teams-apps.d.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts", "types/release-stubs/**/*.d.ts"]
+}

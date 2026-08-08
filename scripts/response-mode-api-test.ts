@@ -31,9 +31,19 @@ async function freePort(): Promise<number> {
   return port;
 }
 
-async function waitForHealth(baseUrl: string, token: string): Promise<void> {
+async function waitForHealth(
+  baseUrl: string,
+  token: string,
+  diagnostics?: () => { exitCode: number | null; output: string },
+): Promise<void> {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
+    const state = diagnostics?.();
+    if (state?.exitCode !== null && state?.exitCode !== undefined) {
+      throw new Error(
+        `response-mode test server exited before health check (code ${state.exitCode}):\n${state.output.slice(-4_000)}`,
+      );
+    }
     try {
       const response = await fetch(`${baseUrl}/api/health`, {
         headers: { [ACCESS_TOKEN_HEADER]: token },
@@ -44,7 +54,10 @@ async function waitForHealth(baseUrl: string, token: string): Promise<void> {
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`server did not become healthy: ${baseUrl}`);
+  const state = diagnostics?.();
+  throw new Error(
+    `server did not become healthy: ${baseUrl}\n${state?.output?.slice(-4_000) ?? 'no child-process diagnostics'}`,
+  );
 }
 
 async function request(
@@ -163,6 +176,13 @@ async function main(): Promise<void> {
       TEAMS_LOCAL_DEV: 'true',
       TEAMS_BIND_HOST: '127.0.0.1',
       TEAMS_LOCAL_ACCESS_TOKEN: token,
+      // The release gate loads .env.runtime before invoking npm test. Keep
+      // public deployment hints out of this intentionally local test process;
+      // the server must reject skip-auth when those hints are present.
+      PUBLIC_BASE_URL: '',
+      TAB_DOMAIN: '',
+      BOT_DOMAIN: '',
+      DEV_TUNNEL_ID: '',
       MCP_PUBLIC_ENABLED: '',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -172,7 +192,7 @@ async function main(): Promise<void> {
   child.stderr?.on('data', (chunk) => { output += chunk.toString(); });
 
   try {
-    await waitForHealth(baseUrl, token);
+    await waitForHealth(baseUrl, token, () => ({ exitCode: child.exitCode, output }));
 
     const unauthenticated = await request(baseUrl, '/api/response-mode', undefined);
     assert.equal(unauthenticated.response.status, 401);

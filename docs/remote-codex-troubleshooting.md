@@ -18,6 +18,24 @@ Teams Bot에서 실행되는 Codex CLI 작업이 부모 Codex 앱의 브라우�
 
 ## 케이스별 대응
 
+### 공개 탭이 갑자기 404가 되거나 빌드 명령이 멈춤
+
+반복 배포에서 가장 먼저 명령어 게이트로 재현한다.
+
+```bash
+npm run test:build-client-atomic
+npm run test:release-gate
+npm run build:client
+curl -fsS https://<현재-portUri>/api/health
+curl -fsS https://<현재-portUri>/tabs/home/
+```
+
+`build:client`는 `dist/client`를 선삭제하지 않고 `.client-build-*` 임시 디렉터리에 출력한 뒤 성공 시에만 교체한다. 따라서 esbuild·CopilotKit 그래프가 멈춰도 이미 서비스 중인 클라이언트가 사라지지 않아야 한다. 현재 확인된 재현은 Node 24 + esbuild API에서 CopilotKit v2 대형 번들의 `sourcemap: true`가 무기한 대기하는 경우이며, 운영 번들은 source map을 끈다. 같은 문제가 재현되면 제한시간이 있는 `release:preflight`가 `BLOCKED`를 반환하는지 확인하고, 공개 서버를 죽이거나 이전 주소를 추측해 우회하지 않는다.
+
+`/api/health`가 200인데 `/tabs/home/`만 404이면 공개 프로세스는 살아 있고 정적 산출물만 없거나 교체되지 않은 상태다. 먼저 `test -f dist/client/index.html`과 `npm run build:client` 결과를 확인하고, 공개 서버 PID·Dev Tunnel은 유지한 채 다시 HTTP 검사를 한다.
+
+`COMMAND_ONLY` 또는 공개 HTTP 통과는 Developer Portal 업로드, 실제 Teams 설치 버전, 데스크톱 스크린샷, iPhone 위치 권한·모바일 왕복을 완료했다는 뜻이 아니다. 각 항목은 `PORTAL_UPLOAD_UNVERIFIED`, `INSTALLED_VERSION_UNVERIFIED`, `DESKTOP_UNVERIFIED`, `MOBILE_UNVERIFIED`로 계속 표시하고, 모든 UI 게이트가 확인되기 전에는 Teams 완료 메시지를 보내지 않는다.
+
 ### `Browser is not available`, `iab unavailable`
 
 Teams Bot에서 실행된 하위 Codex 프로세스가 부모 Codex 앱의 인앱 브라우저를 직접 제어하려고 시도한 것이다. 하위 프로세스에서 브라우저 재연결을 반복하지 않는다. 부모 Codex 오케스트레이터가 기존 로그인 탭을 URL·제목으로 확인해 재사용하고, 없을 때만 사용자에게 탭을 열도록 요청한다.

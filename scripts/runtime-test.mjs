@@ -292,6 +292,13 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
       TEAMS_LOCAL_DEV: production ? 'false' : 'true',
       TEAMS_BIND_HOST: '127.0.0.1',
       TEAMS_LOCAL_ACCESS_TOKEN: localAccessToken,
+      // Keep isolated runtime fixtures independent from the release gate's
+      // public .env.runtime values. Individual cases can opt back in through
+      // extraEnv when they explicitly test a deployment hint.
+      PUBLIC_BASE_URL: '',
+      TAB_DOMAIN: '',
+      BOT_DOMAIN: '',
+      DEV_TUNNEL_ID: '',
       MCP_PUBLIC_ENABLED: '',
       ...(teamsSdk
         ? {
@@ -339,6 +346,14 @@ async function expectStartupFailure(label, extraEnv, expectedMessage) {
       TEAMS_SKIP_AUTH: '',
       TEAMS_LOCAL_DEV: 'false',
       TEAMS_BIND_HOST: '127.0.0.1',
+      // The release gate intentionally loads .env.runtime. Startup-failure
+      // cases must start from a clean local environment so a real deployment
+      // hint or local token cannot mask the failure being asserted.
+      PUBLIC_BASE_URL: '',
+      TAB_DOMAIN: '',
+      BOT_DOMAIN: '',
+      DEV_TUNNEL_ID: '',
+      TEAMS_LOCAL_ACCESS_TOKEN: '',
       MCP_PUBLIC_ENABLED: '',
       ...extraEnv,
     },
@@ -387,6 +402,13 @@ async function expectStoreLeaseConflict(dataFile, jobDataFile) {
       TEAMS_LOCAL_DEV: 'true',
       TEAMS_BIND_HOST: '127.0.0.1',
       TEAMS_LOCAL_ACCESS_TOKEN: localAccessToken,
+      // The release gate loads the real deployment environment before this
+      // child is spawned. Keep the lease-conflict assertion focused on the
+      // store lock instead of letting a public-hint startup guard win first.
+      PUBLIC_BASE_URL: '',
+      TAB_DOMAIN: '',
+      BOT_DOMAIN: '',
+      DEV_TUNNEL_ID: '',
       MCP_PUBLIC_ENABLED: '',
     },
     stdio: ['ignore', 'pipe', 'pipe'],

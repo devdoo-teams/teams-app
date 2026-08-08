@@ -1,0 +1,77 @@
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import process from 'node:process';
+
+import {
+  assertPackagedManifest,
+  assertPublicHealth,
+  parseDotEnv,
+  resolvePublicUrl,
+  runWithTimeout,
+} from './release-gate.mjs';
+
+const expected = {
+  version: '1.0.12',
+  appId: 'e915b402-eed4-4ee2-ba1f-c31d75c870a5',
+  tabDomain: 'runtime.example.com',
+  clientId: '5b48ad62-f024-4a63-b3e8-66b589e3cd43',
+  applicationIdUri: 'api://runtime.example.com/5b48ad62-f024-4a63-b3e8-66b589e3cd43',
+};
+
+const validManifest = {
+  version: expected.version,
+  id: expected.appId,
+  staticTabs: [{ contentUrl: `https://${expected.tabDomain}/tabs/home` }],
+  devicePermissions: ['geolocation'],
+  webApplicationInfo: {
+    id: expected.clientId,
+    resource: expected.applicationIdUri,
+  },
+};
+
+const validHealth = {
+  ok: true,
+  version: expected.version,
+  environment: 'production',
+  auth: 'teams-authenticated',
+  userAuth: 'entra-sso',
+  bot: 'teams-sdk',
+  outbound: 'teams-sdk',
+};
+
+assert.deepEqual(parseDotEnv('A=one\nB="two words"\n# ignored\n'), {
+  A: 'one',
+  B: 'two words',
+});
+assert.equal(resolvePublicUrl({ TEAMS_PUBLIC_URL: 'https://explicit.test/' }), 'https://explicit.test');
+assert.equal(resolvePublicUrl({ PUBLIC_BASE_URL: 'https://base.test/' }), 'https://base.test');
+assert.equal(resolvePublicUrl({ TAB_DOMAIN: 'tab.test' }), 'https://tab.test');
+assert.equal(resolvePublicUrl({}), undefined);
+assert.doesNotThrow(() => assertPackagedManifest(validManifest, expected));
+assert.throws(
+  () => assertPackagedManifest({ ...validManifest, devicePermissions: [] }, expected),
+  /geolocation/,
+);
+assert.doesNotThrow(() => assertPublicHealth(validHealth, expected.version));
+assert.throws(
+  () => assertPublicHealth({ ...validHealth, outbound: 'local-outbox' }, expected.version),
+  /outbound/,
+);
+assert.throws(
+  () => assertPackagedManifest({ ...validManifest, webApplicationInfo: { ...validManifest.webApplicationInfo, resource: '${{APPLICATION_ID_URI}}' } }, expected),
+  /placeholder|resource/i,
+);
+await assert.rejects(
+  runWithTimeout(process.execPath, ['-e', 'setTimeout(() => {}, 1000)'], { timeoutMs: 25 }),
+  /timed out/,
+);
+
+const boundedPhase = spawnSync(
+  process.execPath,
+  ['scripts/release-gate.mjs', 'preflight', '--timeout-ms', '25'],
+  { cwd: process.cwd(), encoding: 'utf8' },
+);
+assert.notEqual(boundedPhase.status, 0, 'a timed-out release phase must fail');
+assert.match(`${boundedPhase.stdout}\n${boundedPhase.stderr}`, /"status":\s*"BLOCKED"/);
+
+console.log('Release gate contract tests passed.');

@@ -43,3 +43,13 @@ Teams 앱 변경 요청에는 별도 예외 승인이 없는 한 다음 순서�
 - 매니페스트의 `TAB_DOMAIN`과 Teams 관리 봇의 `messagingEndpoint`는 별도 상태다. 호스트가 바뀌면 현재 `portUri`의 `/api/messages`를 Teams 외부 앱 ID에 `teams app update <external-app-id> --endpoint https://<portUri>/api/messages --json`으로 반영하고, 응답의 `updated.endpoint`·`needsReinstall`를 확인한 뒤 새 ZIP을 다시 생성·업로드한다. 공개 `/api/health`가 살아 있어도 이전 엔드포인트가 남아 있으면 모바일 메시지는 무응답일 수 있다.
 - 결과는 반드시 `STATUS / EVIDENCE / COMPLETED / BLOCKER / NEXT ACTION` 형식으로 보고한다. 관찰하지 않은 로그인·브라우저 연결·모바일 GPS·업로드 완료를 주장하지 않는다.
 - Adaptive Card 응답은 카드 attachment만 전송한다. 카드와 같은 내용을 top-level `text`에 함께 넣어 Teams 모바일에서 회색 텍스트 버블과 카드가 중복 표시되지 않게 한다. 텍스트는 legacy 모드 또는 카드 전송 실패 시의 명시적 fallback에만 사용한다.
+
+## 명령어 우선 릴리스 게이트와 화면 잠금 대응
+
+- 반복 가능한 검사는 Computer Use나 화면 잠금 상태에 의존하지 않는다. 구현·타입체크·전체 테스트·배포 환경·ZIP 내부 매니페스트·공개 health·공개 탭 HTTP 응답은 명령어로 먼저 검증한다.
+- 릴리스 판정에는 다음 제한시간 게이트를 사용한다. `release:preflight`는 타입체크(60초), 전체 테스트(300초), 배포 환경(30초)을 순서대로 실행하고, `release:package`는 검증된 새 ZIP과 내부 매니페스트·SHA-256을 생성하며, `release:public`은 공개 health와 `/tabs/home`을 확인한다. 전부 실행할 때는 `npm run release:gate`를 사용한다.
+- `release:public`은 명시적 `--url` 다음 `TEAMS_PUBLIC_URL`, `PUBLIC_BASE_URL`, `.env.runtime`의 `TAB_DOMAIN`에서 공개 origin을 해석한다. `typecheck`는 런타임 패키지를 바꾸지 않는 release 전용 선언 stub을 사용하고, vendor 선언 그래프 진단은 별도 `typecheck:vendor`로 분리한다.
+- 게이트가 명령어 timeout이나 비정상 종료를 만나면 `BLOCKED`로 중단한다. 실패한 하위 프로세스 그룹은 정리하지만, 이미 실행 중인 공개 Teams 서버나 Dev Tunnel은 임의로 종료하지 않는다. 원인을 고친 뒤 같은 게이트를 다시 실행한다.
+- 클라이언트 빌드는 `dist/client`를 먼저 지우지 않고 형제 임시 디렉터리에서 빌드·후처리한 뒤 성공할 때만 원자적으로 교체한다. 따라서 빌드 실패가 공개 탭을 빈 404 상태로 만들면 안 된다. 현재 CopilotKit v2 대형 번들의 source map 생성은 Node 24 + esbuild API에서 무기한 대기하므로 운영 번들은 source map을 끈다.
+- 화면이 잠겨 있으면 명령어 게이트·공개 HTTPS·이미 로그인된 인앱 브라우저 탭 검증은 계속할 수 있다. 로그인·Auth 앱 승인·파일 선택·Teams 데스크톱 스크린샷처럼 네이티브 UI가 필요한 항목만 `DESKTOP_UNVERIFIED` 또는 `BLOCKED`로 분리하고 잠금 해제 우회나 자격 증명 추측을 하지 않는다.
+- 명령어 게이트 통과는 포털 업로드·설치 버전·Teams 데스크톱·모바일 사용자 확인을 대신하지 않는다. 최종 완료 상태에는 `PORTAL_UPLOAD_UNVERIFIED`, `INSTALLED_VERSION_UNVERIFIED`, `DESKTOP_UNVERIFIED`, `MOBILE_UNVERIFIED`가 남아 있지 않아야 한다.
