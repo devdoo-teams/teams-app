@@ -280,6 +280,7 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
       ITEM_STORE_PATH: dataFile,
       AGENT_JOB_STORE_PATH: jobDataFile,
       GENUI_ACTION_STORE_PATH: `${jobDataFile}.genui-actions.json`,
+      RESPONSE_MODE_STORE_PATH: `${jobDataFile}.response-modes.json`,
       AGENT_WORKSPACE: workspace,
       CODEX_BIN: process.execPath,
       CODEX_SCRIPT: path.join(root, 'scripts/fake-codex.mjs'),
@@ -572,17 +573,38 @@ async function runLocalFlow(dataFile, jobDataFile) {
     assert(health.body.userAuth === 'local-bypass', 'local health reports the user auth bypass truthfully');
     assert(health.body.bot === 'local-handler', 'local health reports the local Bot handler truthfully');
     assert(health.body.outbound === 'local-outbox', 'local health reports the local outbox truthfully');
-    assert(health.body.version === '1.0.6', 'health version comes from the Teams manifest');
+    assert(health.body.version === '1.0.7', 'health version comes from the Teams manifest');
     assert(!('agent' in health.body) && !('agentWorkspace' in health.body), 'health does not expose agent binary or workspace paths');
     assert(health.body.storage === 'file-json-single-process', 'local runtime reports single-process file storage');
     assert(health.body.copilotKit === 'enabled', 'CopilotKit runtime is enabled');
     assert(health.body.genAI === 'deterministic-test', 'local runtime reports explicit deterministic test mode');
+    assert(health.body.genAIProvider?.provider === 'openai', 'health identifies the optional OpenAI provider without exposing credentials');
+    assert(health.body.genAIProvider?.configured === false, 'no-key local health reports the OpenAI provider as unavailable');
     assert(health.body.genUiMode === 'hybrid', 'health reports the hybrid GenUI mode');
     assert(health.body.genUi === 'adaptive-cards', 'health reports Adaptive Cards as the GenUI renderer');
     assert(health.body.channelsShadow?.enabled === false, 'hybrid health disables Channels shadow diagnostics');
     assert(health.body.mcp === '/mcp' && health.body.mcpEnabled === true, 'local health exposes only the explicitly gated local MCP route');
     const healthSerialized = JSON.stringify(health.body);
     assert(!healthSerialized.includes(server.localAccessToken), 'local access token is absent from health output');
+    assert(!healthSerialized.includes('OPENAI_API_KEY') && !healthSerialized.includes('LOCAL_MODEL_BASE_URL'), 'health omits provider secrets and endpoint URLs');
+
+    const responseModeUnauthenticated = await request(server.baseUrl, '/api/response-mode', { localAccessToken: null });
+    assert(responseModeUnauthenticated.response.status === 401, 'response-mode status requires the authenticated local boundary');
+    const responseMode = await request(server.baseUrl, '/api/response-mode');
+    assert(responseMode.response.status === 200, 'response-mode status is available to the authenticated user');
+    assert(responseMode.body.mode === 'deterministic', 'no-key users default to the deterministic response engine');
+    assert(JSON.stringify(responseMode.body.availability?.map((entry) => [entry.mode, entry.configured])) === JSON.stringify([
+      ['deterministic', true],
+      ['openai', false],
+      ['local', false],
+    ]), 'response-mode availability exposes deterministic as the only configured engine without keys');
+    assert(!JSON.stringify(responseMode.body).includes('OPENAI_API_KEY') && !JSON.stringify(responseMode.body).includes('LOCAL_MODEL_BASE_URL'), 'response-mode status omits provider secrets and endpoint URLs');
+    const unavailableOpenAi = await request(server.baseUrl, '/api/response-mode', {
+      method: 'POST',
+      body: JSON.stringify({ mode: 'openai' }),
+    });
+    assert(unavailableOpenAi.response.status === 409, 'unconfigured OpenAI mode cannot be selected at runtime');
+    assert(unavailableOpenAi.body.mode === 'deterministic', 'failed mode selection preserves the deterministic mode');
 
     const staticTab = await rawRequest(server.baseUrl, '/tabs/home', {}, null);
     assert(staticTab.response.statusCode === 200, 'static tab entry loads without the local access token');
@@ -641,6 +663,8 @@ async function runLocalFlow(dataFile, jobDataFile) {
     }, { sessionId: initialize.sessionId, protocolVersion: mcpProtocolVersion });
     assert(workspaceSnapshot.response.status === 200, 'MCP get_workspace_snapshot returns 200');
     assert(workspaceSnapshot.body?.result?.structuredContent?.kind === 'task-list', 'MCP structuredContent returns the task-list GenUI envelope');
+    assert(workspaceSnapshot.body?.result?.structuredContent?.schemaVersion === '1', 'MCP structuredContent uses GenUiEnvelopeV1');
+    assert(workspaceSnapshot.body?.result?.content?.[0]?.text === workspaceSnapshot.body?.result?.structuredContent?.fallbackText, 'MCP text fallback matches the shared GenUI envelope');
 
     const copilotInfo = await request(server.baseUrl, '/api/copilotkit/info');
     assert(copilotInfo.response.status === 200, 'CopilotKit info endpoint returns 200');
@@ -1255,7 +1279,10 @@ async function runProductionAuthFlow(dataFile, jobDataFile) {
     assert(health.body.auth === 'teams-authenticated', 'production does not use local auth bypass');
     assert(health.body.userAuth === 'entra-sso', 'production health reports Entra SSO only when configured');
     assert(health.body.bot === 'teams-sdk', 'production health reports the Teams SDK Bot');
-    assert(health.body.version === '1.0.6', 'production health reports the Teams manifest version');
+    assert(health.body.version === '1.0.7', 'production health reports the Teams manifest version');
+    assert(health.body.genAI === 'not-configured', 'no-key production health does not pretend that OpenAI is configured');
+    assert(health.body.genAIProvider?.provider === 'openai' && health.body.genAIProvider?.configured === false, 'no-key production health keeps the optional provider unavailable and healthy');
+    assert(!JSON.stringify(health.body).includes('OPENAI_API_KEY') && !JSON.stringify(health.body).includes('LOCAL_MODEL_BASE_URL'), 'production health omits provider secrets and endpoint URLs');
     assert(health.body.mcp === 'disabled' && health.body.mcpEnabled === false, 'production disables MCP unless explicitly opted in');
 
     const disabledMcp = await request(server.baseUrl, '/mcp');
@@ -1277,11 +1304,21 @@ async function runProductionAuthFlow(dataFile, jobDataFile) {
 }
 
 async function runTeamsSdkFlow(dataFile, jobDataFile) {
-  const server = await startServer({ production: false, dataFile, jobDataFile, teamsSdk: true });
+  const server = await startServer({
+    production: false,
+    dataFile,
+    jobDataFile,
+    teamsSdk: true,
+    extraEnv: { COPILOTKIT_DETERMINISTIC_MODE: '' },
+  });
 
   try {
     const health = await request(server.baseUrl, '/api/health');
     assert(health.body.bot === 'teams-sdk', 'Teams SDK runtime branch is active');
+    assert(health.body.genAIProvider?.configured === false, 'Teams SDK runtime has no OpenAI key');
+
+    const modeStatus = await request(server.baseUrl, '/api/response-mode');
+    assert(modeStatus.body.mode === 'deterministic', 'Teams Bot defaults to the persisted deterministic mode without a key');
 
     const response = await request(server.baseUrl, '/api/messages', {
       method: 'POST',

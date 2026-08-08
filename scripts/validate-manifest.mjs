@@ -3,6 +3,9 @@ import path from 'node:path';
 
 const manifestPath = path.resolve('appPackage/manifest.json');
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+const packagePath = path.resolve('package.json');
+const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+const releaseVersion = '1.0.7';
 const required = [
   'manifestVersion',
   'version',
@@ -24,6 +27,11 @@ if (missing.length > 0) {
 
 if (manifest.manifestVersion !== '1.25') {
   console.error(`Expected manifestVersion 1.25, received ${manifest.manifestVersion}`);
+  process.exit(1);
+}
+
+if (packageJson.version !== releaseVersion || manifest.version !== releaseVersion) {
+  console.error(`Expected package and manifest version ${releaseVersion}, received package=${packageJson.version}, manifest=${manifest.version}`);
   process.exit(1);
 }
 

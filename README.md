@@ -30,6 +30,8 @@ TypeScript + React + Express + Microsoft Teams SDK 기반의 내부용 Teams 앱
 - CopilotKit `useRenderTool` 기반 업무 현황·날씨·workspace-write 승인 카드
 - `POST /api/copilotkit/agent/default/run` CopilotKit REST/SSE 런타임
 - OpenAI-compatible Chat Completions 기반 GenAI 에이전트와 tool-calling
+- v1.0.7 응답 엔진 선택: 결정형, OpenAI, 로컬/사내 OpenAI-compatible provider
+- Teams Bot Adaptive Card, Teams 탭 CopilotKit, MCP Apps가 공유하는 `GenUiEnvelopeV1` 응답 계약
 - Teams 모바일 HTML5 Geolocation 위치 조회 및 구형 호스트용 TeamsJS 위치 API fallback
 - Teams 앱 manifest `devicePermissions: ["geolocation"]` 선언
 - 환경 템플릿 기반 Teams manifest
@@ -54,7 +56,25 @@ TEAMS_LOCAL_DEV=true TEAMS_SKIP_AUTH=true npm run dev
 
 `TEAMS_SKIP_AUTH=true`는 `TEAMS_LOCAL_DEV=true`와 함께 사용하고, `NODE_ENV=production`이 아니며 `PUBLIC_BASE_URL`, `TAB_DOMAIN`, `BOT_DOMAIN`, `DEV_TUNNEL_ID`가 모두 비어 있는 로컬 개발에서만 허용됩니다. 이 안전한 로컬 게이트가 열릴 때만 MCP가 loopback 서버에 연결됩니다. `BOT_CLIENT_ID`, `CLIENT_SECRET`, `TENANT_ID`가 있으면 Teams SDK Bot은 계속 실행되어 실제 Teams 메시지 라우팅을 테스트할 수 있습니다. `TEAMS_SKIP_OUTBOUND=true`를 별도로 설정한 경우에만 비동기 진행·완료 메시지를 로컬 outbox에 보관합니다. 운영에서는 `TEAMS_SKIP_AUTH`와 `TEAMS_LOCAL_DEV`를 제거하고 Teams Bot 자격 증명과 Entra SSO를 모두 구성해야 합니다. 예전 `MCP_PUBLIC_ENABLED=true` 설정은 지원하지 않으며 시작 시 거부됩니다.
 
-CopilotKit 채팅은 `OPENAI_API_KEY`가 설정된 경우에만 실제 GenAI 경로를 사용합니다. 선택적으로 `OPENAI_MODEL`(기본 `gpt-4o-mini`)과 OpenAI-compatible `OPENAI_BASE_URL`을 지정할 수 있습니다. 키가 없는 운영 프로세스는 결정형 응답으로 위장하지 않고 GenAI 설정 오류를 반환합니다. `COPILOTKIT_DETERMINISTIC_MODE=true`는 자동 테스트 전용이며 운영에서 사용하면 안 됩니다.
+### 응답 엔진 선택과 모바일 사용 흐름
+
+v1.0.7부터 사용자·테넌트별로 다음 응답 엔진을 선택할 수 있습니다. 새 사용자와 키가 없는 환경의 기본값은 서버 네트워크가 필요 없는 결정형 모드입니다. 세 모드는 모두 같은 `GenUiEnvelopeV1`을 반환하므로 Teams Bot에서는 Adaptive Card, Teams 탭에서는 CopilotKit GenUI, MCP Apps에서는 구조화된 리소스로 같은 업무·날씨·승인 결과를 표현합니다.
+
+| 모드 | 용도 | 필요한 서버 설정 |
+| --- | --- | --- |
+| 결정형 | 키 없이 안정적인 업무·날씨·Codex 명령 실행 | 없음 |
+| OpenAI | OpenAI 또는 호환 Chat Completions 기반 자연어 응답 | `OPENAI_API_KEY` 및 선택적 `OPENAI_MODEL`, `OPENAI_BASE_URL` |
+| 로컬/사내 모델 | 사내망 또는 자체 호스팅 OpenAI-compatible endpoint | `LOCAL_MODEL_BASE_URL`, 선택적 `LOCAL_MODEL_NAME`, `LOCAL_MODEL_API_KEY` |
+
+모바일 Teams에서 선택하려면 다음 순서를 따릅니다.
+
+1. Developer Portal에 업로드된 v1.0.7 앱을 Teams 모바일에서 새로 고침하거나 앱을 다시 추가하고 `업무 허브` 개인 탭을 엽니다.
+2. 탭의 `응답 엔진` 선택 영역에서 `결정형`, `OpenAI`, `로컬/사내 모델` 중 하나를 누릅니다.
+3. 설정되지 않은 provider는 비활성화되어 있으며 모바일 사용자는 키·endpoint URL을 입력하지 않습니다. OpenAI/로컬 항목이 비활성화되어 있으면 `결정형`을 선택하거나 관리자에게 서버 설정을 요청합니다.
+4. Bot 대화에서는 `mode` 또는 `응답 모드`를 보내 같은 세 가지 선택 Adaptive Card를 열 수 있습니다. 선택 후 `help`, `list`, `status`, `날씨` 또는 자연어 요청을 보내 응답을 확인합니다.
+5. 선택값은 서버가 검증한 Entra 사용자·테넌트 scope에 저장됩니다. 클라이언트가 tenant/requester를 body에 넣어도 무시되며, 업무 ACL·승인 경계는 응답 모드와 독립적으로 유지됩니다.
+
+OpenAI와 로컬 provider의 비밀값은 서버 프로세스 환경변수에만 둡니다. Teams 모바일, 탭의 HTML, `/api/health`, `/api/response-mode`, GenUI 카드, MCP metadata에는 API key, bearer token, provider credential, provider endpoint URL을 넣지 않습니다. `OPENAI_API_KEY`가 없을 때 OpenAI 모드를 선택하면 설정 오류를 반환하고 결정형 성공 응답으로 위장하지 않습니다. `COPILOTKIT_DETERMINISTIC_MODE=true`는 자동 테스트 전용이며 운영 공개 프로세스에는 설정하지 않습니다.
 
 로컬/엔터프라이즈 OpenAI-compatible provider는 서버에서 `LOCAL_MODEL_BASE_URL`(필수), `LOCAL_MODEL_NAME`(기본 `local-model`), `LOCAL_MODEL_API_KEY`(선택)를 읽습니다. Teams 모바일 클라이언트는 이 URL·키를 입력하거나 덮어쓸 수 없으며, local provider가 설정되지 않거나 실패하면 OpenAI나 결정형 응답으로 자동 전환하지 않고 안전한 GenUI 오류를 반환합니다. 주소는 서버 환경변수의 `http://` 또는 `https://` URL만 허용하고 URL 안의 사용자명·비밀번호는 거부합니다. `LOCAL_MODEL_API_KEY`가 없어도 인증 없는 호환 서버를 사용할 수 있습니다.
 
@@ -100,6 +120,8 @@ npm test
 
 `npm run test:runtime`만 실행하면 이미 빌드된 서버를 기준으로 런타임 테스트를 반복할 수 있습니다. 테스트는 로컬 인증 우회 흐름, 업무 CRUD, Bot 명령, 설치 welcome message, Teams SDK Activity 라우팅, Codex thread 재개·취소·승인·Git commit·outbox 전달과 production bearer token 거부 흐름을 모두 확인합니다.
 
+`npm test`에는 Task 0–7의 저장소 hardening, 결정형/OpenAI/local provider, response-mode 저장소·API, Teams 탭 selector, MCP GenUI, 기존 CopilotKit·Teams·ACL 런타임 검증이 모두 포함됩니다. 릴리스 assertions는 무키 provider 상태, 결정형 기본값, 응답 모드 인증 경계, MCP/Teams/CopilotKit의 공통 GenUI 계약, v1.0.7 런타임 버전을 확인합니다.
+
 CopilotKit 런타임 검증은 `/api/copilotkit/info` 검색, 업무 현황·날씨 tool event, Codex 진행 스트림, workspace-write 승인 경계와 승인 카드 취소까지 포함합니다. Teams 탭의 CopilotKit 클라이언트는 REST/SSE 전송을 명시해 `/info`와 `/agent/default/run` 엔드포인트를 사용합니다.
 
 `npm run check:types`는 별도로 TypeScript 타입 검사를 실행합니다. 실행 환경의 TypeScript CLI가 멈추는 경우에도 `npm run build`는 esbuild 산출물을 만들고 런타임 테스트를 계속할 수 있습니다.
@@ -113,6 +135,8 @@ Teams 탭이 초기화되면 TeamsJS `authentication.getAuthToken()`으로 받�
 ## 앱 패키지 생성
 
 실제 Teams 등록 후 발급받은 값으로 패키지를 생성합니다.
+
+이 릴리스 후보의 소스 package와 Teams manifest 버전은 `1.0.7`로 고정되어 있으며 `npm run validate:manifest`가 두 값을 함께 검사합니다. 실제 배포 환경값이 없는 상태에서는 패키지를 업로드하거나 placeholder를 운영 자격 증명으로 간주하지 않습니다.
 
 운영 패키지를 만들기 전에 배포 환경 사전검사를 실행합니다. 이 검사는 검증용 placeholder, 로컬 호스트, 잘못된 GUID를 차단합니다. `BOT_ID`는 메시징용 Teams/Bot 등록 ID이고 `CLIENT_ID`는 탭/SSO용 Microsoft Entra 앱 등록 ID이므로 서로 다를 수 있습니다.
 
@@ -133,6 +157,8 @@ npm run package:app
 
 생성된 `appPackage/build/teams-sdk-mvp.zip`을 Teams Developer Portal 또는 Teams Admin Center에 업로드합니다.
 
+ZIP을 새로 만든 뒤에는 내부 `manifest.json`의 버전 `1.0.7`, `devicePermissions: ["geolocation"]`, 실제 valid domain, 해석된 ID/URI를 확인하고 SHA-256을 기록합니다. 이전 ZIP을 재사용하지 않습니다.
+
 `APPLICATION_ID_URI`는 Microsoft Entra 앱 등록의 `Expose an API`에 표시되는 실제 Application ID URI를 사용해야 합니다. 이 값은 manifest의 `webApplicationInfo.resource`로 들어갑니다.
 
 Teams 탭 SSO에서는 `TAB_DOMAIN`이 Microsoft Entra 테넌트에서 검증된 공개 HTTPS 도메인이어야 하며, `APPLICATION_ID_URI`는 반드시 `api://<TAB_DOMAIN>/<CLIENT_ID>`와 같아야 합니다. Dev Tunnel의 임시 호스트가 테넌트 검증 도메인이 아니면 Teams 화면은 열리지만 SSO 토큰 발급은 시작되지 않습니다. 이 경우에는 공개 힌트를 비운 로컬 환경에서 `TEAMS_LOCAL_DEV=true TEAMS_SKIP_AUTH=true`로 기능을 확인하고, 운영 전환 시 검증된 도메인으로 패키지를 다시 생성합니다.
@@ -142,6 +168,8 @@ Teams 탭 SSO에서는 `TAB_DOMAIN`이 Microsoft Entra 테넌트에서 검증된
 실제 Teams sideload에는 public HTTPS 터널과 Teams 앱 등록이 필요합니다.
 
 Teams 앱 변경 요청은 구현·로컬 검증 후 새 버전의 패키지를 생성하고 실제 업로드해야 합니다. 업로드가 끝나면 로컬 테스트 프로세스를 종료하고 `TEAMS_SKIP_AUTH`·`TEAMS_SKIP_OUTBOUND`가 없는 공개 Teams SDK 프로세스로 전환한 뒤, 공개 `/api/health`와 실제 Teams 메시지 왕복을 확인하고서야 Teams 완료 메시지를 보냅니다. 이 순서는 저장소 전역 지침인 [`AGENTS.md`](AGENTS.md)와 [Teams 릴리스 워크플로우](docs/teams-release-workflow.md)에 고정되어 있습니다.
+
+필수 릴리스 순서는 `새 ZIP 생성·검사 → Developer Portal 업로드 확인 → local bypass/outbox 프로세스 종료 → 실제 자격 증명의 공개 Teams SDK 프로세스 시작 → 공개 HTTPS health에서 auth=teams-authenticated, userAuth=entra-sso, bot=teams-sdk, outbound=teams-sdk 확인 → 공개 탭과 실제 Teams 모바일 메시지 왕복 확인 → 그 뒤에만 완료 메시지 전송`입니다. 공개 health 또는 모바일 왕복을 관찰하지 못하면 완료로 보고하지 않고 BLOCKER로 남깁니다.
 
 ```bash
 npm install -g @microsoft/teams.cli
