@@ -74,7 +74,11 @@ function activity(baseUrl: string, text: string, suffix: string, value?: unknown
     timestamp: new Date().toISOString(),
     serviceUrl: baseUrl,
     channelId: 'msteams',
-    from: { id: 'response-mode-user', name: 'Response Mode Test User' },
+    from: {
+      id: '29:response-mode-bot-framework-user',
+      aadObjectId: 'response-mode-user',
+      name: 'Response Mode Test User',
+    },
     conversation: { id: `response-mode-conversation-${suffix}`, tenantId: 'response-mode-tenant' },
     channelData: { tenant: { id: 'response-mode-tenant' } },
     recipient: { id: 'runtime-bot', name: 'Teams SDK MVP' },
@@ -234,6 +238,16 @@ async function main(): Promise<void> {
     });
     assert.equal(cardSubmit.response.status, 200);
     assertPass(JSON.stringify(cardSubmit.body.activities).includes('결정형'), 'mode card submit returns a result card');
+
+    const naturalLanguage = await request(baseUrl, '/api/messages', token, {
+      method: 'POST',
+      body: JSON.stringify(activity(baseUrl, '현재 업무 목록 보여줘', 'natural-language')),
+    });
+    assert.equal(naturalLanguage.response.status, 200, JSON.stringify(naturalLanguage.body));
+    assertPass(
+      JSON.stringify(naturalLanguage.body.activities).includes('업무 목록'),
+      'Teams Bot natural-language messages use the persisted response-engine selection and return GenUI',
+    );
 
     const storePath = join(dataRoot, 'cross-tenant.json');
     const store = new ResponseModeStore(storePath);

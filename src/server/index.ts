@@ -19,8 +19,10 @@ import {
 import { CodexRunner } from './codex-runner.js';
 import { GitService } from './git-service.js';
 import { TeamsCodexAgent } from './copilot-agent.js';
+import { DeterministicResponseEngine } from './response-engine-deterministic.js';
 import { LocalCompatibleResponseEngine } from './response-engine-local.js';
-import { configureResponseEngineRouter } from './response-engine.js';
+import { OpenAIResponseEngine } from './response-engine-openai.js';
+import { ResponseEngineRouter, configureResponseEngineRouter } from './response-engine.js';
 import { ResponseModeStore } from './response-mode-store.js';
 import {
   createResponseModeCardActivity,
@@ -52,6 +54,7 @@ import {
   responseModeLabel,
   type ResponseMode,
 } from '../shared/response-mode.js';
+import type { RunAgentInput } from '@ag-ui/core';
 
 const port = Number(process.env.PORT ?? 3978);
 const isProduction = process.env.NODE_ENV === 'production';
@@ -175,6 +178,13 @@ configureResponseEngineRouter({
   },
 });
 
+// Bot messages and CopilotKit runs must use the same server-owned resolver.
+// The router constructor also includes the globally configured local engine.
+const botResponseEngineRouter = new ResponseEngineRouter([
+  new DeterministicResponseEngine(),
+  new OpenAIResponseEngine(),
+]);
+
 let http: any;
 let teamsApp: any;
 let userAuthValidator: any;
@@ -231,7 +241,11 @@ function validateItemTitle(value: unknown): { value?: string; error?: string } {
 }
 
 function activityScope(activity: any): AgentJobScope | undefined {
-  const requesterId = nonEmptyString(activity?.from?.id);
+  // Teams SDK activities expose the Entra object id as aadObjectId. Prefer it
+  // so Bot and CopilotKit requests share the same server-owned preference scope;
+  // the Bot Framework id remains a compatibility fallback for local fixtures.
+  const requesterId = nonEmptyString(activity?.from?.aadObjectId)
+    ?? nonEmptyString(activity?.from?.id);
   const conversationId = nonEmptyString(activity?.conversation?.id);
   const tenantId = nonEmptyString(activity?.conversation?.tenantId)
     ?? nonEmptyString(activity?.channelData?.tenant?.id);
@@ -1175,6 +1189,44 @@ async function handleResponseModeSubmit(activity: any, send: BotSend): Promise<v
   await send(text, undefined, createResponseModeCardActivity(parsed.mode, publicResponseModeAvailability(), text));
 }
 
+function botResponseRequest(activity: any, prompt: string, scope: AgentJobScope): RunAgentInput {
+  return {
+    threadId: scope.conversationId,
+    runId: `teams-bot-${crypto.randomUUID()}`,
+    state: {},
+    messages: [{ id: `teams-bot-message-${crypto.randomUUID()}`, role: 'user', content: prompt }],
+    tools: [],
+    context: [],
+    forwardedProps: {
+      channelId: nonEmptyString(activity?.channelId) ?? 'msteams',
+      conversationType: nonEmptyString(activity?.conversation?.conversationType) ?? 'personal',
+    },
+  };
+}
+
+async function handleBotNaturalLanguage(activity: any, send: BotSend, scope: AgentJobScope, prompt: string): Promise<void> {
+  try {
+    const output = await botResponseEngineRouter.run({
+      // The server-owned resolver replaces this fallback with the persisted
+      // tenant/requester selection. The deterministic fallback is also the
+      // safe behavior for local test mode.
+      mode: 'deterministic',
+      prompt,
+      request: botResponseRequest(activity, prompt, scope),
+      scope,
+      itemStore,
+      agentService,
+      setActiveJobId: () => undefined,
+      isCancelled: () => false,
+    });
+    await send(output.text, output.envelope);
+  } catch (error) {
+    console.error('Teams Bot response engine failed', error);
+    const text = '응답 엔진을 실행하지 못했습니다. mode에서 사용 가능한 모드를 선택한 뒤 다시 시도하세요.';
+    await send(text, genUi.error(text, 'response-engine-error'));
+  }
+}
+
 async function handleMessage(activity: any, send: BotSend): Promise<void> {
   const userText = typeof activity.text === 'string'
     ? activity.text.replace(/<at>.*?<\/at>/gi, '').trim()
@@ -1395,25 +1447,7 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
       await send(promptResult.error, genUi.error(promptResult.error, 'natural-language-prompt-invalid'));
       return;
     }
-    const previous = agentService.latestCompletedForConversation(scope);
-    if (previous) {
-      const continued = await agentService.continue(previous.id, promptResult.value!, scope);
-      if (continued) {
-        const responseText = `이전 Codex 대화를 이어서 작업 ${continued.id}을 시작했습니다.\nstatus ${continued.id}`;
-        const envelope = genUi.continued(continued);
-        await send(responseText, envelope);
-        return;
-      }
-    }
-
-    const job = await agentService.submit({
-      prompt: promptResult.value!,
-      mode: 'read-only',
-      scope,
-    });
-    const responseText = `자연어 작업 ${job.id}을 읽기 전용으로 시작했습니다.\nstatus ${job.id}`;
-    const envelope = genUi.naturalLanguageStarted(job);
-    await send(responseText, envelope);
+    await handleBotNaturalLanguage(activity, send, scope, promptResult.value!);
     return;
   }
 
