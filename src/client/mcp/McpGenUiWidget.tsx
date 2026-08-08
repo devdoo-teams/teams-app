@@ -3,8 +3,15 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { GenUiCard } from '../genui/GenUiCard.js';
 import {
+  RESPONSE_MODES,
+  ResponseModeSchema,
+  responseModeLabel,
+} from '../../shared/response-mode.js';
+import {
   GenUiEnvelopeV1Schema,
+  GenUiResponseModeSchema,
   type GenUiEnvelopeV1,
+  type GenUiResponseMode,
 } from '../../shared/genui.js';
 
 type ToolResult = Parameters<NonNullable<App['ontoolresult']>>[0];
@@ -24,6 +31,41 @@ function PreviewNotice({ connected, error }: { connected: boolean; error: Error 
   );
 }
 
+function safeResponseMode(value: GenUiResponseMode | undefined): GenUiResponseMode | null {
+  const parsed = GenUiResponseModeSchema.safeParse(value);
+  if (!parsed.success) return null;
+  const mode = ResponseModeSchema.parse(parsed.data.mode);
+  const availability = RESPONSE_MODES.map((candidate) => {
+    const supplied = parsed.data.availability.find((entry) => entry.mode === candidate);
+    return {
+      mode: candidate,
+      label: responseModeLabel(candidate),
+      configured: supplied?.configured ?? false,
+      requiresServerConfiguration: candidate !== 'deterministic',
+    };
+  });
+  const selected = availability.find((entry) => entry.mode === mode);
+  return selected
+    ? { mode, label: selected.label, configured: selected.configured, availability }
+    : null;
+}
+
+function ResponseModeNotice({ responseMode }: { responseMode: GenUiResponseMode }) {
+  const available = responseMode.availability
+    .filter((entry) => entry.configured)
+    .map((entry) => entry.label)
+    .join(' · ');
+  return (
+    <section className="mcp-mode-status" aria-label="응답 모드 상태">
+      <div>
+        <strong>응답 모드</strong>
+        <span>{responseMode.label} · {responseMode.configured ? '사용 가능' : '서버 설정 필요'}</span>
+      </div>
+      {available && <small>공개 사용 가능: {available}</small>}
+    </section>
+  );
+}
+
 export function McpGenUiWidget() {
   const [envelope, setEnvelope] = useState<GenUiEnvelopeV1 | null>(null);
   const [toolResultError, setToolResultError] = useState<string | null>(null);
@@ -31,6 +73,7 @@ export function McpGenUiWidget() {
   const [bridgeError, setBridgeError] = useState<Error | null>(null);
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const hasSuppressedActions = Boolean(envelope && (envelope.actions.length > 0 || envelope.aiGenerated));
+  const displayedResponseMode = safeResponseMode(envelope?.responseMode);
 
   const handleToolResult = useCallback((result: ToolResult) => {
     const parsed = GenUiEnvelopeV1Schema.safeParse(result.structuredContent);
@@ -79,6 +122,7 @@ export function McpGenUiWidget() {
       <style>{styles}</style>
       {envelope ? (
         <>
+          {displayedResponseMode && <ResponseModeNotice responseMode={displayedResponseMode} />}
           <GenUiCard envelope={envelope} theme={theme} interactive={false} />
           {hasSuppressedActions && (
             <p className="mcp-readonly-note" role="note">
@@ -104,6 +148,9 @@ body { margin: 0; background: transparent; color: #242424; }
 .mcp-empty code { display: block; margin: 10px 0; padding: 8px; overflow-wrap: anywhere; border-radius: 8px; background: rgba(128,128,128,.12); text-align: left; font-size: 11px; }
 .mcp-empty small { display: block; margin-top: 14px; line-height: 1.5; opacity: .65; }
 .mcp-inline-error { color: #b42318; font-size: 12px; }
+.mcp-mode-status { display: grid; gap: 4px; margin: 0 auto 10px; padding: 10px 12px; border: 1px solid #d9dcf0; border-radius: 12px; background: rgba(98,100,167,.08); color: #25274b; font-size: 12px; }
+.mcp-mode-status div { display: flex; gap: 8px; justify-content: space-between; flex-wrap: wrap; }
+.mcp-mode-status small { color: #667085; font-size: 11px; }
 .mcp-readonly-note { margin: 8px 2px 0; color: #667085; font-size: 11px; line-height: 1.5; }
 .genui-card { width: 100%; max-width: 640px; margin: 0 auto; overflow: hidden; border: 1px solid #e0e3f2; border-radius: 16px; background: #fff; color: #25274b; box-shadow: 0 12px 32px rgba(37,52,89,.09); font-family: inherit; }
 .genui-card[data-theme="dark"] { border-color: #3b3e4e; background: #1e1f25; color: #f5f6ff; }

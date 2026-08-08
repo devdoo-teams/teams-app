@@ -1,5 +1,12 @@
 import { z } from 'zod';
 
+import {
+  RESPONSE_MODES,
+  ResponseModeAvailabilitySchema,
+  ResponseModeSchema,
+  type ResponseMode,
+} from './response-mode.js';
+
 export const GENUI_SCHEMA_VERSION = '1' as const;
 
 export const GENUI_KINDS = [
@@ -54,6 +61,18 @@ export const GenUiSectionTypeSchema = z.enum(GENUI_SECTION_TYPES);
 export const GenUiActionNameSchema = z.enum(GENUI_ACTIONS);
 export const GenUiToneSchema = z.enum(['neutral', 'info', 'success', 'warning', 'danger']);
 export const GenUiActionStyleSchema = z.enum(['default', 'positive', 'destructive']);
+
+/**
+ * Public, provider-neutral response mode state. This is optional because a
+ * generic MCP host has no Teams identity and must not call the Teams-only
+ * response-mode API to discover it.
+ */
+export const GenUiResponseModeSchema = z.object({
+  mode: ResponseModeSchema,
+  label: z.string().min(1).max(80),
+  configured: z.boolean(),
+  availability: z.array(ResponseModeAvailabilitySchema).max(RESPONSE_MODES.length),
+}).strict();
 
 export const GenUiScalarSchema = z.union([
   z.string().max(2_000),
@@ -192,6 +211,7 @@ export const GenUiEnvelopeV1BaseSchema = z.object({
   aiGenerated: z.boolean().default(false),
   fallbackText: z.string().min(1).max(4_000).optional(),
   metadata: GenUiMetadataSchema.default({}),
+  responseMode: GenUiResponseModeSchema.optional(),
 }).strict();
 
 export const GenUiEnvelopeV1Schema = GenUiEnvelopeV1BaseSchema.superRefine((value, context) => {
@@ -221,6 +241,7 @@ export type GenUiSectionType = z.infer<typeof GenUiSectionTypeSchema>;
 export type GenUiTone = z.infer<typeof GenUiToneSchema>;
 export type GenUiActionStyle = z.infer<typeof GenUiActionStyleSchema>;
 export type GenUiActionName = z.infer<typeof GenUiActionNameSchema>;
+export type GenUiResponseMode = z.infer<typeof GenUiResponseModeSchema>;
 export type GenUiScalar = z.infer<typeof GenUiScalarSchema>;
 export type GenUiItem = z.infer<typeof GenUiItemSchema>;
 export type GenUiFact = z.infer<typeof GenUiFactSchema>;
@@ -229,6 +250,8 @@ export type GenUiCitation = z.infer<typeof GenUiCitationSchema>;
 export type GenUiAction = z.infer<typeof GenUiActionSchema>;
 export type GenUiMetadata = z.infer<typeof GenUiMetadataSchema>;
 export type GenUiEnvelopeV1 = z.infer<typeof GenUiEnvelopeV1Schema>;
+
+export type GenUiResponseModeName = ResponseMode;
 
 export function parseGenUiEnvelope(value: unknown): GenUiEnvelopeV1 {
   return GenUiEnvelopeV1Schema.parse(value);

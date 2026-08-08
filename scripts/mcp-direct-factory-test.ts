@@ -6,8 +6,11 @@ import express from 'express';
 import {
   createMcpGenUiRouter,
   createMcpGenUiServer,
+  MCP_GENUI_RESOURCE_MIME_TYPE,
+  MCP_GENUI_RESOURCE_URI,
   type McpGenUiServerOptions,
 } from '../src/server/mcp-genui.js';
+import { GenUiEnvelopeV1Schema } from '../src/shared/genui.js';
 
 const dependencies: McpGenUiServerOptions = {
   itemStore: {
@@ -152,12 +155,48 @@ async function verifyProtocol(label: string, baseUrl: string): Promise<void> {
     'task-list',
     `${label}: get_workspace_snapshot returns a GenUI envelope`,
   );
+  const snapshotEnvelope = GenUiEnvelopeV1Schema.parse(snapshot.body?.result?.structuredContent);
+  assert.equal(
+    snapshot.body?.result?.content?.[0]?.text,
+    snapshotEnvelope.fallbackText,
+    `${label}: non-MCP host text matches the structured fallback text`,
+  );
+
+  const resourcesList = await mcpRequest(baseUrl, {
+    jsonrpc: '2.0',
+    id: 35,
+    method: 'resources/list',
+    params: {},
+  }, initialize.sessionId);
+  assert.equal(resourcesList.response.status, 200, `${label}: resources/list returns 200`);
+  const resource = (resourcesList.body?.result?.resources as Array<Record<string, any>> | undefined)
+    ?.find((entry) => entry.uri === MCP_GENUI_RESOURCE_URI);
+  assert.equal(resource?.uri, MCP_GENUI_RESOURCE_URI, `${label}: resources/list exposes the canonical GenUI URI`);
+  assert.equal(resource?.mimeType, MCP_GENUI_RESOURCE_MIME_TYPE, `${label}: resources/list exposes the MCP Apps MIME type`);
+
+  const resourceRead = await mcpRequest(baseUrl, {
+    jsonrpc: '2.0',
+    id: 36,
+    method: 'resources/read',
+    params: { uri: MCP_GENUI_RESOURCE_URI },
+  }, initialize.sessionId);
+  assert.equal(resourceRead.response.status, 200, `${label}: resources/read returns 200`);
+  assert.equal(
+    resourceRead.body?.result?.contents?.[0]?.mimeType,
+    MCP_GENUI_RESOURCE_MIME_TYPE,
+    `${label}: resources/read returns text/html;profile=mcp-app`,
+  );
+  assert.match(
+    String(resourceRead.body?.result?.contents?.[0]?.text),
+    /^<!doctype html>/i,
+    `${label}: resources/read returns HTML content`,
+  );
 
   const secretActionToken = 'untrusted-secret-action-token';
   const untrustedCitation = 'https://untrusted.example.invalid/private';
   const rejected = await mcpRequest(baseUrl, {
     jsonrpc: '2.0',
-    id: 4,
+    id: 5,
     method: 'tools/call',
     params: {
       name: 'render_workspace_response',

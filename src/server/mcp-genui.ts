@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import express, { type RequestHandler, type Router } from 'express';
-import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server';
+import { registerAppResource, registerAppTool } from '@modelcontextprotocol/ext-apps/server';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -22,10 +22,13 @@ import {
   GENUI_SCHEMA_VERSION,
   GenUiEnvelopeV1BaseSchema,
   GenUiEnvelopeV1Schema,
+  GenUiResponseModeSchema,
   type GenUiEnvelopeV1,
+  type GenUiResponseMode,
   type GenUiKind,
   type GenUiState,
 } from '../shared/genui.js';
+import { RESPONSE_MODES, responseModeLabel } from '../shared/response-mode.js';
 
 export const MCP_GENUI_RESOURCE_URI = 'ui://teams-workspace/v1/genui.html';
 export const MCP_GENUI_RESOURCE_MIME_TYPE = 'text/html;profile=mcp-app';
@@ -60,6 +63,8 @@ export interface McpGenUiServerOptions extends McpGenUiDependencies {
   /** Optional server identity override for host diagnostics. */
   serverName?: string;
   serverVersion?: string;
+  /** Optional public mode state supplied by an authenticated MCP integration. */
+  responseMode?: GenUiResponseMode;
   /** Maximum idle time for a stateful MCP session. Defaults to ten minutes. */
   sessionTtlMs?: number;
   /** Maximum number of mapped or initializing stateful sessions. Defaults to 64. */
@@ -94,6 +99,7 @@ type EnvelopeInput = {
   citations?: Array<Record<string, unknown>>;
   aiGenerated?: boolean;
   metadata?: Record<string, unknown>;
+  responseMode?: unknown;
   status?: GenUiState;
 };
 
@@ -135,7 +141,7 @@ function jobToSectionItem(job: AgentJob): Record<string, unknown> {
 }
 
 function createEnvelope(input: EnvelopeInput): GenUiEnvelopeV1 {
-  return GenUiEnvelopeV1Schema.parse({
+  return sanitizeMcpEnvelope(GenUiEnvelopeV1Schema.parse({
     schemaVersion: GENUI_SCHEMA_VERSION,
     kind: input.kind,
     id: input.id,
@@ -149,19 +155,69 @@ function createEnvelope(input: EnvelopeInput): GenUiEnvelopeV1 {
     aiGenerated: input.aiGenerated ?? false,
     fallbackText: input.fallbackText,
     ...(input.metadata ? { metadata: input.metadata } : {}),
-  });
+    ...(input.responseMode ? { responseMode: input.responseMode } : {}),
+  }));
 }
 
-function resultForEnvelope(envelope: GenUiEnvelopeV1, text: string): CallToolResult {
-  const parsed = GenUiEnvelopeV1Schema.parse(envelope);
+const SENSITIVE_METADATA_KEY = /(api[_-]?key|secret|token|password|authorization|provider[_-]?url|base[_-]?url|endpoint)/i;
+const URL_VALUE = /\b(?:https?|wss?):\/\//i;
+
+function normalizeResponseMode(value: unknown): GenUiResponseMode | undefined {
+  const parsed = GenUiResponseModeSchema.safeParse(value);
+  if (!parsed.success) return undefined;
+
+  const availability = RESPONSE_MODES.map((mode) => {
+    const supplied = parsed.data.availability.find((entry) => entry.mode === mode);
+    return {
+      mode,
+      label: responseModeLabel(mode),
+      configured: supplied?.configured ?? false,
+      requiresServerConfiguration: mode !== 'deterministic',
+    };
+  });
+  const selected = availability.find((entry) => entry.mode === parsed.data.mode);
+  if (!selected) return undefined;
   return {
-    content: [{ type: 'text', text }],
-    structuredContent: Object.fromEntries(Object.entries(parsed)),
+    mode: selected.mode,
+    label: selected.label,
+    configured: selected.configured,
+    availability,
   };
 }
 
-function fallbackTextOf(envelope: GenUiEnvelopeV1): string {
-  return envelope.fallbackText ?? '';
+function sanitizeMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(metadata).filter(([key, value]) => {
+    if (SENSITIVE_METADATA_KEY.test(key)) return false;
+    return typeof value !== 'string' || !URL_VALUE.test(value);
+  }));
+}
+
+function sanitizeMcpEnvelope(envelope: GenUiEnvelopeV1): GenUiEnvelopeV1 {
+  const responseMode = normalizeResponseMode(envelope.responseMode);
+  const sanitized = {
+    ...envelope,
+    metadata: sanitizeMetadata(envelope.metadata),
+    ...(responseMode ? { responseMode } : {}),
+  };
+  if (!responseMode) delete (sanitized as Partial<GenUiEnvelopeV1>).responseMode;
+  return GenUiEnvelopeV1Schema.parse(sanitized);
+}
+
+function withFallbackText(envelope: GenUiEnvelopeV1): GenUiEnvelopeV1 {
+  const parsed = sanitizeMcpEnvelope(envelope);
+  if (parsed.fallbackText) return parsed;
+  return GenUiEnvelopeV1Schema.parse({
+    ...parsed,
+    fallbackText: parsed.summary ?? parsed.title ?? '요청 결과를 표시합니다.',
+  });
+}
+
+function resultForEnvelope(envelope: GenUiEnvelopeV1): CallToolResult {
+  const parsed = withFallbackText(envelope);
+  return {
+    content: [{ type: 'text', text: parsed.fallbackText! }],
+    structuredContent: Object.fromEntries(Object.entries(parsed)),
+  };
 }
 
 function errorResult(message: string): CallToolResult {
@@ -175,10 +231,10 @@ function errorResult(message: string): CallToolResult {
     status: 'error',
     metadata: { source: 'mcp', deterministic: true },
   });
-  return { ...resultForEnvelope(envelope, message), isError: true };
+  return { ...resultForEnvelope(envelope), isError: true };
 }
 
-function workspaceEnvelope(deps: McpGenUiDependencies, limit = 8): GenUiEnvelopeV1 {
+function workspaceEnvelope(deps: McpGenUiDependencies, limit = 8, responseMode?: GenUiResponseMode): GenUiEnvelopeV1 {
   const items = deps.itemStore.list();
   const summary = deps.itemStore.summary();
   const jobs = deps.agentService.listLocalOnly(limit);
@@ -223,10 +279,11 @@ function workspaceEnvelope(deps: McpGenUiDependencies, limit = 8): GenUiEnvelope
     ],
     fallbackText: `${itemText}\n\n${jobText}`,
     metadata: { source: 'teams-workspace', deterministic: true },
+    responseMode,
   });
 }
 
-function weatherEnvelope(weather: WeatherResponse): GenUiEnvelopeV1 {
+function weatherEnvelope(weather: WeatherResponse, responseMode?: GenUiResponseMode): GenUiEnvelopeV1 {
   const { current, location } = weather;
   return createEnvelope({
     kind: 'weather',
@@ -253,10 +310,11 @@ function weatherEnvelope(weather: WeatherResponse): GenUiEnvelopeV1 {
     ],
     fallbackText: `${location.name}\n${current.temperature.toFixed(1)}°C · ${current.condition}\n체감 ${current.apparentTemperature.toFixed(1)}°C · 습도 ${Math.round(current.humidity)}% · 바람 ${current.windSpeed.toFixed(1)}km/h`,
     metadata: { source: weather.source, deterministic: true },
+    responseMode,
   });
 }
 
-function jobEnvelope(job: AgentJob | undefined, limit = 8): GenUiEnvelopeV1 {
+function jobEnvelope(job: AgentJob | undefined, limit = 8, responseMode?: GenUiResponseMode): GenUiEnvelopeV1 {
   if (!job) {
     return createEnvelope({
       kind: 'job-status',
@@ -266,6 +324,7 @@ function jobEnvelope(job: AgentJob | undefined, limit = 8): GenUiEnvelopeV1 {
       sections: [{ type: 'status', status: 'not-found' }],
       fallbackText: '요청한 Codex 작업을 찾을 수 없습니다.',
       metadata: { source: 'teams-workspace', deterministic: true },
+      responseMode,
     });
   }
 
@@ -306,23 +365,32 @@ function jobEnvelope(job: AgentJob | undefined, limit = 8): GenUiEnvelopeV1 {
       job.progress.length > 0 ? job.progress.slice(-limit).join('\n') : undefined,
     ].filter(Boolean).join('\n\n'),
     metadata: { source: 'teams-workspace', deterministic: true },
+    responseMode,
   });
 }
 
 async function resolveWidgetHtml(options: McpGenUiServerOptions): Promise<string> {
-  if (typeof options.widgetHtml === 'string') return options.widgetHtml;
-  if (typeof options.widgetHtml === 'function') return await options.widgetHtml();
+  if (typeof options.widgetHtml === 'string') return validateWidgetHtml(options.widgetHtml);
+  if (typeof options.widgetHtml === 'function') return validateWidgetHtml(await options.widgetHtml());
 
   const widgetPath = options.widgetHtmlPath ?? path.resolve(process.cwd(), 'dist/mcp-widget/index.html');
   try {
-    return await fs.readFile(widgetPath, 'utf8');
+    return validateWidgetHtml(await fs.readFile(widgetPath, 'utf8'));
   } catch (error) {
     const reason = error instanceof Error ? error.message : 'unknown error';
     throw new Error(`MCP GenUI 위젯 산출물을 찾을 수 없습니다: ${widgetPath} (${reason}). node scripts/build-mcp-widget.mjs를 먼저 실행하세요.`);
   }
 }
 
+function validateWidgetHtml(value: string): string {
+  if (!/^\s*(?:<!doctype\s+html\b|<html\b)/i.test(value)) {
+    throw new Error('MCP GenUI 위젯 리소스가 유효한 HTML 문서가 아닙니다.');
+  }
+  return value;
+}
+
 function registerTools(server: McpServer, options: McpGenUiServerOptions): void {
+  const responseMode = normalizeResponseMode(options.responseMode);
   registerAppTool(
     server,
     'get_workspace_snapshot',
@@ -340,8 +408,8 @@ function registerTools(server: McpServer, options: McpGenUiServerOptions): void 
       _meta: { ui: { visibility: ['model'] } },
     },
     async ({ limit }) => {
-      const envelope = workspaceEnvelope(options, limit ?? 8);
-      return resultForEnvelope(envelope, fallbackTextOf(envelope));
+      const envelope = workspaceEnvelope(options, limit ?? 8, responseMode);
+      return resultForEnvelope(envelope);
     },
   );
 
@@ -364,8 +432,8 @@ function registerTools(server: McpServer, options: McpGenUiServerOptions): void 
     async ({ latitude, longitude, demo }) => {
       try {
         const weather = await options.getWeather(latitude, longitude, { demo });
-        const envelope = weatherEnvelope(weather);
-        return resultForEnvelope(envelope, fallbackTextOf(envelope));
+        const envelope = weatherEnvelope(weather, responseMode);
+        return resultForEnvelope(envelope);
       } catch (error) {
         const message = error instanceof Error ? error.message : '날씨 정보를 가져오지 못했습니다.';
         return errorResult(`날씨 조회에 실패했습니다. 위치와 네트워크를 확인하세요. (${message})`);
@@ -393,8 +461,8 @@ function registerTools(server: McpServer, options: McpGenUiServerOptions): void 
       const selected = jobId
         ? options.agentService.getLocalOnly(jobId)
         : options.agentService.listLocalOnly(limit ?? 8)[0];
-      const envelope = jobEnvelope(selected, limit ?? 8);
-      return resultForEnvelope(envelope, fallbackTextOf(envelope));
+      const envelope = jobEnvelope(selected, limit ?? 8, responseMode);
+      return resultForEnvelope(envelope);
     },
   );
 
@@ -429,7 +497,7 @@ function registerTools(server: McpServer, options: McpGenUiServerOptions): void 
         return errorResult('MCP GenUI 위젯은 읽기 전용입니다. action 또는 feedback이 포함된 envelope는 Teams 호스트에서만 렌더링할 수 있습니다.');
       }
 
-      return resultForEnvelope(parsed.data, fallbackTextOf(parsed.data));
+      return resultForEnvelope(parsed.data);
     },
   );
 }
@@ -464,7 +532,7 @@ export function createMcpGenUiServer(options: McpGenUiServerOptions): McpGenUiSe
     async (uri) => ({
       contents: [{
         uri: uri.toString(),
-        mimeType: RESOURCE_MIME_TYPE,
+        mimeType: MCP_GENUI_RESOURCE_MIME_TYPE,
         text: await resolveWidgetHtml(options),
         _meta: {
           ui: {
