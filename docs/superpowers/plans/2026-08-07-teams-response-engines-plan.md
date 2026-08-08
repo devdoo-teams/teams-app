@@ -331,7 +331,7 @@ git commit -m "feat: expose selectable modes through MCP GenUI"
 - Create: scripts/response-engine-runtime-test.mjs when the existing runtime harness cannot express provider switching cleanly
 
 **Interfaces:**
-- Produces version 1.0.7 consistently in the Teams manifest, runtime assertions, and package output.
+- Produces version 1.0.8 consistently in the Teams manifest, runtime assertions, and package output.
 - Produces npm test coverage for every focused test from Tasks 0–7.
 
 - [ ] Step 1: Add all focused tests to npm test.
@@ -344,7 +344,7 @@ Assert that no-key production deterministic mode is healthy, OpenAI availability
 
 - [ ] Step 3: Align versions and docs.
 
-Set the app manifest and runtime expectation to 1.0.7. Document the three modes, server-only secrets, local endpoint reachability, and the exact mobile selection flow.
+Set the app manifest and runtime expectation to 1.0.8. Document the three modes, server-only secrets, local endpoint reachability, and the exact mobile selection flow.
 
 - [ ] Step 4: Run the complete local gate.
 
@@ -364,13 +364,13 @@ unzip -l appPackage/build/*.zip
 shasum -a 256 appPackage/build/*.zip
 ~~~
 
-Verify the ZIP contains the v1.0.7 manifest, devicePermissions, valid domains, and no local-only token or placeholder.
+Verify the ZIP contains the v1.0.8 manifest, devicePermissions, valid domains, and no local-only token or placeholder.
 
 - [ ] Step 6: Commit the release candidate.
 
 ~~~bash
 git add package.json package-lock.json appPackage/manifest.json scripts/runtime-test.mjs scripts/validate-deployment-env.mjs scripts/validate-manifest.mjs README.md scripts/response-engine-runtime-test.mjs
-git commit -m "release: selectable Teams response engines v1.0.7"
+git commit -m "release: selectable Teams response engines v1.0.8"
 ~~~
 
 ### Task 9: External release and Teams mobile E2E gate (orchestrator-owned)
@@ -379,12 +379,12 @@ git commit -m "release: selectable Teams response engines v1.0.7"
 - No source-file changes. Evidence is recorded in docs/teams-release-workflow.md or the release report only after observation.
 
 **Interfaces:**
-- Consumes the committed v1.0.7 ZIP and the user’s authenticated in-app Developer Portal session.
+- Consumes the committed v1.0.8 ZIP and the user’s authenticated in-app Developer Portal session.
 - Produces upload evidence, public health evidence, and Teams mobile message screenshots/observations.
 
-- [ ] Step 1: Upload the new ZIP in the Codex in-app browser.
+- [ ] Step 1: Reuse the authenticated Developer Portal or Teams Admin Center tab and upload the new ZIP.
 
-Confirm the portal shows the new version and successful validation. Do not reuse an old ZIP.
+For an existing app ID, use Teams Admin Center app management → custom app search → existing app detail → new version → file upload. Confirm the target shows the new version and successful validation. Do not use the top-level new-app upload action for an existing app and do not reuse an old ZIP.
 
 - [ ] Step 2: Stop local bypass processes and start the public Teams SDK process.
 

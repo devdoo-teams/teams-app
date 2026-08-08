@@ -5,7 +5,7 @@ const manifestPath = path.resolve('appPackage/manifest.json');
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 const packagePath = path.resolve('package.json');
 const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
-const releaseVersion = '1.0.7';
+const releaseVersion = '1.0.8';
 const required = [
   'manifestVersion',
   'version',

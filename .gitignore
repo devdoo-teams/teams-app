@@ -2,6 +2,7 @@ node_modules/
 dist/
 appPackage/build/
 data/*.json
+data/.*-store-lease*/
 .env
 .env.*
 !.env.example

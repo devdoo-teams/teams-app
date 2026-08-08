@@ -2,6 +2,19 @@
 
 이 문서는 Teams 앱 변경 요청의 종료 조건을 정의한다. 로컬 화면이 열리고 `npm test`가 통과한 것만으로는 완료가 아니다.
 
+## 인앱 브라우저 세션과 업로드 대상 보존 원칙
+
+배포 작업은 Codex 인앱 브라우저에 이미 열려 있는 로그인 세션과 탭을 기반으로 이어간다.
+
+- 시작할 때 기존 탭 목록에서 Developer Portal, Teams Admin Center 앱 상세, Teams 채팅, 공개 Teams 탭을 URL과 제목으로 확인하고, 일치하는 탭을 재사용한다.
+- 같은 페이지를 다시 `goto`하거나 새 로그인 탭을 반복 생성하지 않는다. 사용자 로그인·Auth 앱 승인·모바일 검증 중인 탭을 닫지 않는다.
+- Teams Admin Center의 앱 상세 페이지에서 `게시된 버전`과 `새 버전 → 파일 업로드`를 직접 확인한다. `동작 → 새 앱 업로드`는 동일 앱 ID를 신규 앱으로 처리하므로 기존 앱 업데이트에 사용하지 않는다.
+- Developer Portal의 `앱 가져오기`는 앱 목록/검증 흐름으로 동작할 수 있고 동일 앱 ID 업데이트가 멈추거나 거부될 수 있다. 기존 앱 업데이트는 Teams Admin Center의 기존 앱 상세 경로를 우선한다.
+- 파일 선택기가 운영체제 창으로 전환되어 브라우저 자동화에서 보이지 않으면 Mac 잠금 해제만 사용자에게 요청한다. 패키지나 앱 ID를 바꾸어 우회하지 않는다.
+- 브라우저 작업이 끝나도 사용자에게 필요한 로그인·관리자·Teams 모바일 탭은 유지한다. 탭 정리는 중복·오류 탭에 한정하고, 사용자가 이어서 확인할 탭은 handoff 상태로 남긴다.
+
+이 규칙은 매번 새 창을 만들어 로그인 상태를 잃거나, 신규 앱 업로드 경로에서 동일 앱 ID 오류를 반복하는 문제를 방지한다.
+
 ## 순서
 
 ### 1. 구현과 로컬 검증
@@ -17,6 +30,18 @@
 - 생성된 ZIP을 열어 실제 `manifest.json`의 버전, 앱 ID, 도메인, `devicePermissions`를 확인한다.
 - ZIP의 SHA-256을 기록한다. 이전 ZIP을 재사용하거나 “패키지를 만들었다”고 추정하지 않는다.
 
+Dev Tunnel을 다시 만들었으면 tunnel ID를 공개 호스트로 간주하지 않는다. 다음 순서로 실제 호스트를 확인한다.
+
+```bash
+devtunnel user login --use-browser-auth --entra
+devtunnel create <tunnel-id> --allow-anonymous
+devtunnel port create <tunnel-id> -p 3978 --protocol http
+devtunnel host <tunnel-id> --allow-anonymous
+devtunnel show <tunnel-id> --json
+```
+
+`ports[].portUri`의 실제 HTTPS 호스트로 `TAB_DOMAIN`을 설정해 패키지를 생성한다. 기존 주소가 더 이상 응답하지 않으면 이전 주소를 재사용한다고 가정하지 않는다.
+
 ### 3. Git 이력
 
 - `git diff`, `git status`, 테스트 결과를 검토한다.
@@ -25,7 +50,7 @@
 
 ### 4. 실제 업로드
 
-- 승인된 Developer Portal 또는 Teams Admin Center의 배포 대상에 새 ZIP을 업로드한다.
+- 승인된 Developer Portal 또는 Teams Admin Center의 배포 대상에 새 ZIP을 업로드한다. 동일 앱 ID 업데이트는 Teams Admin Center의 `앱 관리 → 사용자 지정 앱 검색 → 기존 앱 상세 → 새 버전 → 파일 업로드`를 사용한다. `동작 → 새 앱 업로드`에서 동일 앱 ID 오류가 나면 신규 앱 생성 문제가 아니라 업데이트 경로를 잘못 선택한 것이다.
 - 업로드 후 대상 화면에서 새 버전과 검증 결과를 직접 확인한다.
 - 인증·정책·업로드 대상이 없으면 안전한 범위까지만 진행하고 `BLOCKER`로 보고한다. 성공을 추측하지 않는다.
 
@@ -53,6 +78,8 @@ npm run start
 ```
 
 `local-handler`, `local-outbox`, `local-bypass`, `outbound=disabled`가 하나라도 보이면 공개 전환이 완료되지 않은 것이다. 이 상태에서는 완료 메시지를 보내지 않는다.
+
+공개 Dev Tunnel 인증이 필요한 경우 디바이스 코드가 보안 기본값으로 차단될 수 있다. 이때 브라우저 인증을 사용하고 사용자가 Auth 앱 승인을 완료한 뒤 `devtunnel user show`가 로그인 상태인지 확인한다. 터널 호스트가 출력한 `Connect via browser` URL과 `devtunnel show --json`의 `portUri`가 패키지의 `TAB_DOMAIN`과 일치해야 한다.
 
 ### 6. 엔드투엔드 런타임 검증
 
