@@ -83,6 +83,8 @@ npm run start
 
 공개 Dev Tunnel 인증이 필요한 경우 디바이스 코드가 보안 기본값으로 차단될 수 있다. 이때 브라우저 인증을 사용하고 사용자가 Auth 앱 승인을 완료한 뒤 `devtunnel user show`가 로그인 상태인지 확인한다. 터널 호스트가 출력한 `Connect via browser` URL과 `devtunnel show --json`의 `portUri`가 패키지의 `TAB_DOMAIN`과 일치해야 한다.
 
+Entra SSO는 패키지 업로드 성공만으로 완료된 것으로 보지 않는다. `Expose an API`의 Application ID URI가 `api://<TAB_DOMAIN>/<CLIENT_ID>`와 같은지 확인하고, 실제 Teams 탭 iframe에서 `authentication.getAuthToken()`을 호출해 `App resource defined in manifest and iframe origin do not match`가 없는지 검증한다. 불일치가 재현되고 관리자 접근이 작업 범위에 있으면 Entra URI를 먼저 수정한 뒤 `access_as_user` 범위, `webApplicationInfo.resource`, `APPLICATION_ID_URI`를 동일 값으로 맞추고 반드시 새 버전 패키지를 다시 생성·업로드한다.
+
 ### 6. 엔드투엔드 런타임 검증
 
 - 공개 HTTPS 탭 URL이 새 UI를 제공하는지 확인한다.

@@ -42,7 +42,7 @@ Teams Bot에서 실행된 하위 Codex 프로세스가 부모 Codex 앱의 인�
 
 ### `APPLICATION_ID_URI` 불일치
 
-`.env`의 실제 Entra Application ID URI와 매니페스트 `webApplicationInfo.resource`를 맞춘다. Dev Tunnel의 `api://<domain>/<client-id>`를 추측해 실제 등록값을 덮어쓰지 않는다. 실제 Entra 등록값을 바꾸는 작업은 별도 관리자 권한과 SSO 재동의가 필요하다.
+먼저 Entra `Expose an API`의 실제 Application ID URI, 매니페스트 `webApplicationInfo.resource`, 탭 iframe의 공개 origin을 세 방향으로 비교한다. Teams 탭에서 `App resource defined in manifest and iframe origin do not match`가 재현되면 `api://<TAB_DOMAIN>/<CLIENT_ID>`를 기준으로 Entra URI를 관리자 화면에서 명시적으로 수정하고, `access_as_user` 범위의 접두사도 같은 값인지 확인한다. 그 뒤 `.env.runtime`의 `APPLICATION_ID_URI`를 Entra에 저장된 정확한 값으로 갱신하고 버전 증가·매니페스트 검증·새 ZIP 생성·기존 앱 업데이트 업로드·실제 탭 SSO 재검증을 모두 수행한다. 관리자 권한이 없으면 URI를 추측하거나 기존 등록값을 덮어쓰지 말고 BLOCKER로 보고한다.
 
 ### 인앱 브라우저와 Dev Tunnel 재사용
 
