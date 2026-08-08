@@ -2,6 +2,11 @@ import { app as teamsApp, geoLocation, location as teamsLocation } from '@micros
 import { FormEvent, Suspense, lazy, useEffect, useRef, useState } from 'react';
 
 import { apiFetch, getLastAuthError, setAuthRequired } from './auth.js';
+import {
+  ResponseModeSelector,
+  getPublicResponseMode,
+  useResponseMode,
+} from './ResponseModeSelector.js';
 
 const LazyCopilotWorkspaceRuntime = lazy(async () => {
   const module = await import('./CopilotWorkspaceAssistant.js');
@@ -125,6 +130,8 @@ export function App() {
   const [teamsClientType, setTeamsClientType] = useState('');
   const [teamsHostName, setTeamsHostName] = useState('');
   const [copilotReady, setCopilotReady] = useState(false);
+  const responseMode = useResponseMode();
+  const selectedResponseMode = getPublicResponseMode(responseMode.state);
   const teamsLocationReady = useRef<Promise<TeamsLocationRuntime> | null>(null);
   const deviceLocationRequest = useRef<Promise<DeviceLocation> | null>(null);
   const weatherRequestGeneration = useRef(0);
@@ -609,6 +616,14 @@ export function App() {
           <strong>{health?.genAI === 'openai-configured' ? 'OpenAI 연결됨' : health?.genAI === 'deterministic-test' ? '테스트 모드' : '설정 필요'}</strong>
         </div>
         <div>
+          <span>응답 모드</span>
+          <strong>
+            {responseMode.state.status === 'loading'
+              ? '확인 중'
+              : `${selectedResponseMode.label} · ${selectedResponseMode.configured ? '사용 가능' : '설정 필요'}`}
+          </strong>
+        </div>
+        <div>
           <span>저장소</span>
           <strong>{health?.storage === 'file-json' ? '파일 JSON' : health?.storage || '-'}</strong>
         </div>
@@ -617,6 +632,11 @@ export function App() {
           <strong>{health ? new Date(health.timestamp).toLocaleTimeString('ko-KR') : '-'}</strong>
         </div>
       </section>
+
+      <ResponseModeSelector
+        onSelectMode={responseMode.selectMode}
+        state={responseMode.state}
+      />
 
       <section className="weather-widget" aria-label="현재 위치 날씨 위젯">
         <div className="weather-heading">
@@ -827,6 +847,7 @@ export function App() {
       <LazyCopilotWorkspaceRuntime
         health={health ? { ok: health.ok, bot: health.bot, userAuth: health.userAuth, genAI: health.genAI } : null}
         items={items}
+        responseMode={selectedResponseMode}
         summary={summary}
         teamsHostName={teamsHostName}
         weather={weather}

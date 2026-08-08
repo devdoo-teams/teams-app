@@ -10,6 +10,7 @@ import { useState, type ReactNode } from 'react';
 import { z } from 'zod';
 
 import { apiFetch, getCachedAuthHeaders } from './auth.js';
+import type { PublicResponseMode } from './ResponseModeSelector.js';
 import { GenUiCard } from './genui/GenUiCard.js';
 import './genui/genui.css';
 import {
@@ -205,6 +206,7 @@ export type CopilotWorkspaceAssistantProps = {
   items: WorkspaceItem[];
   summary: { total: number; open: number; done: number };
   health: WorkspaceHealth | null;
+  responseMode: PublicResponseMode | null;
 };
 
 export function CopilotWorkspaceAssistant(props: CopilotWorkspaceAssistantProps) {
@@ -219,6 +221,10 @@ export function CopilotWorkspaceAssistant(props: CopilotWorkspaceAssistantProps)
   useAgentContext({
     description: '현재 Teams 런타임 상태',
     value: props.health ?? { status: 'checking' },
+  });
+  useAgentContext({
+    description: '현재 Teams 응답 모드(공개 메타데이터만 포함)',
+    value: props.responseMode ?? { status: 'checking' },
   });
 
   useRenderTool({
@@ -245,7 +251,12 @@ export function CopilotWorkspaceAssistant(props: CopilotWorkspaceAssistantProps)
           <h2>업무 도우미</h2>
           <p>모델이 선택한 도구 결과를 날씨·업무·승인 카드로 표시합니다.</p>
         </div>
-        <span className="copilot-live-badge"><span aria-hidden="true" />{getGenAiBadgeLabel(props.health?.genAI)}</span>
+        <div className="copilot-heading-badges">
+          <span className="copilot-live-badge"><span aria-hidden="true" />{getGenAiBadgeLabel(props.health?.genAI)}</span>
+          <span className="copilot-mode-badge">
+            응답 모드 · {props.responseMode?.label ?? '확인 중'} · {props.responseMode?.configured ? '사용 가능' : '설정 필요'}
+          </span>
+        </div>
       </div>
       <CopilotChat
         agentId="default"
@@ -272,7 +283,12 @@ export function CopilotWorkspaceRuntime(props: CopilotWorkspaceAssistantProps & 
       enableInspector={false}
       headers={getCachedAuthHeaders}
       onError={(event) => console.warn('CopilotKit runtime error', event.error)}
-      properties={{ surface: 'teams-tab', host: teamsHostName || 'browser' }}
+      properties={{
+        surface: 'teams-tab',
+        host: teamsHostName || 'browser',
+        responseMode: props.responseMode?.mode ?? 'unknown',
+        responseModeConfigured: props.responseMode?.configured ?? false,
+      }}
       runtimeUrl="/api/copilotkit"
       useSingleEndpoint={false}
     >
