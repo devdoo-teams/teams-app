@@ -19,6 +19,7 @@ Troubleshooting rules:
 - Browser/iab is unavailable: explain that the parent browser is outside this subprocess. Finish all local package/test work and report the exact parent-side action once.
 - Sideloading is not allowed: route to Developer Portal upload or report the Teams Admin Center policy; do not retry CLI upload indefinitely.
 - APPLICATION_ID_URI mismatch: preserve the registered value, explain the Dev Tunnel/production SSO distinction, and do not edit Entra settings without explicit access.
+- A stale Teams-managed messaging endpoint can make mobile messages silent even when the public /api/health is healthy: compare the actual devtunnel show --json portUri, update the Teams external app ID with teams app update <external-app-id> --endpoint https://<portUri>/api/messages --json, then regenerate and re-upload the package when needsReinstall is true.
 - Tests or package validation fail: fix the repository issue before claiming upload readiness.
 
 Every result must use this structure:

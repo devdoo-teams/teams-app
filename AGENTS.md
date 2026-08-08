@@ -30,4 +30,5 @@ Teams 앱 변경 요청에는 별도 예외 승인이 없는 한 다음 순서�
 - `APPLICATION_ID_URI` 불일치는 Entra에 등록된 실제 URI를 보존하고 Dev Tunnel URI를 추측해 바꾸지 않는다. 개발 터널의 SSO 경고와 패키지 업로드 가능 여부를 별도로 보고한다.
 - Dev Tunnel CLI가 디바이스 코드 흐름에서 보안 기본값으로 거부되면 브라우저 인증(`devtunnel user login --use-browser-auth --entra`)을 시도하고, 비밀번호·Auth 앱 승인·추가 인증은 사용자에게 맡긴다. 로그인 후에는 `devtunnel create`, `devtunnel port create`, `devtunnel host`를 분리 실행한다. `tunnel-id`와 실제 공개 `ports[].portUri` 호스트가 다를 수 있으므로 `devtunnel show <tunnel-id> --json`의 `portUri`를 기준으로 패키지를 만든다.
 - 공개 터널 호스트가 바뀌면 `TAB_DOMAIN`을 새 호스트로 바꾸고 버전 증가·매니페스트 검증·새 ZIP 생성·기존 앱 업데이트 업로드를 다시 수행한다. 기존 주소가 응답하지 않는다고 새 주소를 추측하지 말고, `curl`로 `/api/health`를 확인한 실제 `portUri`만 사용한다.
+- 매니페스트의 `TAB_DOMAIN`과 Teams 관리 봇의 `messagingEndpoint`는 별도 상태다. 호스트가 바뀌면 현재 `portUri`의 `/api/messages`를 Teams 외부 앱 ID에 `teams app update <external-app-id> --endpoint https://<portUri>/api/messages --json`으로 반영하고, 응답의 `updated.endpoint`·`needsReinstall`를 확인한 뒤 새 ZIP을 다시 생성·업로드한다. 공개 `/api/health`가 살아 있어도 이전 엔드포인트가 남아 있으면 모바일 메시지는 무응답일 수 있다.
 - 결과는 반드시 `STATUS / EVIDENCE / COMPLETED / BLOCKER / NEXT ACTION` 형식으로 보고한다. 관찰하지 않은 로그인·브라우저 연결·모바일 GPS·업로드 완료를 주장하지 않는다.

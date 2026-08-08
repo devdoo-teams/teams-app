@@ -18,6 +18,10 @@ assert.equal(
   'sideload-policy',
 );
 assert.equal(
+  diagnoseRemoteTroubleshooting('Teams mobile is silent; stale messagingEndpoint still points to the old tunnel').code,
+  'teams-endpoint',
+);
+assert.equal(
   diagnoseRemoteTroubleshooting('APPLICATION_ID_URI mismatch: expected api://example/client').code,
   'sso-uri-mismatch',
 );

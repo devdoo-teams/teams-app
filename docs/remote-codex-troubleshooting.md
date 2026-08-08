@@ -52,6 +52,18 @@ Teams Bot에서 실행된 하위 Codex 프로세스가 부모 Codex 앱의 인�
 - `devtunnel show <tunnel-id> --json`의 `ports[].portUri`를 실제 공개 주소로 사용한다. tunnel ID와 호스트명이 같다고 가정하지 않는다.
 - 공개 주소가 바뀌면 매니페스트 도메인과 패키지를 함께 갱신하고 기존 앱 업데이트 절차를 반복한다.
 
+### Teams 모바일 Bot 무응답과 오래된 메시징 엔드포인트
+
+공개 탭의 `/api/health`가 정상이어도 Teams 관리 봇 등록의 `messagingEndpoint`가 이전 Dev Tunnel을 가리키면 모바일 메시지가 Bot까지 도달하지 않는다. 현재 `devtunnel show --json`의 `ports[].portUri`를 기준으로 다음을 실행한다.
+
+```bash
+teams app update <external-app-id> \
+  --endpoint https://<portUri>/api/messages \
+  --json
+```
+
+출력의 `updated.endpoint`가 현재 호스트인지 확인하고, `needsReinstall: true`이면 버전 증가·새 ZIP 생성·기존 앱 상세의 파일 업로드·앱 재설치까지 다시 진행한다. 죽은 이전 호스트를 재사용하거나 health 200만으로 모바일 왕복을 완료했다고 판단하지 않는다.
+
 ### 패키지 업로드 전 필수 증거
 
 - `npm test` 통과

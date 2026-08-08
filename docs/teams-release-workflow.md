@@ -42,6 +42,8 @@ devtunnel show <tunnel-id> --json
 
 `ports[].portUri`의 실제 HTTPS 호스트로 `TAB_DOMAIN`을 설정해 패키지를 생성한다. 기존 주소가 더 이상 응답하지 않으면 이전 주소를 재사용한다고 가정하지 않는다.
 
+매니페스트의 `TAB_DOMAIN`과 Teams 관리 봇의 메시징 엔드포인트는 별도 등록이다. 공개 호스트가 바뀌면 Teams 외부 앱 ID를 사용해 `teams app update <external-app-id> --endpoint https://<portUri>/api/messages --json`으로 `messagingEndpoint`를 갱신하고, 출력의 `updated.endpoint`가 현재 주소인지 확인한다. `needsReinstall: true`가 나오면 반드시 새 ZIP 생성·업로드와 Teams 앱 재설치를 수행한다. `/api/health`가 200이어도 이전 엔드포인트가 남아 있으면 모바일 Bot은 응답하지 않는다.
+
 ### 3. Git 이력
 
 - `git diff`, `git status`, 테스트 결과를 검토한다.

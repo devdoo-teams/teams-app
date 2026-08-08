@@ -3,6 +3,7 @@ export type RemoteTroubleshootingCode =
   | 'teams-cli-auth'
   | 'browser-unavailable'
   | 'sideload-policy'
+  | 'teams-endpoint'
   | 'sso-uri-mismatch'
   | 'package-validation'
   | 'network'
@@ -30,6 +31,15 @@ export function diagnoseRemoteTroubleshooting(input: string): RemoteTroubleshoot
       code: 'sideload-policy',
       summary: 'Teams 사용자 정책이 CLI 사용자 지정 앱 업로드를 차단했습니다.',
       nextAction: 'Developer Portal 업로드를 사용하거나 Teams Admin Center에서 Upload custom apps 정책을 확인하세요.',
+    };
+  }
+
+  if (/(?:messaging endpoint|messagingendpoint|bot[^\n]*endpoint|봇[^\n]*엔드포인트|\/api\/messages)/i.test(text)
+    && /(?:stale|old|dead|unreachable|timeout|무응답|응답[^\n]*(?:없|안 오)|오래된|이전[^\n]*터널)/i.test(text)) {
+    return {
+      code: 'teams-endpoint',
+      summary: 'Teams 관리 봇이 현재 공개 터널이 아닌 이전 메시징 엔드포인트를 가리키고 있습니다.',
+      nextAction: '현재 `devtunnel show --json`의 `portUri`를 확인하고, Teams 외부 앱 ID로 `teams app update <external-app-id> --endpoint https://<portUri>/api/messages --json`을 실행한 뒤 `needsReinstall` 결과에 따라 새 ZIP을 재생성·재업로드하세요.',
     };
   }
 
