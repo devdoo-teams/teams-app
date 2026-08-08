@@ -1,6 +1,7 @@
 node_modules/
 dist/
 appPackage/build/
+.release/
 data/*.json
 data/.*-store-lease*/
 .env
