@@ -253,6 +253,10 @@ const phaseTimeouts = {
   public: 30_000,
 };
 
+export function gatePhaseForLoop(phase) {
+  return phase === 'machine' ? 'preflight' : phase;
+}
+
 export function parseGatePayload(stdout, stderr) {
   const source = String(stdout || stderr || '').trim();
   if (!source) throw new Error('release gate returned no JSON evidence');
@@ -261,7 +265,7 @@ export function parseGatePayload(stdout, stderr) {
 
 async function runGatePhase(phase) {
   const gatePath = path.join(root, 'scripts', 'release-gate.mjs');
-  const result = await runWithTimeout(process.execPath, [gatePath, phase], {
+  const result = await runWithTimeout(process.execPath, [gatePath, gatePhaseForLoop(phase)], {
     cwd: root,
     timeoutMs: phaseTimeouts[phase],
     maxOutputChars: 20_000,

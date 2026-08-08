@@ -9,6 +9,7 @@ import {
   completionMessage,
   createInitialState,
   deriveStatus,
+  gatePhaseForLoop,
   missingGates,
   parseGatePayload,
   validateEvidence,
@@ -169,6 +170,9 @@ assert.match(report, /0123456/);
 assert.match(report, /a{64}/);
 assert.doesNotMatch(report, /desktop-proof\.png/);
 assert.doesNotMatch(report, /Bearer|sk-|client_secret|password/i);
+assert.equal(gatePhaseForLoop('machine'), 'preflight');
+assert.equal(gatePhaseForLoop('package'), 'package');
+assert.equal(gatePhaseForLoop('public'), 'public');
 assert.deepEqual(parseGatePayload('', JSON.stringify({ status: 'BLOCKED', phase: 'public' })), {
   status: 'BLOCKED',
   phase: 'public',
