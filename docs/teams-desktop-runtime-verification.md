@@ -45,7 +45,7 @@ nodeRepl.write(state.text);
    - 장시간 작업이면 진행·승인·취소·완료 상태가 순서대로 보이는가
 
 7. 보고서에 창 제목, 시각, 명령, 작업 ID, 접근성 핵심 텍스트, 스크린샷, 앱 버전, 공개 health, 커밋 SHA를 기록한다.
-8. 현재 release loop의 package SHA와 커밋을 포함한 evidence JSON을 만들고 등록한다.
+8. 현재 release loop의 package SHA와 커밋을 포함한 evidence JSON을 만들고 등록한다. 데스크톱 검증 전에 Teams 앱 정보 화면에서 설치 버전이 현재 ZIP과 일치하는지 별도로 확인하고 `installedVersion`을 등록해야 한다.
 
 ```bash
 npm run release:loop -- evidence --file /absolute/path/desktop-evidence.json

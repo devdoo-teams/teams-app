@@ -596,7 +596,7 @@ async function runLocalFlow(dataFile, jobDataFile) {
     assert(health.body.userAuth === 'local-bypass', 'local health reports the user auth bypass truthfully');
     assert(health.body.bot === 'local-handler', 'local health reports the local Bot handler truthfully');
     assert(health.body.outbound === 'local-outbox', 'local health reports the local outbox truthfully');
-    assert(health.body.version === '1.0.12', 'health version comes from the Teams manifest');
+    assert(health.body.version === '1.0.13', 'health version comes from the Teams manifest');
     assert(!('agent' in health.body) && !('agentWorkspace' in health.body), 'health does not expose agent binary or workspace paths');
     assert(health.body.storage === 'file-json-single-process', 'local runtime reports single-process file storage');
     assert(health.body.copilotKit === 'enabled', 'CopilotKit runtime is enabled');
@@ -1312,7 +1312,7 @@ async function runProductionAuthFlow(dataFile, jobDataFile) {
     assert(health.body.auth === 'teams-authenticated', 'production does not use local auth bypass');
     assert(health.body.userAuth === 'entra-sso', 'production health reports Entra SSO only when configured');
     assert(health.body.bot === 'teams-sdk', 'production health reports the Teams SDK Bot');
-    assert(health.body.version === '1.0.12', 'production health reports the Teams manifest version');
+    assert(health.body.version === '1.0.13', 'production health reports the Teams manifest version');
     assert(health.body.genAI === 'not-configured', 'no-key production health does not pretend that OpenAI is configured');
     assert(health.body.genAIProvider?.provider === 'openai' && health.body.genAIProvider?.configured === false, 'no-key production health keeps the optional provider unavailable and healthy');
     assert(!JSON.stringify(health.body).includes('OPENAI_API_KEY') && !JSON.stringify(health.body).includes('LOCAL_MODEL_BASE_URL'), 'production health omits provider secrets and endpoint URLs');

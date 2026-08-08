@@ -71,7 +71,7 @@ npm run release:loop -- complete
   "surface": "desktop",
   "observedAt": "2026-08-09T12:00:00.000Z",
   "commit": "<현재 커밋>",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "packageSha256": "<release:package 결과>",
   "summary": "실제 배포 Teams 데스크톱에서 status 답장과 카드/탭을 확인함",
   "artifactPaths": ["/absolute/path/teams-desktop.png"]
@@ -79,6 +79,23 @@ npm run release:loop -- complete
 ```
 
 이 JSON은 화면 확인 사실을 입력하는 계약이며, loop가 화면을 합성하거나 모바일 확인을 추정하는 기능이 아니다. 포털 업로드·설치 버전·데스크톱·모바일 순서가 어긋나거나 증거 identity가 다르면 등록을 거부한다.
+
+설치본 증거는 Teams 앱 정보 화면에서 확인한 버전을 별도로 기록해야 한다.
+
+```json
+{
+  "surface": "installed",
+  "observedAt": "2026-08-09T12:00:00.000Z",
+  "commit": "<현재 커밋>",
+  "version": "1.0.13",
+  "packageSha256": "<release:package 결과>",
+  "installedVersion": "1.0.13",
+  "summary": "Teams 앱 정보 화면에서 설치 버전 1.0.13을 확인하고 status 왕복을 확인함",
+  "artifactPaths": ["/absolute/path/teams-installed-info.png"]
+}
+```
+
+관리자 센터의 게시 버전이나 채팅 응답만으로 `installedVersion`을 추정해서는 안 된다.
 
 ### 1. 구현과 로컬 검증
 

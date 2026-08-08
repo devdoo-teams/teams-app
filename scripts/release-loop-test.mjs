@@ -24,7 +24,7 @@ const identity = {
   runId: 'run-test-001',
   commit: '0123456789abcdef0123456789abcdef01234567',
   shortCommit: '0123456',
-  version: '1.0.12',
+  version: '1.0.13',
   startedAt: '2026-08-09T00:00:00.000Z',
 };
 
@@ -100,6 +100,19 @@ assert.deepEqual(Object.keys(portalEvidence).sort(), [
   'version',
 ]);
 assert.equal(applyEvidence(machineReady, portalEvidence).status, 'PORTAL_READY');
+const portalReady = applyEvidence(machineReady, portalEvidence);
+assert.throws(
+  () => validateEvidence(evidence('installed'), portalReady, {
+    fileExists: () => true,
+    now: new Date('2026-08-09T00:05:00.000Z'),
+  }),
+  /installed.*version|version.*installed/i,
+);
+const installedEvidence = validateEvidence(evidence('installed', { installedVersion: identity.version }), portalReady, {
+  fileExists: () => true,
+  now: new Date('2026-08-09T00:05:00.000Z'),
+});
+assert.equal(installedEvidence.installedVersion, identity.version);
 
 assert.throws(
   () => validateEvidence(evidence('portal', { commit: 'f'.repeat(40) }), machineReady, {
@@ -157,7 +170,7 @@ assert.throws(
 
 let completeState = machineReady;
 for (const surface of ['portal', 'installed', 'desktop', 'mobile']) {
-  const normalized = validateEvidence(evidence(surface), completeState, {
+  const normalized = validateEvidence(evidence(surface, surface === 'installed' ? { installedVersion: identity.version } : {}), completeState, {
     fileExists: () => true,
     now: new Date('2026-08-09T00:05:00.000Z'),
   });
@@ -166,7 +179,7 @@ for (const surface of ['portal', 'installed', 'desktop', 'mobile']) {
 assert.equal(completeState.status, 'MOBILE_READY');
 assert.deepEqual(missingGates(completeState), []);
 const report = completionMessage(completeState);
-assert.match(report, /1\.0\.12/);
+assert.match(report, /1\.0\.13/);
 assert.match(report, /0123456/);
 assert.match(report, /a{64}/);
 assert.doesNotMatch(report, /desktop-proof\.png/);

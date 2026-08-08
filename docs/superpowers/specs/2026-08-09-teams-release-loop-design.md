@@ -57,14 +57,15 @@ npm run release:loop -- complete    # 모든 게이트 통과 때만 완료 보�
   "surface": "portal|installed|desktop|mobile",
   "observedAt": "2026-08-09T12:00:00.000Z",
   "commit": "bb4c0f9...",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "packageSha256": "...",
+  "installedVersion": "1.0.13",
   "summary": "관찰한 사실을 짧게 기록",
   "artifactPaths": ["/absolute/path/screenshot.png"]
 }
 ```
 
-입력은 현재 run의 commit·version·package SHA와 모두 일치해야 한다. `surface=desktop`은 스크린샷과 접근성/실제 메시지 요약을 요구하고, `surface=mobile`은 사용자가 배포된 Teams 모바일에서 보낸 메시지와 답장 관찰 요약을 요구한다. loop는 파일이 존재하는지만 확인하며 화면 내용을 합성하거나 UI 통과를 추정하지 않는다.
+입력은 현재 run의 commit·version·package SHA와 모두 일치해야 한다. `surface=installed`는 Teams 앱 정보 화면에서 읽은 `installedVersion`을 요구하며 현재 ZIP 버전과 정확히 같아야 한다. 카탈로그 게시 버전이나 봇 왕복만으로는 설치본 버전 게이트를 통과할 수 없다. `surface=desktop`은 스크린샷과 접근성/실제 메시지 요약을 요구하고, `surface=mobile`은 사용자가 배포된 Teams 모바일에서 보낸 메시지와 답장 관찰 요약을 요구한다. loop는 파일이 존재하는지만 확인하며 화면 내용을 합성하거나 UI 통과를 추정하지 않는다.
 
 ## 완료 판정
 

@@ -9,11 +9,22 @@ import { runWithTimeout } from './release-gate.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const surfaces = ['portal', 'installed', 'desktop', 'mobile'];
+
+function hasSurfaceEvidence(state, surface) {
+  const evidence = state.evidence?.[surface];
+  if (!evidence) return false;
+  // The portal's published version and the installed conversation's response
+  // are different facts. Do not let a chat round-trip stand in for the
+  // installed app-info version check.
+  if (surface === 'installed' && evidence.installedVersion !== state.version) return false;
+  return true;
+}
+
 const surfacePrerequisites = {
   portal: () => true,
-  installed: (state) => Boolean(state.evidence?.portal),
-  desktop: (state) => Boolean(state.evidence?.installed),
-  mobile: (state) => Boolean(state.evidence?.desktop),
+  installed: (state) => hasSurfaceEvidence(state, 'portal'),
+  desktop: (state) => hasSurfaceEvidence(state, 'installed'),
+  mobile: (state) => hasSurfaceEvidence(state, 'desktop'),
 };
 
 export const RELEASE_SURFACES = [...surfaces];
@@ -54,10 +65,10 @@ export function deriveStatus(state) {
   if (!hasReady(state.machine)) return 'INIT';
   if (!hasReady(state.package)) return 'MACHINE_READY';
   if (!hasReady(state.public)) return 'PACKAGE_READY';
-  if (!state.evidence?.portal) return 'PUBLIC_READY';
-  if (!state.evidence?.installed) return 'PORTAL_READY';
-  if (!state.evidence?.desktop) return 'INSTALLED_READY';
-  if (!state.evidence?.mobile) return 'DESKTOP_READY';
+  if (!hasSurfaceEvidence(state, 'portal')) return 'PUBLIC_READY';
+  if (!hasSurfaceEvidence(state, 'installed')) return 'PORTAL_READY';
+  if (!hasSurfaceEvidence(state, 'desktop')) return 'INSTALLED_READY';
+  if (!hasSurfaceEvidence(state, 'mobile')) return 'DESKTOP_READY';
   return 'MOBILE_READY';
 }
 
@@ -66,10 +77,10 @@ export function missingGates(state) {
   if (!hasReady(state.machine)) gates.push('MACHINE_READY');
   if (!hasReady(state.package)) gates.push('PACKAGE_READY');
   if (!hasReady(state.public)) gates.push('PUBLIC_READY');
-  if (!state.evidence?.portal) gates.push('PORTAL_READY');
-  if (!state.evidence?.installed) gates.push('INSTALLED_READY');
-  if (!state.evidence?.desktop) gates.push('DESKTOP_READY');
-  if (!state.evidence?.mobile) gates.push('MOBILE_READY');
+  if (!hasSurfaceEvidence(state, 'portal')) gates.push('PORTAL_READY');
+  if (!hasSurfaceEvidence(state, 'installed')) gates.push('INSTALLED_READY');
+  if (!hasSurfaceEvidence(state, 'desktop')) gates.push('DESKTOP_READY');
+  if (!hasSurfaceEvidence(state, 'mobile')) gates.push('MOBILE_READY');
   return gates;
 }
 
@@ -100,7 +111,7 @@ function assertObservedAt(observedAt, state, now) {
 
 export function validateEvidence(input, state, { fileExists = (candidate) => true, now = new Date() } = {}) {
   if (!input || typeof input !== 'object') throw new Error('evidence must be an object');
-  const { surface, observedAt, commit, version, packageSha256, summary, artifactPaths } = input;
+  const { surface, observedAt, commit, version, packageSha256, installedVersion, summary, artifactPaths } = input;
   assertSurface(surface);
   if (state.status === 'COMPLETE') throw new Error('cannot add evidence to a completed release run');
   if (!hasReady(state.package) || !state.package.sha256) throw new Error('package must be READY before evidence is registered');
@@ -108,6 +119,9 @@ export function validateEvidence(input, state, { fileExists = (candidate) => tru
   if (commit !== state.commit) throw new Error('evidence commit does not match the release run');
   if (version !== state.version) throw new Error('evidence version does not match the release run');
   if (packageSha256 !== state.package.sha256) throw new Error('evidence package SHA does not match the release run');
+  if (surface === 'installed' && installedVersion !== state.version) {
+    throw new Error('installed evidence requires installedVersion equal to the release version');
+  }
   assertObservedAt(observedAt, state, now);
   assertSafeSummary(summary);
   if (!Array.isArray(artifactPaths) || artifactPaths.length === 0) {
@@ -128,6 +142,7 @@ export function validateEvidence(input, state, { fileExists = (candidate) => tru
     commit,
     version,
     packageSha256,
+    ...(surface === 'installed' ? { installedVersion } : {}),
     summary: summary.trim(),
     artifactPaths: normalizedPaths,
   };
@@ -150,6 +165,7 @@ export function applyEvidence(state, evidence) {
         commit: evidence.commit,
         version: evidence.version,
         packageSha256: evidence.packageSha256,
+        ...(evidence.surface === 'installed' ? { installedVersion: evidence.installedVersion } : {}),
         summary: evidence.summary,
         artifactPaths: [...evidence.artifactPaths],
       },
