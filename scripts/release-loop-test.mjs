@@ -12,6 +12,7 @@ import {
   gatePhaseForLoop,
   missingGates,
   parseGatePayload,
+  summarizePhase,
   validateEvidence,
 } from './release-loop.mjs';
 
@@ -173,6 +174,14 @@ assert.doesNotMatch(report, /Bearer|sk-|client_secret|password/i);
 assert.equal(gatePhaseForLoop('machine'), 'preflight');
 assert.equal(gatePhaseForLoop('package'), 'package');
 assert.equal(gatePhaseForLoop('public'), 'public');
+const packageSummary = summarizePhase('package', {
+  evidence: [
+    { package: '/absolute/teams-sdk-mvp.zip', version: identity.version, sha256: 'a'.repeat(64) },
+    { manifest: { version: identity.version, appId: 'app-id' } },
+  ],
+});
+assert.equal(packageSummary.version, identity.version);
+assert.equal(packageSummary.sha256, 'a'.repeat(64));
 assert.deepEqual(parseGatePayload('', JSON.stringify({ status: 'BLOCKED', phase: 'public' })), {
   status: 'BLOCKED',
   phase: 'public',

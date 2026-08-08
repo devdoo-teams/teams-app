@@ -224,20 +224,21 @@ function phaseField(phase) {
   return phase === 'machine' ? 'machine' : phase;
 }
 
-function summarizePhase(phase, payload) {
+export function summarizePhase(phase, payload) {
   const completedAt = new Date().toISOString();
   if (phase === 'machine') {
     return { status: 'READY', completedAt, commands: payload.evidence?.map(({ command, exitCode }) => ({ command, exitCode })) ?? [] };
   }
   if (phase === 'package') {
-    const packageEvidence = payload.evidence?.find((entry) => entry.package)?.package;
+    const packageEntry = payload.evidence?.find((entry) => typeof entry.package === 'string');
     const manifestEvidence = payload.evidence?.find((entry) => entry.manifest)?.manifest;
-    if (!packageEvidence || !manifestEvidence) throw new Error('package gate returned incomplete package evidence');
+    if (!packageEntry || !manifestEvidence) throw new Error('package gate returned incomplete package evidence');
     return {
       status: 'READY',
       completedAt,
-      version: packageEvidence.version,
-      sha256: packageEvidence.sha256,
+      packagePath: packageEntry.package,
+      version: packageEntry.version,
+      sha256: packageEntry.sha256,
       manifest: manifestEvidence,
     };
   }
