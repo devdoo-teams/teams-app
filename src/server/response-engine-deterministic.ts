@@ -103,6 +103,7 @@ function envelope(input: {
   status?: GenUiEnvelopeV1['status'];
   sections?: GenUiEnvelopeV1['sections'];
 }): GenUiEnvelopeV1 {
+  const safeText = input.text.slice(0, 4_000);
   return GenUiEnvelopeV1Schema.parse({
     schemaVersion: GENUI_SCHEMA_VERSION,
     kind: input.kind,
@@ -110,12 +111,12 @@ function envelope(input: {
     id: input.id,
     correlationId: randomUUID(),
     title: input.title,
-    summary: input.text.slice(0, 2_000),
-    sections: input.sections ?? [{ type: 'text', text: input.text }],
+    summary: safeText.slice(0, 2_000),
+    sections: input.sections ?? [{ type: 'text', text: safeText }],
     actions: [],
     citations: [],
     aiGenerated: false,
-    fallbackText: input.text,
+    fallbackText: safeText,
     metadata: { source: 'copilotkit', deterministic: true },
   });
 }
@@ -139,7 +140,7 @@ function jobEnvelope(job: AgentJob, text: string, status = envelopeStatusForJob(
       type: 'status',
       title: '작업 상태',
       status: job.status,
-      description: [job.error, job.result, job.progress.at(-1)].filter(Boolean).join('\n'),
+      description: [job.error, job.result, job.progress.at(-1)].filter(Boolean).join('\n').slice(0, 2_000),
     }],
   });
 }

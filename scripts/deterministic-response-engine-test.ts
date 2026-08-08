@@ -15,7 +15,11 @@ const scope: AgentJobScope = {
   tenantId: 'test-tenant',
 };
 
-function job(status: AgentJob['status'] = 'completed', prompt = '저장소를 분석해줘'): AgentJob {
+function job(
+  status: AgentJob['status'] = 'completed',
+  prompt = '저장소를 분석해줘',
+  result = '테스트 작업이 완료되었습니다.',
+): AgentJob {
   return {
     id: 'job-test-1',
     prompt,
@@ -23,7 +27,7 @@ function job(status: AgentJob['status'] = 'completed', prompt = '저장소를 �
     status,
     scope,
     progress: [],
-    result: '테스트 작업이 완료되었습니다.',
+    result,
     createdAt: '2026-08-07T00:00:00.000Z',
     updatedAt: '2026-08-07T00:00:00.000Z',
     startedAt: '2026-08-07T00:00:00.000Z',
@@ -131,6 +135,14 @@ async function main(): Promise<void> {
 
     const running = await engine.run(await createInput(itemStore, createAgentServiceFake(job('running')), '저장소를 분석해줘'));
     assert.equal(running.envelope.status, 'loading');
+
+    const oversized = await engine.run(await createInput(
+      itemStore,
+      createAgentServiceFake(job('completed', '저장소를 분석해줘', '긴 결과'.repeat(2_000))),
+      '저장소를 분석해줘',
+    ));
+    assert.equal(oversized.envelope.kind, 'job-status');
+    assert.ok((oversized.envelope.fallbackText?.length ?? 0) <= 4_000);
 
     console.log('deterministic response engine tests passed');
   } finally {

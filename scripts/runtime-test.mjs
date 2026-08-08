@@ -1373,7 +1373,6 @@ async function runRecoveryFlow(dataFile, jobDataFile) {
         status: 'completed',
         conversationId: 'recovery-conversation',
         requesterId: 'recovery-user',
-        tenantId: 'runtime-tenant',
         progress: ['legacy progress '.repeat(400)],
         result: 'legacy result '.repeat(400),
         createdAt: new Date().toISOString(),
