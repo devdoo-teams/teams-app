@@ -394,9 +394,9 @@ Remove TEAMS_SKIP_AUTH, TEAMS_SKIP_OUTBOUND, and local-only mode flags from the 
 
 Open the public tab in the Codex in-app browser and verify deterministic mode, response-mode selector, current tasks, weather, and mode status. Confirm MCP endpoint behavior separately because MCP Apps host support is distinct from Teams rendering.
 
-- [ ] Step 4: Verify Teams mobile roundtrip.
+- [ ] Step 4: Hand off the deployed Teams app for user-message verification.
 
-In the user’s Teams mobile app, send mode, choose 키 없음·결정형, send list, status, and weather, and observe GenUI/Adaptive Card responses. If an OpenAI key is configured later, repeat with OpenAI. If a reachable local endpoint is configured, repeat with 로컬/사내 모델.
+The user must send `mode`, choose 키 없음·결정형, then send `list`, `status`, and `weather` from the deployed Teams mobile app (or the real deployed Teams host) and confirm the received GenUI/Adaptive Card responses. Orchestrator/API synthetic requests do not satisfy this gate. If an OpenAI key is configured later, repeat with OpenAI. If a reachable local endpoint is configured, repeat with 로컬/사내 모델.
 
 - [ ] Step 5: Send the Teams completion message only after all evidence.
 
