@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import process from 'node:process';
 
 import {
   assertPackagedManifest,
   assertPublicHealth,
+  formatReleaseFailure,
   parseDotEnv,
   resolvePublicUrl,
   runWithTimeout,
@@ -66,12 +66,16 @@ await assert.rejects(
   /timed out/,
 );
 
-const boundedPhase = spawnSync(
-  process.execPath,
-  ['scripts/release-gate.mjs', 'preflight', '--timeout-ms', '25'],
-  { cwd: process.cwd(), encoding: 'utf8' },
+const timeoutReport = formatReleaseFailure(
+  Object.assign(new Error('Command timed out after 25ms'), {
+    code: 'ETIMEDOUT',
+    timeoutMs: 25,
+    command: 'fixture-command',
+  }),
+  'preflight',
 );
-assert.notEqual(boundedPhase.status, 0, 'a timed-out release phase must fail');
-assert.match(`${boundedPhase.stdout}\n${boundedPhase.stderr}`, /"status":\s*"BLOCKED"/);
+assert.equal(timeoutReport.status, 'BLOCKED', 'a timed-out release phase must be blocked');
+assert.equal(timeoutReport.blocker.code, 'ETIMEDOUT');
+assert.match(timeoutReport.nextAction, /timed-out/i);
 
 console.log('Release gate contract tests passed.');

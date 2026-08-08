@@ -373,6 +373,25 @@ function isMainModule() {
   return process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 }
 
+export function formatReleaseFailure(error, phase = 'all') {
+  const status = error.code === 'ETIMEDOUT' || error.code === 'ECOMMAND' ? 'BLOCKED' : 'FAILED';
+  return {
+    status,
+    phase,
+    evidence: tailOutput(error),
+    blocker: {
+      code: error.code ?? 'EUNKNOWN',
+      message: error.message,
+      command: error.command ?? null,
+      timeoutMs: error.timeoutMs ?? null,
+      exitCode: error.exitCode ?? null,
+    },
+    nextAction: error.code === 'ETIMEDOUT'
+      ? 'Fix or isolate the timed-out command, then rerun the same bounded release phase.'
+      : 'Inspect the reported command output before continuing.',
+  };
+}
+
 if (isMainModule()) {
   try {
     const options = parseArgs(process.argv.slice(2));
@@ -385,22 +404,7 @@ if (isMainModule()) {
       nextAction: result.uiGates.length > 0 ? `Complete UI gates: ${result.uiGates.join(', ')}` : 'None',
     }, null, 2));
   } catch (error) {
-    const status = error.code === 'ETIMEDOUT' || error.code === 'ECOMMAND' ? 'BLOCKED' : 'FAILED';
-    console.error(JSON.stringify({
-      status,
-      phase: process.argv[2] ?? 'all',
-      evidence: tailOutput(error),
-      blocker: {
-        code: error.code ?? 'EUNKNOWN',
-        message: error.message,
-        command: error.command ?? null,
-        timeoutMs: error.timeoutMs ?? null,
-        exitCode: error.exitCode ?? null,
-      },
-      nextAction: error.code === 'ETIMEDOUT'
-        ? 'Fix or isolate the timed-out command, then rerun the same bounded release phase.'
-        : 'Inspect the reported command output before continuing.',
-    }, null, 2));
+    console.error(JSON.stringify(formatReleaseFailure(error, process.argv[2] ?? 'all'), null, 2));
     process.exitCode = 1;
   }
 }
