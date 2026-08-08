@@ -124,6 +124,8 @@ npm test
 
 CopilotKit 런타임 검증은 `/api/copilotkit/info` 검색, 업무 현황·날씨 tool event, Codex 진행 스트림, workspace-write 승인 경계와 승인 카드 취소까지 포함합니다. Teams 탭의 CopilotKit 클라이언트는 REST/SSE 전송을 명시해 `/info`와 `/agent/default/run` 엔드포인트를 사용합니다.
 
+배포 런타임 검증은 사용자가 모바일 스크린샷을 제공해야만 시작하는 방식이 아닙니다. 공개 프로세스가 준비되면 Computer Use의 `node_repl` + `@oai/sky`로 로그인된 Teams 데스크톱 앱을 직접 확인하고, 접근성 트리와 전·후 스크린샷으로 `업무 허브` 채팅·Bot 카드·개인 탭·변경 UI를 검증합니다. 상세 절차는 [`docs/teams-desktop-runtime-verification.md`](docs/teams-desktop-runtime-verification.md)에 있습니다. 데스크톱 검증은 일반 Teams 동작의 독립 증거이며, iOS 전용 WebView·모바일 앱 권한·iPhone GPS는 별도로 `MOBILE_UNVERIFIED`로 보고합니다.
+
 `npm run check:types`는 별도로 TypeScript 타입 검사를 실행합니다. 실행 환경의 TypeScript CLI가 멈추는 경우에도 `npm run build`는 esbuild 산출물을 만들고 런타임 테스트를 계속할 수 있습니다.
 
 ## 인증과 저장소
