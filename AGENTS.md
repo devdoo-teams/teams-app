@@ -50,6 +50,7 @@ Teams 앱 변경 요청에는 별도 예외 승인이 없는 한 다음 순서�
 - 릴리스 판정에는 다음 제한시간 게이트를 사용한다. `release:preflight`는 타입체크(60초), 전체 테스트(300초), 배포 환경(30초)을 순서대로 실행하고, `release:package`는 검증된 새 ZIP과 내부 매니페스트·SHA-256을 생성하며, `release:public`은 공개 health와 `/tabs/home`을 확인한다. 전부 실행할 때는 `npm run release:gate`를 사용한다.
 - `release:public`은 명시적 `--url` 다음 `TEAMS_PUBLIC_URL`, `PUBLIC_BASE_URL`, `.env.runtime`의 `TAB_DOMAIN`에서 공개 origin을 해석한다. `typecheck`는 런타임 패키지를 바꾸지 않는 release 전용 선언 stub을 사용하고, vendor 선언 그래프 진단은 별도 `typecheck:vendor`로 분리한다.
 - 게이트가 명령어 timeout이나 비정상 종료를 만나면 `BLOCKED`로 중단한다. 실패한 하위 프로세스 그룹은 정리하지만, 이미 실행 중인 공개 Teams 서버나 Dev Tunnel은 임의로 종료하지 않는다. 원인을 고친 뒤 같은 게이트를 다시 실행한다.
+- timeout 회귀 테스트는 실제 저장소에서 짧은 `preflight`를 강제 종료하지 않는다. 빌드 중간 종료가 `dist/client`를 비울 수 있으므로 `runWithTimeout`과 실패 보고 포맷을 무해한 fixture로 검증한다.
 - 클라이언트 빌드는 `dist/client`를 먼저 지우지 않고 형제 임시 디렉터리에서 빌드·후처리한 뒤 성공할 때만 원자적으로 교체한다. 따라서 빌드 실패가 공개 탭을 빈 404 상태로 만들면 안 된다. 현재 CopilotKit v2 대형 번들의 source map 생성은 Node 24 + esbuild API에서 무기한 대기하므로 운영 번들은 source map을 끈다.
 - 화면이 잠겨 있으면 명령어 게이트·공개 HTTPS·이미 로그인된 인앱 브라우저 탭 검증은 계속할 수 있다. 로그인·Auth 앱 승인·파일 선택·Teams 데스크톱 스크린샷처럼 네이티브 UI가 필요한 항목만 `DESKTOP_UNVERIFIED` 또는 `BLOCKED`로 분리하고 잠금 해제 우회나 자격 증명 추측을 하지 않는다.
 - 명령어 게이트 통과는 포털 업로드·설치 버전·Teams 데스크톱·모바일 사용자 확인을 대신하지 않는다. 최종 완료 상태에는 `PORTAL_UPLOAD_UNVERIFIED`, `INSTALLED_VERSION_UNVERIFIED`, `DESKTOP_UNVERIFIED`, `MOBILE_UNVERIFIED`가 남아 있지 않아야 한다.

@@ -32,6 +32,8 @@ curl -fsS https://<현재-portUri>/tabs/home/
 
 `build:client`는 `dist/client`를 선삭제하지 않고 `.client-build-*` 임시 디렉터리에 출력한 뒤 성공 시에만 교체한다. 따라서 esbuild·CopilotKit 그래프가 멈춰도 이미 서비스 중인 클라이언트가 사라지지 않아야 한다. 현재 확인된 재현은 Node 24 + esbuild API에서 CopilotKit v2 대형 번들의 `sourcemap: true`가 무기한 대기하는 경우이며, 운영 번들은 source map을 끈다. 같은 문제가 재현되면 제한시간이 있는 `release:preflight`가 `BLOCKED`를 반환하는지 확인하고, 공개 서버를 죽이거나 이전 주소를 추측해 우회하지 않는다.
 
+`test:release-gate`의 timeout 회귀 테스트는 실제 저장소의 `preflight --timeout-ms`를 실행하지 않는다. 프로젝트 빌드 중간에 강제 종료하면 JavaScript의 `finally`가 실행되기 전에 임시 산출물이 남을 수 있으므로, timeout 계약은 무해한 fixture와 `formatReleaseFailure`/`runWithTimeout` 계약으로 검증한다. 이 테스트에 실제 preflight 호출을 다시 넣지 않는다.
+
 `/api/health`가 200인데 `/tabs/home/`만 404이면 공개 프로세스는 살아 있고 정적 산출물만 없거나 교체되지 않은 상태다. 먼저 `test -f dist/client/index.html`과 `npm run build:client` 결과를 확인하고, 공개 서버 PID·Dev Tunnel은 유지한 채 다시 HTTP 검사를 한다.
 
 `COMMAND_ONLY` 또는 공개 HTTP 통과는 Developer Portal 업로드, 실제 Teams 설치 버전, 데스크톱 스크린샷, iPhone 위치 권한·모바일 왕복을 완료했다는 뜻이 아니다. 각 항목은 `PORTAL_UPLOAD_UNVERIFIED`, `INSTALLED_VERSION_UNVERIFIED`, `DESKTOP_UNVERIFIED`, `MOBILE_UNVERIFIED`로 계속 표시하고, 모든 UI 게이트가 확인되기 전에는 Teams 완료 메시지를 보내지 않는다.
