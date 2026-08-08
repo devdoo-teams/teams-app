@@ -19,6 +19,15 @@ import {
 import { CodexRunner } from './codex-runner.js';
 import { GitService } from './git-service.js';
 import { TeamsCodexAgent } from './copilot-agent.js';
+import { LocalCompatibleResponseEngine } from './response-engine-local.js';
+import { configureResponseEngineRouter } from './response-engine.js';
+import { ResponseModeStore } from './response-mode-store.js';
+import {
+  createResponseModeCardActivity,
+  isResponseModeCardAction,
+  parseResponseModeCardAction,
+  type PublicResponseModeAvailability,
+} from './response-mode-card.js';
 import { formatWeatherMessage, getWeather } from './weather-service.js';
 import { GenUiActionStore, type GenUiActionName } from './genui-action-store.js';
 import { GenUiResponseFactory } from './genui-response.js';
@@ -38,6 +47,11 @@ import {
   GenUiEnvelopeV1Schema,
   type GenUiEnvelopeV1,
 } from '../shared/genui.js';
+import {
+  ResponseModeSelectionSchema,
+  responseModeLabel,
+  type ResponseMode,
+} from '../shared/response-mode.js';
 
 const port = Number(process.env.PORT ?? 3978);
 const isProduction = process.env.NODE_ENV === 'production';
@@ -57,6 +71,7 @@ const clientDist = path.resolve(process.cwd(), 'dist/client');
 const itemStorePath = process.env.ITEM_STORE_PATH ?? path.resolve(process.cwd(), 'data/items.json');
 const agentJobStorePath = process.env.AGENT_JOB_STORE_PATH ?? path.resolve(process.cwd(), 'data/agent-jobs.json');
 const genUiActionStorePath = process.env.GENUI_ACTION_STORE_PATH ?? path.resolve(process.cwd(), 'data/genui-actions.json');
+const responseModeStorePath = process.env.RESPONSE_MODE_STORE_PATH ?? path.resolve(process.cwd(), 'data/response-modes.json');
 const itemStore = new ItemStore(
   itemStorePath,
 );
@@ -94,6 +109,7 @@ const genUiMode = process.env.TEAMS_GENUI_MODE === 'legacy' || process.env.TEAMS
 const genUiActionStore = new GenUiActionStore(
   genUiActionStorePath,
 );
+const responseModeStore = new ResponseModeStore(responseModeStorePath);
 const genUi = new GenUiResponseFactory(genUiActionStore);
 const channelsShadowMonitor = new ChannelsShadowMonitor();
 const openAiConfigured = Boolean(process.env.OPENAI_API_KEY?.trim());
@@ -137,11 +153,27 @@ storeProcessLease = await acquireStoreProcessLease([
   itemStorePath,
   agentJobStorePath,
   genUiActionStorePath,
+  responseModeStorePath,
 ]);
 process.once('exit', () => storeProcessLease?.releaseSync());
 
 await itemStore.initialize();
 await genUiActionStore.initialize();
+await responseModeStore.initialize();
+
+configureResponseEngineRouter({
+  engines: [new LocalCompatibleResponseEngine()],
+  resolveMode: async (input) => {
+    // This environment flag is intentionally retained only for the existing
+    // deterministic test harness. Production users are resolved from the
+    // server-owned, tenant/requester-scoped preference store.
+    if (process.env.COPILOTKIT_DETERMINISTIC_MODE === 'true') return 'deterministic';
+    return responseModeStore.get({
+      tenantId: input.scope.tenantId,
+      requesterId: input.scope.requesterId,
+    });
+  },
+});
 
 let http: any;
 let teamsApp: any;
@@ -149,7 +181,7 @@ let userAuthValidator: any;
 const localOutbox = new Map<string, string[]>();
 const localOutboxActivities = new Map<string, unknown[]>();
 
-type BotSend = (text: string, envelope?: GenUiEnvelopeV1) => Promise<void>;
+type BotSend = (text: string, envelope?: GenUiEnvelopeV1, activityOverride?: unknown) => Promise<void>;
 type GenUiCardAction = Extract<GenUiActionName, 'approve' | 'cancel' | 'refresh' | 'feedback'>;
 type GenUiActionPayload = {
   schemaVersion: typeof GENUI_SCHEMA_VERSION;
@@ -379,16 +411,26 @@ function createBotSender(
   messages?: string[],
   activities?: unknown[],
 ): BotSend {
-  return async (text, envelope) => {
+  return async (text, envelope, activityOverride) => {
     const normalized = envelope ? GenUiEnvelopeV1Schema.parse(envelope) : undefined;
-    const activity = normalized && genUiMode !== 'legacy'
+    const activity = activityOverride ?? (normalized && genUiMode !== 'legacy'
       ? createAdaptiveCardActivity(normalized)
-      : { type: 'message', text };
+      : { type: 'message', text });
 
     if (messages) {
       if (normalized) recordChannelsShadowComparison(normalized, activity);
       messages.push(text);
       activities?.push(activity);
+      return;
+    }
+
+    if (activityOverride) {
+      if (!deliver) return;
+      try {
+        await deliver(activityOverride);
+      } catch {
+        await deliver({ type: 'message', text });
+      }
       return;
     }
 
@@ -499,6 +541,111 @@ http.get('/api/health', (_request: any, response: any) => {
     mcp: mcpEnabled ? '/mcp' : 'disabled',
     timestamp: new Date().toISOString(),
   });
+});
+
+function publicModelLabel(value: string | undefined, fallback: string): string {
+  const normalized = value?.trim() ?? '';
+  if (!normalized || normalized.length > 120 || /[\u0000-\u001f\u007f]/.test(normalized) || /:\/\/|[?&#]/.test(normalized)) {
+    return fallback;
+  }
+  return normalized;
+}
+
+function publicResponseModeAvailability(): PublicResponseModeAvailability[] {
+  return responseModeStore.availability().map((entry) => ({
+    ...entry,
+    ...(entry.mode === 'openai'
+      ? { model: publicModelLabel(process.env.OPENAI_MODEL, openAiModel) }
+      : entry.mode === 'local'
+        ? { model: publicModelLabel(process.env.LOCAL_MODEL_NAME, 'local-model') }
+        : {}),
+  }));
+}
+
+function responseModeScope(request: any, response: any): { tenantId: string; requesterId: string } | undefined {
+  const identity = copilotIdentity(request, response);
+  return identity ? { tenantId: identity.tenantId, requesterId: identity.requesterId } : undefined;
+}
+
+function responseModeActivityScope(activity: any): { tenantId: string; requesterId: string } | undefined {
+  const scope = activityScope(activity);
+  return scope ? { tenantId: scope.tenantId, requesterId: scope.requesterId } : undefined;
+}
+
+async function responseModeStatus(scope: { tenantId: string; requesterId: string }): Promise<{
+  mode: ResponseMode;
+  availability: PublicResponseModeAvailability[];
+}> {
+  return {
+    mode: await responseModeStore.get(scope),
+    availability: publicResponseModeAvailability(),
+  };
+}
+
+http.use(
+  '/api/response-mode',
+  createUserAuthMiddleware({
+    allowUnauthenticated: skipAuth,
+    validator: userAuthValidator,
+  }),
+);
+
+http.get('/api/response-mode', async (request: any, response: any) => {
+  const scope = responseModeScope(request, response);
+  if (!scope) {
+    response.status(401).json({ error: 'validated user identity is required' });
+    return;
+  }
+
+  try {
+    response.json(await responseModeStatus(scope));
+  } catch (error) {
+    console.error('Response mode status failed', error);
+    response.status(500).json({ error: '응답 모드 상태를 확인하지 못했습니다.' });
+  }
+});
+
+http.post('/api/response-mode', async (request: any, response: any) => {
+  const scope = responseModeScope(request, response);
+  if (!scope) {
+    response.status(401).json({ error: 'validated user identity is required' });
+    return;
+  }
+
+  const selection = ResponseModeSelectionSchema.safeParse(request.body);
+  if (!selection.success) {
+    response.status(400).json({ error: 'body must contain only a valid mode' });
+    return;
+  }
+
+  let currentMode: ResponseMode;
+  try {
+    currentMode = await responseModeStore.get(scope);
+  } catch (error) {
+    console.error('Response mode selection status failed', error);
+    response.status(500).json({ error: '응답 모드 상태를 확인하지 못했습니다.' });
+    return;
+  }
+
+  const availability = publicResponseModeAvailability();
+  const selected = availability.find((entry) => entry.mode === selection.data.mode);
+  if (!selected?.configured) {
+    response.status(409).json({
+      error: `${responseModeLabel(selection.data.mode)} 응답 모드가 서버에 설정되지 않았습니다. 다른 모드를 선택하거나 관리자에게 서버 설정을 요청하세요.`,
+      code: 'response-mode-not-configured',
+      mode: currentMode,
+      availability,
+    });
+    return;
+  }
+
+  try {
+    await responseModeStore.set(scope, selection.data.mode);
+    response.json(await responseModeStatus(scope));
+  } catch (error) {
+    console.error('Response mode selection failed', error);
+    response.status(500).json({ error: '응답 모드를 저장하지 못했습니다.' });
+  }
 });
 
 http.use(
@@ -986,6 +1133,48 @@ async function handleGenUiSubmit(activity: any, send: BotSend): Promise<void> {
   await send(envelopeText(envelope), envelope);
 }
 
+async function handleResponseModeCommand(activity: any, send: BotSend): Promise<void> {
+  const scope = responseModeActivityScope(activity);
+  if (!scope) {
+    const text = '응답 모드에는 사용자·대화·테넌트 정보가 필요합니다.';
+    await send(text, undefined, createResponseModeCardActivity('deterministic', publicResponseModeAvailability(), text));
+    return;
+  }
+
+  const status = await responseModeStatus(scope);
+  const text = `현재 응답 모드는 ${responseModeLabel(status.mode)}입니다.`;
+  await send(text, undefined, createResponseModeCardActivity(status.mode, status.availability));
+}
+
+async function handleResponseModeSubmit(activity: any, send: BotSend): Promise<void> {
+  const scope = responseModeActivityScope(activity);
+  if (!scope) {
+    const text = '응답 모드에는 사용자·대화·테넌트 정보가 필요합니다.';
+    await send(text, undefined, createResponseModeCardActivity('deterministic', publicResponseModeAvailability(), text));
+    return;
+  }
+
+  const current = await responseModeStore.get(scope);
+  const parsed = parseResponseModeCardAction(activity.value);
+  if (!parsed) {
+    const text = '유효하지 않은 응답 모드 선택입니다.';
+    await send(text, undefined, createResponseModeCardActivity(current, publicResponseModeAvailability(), text));
+    return;
+  }
+
+  const availability = publicResponseModeAvailability();
+  const selected = availability.find((entry) => entry.mode === parsed.mode);
+  if (!selected?.configured) {
+    const text = `${responseModeLabel(parsed.mode)} 응답 모드는 아직 서버에 설정되지 않았습니다. 결정형 또는 사용 가능한 모드를 선택하세요.`;
+    await send(text, undefined, createResponseModeCardActivity(current, availability, text));
+    return;
+  }
+
+  await responseModeStore.set(scope, parsed.mode);
+  const text = `응답 모드를 ${responseModeLabel(parsed.mode)}으로 변경했습니다.`;
+  await send(text, undefined, createResponseModeCardActivity(parsed.mode, publicResponseModeAvailability(), text));
+}
+
 async function handleMessage(activity: any, send: BotSend): Promise<void> {
   const userText = typeof activity.text === 'string'
     ? activity.text.replace(/<at>.*?<\/at>/gi, '').trim()
@@ -993,8 +1182,13 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
   const normalizedText = userText.toLowerCase();
   const scope = activityScope(activity);
 
+  if (normalizedText === 'mode' || normalizedText === 'response-mode' || normalizedText === '응답 모드') {
+    await handleResponseModeCommand(activity, send);
+    return;
+  }
+
   if (normalizedText === 'help') {
-    const responseText = '사용 가능한 명령: help, weather [위도 경도], status, list, run <작업>, continue <작업 ID> <추가 요청>, write <작업>, approve <작업 ID>, commit <작업 ID> [메시지], cancel <작업 ID>';
+    const responseText = '사용 가능한 명령: help, mode, weather [위도 경도], status, list, run <작업>, continue <작업 ID> <추가 요청>, write <작업>, approve <작업 ID>, commit <작업 ID> [메시지], cancel <작업 ID>';
     const envelope = genUi.help();
     await send(responseText, envelope);
     return;
@@ -1248,6 +1442,14 @@ if (teamsApp) {
     await handleInstall(activity, runtimeSend);
   });
   teamsApp.on('message', async ({ activity, send }: any) => {
+    if (activity?.type === 'message' && isResponseModeCardAction(activity.value)) {
+      const runtimeSend: BotSend = process.env.TEAMS_SKIP_OUTBOUND === 'true'
+        ? async () => {}
+        : createBotSender(send);
+      await handleResponseModeSubmit(activity, runtimeSend);
+      return;
+    }
+
     if (activity?.type === 'message' && hasGenUiActionValue(activity)) {
       const runtimeSend: BotSend = process.env.TEAMS_SKIP_OUTBOUND === 'true'
         ? async () => {}
@@ -1273,6 +1475,15 @@ if (teamsApp) {
   http.post('/api/messages', async (request: any, response: any) => {
     if (!skipAuth) {
       response.status(401).json({ error: 'Bot authentication is not configured' });
+      return;
+    }
+
+    if (request.body?.type === 'message' && isResponseModeCardAction(request.body.value)) {
+      const messages: string[] = [];
+      const activities: unknown[] = [];
+      const send = createBotSender(undefined, messages, activities);
+      await handleResponseModeSubmit(request.body, send);
+      response.json({ messages, activities });
       return;
     }
 

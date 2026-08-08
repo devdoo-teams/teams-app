@@ -92,10 +92,34 @@ export interface ResponseEngine {
   run(input: ResponseEngineInput): Promise<ResponseEngineOutput>;
 }
 
+export type ResponseEngineModeResolver = (
+  input: ResponseEngineInput,
+) => ResponseMode | Promise<ResponseMode>;
+
+let configuredModeResolver: ResponseEngineModeResolver | undefined;
+const configuredEngines = new Map<ResponseMode, ResponseEngine>();
+
+/**
+ * Configure the server-owned defaults used by request-scoped Copilot agents.
+ * The agent class is constructed by CopilotKit, so this small registry keeps
+ * tenant-scoped mode selection out of client-controlled request fields while
+ * allowing the server to register providers that are not part of the legacy
+ * constructor call.
+ */
+export function configureResponseEngineRouter(options: {
+  engines?: Iterable<ResponseEngine>;
+  resolveMode?: ResponseEngineModeResolver;
+}): void {
+  configuredModeResolver = options.resolveMode;
+  configuredEngines.clear();
+  for (const engine of options.engines ?? []) configuredEngines.set(engine.mode, engine);
+}
+
 export class ResponseEngineRouter {
   private readonly engines = new Map<ResponseMode, ResponseEngine>();
 
   constructor(engines: Iterable<ResponseEngine> = []) {
+    for (const engine of configuredEngines.values()) this.register(engine);
     for (const engine of engines) this.register(engine);
   }
 
@@ -110,7 +134,11 @@ export class ResponseEngineRouter {
     return engine;
   }
 
-  run(input: ResponseEngineInput): Promise<ResponseEngineOutput> {
-    return this.get(input.mode).run(input);
+  async run(input: ResponseEngineInput): Promise<ResponseEngineOutput> {
+    const mode = configuredModeResolver
+      ? await configuredModeResolver(input)
+      : input.mode;
+    const selectedInput = mode === input.mode ? input : { ...input, mode };
+    return this.get(mode).run(selectedInput);
   }
 }
