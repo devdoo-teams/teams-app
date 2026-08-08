@@ -246,9 +246,12 @@ export class DeterministicResponseEngine implements ResponseEngine {
     if (!job) throw new Error('Codex 작업을 생성하지 못했습니다.');
     input.setActiveJobId?.(job.id);
     const completed = await input.agentService.waitForTerminal(job.id, input.scope);
-    const text = completed.status === 'completed'
+    const resultText = completed.status === 'completed'
       ? completed.result || `작업 ${completed.id}이 완료되었습니다.`
       : `작업 ${completed.id}이 ${completed.status} 상태입니다.\n\n${completed.error || completed.progress.at(-1) || '추가 확인이 필요합니다.'}`;
+    const text = previous
+      ? `이전 Codex 대화를 이어서 작업 ${completed.id}이 완료되었습니다.\n\n${resultText}`
+      : resultText;
     return { text, envelope: jobEnvelope(completed, text), toolCalls };
   }
 }

@@ -35,18 +35,18 @@ function job(
   };
 }
 
-function createAgentServiceFake(terminalJob = job()): AgentService {
+function createAgentServiceFake(terminalJob = job(), previous?: AgentJob): AgentService {
   const submitted: AgentJob[] = [];
   const service = {
     countActive: () => 0,
     list: () => submitted.slice(),
-    latestCompletedForConversation: () => undefined,
+    latestCompletedForConversation: () => previous,
     submit: async (input: { prompt: string; mode: AgentJob['mode']; scope: AgentJobScope }) => {
       const created = { ...job(input.mode === 'workspace-write' ? 'awaiting_approval' : 'running', input.prompt), mode: input.mode };
       submitted.push(created);
       return created;
     },
-    continue: async () => undefined,
+    continue: async () => previous ? terminalJob : undefined,
     waitForTerminal: async () => terminalJob,
   } as unknown as AgentService;
   return service;
@@ -129,6 +129,14 @@ async function main(): Promise<void> {
     assert.equal(unsupported.envelope.kind, 'job-status');
     assert.equal(unsupported.envelope.aiGenerated, false);
     assert.match(unsupported.text, /테스트 작업이 완료되었습니다/);
+
+    const previous = job('completed', '이전 요청');
+    const continued = await engine.run(await createInput(
+      itemStore,
+      createAgentServiceFake(job('completed', '후속 요청'), previous),
+      '같은 대화에서 이어서 확인해줘',
+    ));
+    assert.match(continued.text, /이전 Codex 대화를 이어서/);
 
     const failed = await engine.run(await createInput(itemStore, createAgentServiceFake(job('failed')), '저장소를 분석해줘'));
     assert.equal(failed.envelope.status, 'error');
