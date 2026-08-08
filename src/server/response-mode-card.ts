@@ -76,7 +76,6 @@ export function createResponseModeCardActivity(
   const card = createResponseModeCard(current, availability, notice);
   return {
     type: 'message',
-    text: notice ?? `현재 응답 모드: ${responseModeLabel(current)}`,
     attachmentLayout: 'list',
     attachments: [{
       contentType: 'application/vnd.microsoft.card.adaptive',

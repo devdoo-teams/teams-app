@@ -378,7 +378,6 @@ export function genUiTextFallback(input: GenUiEnvelopeV1): string {
 export function createAdaptiveCardActivity(input: GenUiEnvelopeV1): TeamsMessageActivity {
   return {
     type: 'message',
-    text: genUiTextFallback(input),
     attachmentLayout: 'list',
     attachments: [createAdaptiveCardAttachment(input)],
   };

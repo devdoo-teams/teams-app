@@ -15,6 +15,7 @@ import {
   genUiTextFallback,
   renderGenUiCard,
 } from '../src/server/genui-teams.js';
+import { createResponseModeCardActivity } from '../src/server/response-mode-card.js';
 
 const baseAction = (action: (typeof GENUI_ACTIONS)[number], index: number) => ({
   id: `action-${index}`,
@@ -154,9 +155,21 @@ assert.equal(attachment.contentType, 'application/vnd.microsoft.card.adaptive');
 assert.equal(attachment.content.version, '1.5');
 const activity = createAdaptiveCardActivity(nonAiEnvelope);
 assert.equal(activity.type, 'message');
+assert.equal('text' in activity, false);
 assert.equal(activity.attachments?.length, 1);
 assert.equal(activity.attachmentLayout, 'list');
-assert.equal(createTextFallbackActivity(nonAiEnvelope).text, '업무 허브 응답입니다.');
+const responseModeActivity = createResponseModeCardActivity('deterministic', [
+  { mode: 'deterministic', label: '결정형', configured: true },
+  { mode: 'openai', label: 'OpenAI', configured: false },
+]);
+assert.equal(responseModeActivity.type, 'message');
+assert.equal('text' in responseModeActivity, false);
+assert.equal(responseModeActivity.attachments?.length, 1);
+assert.equal(responseModeActivity.attachmentLayout, 'list');
+const textFallback = createTextFallbackActivity(nonAiEnvelope);
+assert.equal(textFallback.text, '업무 허브 응답입니다.');
+assert.equal(textFallback.attachments, undefined);
+assert.equal(textFallback.attachmentLayout, undefined);
 assert.equal(genUiTextFallback({ ...envelope, fallbackText: undefined }).includes('출처:'), true);
 
 console.log(`GenUI contract/card tests passed: ${GENUI_KINDS.length} kinds, ${GENUI_SECTION_TYPES.length} sections, ${GENUI_ACTIONS.length} actions.`);

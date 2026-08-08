@@ -32,3 +32,4 @@ Teams 앱 변경 요청에는 별도 예외 승인이 없는 한 다음 순서�
 - 공개 터널 호스트가 바뀌면 `TAB_DOMAIN`을 새 호스트로 바꾸고 버전 증가·매니페스트 검증·새 ZIP 생성·기존 앱 업데이트 업로드를 다시 수행한다. 기존 주소가 응답하지 않는다고 새 주소를 추측하지 말고, `curl`로 `/api/health`를 확인한 실제 `portUri`만 사용한다.
 - 매니페스트의 `TAB_DOMAIN`과 Teams 관리 봇의 `messagingEndpoint`는 별도 상태다. 호스트가 바뀌면 현재 `portUri`의 `/api/messages`를 Teams 외부 앱 ID에 `teams app update <external-app-id> --endpoint https://<portUri>/api/messages --json`으로 반영하고, 응답의 `updated.endpoint`·`needsReinstall`를 확인한 뒤 새 ZIP을 다시 생성·업로드한다. 공개 `/api/health`가 살아 있어도 이전 엔드포인트가 남아 있으면 모바일 메시지는 무응답일 수 있다.
 - 결과는 반드시 `STATUS / EVIDENCE / COMPLETED / BLOCKER / NEXT ACTION` 형식으로 보고한다. 관찰하지 않은 로그인·브라우저 연결·모바일 GPS·업로드 완료를 주장하지 않는다.
+- Adaptive Card 응답은 카드 attachment만 전송한다. 카드와 같은 내용을 top-level `text`에 함께 넣어 Teams 모바일에서 회색 텍스트 버블과 카드가 중복 표시되지 않게 한다. 텍스트는 legacy 모드 또는 카드 전송 실패 시의 명시적 fallback에만 사용한다.

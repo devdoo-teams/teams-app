@@ -89,6 +89,7 @@ npm run start
 - Teams 호스트에서 변경된 UI와 핵심 명령을 확인한다.
 - 공개 검증 후 작업을 사용자에게 넘겨, 사용자가 배포된 Teams 앱(우선 모바일 Teams)에서 `status`, `list`, `help`, 변경 기능 또는 이번 요청에 해당하는 실제 메시지를 직접 보낸다.
 - 사용자가 같은 배포 앱에서 받은 Bot 답장, Adaptive Card/GenUI, 승인·취소 결과, 필요한 proactive 진행·완료 메시지를 확인한다. API 호출·로컬 테스트·오케스트레이터가 만든 합성 Activity는 이 사용자 확인을 대체하지 않는다.
+- Adaptive Card Activity에는 카드와 동일한 요약을 top-level `text`로 중복 포함하지 않는다. 카드 렌더링 경로는 attachment-only이고, text-only Activity는 legacy 또는 카드 전송 실패 fallback으로만 허용한다.
 - 장시간 작업이면 진행 메시지, 승인·취소 경계, proactive 완료 메시지까지 확인한다.
 - 모바일 기능은 모바일 Teams에서 권한과 실제 화면을 별도로 확인하고, 직접 확인하지 못한 것은 확인했다고 보고하지 않는다.
 

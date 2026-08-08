@@ -159,6 +159,7 @@ function adaptiveCardFromActivity(activityValue) {
 }
 
 function assertAdaptiveCardActivity(activityValue, label) {
+  assert(!('text' in (activityValue ?? {})), `${label} does not duplicate card content in a top-level text bubble`);
   const card = adaptiveCardFromActivity(activityValue);
   assert(card?.type === 'AdaptiveCard', `${label} returns an Adaptive Card activity`);
   assert(card?.version === '1.5', `${label} uses Adaptive Card 1.5`);
@@ -605,6 +606,13 @@ async function runLocalFlow(dataFile, jobDataFile) {
     });
     assert(unavailableOpenAi.response.status === 409, 'unconfigured OpenAI mode cannot be selected at runtime');
     assert(unavailableOpenAi.body.mode === 'deterministic', 'failed mode selection preserves the deterministic mode');
+
+    const responseModeActivity = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity('mode', server.baseUrl, 'response-mode-command')),
+    });
+    assert(responseModeActivity.response.status === 200, 'response-mode Bot command returns 200');
+    assertAdaptiveCardActivity(responseModeActivity.body.activities?.[0], 'response-mode Bot command');
 
     const staticTab = await rawRequest(server.baseUrl, '/tabs/home', {}, null);
     assert(staticTab.response.statusCode === 200, 'static tab entry loads without the local access token');
