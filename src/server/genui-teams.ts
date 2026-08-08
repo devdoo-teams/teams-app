@@ -228,7 +228,40 @@ function actionPayload(action: GenUiAction): Record<(typeof GENUI_ACTION_PAYLOAD
   };
 }
 
-function renderAction(action: GenUiAction): AdaptiveCardAction {
+function openTabUrl(
+  envelope: GenUiEnvelopeV1,
+  action: GenUiAction,
+  index: number,
+): string | undefined {
+  if (action.action !== 'open-tab') return undefined;
+
+  const keys = [
+    action.id ? `openTabUrl.${action.id}` : undefined,
+    `openTabUrl.${index}`,
+    'openTabUrl',
+  ].filter((key): key is string => Boolean(key));
+
+  for (const key of keys) {
+    const candidate = envelope.metadata[key];
+    if (typeof candidate === 'string' && isSafeGenUiUrl(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+function renderAction(
+  action: GenUiAction,
+  envelope: GenUiEnvelopeV1,
+  index: number,
+): AdaptiveCardAction {
+  const tabUrl = openTabUrl(envelope, action, index);
+  if (tabUrl) {
+    return {
+      type: 'Action.OpenUrl',
+      title: action.label,
+      url: tabUrl,
+    };
+  }
+
   const payload = actionPayload(action);
   return {
     type: 'Action.Execute',
@@ -286,7 +319,9 @@ function renderGenUiCardFromEnvelope(
     msteams: { width: 'Full' },
     speak: `상태: ${STATUS_PRESENTATION[envelope.status].label}`,
     body,
-    ...(envelope.actions.length > 0 ? { actions: envelope.actions.map(renderAction) } : {}),
+    ...(envelope.actions.length > 0
+      ? { actions: envelope.actions.map((action, index) => renderAction(action, envelope, index)) }
+      : {}),
   };
 }
 

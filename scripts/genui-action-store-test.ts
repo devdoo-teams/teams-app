@@ -91,6 +91,15 @@ try {
   assert.equal(invalidScopeCard.kind, 'error');
   assert.equal(invalidScopeCard.id, 'approval-scope-invalid');
   assert.equal(invalidScopeCard.actions.length, 0, 'invalid scope must issue zero grants');
+
+  const personalTabUrl = 'https://teams.microsoft.com/l/entity/9b20fd94-2ac9-4423-ac1f-ff528ab245c1/home?webUrl=https%3A%2F%2Fexample.com%2Ftabs%2Fhome&label=%EC%97%85%EB%AC%B4%20%ED%97%88%EB%B8%8C';
+  const configuredFactory = new GenUiResponseFactory(store, { openTabUrl: personalTabUrl });
+  const helpCard = configuredFactory.help();
+  assert.equal(helpCard.actions.length, 1);
+  assert.equal(helpCard.actions[0]?.action, 'open-tab');
+  assert.equal(helpCard.actions[0]?.entityId, 'home');
+  assert.equal(helpCard.metadata.openTabUrl, personalTabUrl);
+
   console.log('PASS: GenUI action grants are scoped, single-use, persistent, and expiring');
 } finally {
   await fs.rm(directory, { recursive: true, force: true });

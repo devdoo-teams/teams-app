@@ -12,11 +12,16 @@ import {
   type GenUiAction,
   type GenUiEnvelopeV1,
   type GenUiState,
+  isSafeGenUiUrl,
 } from '../shared/genui.js';
 
 export type GenUiNotification = AgentNotification;
 
 export type GenUiJobAction = 'approve' | 'cancel';
+
+export type GenUiResponseFactoryOptions = {
+  openTabUrl?: string;
+};
 
 const JOB_STATUSES = ['queued', 'awaiting_approval', 'running', 'completed', 'failed', 'cancelled'] as const;
 type SafeJobStatus = (typeof JOB_STATUSES)[number];
@@ -186,7 +191,28 @@ function stateForJob(job: AgentJob): GenUiState {
 }
 
 export class GenUiResponseFactory {
-  constructor(private readonly actionStore: GenUiActionStore) {}
+  private readonly openTabUrl?: string;
+
+  constructor(
+    private readonly actionStore: GenUiActionStore,
+    options: GenUiResponseFactoryOptions = {},
+  ) {
+    const candidate = options.openTabUrl?.trim();
+    this.openTabUrl = candidate && isSafeGenUiUrl(candidate) ? candidate : undefined;
+  }
+
+  private tabActions(): GenUiAction[] {
+    if (!this.openTabUrl) return [];
+    return [{
+      id: 'open-tab',
+      action: 'open-tab',
+      label: '업무 허브 탭 열기',
+      entityId: 'home',
+      correlationId: 'home-tab',
+      actionToken: randomUUID(),
+      style: 'default',
+    }];
+  }
 
   private create(input: {
     kind: GenUiEnvelopeV1['kind'];
@@ -198,21 +224,29 @@ export class GenUiResponseFactory {
     sections: Array<Record<string, unknown>>;
     fallbackText: string;
     actions?: GenUiAction[];
+    includeTabAction?: boolean;
     metadata?: Record<string, string | number | boolean | null>;
   }): GenUiEnvelopeV1 {
+    const { includeTabAction = false, ...envelopeInput } = input;
     return GenUiEnvelopeV1Schema.parse({
       schemaVersion: GENUI_SCHEMA_VERSION,
       correlationId: randomUUID(),
       aiGenerated: false,
-      actions: [],
       citations: [],
-      ...input,
-      id: identifierText(input.id, 200, 'genui-response'),
-      title: displayText(input.title, 240),
-      summary: input.summary === undefined ? undefined : displayText(input.summary, 2_000),
-      sections: redactSharedSections(input.sections),
-      fallbackText: displayText(input.fallbackText, 4_000, '요청 결과를 확인하세요.'),
-      metadata: redactSharedValue(input.metadata ?? {}) as Record<string, string | number | boolean | null>,
+      ...envelopeInput,
+      id: identifierText(envelopeInput.id, 200, 'genui-response'),
+      title: displayText(envelopeInput.title, 240),
+      summary: envelopeInput.summary === undefined ? undefined : displayText(envelopeInput.summary, 2_000),
+      sections: redactSharedSections(envelopeInput.sections),
+      fallbackText: displayText(envelopeInput.fallbackText, 4_000, '요청 결과를 확인하세요.'),
+      actions: [
+        ...(envelopeInput.actions ?? []),
+        ...(includeTabAction ? this.tabActions() : []),
+      ],
+      metadata: redactSharedValue({
+        ...(envelopeInput.metadata ?? {}),
+        ...(this.openTabUrl ? { openTabUrl: this.openTabUrl } : {}),
+      }) as Record<string, string | number | boolean | null>,
     });
   }
 
@@ -225,6 +259,7 @@ export class GenUiResponseFactory {
       summary: safeText,
       sections: [{ type: 'text', text: safeText }],
       fallbackText: safeText,
+      includeTabAction: true,
       metadata: { source: 'teams-bot', deterministic: true },
     });
   }
@@ -238,6 +273,7 @@ export class GenUiResponseFactory {
       summary: 'Teams 모바일에서 사용할 수 있는 명령입니다.',
       sections: [{ type: 'text', title: '명령', text }],
       fallbackText: text,
+      includeTabAction: true,
       metadata: { source: 'teams-bot', deterministic: true },
     });
   }
@@ -251,6 +287,7 @@ export class GenUiResponseFactory {
       summary: text,
       sections: [{ type: 'text', title: '시작하기', text }],
       fallbackText: text,
+      includeTabAction: true,
       metadata: { source: 'teams-bot', deterministic: true },
     });
   }
@@ -264,6 +301,7 @@ export class GenUiResponseFactory {
       summary: '날씨를 조회하려면 위치 또는 좌표가 필요합니다.',
       sections: [{ type: 'text', title: '위치 입력 안내', text }],
       fallbackText: text,
+      includeTabAction: true,
       metadata: { source: 'teams-bot', deterministic: true },
     });
   }
@@ -305,6 +343,7 @@ export class GenUiResponseFactory {
         observedAt: current.time,
       }],
       fallbackText: text,
+      includeTabAction: true,
       metadata: { source: weather.source, deterministic: true },
     });
   }
@@ -321,6 +360,7 @@ export class GenUiResponseFactory {
         { label: '활성 Codex 작업', value: activeCount },
       ] }],
       fallbackText: text,
+      includeTabAction: true,
       metadata: { source: 'teams-bot', deterministic: true },
     });
   }
@@ -340,6 +380,7 @@ export class GenUiResponseFactory {
         { type: 'list', title: '최근 Codex 작업', items: recentJobs.map((job) => ({ id: safeJobId(job), label: safeJobListLabel(job), status: safeJobStatus(job) })) },
       ],
       fallbackText: `${itemText}\n\n${jobText}`,
+      includeTabAction: true,
       metadata: { source: 'teams-bot', deterministic: true },
     });
   }

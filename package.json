@@ -25,6 +25,7 @@
     "test:process-lease-hardening": "tsx scripts/process-lease-hardening-test.ts",
     "test:agent-transitions": "tsx scripts/agent-service-transition-test.ts",
     "test:genui-contract": "tsx scripts/genui-contract-test.ts",
+    "test:teams-tab-link": "tsx scripts/teams-tab-link-test.ts",
     "test:channels-shadow": "tsx scripts/channels-shadow-test.ts",
     "test:deterministic-engine": "tsx scripts/deterministic-response-engine-test.ts",
     "test:openai-engine": "tsx scripts/openai-response-engine-test.ts",
@@ -40,7 +41,7 @@
     "test:mcp-direct-factory": "tsx scripts/mcp-direct-factory-test.ts",
     "check": "npm run build:client && npm run validate:manifest",
     "test:runtime": "node scripts/runtime-test.mjs",
-    "test": "npm run check && npm run build && npm run test:troubleshooting && npm run test:atomic-stores && npm run test:agent-job-hardening && npm run test:genui-action-hardening && npm run test:genui-redaction && npm run test:genui-actions && npm run test:item-store-hardening && npm run test:process-lease-hardening && npm run test:agent-transitions && npm run test:genui-contract && npm run test:channels-shadow && npm run test:response-mode-store && npm run test:deterministic-engine && npm run test:openai-engine && npm run test:local-engine && npm run test:response-mode-api && npm run test:client-auth && npm run test:client-genui-adapter && npm run test:client-response-mode && npm run test:local-auth && npm run test:weather-service && npm run test:mcp-response-mode && npm run test:mcp-direct-factory && npm run test:runtime"
+    "test": "npm run check && npm run build && npm run test:troubleshooting && npm run test:atomic-stores && npm run test:agent-job-hardening && npm run test:genui-action-hardening && npm run test:genui-redaction && npm run test:genui-actions && npm run test:item-store-hardening && npm run test:process-lease-hardening && npm run test:agent-transitions && npm run test:genui-contract && npm run test:teams-tab-link && npm run test:channels-shadow && npm run test:response-mode-store && npm run test:deterministic-engine && npm run test:openai-engine && npm run test:local-engine && npm run test:response-mode-api && npm run test:client-auth && npm run test:client-genui-adapter && npm run test:client-response-mode && npm run test:local-auth && npm run test:weather-service && npm run test:mcp-response-mode && npm run test:mcp-direct-factory && npm run test:runtime"
   },
   "dependencies": {
     "@copilotkit/channels-teams": "0.7.3",

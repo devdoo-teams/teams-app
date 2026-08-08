@@ -43,6 +43,7 @@ import { createMcpGenUiRouter, type McpGenUiRouter } from './mcp-genui.js';
 import { ChannelsShadowMonitor } from './channels-shadow-monitor.js';
 import { renderChannelsShadow } from './copilot-channels-shadow.js';
 import { acquireStoreProcessLease, type StoreProcessLease } from './process-lease.js';
+import { buildTeamsPersonalTabDeepLink } from './teams-tab-link.js';
 import {
   GENUI_ACTION_PAYLOAD_KEYS,
   GENUI_SCHEMA_VERSION,
@@ -113,7 +114,14 @@ const genUiActionStore = new GenUiActionStore(
   genUiActionStorePath,
 );
 const responseModeStore = new ResponseModeStore(responseModeStorePath);
-const genUi = new GenUiResponseFactory(genUiActionStore);
+const personalTabDeepLink = buildTeamsPersonalTabDeepLink({
+  appId: process.env.TEAMS_APP_ID ?? '',
+  tabDomain: process.env.TAB_DOMAIN ?? '',
+  tenantId: process.env.TENANT_ID,
+});
+const genUi = new GenUiResponseFactory(genUiActionStore, {
+  openTabUrl: personalTabDeepLink,
+});
 const channelsShadowMonitor = new ChannelsShadowMonitor();
 const openAiConfigured = Boolean(process.env.OPENAI_API_KEY?.trim());
 const openAiModel = process.env.OPENAI_MODEL?.trim() || 'gpt-4o-mini';

@@ -108,6 +108,25 @@ assert.equal(card.type, 'AdaptiveCard');
 assert.equal(card.version, '1.5');
 assert.equal(card.msteams.width, 'Full');
 assert.ok(card.body.every((element) => element.type !== 'TextBlock' || element.wrap === true));
+
+const personalTabUrl = 'https://teams.microsoft.com/l/entity/9b20fd94-2ac9-4423-ac1f-ff528ab245c1/home?webUrl=https%3A%2F%2Fexample.com%2Ftabs%2Fhome&label=%EC%97%85%EB%AC%B4%20%ED%97%88%EB%B8%8C';
+const tabEnvelope = GenUiEnvelopeV1Schema.parse({
+  ...nonAiEnvelope,
+  id: 'open-tab-answer',
+  actions: [baseAction('open-tab', 0)],
+  metadata: { openTabUrl: personalTabUrl },
+});
+const tabCard = renderGenUiCard(tabEnvelope);
+assert.equal(tabCard.actions?.[0]?.type, 'Action.OpenUrl');
+assert.equal(tabCard.actions?.[0]?.url, personalTabUrl);
+
+const unsafeTabCard = renderGenUiCard(GenUiEnvelopeV1Schema.parse({
+  ...tabEnvelope,
+  metadata: { openTabUrl: 'javascript:alert(1)' },
+}));
+assert.notEqual(unsafeTabCard.actions?.[0]?.type, 'Action.OpenUrl');
+assert.equal('url' in (unsafeTabCard.actions?.[0] ?? {}), false);
+
 const statusLabels: Record<string, string> = {
   loading: '로딩 중',
   ready: '준비 완료',
