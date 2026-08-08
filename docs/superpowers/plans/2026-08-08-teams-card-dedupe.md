@@ -26,7 +26,7 @@
 - Consumes: `createAdaptiveCardActivity`, `createTextFallbackActivity`, `createResponseModeCardActivity`.
 - Produces: executable assertions that card-mode activities omit top-level `text`, retain one Adaptive Card attachment and `attachmentLayout: 'list'`, and preserve text-only fallback behavior.
 
-- [ ] **Step 1: Add assertions before production changes**
+- [x] **Step 1: Add assertions before production changes**
 
 Add `createResponseModeCardActivity` to the existing import and assert:
 
@@ -49,7 +49,7 @@ assert.equal(textFallback.attachments, undefined);
 assert.equal(textFallback.attachmentLayout, undefined);
 ```
 
-- [ ] **Step 2: Run the focused contract test and observe the expected failure**
+- [x] **Step 2: Run the focused contract test and observe the expected failure**
 
 Run: `npx tsx scripts/genui-contract-test.ts`
 
@@ -65,27 +65,27 @@ Expected: FAIL at the new card-only assertion because the current card activity 
 - Consumes: Existing envelope/response-mode inputs.
 - Produces: Existing `TeamsMessageActivity` shape with attachment-only card-mode delivery and unchanged fallback behavior.
 
-- [ ] **Step 1: Remove only the top-level `text` properties from the two card-mode activity returns**
-- [ ] **Step 2: Leave `createTextFallbackActivity`, delivery failure fallback, legacy mode, attachment payloads, and `attachmentLayout: 'list'` unchanged**
+- [x] **Step 1: Remove only the top-level `text` properties from the two card-mode activity returns**
+- [x] **Step 2: Leave `createTextFallbackActivity`, delivery failure fallback, legacy mode, attachment payloads, and `attachmentLayout: 'list'` unchanged**
 
 ### Task 3: Verify and commit
 
 **Files:**
 - No additional production files.
 
-- [ ] **Step 1: Run the focused contract test**
+- [x] **Step 1: Run the focused contract test**
 
 Run: `npx tsx scripts/genui-contract-test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 2: Run TypeScript typecheck**
+- [x] **Step 2: Run TypeScript typecheck**
 
 Run: `npm run typecheck`
 
 Expected: PASS with exit code 0.
 
-- [ ] **Step 3: Review the diff and commit**
+- [x] **Step 3: Review the diff and commit**
 
 Run:
 ```bash
@@ -97,3 +97,11 @@ git commit -m "fix: prevent duplicate Teams card responses"
 ```
 
 Expected: one implementation commit with the requested message and no unrelated changes.
+
+## Release/runtime evidence
+
+- [x] `npm test` passed after the v1.0.10 package bump.
+- [x] `teams-sdk-mvp.zip` v1.0.10 was generated, inspected, and uploaded to the existing Teams app.
+- [x] Public health reports `auth=teams-authenticated`, `bot=teams-sdk`, `outbound=teams-sdk`, and `genUi=adaptive-cards`.
+- [x] Teams web-host runtime `help` round-trip returned one Adaptive Card without a duplicate text bubble.
+- [ ] Teams mobile-host confirmation remains the final user acceptance step.
