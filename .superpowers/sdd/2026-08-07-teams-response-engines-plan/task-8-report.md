@@ -17,6 +17,7 @@ EVIDENCE:
 - `npm run build:server` — PASS (executed in the attempted npm test run and independently before runtime validation).
 - `npm run typecheck` — PASS.
 - `npm run validate:manifest` — PASS; manifestVersion `1.25`, package/manifest release version `1.0.7`, geolocation permission, required icons and tab fields validated.
+- `npm test` — PASS; aggregate exit code `0` after all focused tests and the final runtime gate.
 - `npm run test:runtime` — PASS; local, MCP, CopilotKit, Bot/Teams SDK, ACL, approval, recovery, timeout, and production-auth flows completed with `Runtime verification complete.`
 - Focused tests — PASS: troubleshooting, atomic stores, AgentJob/GenUI action/item/process-lease hardening, redaction, agent transitions, GenUI/channels contracts, response-mode store/API, deterministic/OpenAI/local engines, client auth/GenUI/selector, local auth, weather, MCP response-mode/direct factory.
 - `git diff --check` — PASS.
@@ -26,7 +27,7 @@ EVIDENCE:
 
 NPM TEST NOTE:
 
-- The full `npm test` command was started and was intentionally interrupted by the user after `test:process-lease-hardening` began. It did not report a test failure or a final exit status. The remaining commands were then run independently and passed, including the final runtime gate. This report does not claim an observed zero exit code for that interrupted aggregate invocation.
+- A final aggregate `npm test` run completed with exit code `0`; the earlier interrupted attempt is superseded by this observed release-gate run.
 
 PACKAGING:
 
