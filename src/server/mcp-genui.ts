@@ -13,6 +13,7 @@ import type { AgentJob } from './agent-job-store.js';
 import type { AgentService } from './agent-service.js';
 import type { Item, ItemStore } from './item-store.js';
 import type { WeatherResponse } from './weather-service.js';
+import { redactSensitiveValue } from './sensitive-text.js';
 
 // This is the shared application contract. It is intentionally imported rather
 // than recreated here so Teams cards, the MCP widget, and the CopilotKit tab
@@ -193,10 +194,11 @@ function sanitizeMetadata(metadata: Record<string, unknown>): Record<string, unk
 }
 
 function sanitizeMcpEnvelope(envelope: GenUiEnvelopeV1): GenUiEnvelopeV1 {
+  const redacted = redactSensitiveValue(envelope) as GenUiEnvelopeV1;
   const responseMode = normalizeResponseMode(envelope.responseMode);
   const sanitized = {
-    ...envelope,
-    metadata: sanitizeMetadata(envelope.metadata),
+    ...redacted,
+    metadata: sanitizeMetadata(redacted.metadata),
     ...(responseMode ? { responseMode } : {}),
   };
   if (!responseMode) delete (sanitized as Partial<GenUiEnvelopeV1>).responseMode;

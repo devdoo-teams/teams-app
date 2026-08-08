@@ -1023,6 +1023,9 @@ async function runLocalFlow(dataFile, jobDataFile) {
       method: 'POST',
       body: JSON.stringify(activity('write 테스트 파일 변경 계획을 검토해줘', server.baseUrl, 'agent-write')),
     });
+    const naturalApprovalCard = assertAdaptiveCardActivity(writeRequest.body.activities[0], 'natural-language workspace-write approval');
+    assert(naturalApprovalCard.actions?.some((action) => action.verb === 'genui.approve'), 'natural-language approval card includes an approve action');
+    assert(naturalApprovalCard.actions?.some((action) => action.verb === 'genui.cancel'), 'natural-language approval card includes a cancel action');
     const writeJobId = writeRequest.body.messages[0].match(/task-[\w-]+/)?.[0];
     assert(writeRequest.body.messages[0].includes('승인 대기'), 'workspace-write request requires approval');
 

@@ -4,11 +4,12 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { AgentJobScope } from '../src/server/agent-job-store.js';
+import type { AgentJob, AgentJobScope } from '../src/server/agent-job-store.js';
 import type { AgentService } from '../src/server/agent-service.js';
 import { ItemStore } from '../src/server/item-store.js';
 import { LocalCompatibleResponseEngine } from '../src/server/response-engine-local.js';
 import type { ResponseEngineInput } from '../src/server/response-engine.js';
+import { GenUiEnvelopeV1Schema } from '../src/shared/genui.js';
 
 const scope: AgentJobScope = {
   requesterId: 'local-test-user',
@@ -64,6 +65,7 @@ async function createInput(
   prompt: string,
   context: ResponseEngineInput['request']['context'] = [],
   onTool: ResponseEngineInput['onTool'] = () => undefined,
+  approvalEnvelope?: ResponseEngineInput['approvalEnvelope'],
 ): Promise<ResponseEngineInput> {
   return {
     mode: 'local',
@@ -81,7 +83,28 @@ async function createInput(
     onText: () => undefined,
     setActiveJobId: () => undefined,
     isCancelled: () => false,
+    approvalEnvelope,
   };
+}
+
+function approvalEnvelope(job: AgentJob): ReturnType<typeof GenUiEnvelopeV1Schema.parse> {
+  return GenUiEnvelopeV1Schema.parse({
+    schemaVersion: '1',
+    kind: 'approval',
+    status: 'approval',
+    id: job.id,
+    correlationId: 'local-approval-correlation',
+    title: '쓰기 작업 승인 필요',
+    sections: [{ type: 'status', title: '승인 경계', status: 'awaiting_approval' }],
+    actions: [
+      { action: 'approve', label: '승인', entityId: job.id, correlationId: 'local-approval-correlation', actionToken: 'a'.repeat(32), style: 'positive' },
+      { action: 'cancel', label: '취소', entityId: job.id, correlationId: 'local-approval-correlation', actionToken: 'b'.repeat(32), style: 'destructive' },
+    ],
+    citations: [],
+    aiGenerated: false,
+    fallbackText: '승인 필요',
+    metadata: { source: 'test' },
+  });
 }
 
 async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
@@ -210,6 +233,18 @@ async function main(): Promise<void> {
       assert.equal(result.envelope.metadata.provider, 'local-compatible');
     });
 
+    await withFakeServer(async () => ({
+      body: textBody('Bearer abcdefghijklmnop sk-proj-localabcdefghijklmnop https://user:password@example.test/v1?api_key=url-secret'),
+    }), async (baseUrl) => {
+      const restore = withEnvironment({ LOCAL_MODEL_BASE_URL: baseUrl, LOCAL_MODEL_API_KEY: 'output-secret' });
+      const result = await new LocalCompatibleResponseEngine().run(
+        await createInput(itemStore, createAgentServiceFake(), '민감정보 redaction 테스트'),
+      );
+      restore();
+      assert.doesNotMatch(JSON.stringify(result), /abcdefghijklmnop|localabcdefghijklmnop|url-secret|user:password/);
+      assert.match(result.text, /\[REDACTED\]/);
+    });
+
     await withFakeServer(async (body, request) => {
       assert.equal(request.url, '/v1/chat/completions');
       const messages = body.messages as Array<{ role: string; content: string | null }>;
@@ -261,7 +296,7 @@ async function main(): Promise<void> {
       const service = createAgentServiceFake();
       let activeJobId = '';
       const result = await new LocalCompatibleResponseEngine().run({
-        ...(await createInput(itemStore, service, '설정 파일을 수정해줘')),
+        ...(await createInput(itemStore, service, '설정 파일을 수정해줘', [], undefined, approvalEnvelope)),
         setActiveJobId: (id) => { activeJobId = id; },
       });
       restore();
@@ -270,6 +305,7 @@ async function main(): Promise<void> {
       assert.equal(service.submitted[0]?.mode, 'workspace-write');
       assert.deepEqual(service.submitted[0]?.scope, scope);
       assert.equal(activeJobId, 'task-local-approval');
+      assert.equal(result.envelope.actions.length, 2, 'host approval factory supplies approve/cancel actions');
       assert.doesNotMatch(JSON.stringify(result), /approval-secret/);
     });
 

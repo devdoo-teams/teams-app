@@ -8,6 +8,7 @@ import {
 import type { RunAgentInput } from '@ag-ui/core';
 
 import type { AgentJobScope } from './agent-job-store.js';
+import { redactSensitiveText, redactSensitiveValue } from './sensitive-text.js';
 import {
   LLM_TOOLS,
   type OpenAIChatResponse,
@@ -85,6 +86,14 @@ class OpenAIProviderError extends Error {
 
 function boundedText(value: unknown, maxLength = MAX_MESSAGE_LENGTH): string {
   return typeof value === 'string' ? value.trim().slice(0, maxLength) : '';
+}
+
+function safeProviderText(value: string, maxLength = MAX_MESSAGE_LENGTH): string {
+  return redactSensitiveText(value).slice(0, maxLength);
+}
+
+function safeProviderValue(value: unknown): unknown {
+  return redactSensitiveValue(value);
 }
 
 function textContent(content: unknown): string {
@@ -167,6 +176,7 @@ function responseEnvelope(input: {
   sections?: GenUiEnvelopeV1['sections'];
   errorCode?: string;
 }): GenUiEnvelopeV1 {
+  const safeText = safeProviderText(input.text);
   const metadata: Record<string, string | boolean> = {
     source: 'openai',
     provider: 'openai',
@@ -182,13 +192,15 @@ function responseEnvelope(input: {
     id: input.id,
     correlationId: randomUUID(),
     title: input.title,
-    summary: input.text.slice(0, 2_000),
-    sections: input.sections ?? [{ type: 'text', text: input.text }],
+    summary: safeText.slice(0, 2_000),
+    sections: input.sections
+      ? safeProviderValue(input.sections)
+      : [{ type: 'text', text: safeText }],
     actions: [],
     citations: [],
     aiGenerated: input.aiGenerated,
-    fallbackText: input.text,
-    metadata,
+    fallbackText: safeText,
+    metadata: safeProviderValue(metadata) as Record<string, string | boolean>,
   });
 }
 
@@ -402,6 +414,7 @@ export class OpenAIResponseEngine implements ResponseEngine {
       if (!config.apiKey) return providerErrorOutput(new OpenAIProviderError('configuration'));
       let messages = buildMessages(input);
       let toolEvents: ResponseToolEvent[] = [];
+      let approvalEnvelope: GenUiEnvelopeV1 | undefined;
       let toolChoice: { type: 'function'; function: { name: string } } | 'auto' = forcedToolChoice(input.prompt);
 
       for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -410,12 +423,12 @@ export class OpenAIResponseEngine implements ResponseEngine {
         const assistant = parseAssistant(completion);
 
         if (assistant.toolCalls.length === 0) {
-          const text = assistant.content || toolEvents.at(-1)?.result;
+          const text = safeProviderText(assistant.content || toolEvents.at(-1)?.result || '');
           if (!text) throw new OpenAIProviderError('response');
           input.onText?.(text);
-          const envelope = toolEvents[0]
+          const envelope = approvalEnvelope ?? (toolEvents[0]
             ? toolEnvelope(toolEvents[0], text, config.model)
-            : responseEnvelope({ kind: 'answer', id: 'openai-answer', title: '업무 허브 답변', text, aiGenerated: true, model: config.model });
+            : responseEnvelope({ kind: 'answer', id: 'openai-answer', title: '업무 허브 답변', text, aiGenerated: true, model: config.model }));
           return { text, envelope, toolCalls: toolEvents };
         }
 
@@ -432,8 +445,10 @@ export class OpenAIResponseEngine implements ResponseEngine {
           { role: 'assistant', content: assistant.content || null, tool_calls: assistant.toolCalls },
         ];
         for (const { toolCall, args } of validatedToolCalls) {
-          const event = await this.executeTool(toolCall, input, args);
+          const executed = await this.executeTool(toolCall, input, args);
+          const event = executed.event;
           toolEvents = [...toolEvents, event];
+          approvalEnvelope = executed.approvalEnvelope ?? approvalEnvelope;
           input.onTool?.(event);
           messages.push({ role: 'tool', tool_call_id: toolCall.id, content: event.result });
         }
@@ -517,28 +532,32 @@ export class OpenAIResponseEngine implements ResponseEngine {
     toolCall: OpenAIToolCall,
     input: ResponseEngineInput,
     args: Record<string, unknown>,
-  ): Promise<ResponseToolEvent> {
+  ): Promise<{ event: ResponseToolEvent; approvalEnvelope?: GenUiEnvelopeV1 }> {
     if (toolCall.function.name === 'showWeatherCard') {
       const contextWeather = contextValue(input, '날씨');
       if (!isLiveWeather(contextWeather)) throw new OpenAIProviderError('location');
       const weather = contextWeather;
       return {
-        name: 'showWeatherCard',
-        args: compactWeather(weather) as unknown as Record<string, unknown>,
-        result: formatWeatherMessage(weather, false),
-        weather,
+        event: {
+          name: 'showWeatherCard',
+          args: safeProviderValue(compactWeather(weather)) as Record<string, unknown>,
+          result: safeProviderText(formatWeatherMessage(weather, false)),
+          weather,
+        },
       };
     }
     if (toolCall.function.name === 'showTaskCard') {
       const tasks = compactTasks(input);
       return {
-        name: 'showTaskCard',
-        args: tasks as unknown as Record<string, unknown>,
-        result: formatTasks(tasks),
+        event: {
+          name: 'showTaskCard',
+          args: safeProviderValue(tasks) as Record<string, unknown>,
+          result: safeProviderText(formatTasks(tasks)),
+        },
       };
     }
 
-    const prompt = boundedText(args.prompt, 2_000);
+    const prompt = safeProviderText(boundedText(args.prompt, 2_000), 2_000);
     const job = await input.agentService.submit({
       prompt,
       mode: 'workspace-write',
@@ -548,9 +567,12 @@ export class OpenAIResponseEngine implements ResponseEngine {
     input.setActiveJobId?.(job.id);
     const approval: ApprovalToolArgs = { jobId: job.id, prompt, action: 'approve' };
     return {
-      name: 'workspaceApproval',
-      args: approval as unknown as Record<string, unknown>,
-      result: `승인 대기 중인 작업 ${job.id}`,
+      event: {
+        name: 'workspaceApproval',
+        args: safeProviderValue(approval) as Record<string, unknown>,
+        result: safeProviderText(`승인 대기 중인 작업 ${job.id}`),
+      },
+      approvalEnvelope: input.approvalEnvelope ? await input.approvalEnvelope(job) : undefined,
     };
   }
 }

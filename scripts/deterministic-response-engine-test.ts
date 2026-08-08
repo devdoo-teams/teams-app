@@ -8,6 +8,7 @@ import type { AgentService } from '../src/server/agent-service.js';
 import { ItemStore } from '../src/server/item-store.js';
 import { DeterministicResponseEngine } from '../src/server/response-engine-deterministic.js';
 import type { ResponseEngineInput } from '../src/server/response-engine.js';
+import { GenUiEnvelopeV1Schema } from '../src/shared/genui.js';
 
 const scope: AgentJobScope = {
   requesterId: 'test-user',
@@ -56,7 +57,9 @@ async function createInput(
   itemStore: ItemStore,
   agentService: AgentService,
   prompt: string,
+  context: ResponseEngineInput['request']['context'] = [],
   onTool: ResponseEngineInput['onTool'] = () => undefined,
+  approvalEnvelope?: ResponseEngineInput['approvalEnvelope'],
 ): Promise<ResponseEngineInput> {
   return {
     mode: 'deterministic',
@@ -68,12 +71,13 @@ async function createInput(
       threadId: scope.conversationId,
       runId: 'run-test-1',
       messages: [{ id: 'message-1', role: 'user', content: prompt }],
-      context: [],
+      context,
     } as ResponseEngineInput['request'],
     onTool,
     onText: () => undefined,
     setActiveJobId: () => undefined,
     isCancelled: () => false,
+    approvalEnvelope,
   };
 }
 
@@ -109,20 +113,57 @@ async function main(): Promise<void> {
     }) as typeof fetch;
     try {
       const weather = await engine.run(await createInput(itemStore, agentService, 'weather'));
-      assert.equal(weather.envelope.kind, 'weather');
+      assert.equal(weather.envelope.kind, 'answer');
       assert.equal(weather.envelope.aiGenerated, false);
-      assert.equal(weather.toolCalls[0]?.name, 'showWeatherCard');
+      assert.equal(weather.toolCalls.length, 0, 'deterministic no-location weather must not call a demo provider');
+      assert.match(weather.text, /내 위치 사용|위치를 추측하지 않습니다/);
     } finally {
       globalThis.fetch = originalFetch;
     }
     assert.equal(fetchCalled, false);
 
+    const liveWeather = await engine.run(await createInput(
+      itemStore,
+      agentService,
+      'weather',
+      [{ description: '날씨 컨텍스트', value: JSON.stringify({
+        source: 'open-meteo',
+        location: { name: '서울', latitude: 37.5665, longitude: 126.978, timezone: 'Asia/Seoul' },
+        current: {
+          time: '2026-08-08T00:00:00Z', temperature: 25, apparentTemperature: 26,
+          humidity: 60, windSpeed: 8, precipitation: 0, condition: '맑음', icon: 'sun',
+        },
+      }) }],
+    ));
+    assert.equal(liveWeather.envelope.kind, 'weather');
+    assert.equal(liveWeather.toolCalls[0]?.name, 'showWeatherCard');
+
+    const approvalEnvelope = (createdJob: AgentJob) => GenUiEnvelopeV1Schema.parse({
+      schemaVersion: '1',
+      kind: 'approval',
+      status: 'approval',
+      id: createdJob.id,
+      correlationId: 'deterministic-approval-correlation',
+      title: '쓰기 작업 승인 필요',
+      summary: '승인 필요',
+      sections: [{ type: 'status', title: '승인 경계', status: 'awaiting_approval' }],
+      actions: [
+        { action: 'approve', label: '승인', entityId: createdJob.id, correlationId: 'deterministic-approval-correlation', actionToken: 'a'.repeat(32), style: 'positive' },
+        { action: 'cancel', label: '취소', entityId: createdJob.id, correlationId: 'deterministic-approval-correlation', actionToken: 'b'.repeat(32), style: 'destructive' },
+      ],
+      citations: [],
+      aiGenerated: false,
+      fallbackText: '승인 필요',
+      metadata: { source: 'test' },
+    });
+
     const approvalTools: string[] = [];
-    const write = await engine.run(await createInput(itemStore, agentService, 'write 설정 파일을 수정해줘', (tool) => {
+    const write = await engine.run(await createInput(itemStore, agentService, 'write 설정 파일을 수정해줘', [], (tool) => {
       approvalTools.push(tool.name);
-    }));
+    }, approvalEnvelope));
     assert.equal(write.envelope.kind, 'approval');
     assert.equal(write.envelope.aiGenerated, false);
+    assert.equal(write.envelope.actions.length, 2, 'host approval factory supplies approve/cancel actions');
     assert.deepEqual(approvalTools, ['workspaceApproval']);
 
     const unsupported = await engine.run(await createInput(itemStore, agentService, '저장소를 분석해줘'));

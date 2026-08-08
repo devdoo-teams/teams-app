@@ -853,7 +853,12 @@ const copilotRuntime = new CopilotRuntime({
     const tenantId = request.headers.get('x-validated-tenant-id');
     if (!requesterId || !tenantId) throw new Error('validated Copilot identity is required');
     return {
-      default: new TeamsCodexAgent(itemStore, agentService, { requesterId, tenantId }),
+      default: new TeamsCodexAgent(
+        itemStore,
+        agentService,
+        { requesterId, tenantId },
+        (job) => genUi.approval(job),
+      ),
     };
   },
 });
@@ -1218,6 +1223,7 @@ async function handleBotNaturalLanguage(activity: any, send: BotSend, scope: Age
       agentService,
       setActiveJobId: () => undefined,
       isCancelled: () => false,
+      approvalEnvelope: (job) => genUi.approval(job),
     });
     await send(output.text, output.envelope);
   } catch (error) {

@@ -2,11 +2,10 @@ import { randomUUID } from 'node:crypto';
 
 import type { AgentJob } from './agent-job-store.js';
 import {
-  DEMO_COORDINATES,
   formatWeatherMessage,
-  getWeather,
   type WeatherResponse,
 } from './weather-service.js';
+import { redactSensitiveText, redactSensitiveValue } from './sensitive-text.js';
 import {
   GENUI_SCHEMA_VERSION,
   GenUiEnvelopeV1Schema,
@@ -95,6 +94,14 @@ function formatJobs(input: ResponseEngineInput): string {
   return jobs.map((job) => `- ${job.id}: ${job.status}`).join('\n');
 }
 
+function safeText(value: string, maxLength = 4_000): string {
+  return redactSensitiveText(value).slice(0, maxLength);
+}
+
+function safeSections(sections: GenUiEnvelopeV1['sections']): GenUiEnvelopeV1['sections'] {
+  return redactSensitiveValue(sections) as GenUiEnvelopeV1['sections'];
+}
+
 function envelope(input: {
   kind: GenUiEnvelopeV1['kind'];
   id: string;
@@ -103,7 +110,7 @@ function envelope(input: {
   status?: GenUiEnvelopeV1['status'];
   sections?: GenUiEnvelopeV1['sections'];
 }): GenUiEnvelopeV1 {
-  const safeText = input.text.slice(0, 4_000);
+  const bounded = safeText(input.text);
   return GenUiEnvelopeV1Schema.parse({
     schemaVersion: GENUI_SCHEMA_VERSION,
     kind: input.kind,
@@ -111,14 +118,18 @@ function envelope(input: {
     id: input.id,
     correlationId: randomUUID(),
     title: input.title,
-    summary: safeText.slice(0, 2_000),
-    sections: input.sections ?? [{ type: 'text', text: safeText }],
+    summary: bounded.slice(0, 2_000),
+    sections: input.sections ? safeSections(input.sections) : [{ type: 'text', text: bounded }],
     actions: [],
     citations: [],
     aiGenerated: false,
-    fallbackText: safeText,
+    fallbackText: bounded,
     metadata: { source: 'copilotkit', deterministic: true },
   });
+}
+
+function output(value: ResponseEngineOutput): ResponseEngineOutput {
+  return { ...value, text: safeText(value.text) };
 }
 
 function envelopeStatusForJob(job: AgentJob): GenUiEnvelopeV1['status'] {
@@ -159,37 +170,49 @@ export class DeterministicResponseEngine implements ResponseEngine {
 
     if (!prompt) {
       const text = '요청 내용을 입력해 주세요.';
-      return { text, envelope: envelope({ kind: 'answer', id: 'empty-request', title: '업무 허브', text }), toolCalls };
+      return output({ text, envelope: envelope({ kind: 'answer', id: 'empty-request', title: '업무 허브', text }), toolCalls });
     }
 
     const normalized = prompt.toLowerCase();
     if (/^(help|도움|사용법|명령)/i.test(normalized)) {
       const text = 'CopilotKit 데모 명령\n\n- 현재 업무 목록 보여줘\n- 현재 위치 날씨 보여줘\n- Codex 작업 상태 알려줘\n- 저장소를 분석해줘\n- write로 파일 변경 작업을 요청하면 승인 카드가 표시됩니다.';
-      return { text, envelope: envelope({ kind: 'answer', id: 'help', title: '업무 허브 명령 안내', text }), toolCalls };
+      return output({ text, envelope: envelope({ kind: 'answer', id: 'help', title: '업무 허브 명령 안내', text }), toolCalls });
     }
 
     if (/(업무|할 일|task).*(목록|리스트|보여|확인)|^(list|업무 목록)$/i.test(normalized)) {
       const tasks = compactTasks(input);
       const text = formatTasks(tasks);
       emitTool({ name: 'showTaskCard', args: tasks as unknown as Record<string, unknown>, result: text });
-      return {
+      return output({
         text,
         envelope: envelope({
           kind: 'task-list', id: 'workspace-list', title: '업무 목록', text,
           sections: [{ type: 'list', title: '업무', items: tasks.items.map((item) => ({ id: item.id, label: item.title, status: item.status })) }],
         }),
         toolCalls,
-      };
+      });
     }
 
     if (/(날씨|weather)/i.test(normalized)) {
       const contextWeather = contextValue(input, '날씨');
-      const weather = isWeather(contextWeather)
-        ? contextWeather
-        : await getWeather(DEMO_COORDINATES.latitude, DEMO_COORDINATES.longitude, { demo: true });
+      if (!isWeather(contextWeather)) {
+        const text = '현재 위치 날씨를 확인하려면 Teams 탭에서 “내 위치 사용”을 눌러 위치 권한을 허용한 뒤 다시 요청하세요. 결정형 모드는 위치를 추측하지 않습니다.';
+        return output({
+          text,
+          envelope: envelope({
+            kind: 'answer',
+            id: 'weather-location-required',
+            title: '현재 위치 날씨',
+            text,
+            sections: [{ type: 'status', title: '위치 권한 필요', status: 'ready', description: text }],
+          }),
+          toolCalls,
+        });
+      }
+      const weather = contextWeather;
       const text = `${formatWeatherMessage(weather, weather.source === 'demo')}\n\n탭의 “내 위치 사용” 버튼을 누르면 Teams 모바일 위치 권한으로 실시간 위치를 갱신할 수 있습니다.`;
       emitTool({ name: 'showWeatherCard', args: compactWeather(weather) as unknown as Record<string, unknown>, result: text, weather });
-      return {
+      return output({
         text,
         envelope: envelope({
           kind: 'weather', id: `weather-${weather.location.latitude}-${weather.location.longitude}`, title: '현재 위치 날씨', text,
@@ -211,29 +234,30 @@ export class DeterministicResponseEngine implements ResponseEngine {
           }],
         }),
         toolCalls,
-      };
+      });
     }
 
     if (/^(status|상태|진행 상태)/i.test(normalized)) {
       const text = `활성 Codex 작업 ${input.agentService.countActive(input.scope)}개\n\n${formatJobs(input)}`;
-      return {
+      return output({
         text,
         envelope: envelope({ kind: 'job-status', id: 'workspace-status', title: '업무 허브 상태', text, sections: [{ type: 'status', status: 'ready', description: text }] }),
         toolCalls,
-      };
+      });
     }
 
     if (/^(write|파일|수정|변경|작성|생성)/i.test(normalized)) {
-      const requestedPrompt = prompt.replace(/^(write|파일(?:을|이)?\s*(?:변경|수정)?|수정|변경|작성|생성)\s*/i, '').trim() || '요청한 변경 작업';
+      const requestedPrompt = safeText(prompt.replace(/^(write|파일(?:을|이)?\s*(?:변경|수정)?|수정|변경|작성|생성)\s*/i, '').trim() || '요청한 변경 작업', 2_000);
       const job = await input.agentService.submit({ prompt: requestedPrompt, mode: 'workspace-write', scope: input.scope, notify: false });
       const args: ApprovalToolArgs = { jobId: job.id, prompt: requestedPrompt, action: 'approve' };
       const text = `쓰기 작업 ${job.id}이 승인 대기 중입니다.\n\nTeams Bot에서 “approve ${job.id}”를 보내거나 아래 승인 흐름을 사용하세요.`;
+      const approvalEnvelope = input.approvalEnvelope ? await input.approvalEnvelope(job) : undefined;
       emitTool({ name: 'workspaceApproval', args, result: `승인 대기 중인 작업 ${job.id}` });
-      return {
+      return output({
         text,
-        envelope: envelope({ kind: 'approval', id: job.id, title: '쓰기 작업 승인 필요', text, status: 'approval', sections: [{ type: 'status', title: '승인 경계', status: 'awaiting_approval', description: requestedPrompt }] }),
+        envelope: approvalEnvelope ?? envelope({ kind: 'approval', id: job.id, title: '쓰기 작업 승인 필요', text, status: 'approval', sections: [{ type: 'status', title: '승인 경계', status: 'awaiting_approval', description: requestedPrompt }] }),
         toolCalls,
-      };
+      });
     }
 
     const previous = input.agentService.latestCompletedForConversation(input.scope);
@@ -252,6 +276,6 @@ export class DeterministicResponseEngine implements ResponseEngine {
     const text = previous
       ? `이전 Codex 대화를 이어서 작업 ${completed.id}이 완료되었습니다.\n\n${resultText}`
       : resultText;
-    return { text, envelope: jobEnvelope(completed, text), toolCalls };
+    return output({ text, envelope: jobEnvelope(completed, text), toolCalls });
   }
 }

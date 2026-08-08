@@ -1,4 +1,4 @@
-import type { AgentJobScope } from './agent-job-store.js';
+import type { AgentJob, AgentJobScope } from './agent-job-store.js';
 import type { AgentService } from './agent-service.js';
 import type { ItemStore } from './item-store.js';
 import type { WeatherResponse } from './weather-service.js';
@@ -68,6 +68,10 @@ export type ResponseToolEvent = {
   weather?: WeatherResponse;
 };
 
+export type ApprovalEnvelopeFactory = (
+  job: AgentJob,
+) => GenUiEnvelopeV1 | Promise<GenUiEnvelopeV1>;
+
 export type ResponseEngineInput = {
   mode: ResponseMode;
   prompt: string;
@@ -79,6 +83,11 @@ export type ResponseEngineInput = {
   onTool?: (tool: ResponseToolEvent) => void;
   setActiveJobId?: (id: string) => void;
   isCancelled?: () => boolean;
+  /**
+   * The Teams host injects this factory so engines never mint action tokens.
+   * Direct unit callers may omit it and receive an action-free fallback.
+   */
+  approvalEnvelope?: ApprovalEnvelopeFactory;
 };
 
 export type ResponseEngineOutput = {

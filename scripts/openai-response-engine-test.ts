@@ -3,11 +3,12 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { AgentJobScope } from '../src/server/agent-job-store.js';
+import type { AgentJob, AgentJobScope } from '../src/server/agent-job-store.js';
 import type { AgentService } from '../src/server/agent-service.js';
 import { ItemStore } from '../src/server/item-store.js';
 import { OpenAIResponseEngine } from '../src/server/response-engine-openai.js';
 import type { ResponseEngineInput } from '../src/server/response-engine.js';
+import { GenUiEnvelopeV1Schema } from '../src/shared/genui.js';
 
 const scope: AgentJobScope = {
   requesterId: 'openai-test-user',
@@ -106,6 +107,7 @@ async function createInput(
   prompt: string,
   context: ResponseEngineInput['request']['context'] = [],
   onTool: ResponseEngineInput['onTool'] = () => undefined,
+  approvalEnvelope?: ResponseEngineInput['approvalEnvelope'],
 ): Promise<ResponseEngineInput> {
   return {
     mode: 'openai',
@@ -123,7 +125,28 @@ async function createInput(
     onText: () => undefined,
     setActiveJobId: () => undefined,
     isCancelled: () => false,
+    approvalEnvelope,
   };
+}
+
+function approvalEnvelope(job: AgentJob): ReturnType<typeof GenUiEnvelopeV1Schema.parse> {
+  return GenUiEnvelopeV1Schema.parse({
+    schemaVersion: '1',
+    kind: 'approval',
+    status: 'approval',
+    id: job.id,
+    correlationId: 'openai-approval-correlation',
+    title: '쓰기 작업 승인 필요',
+    sections: [{ type: 'status', title: '승인 경계', status: 'awaiting_approval' }],
+    actions: [
+      { action: 'approve', label: '승인', entityId: job.id, correlationId: 'openai-approval-correlation', actionToken: 'a'.repeat(32), style: 'positive' },
+      { action: 'cancel', label: '취소', entityId: job.id, correlationId: 'openai-approval-correlation', actionToken: 'b'.repeat(32), style: 'destructive' },
+    ],
+    citations: [],
+    aiGenerated: false,
+    fallbackText: '승인 필요',
+    metadata: { source: 'test' },
+  });
 }
 
 async function main(): Promise<void> {
@@ -156,6 +179,13 @@ async function main(): Promise<void> {
     assert.equal(plainFetch.calls[0]?.url, 'https://api.openai.com/v1/chat/completions');
     assert.equal(plainFetch.calls[0]?.init?.headers && new Headers(plainFetch.calls[0]?.init?.headers).get('authorization'), 'Bearer test-secret');
     assert.ok(JSON.stringify(plain).indexOf('test-secret') === -1, 'provider secret must not enter output');
+
+    const providerSecret = 'sk-proj-providerabcdefghijklmnop';
+    const providerSecretFetch = queueFetch([textResponse(`Bearer abcdefghijklmnop ${providerSecret} https://user:password@example.test/v1?api_key=url-secret`)]);
+    const providerSecretResult = await new OpenAIResponseEngine({ apiKey: 'output-secret', fetchImpl: providerSecretFetch.fetch })
+      .run(await createInput(itemStore, createAgentServiceFake(), '민감정보 redaction 테스트'));
+    assert.doesNotMatch(JSON.stringify(providerSecretResult), /abcdefghijklmnop|providerabcdefghijklmnop|url-secret|user:password/);
+    assert.match(providerSecretResult.text, /\[REDACTED\]/);
 
     const liveWeather = {
       source: 'open-meteo',
@@ -193,9 +223,10 @@ async function main(): Promise<void> {
     ]);
     const approvalTools: string[] = [];
     const approval = await new OpenAIResponseEngine({ apiKey: 'approval-secret', fetchImpl: approvalFetch.fetch })
-      .run(await createInput(itemStore, approvalService, '파일 변경을 해줘', [], (tool) => approvalTools.push(tool.name)));
+      .run(await createInput(itemStore, approvalService, '파일 변경을 해줘', [], (tool) => approvalTools.push(tool.name), approvalEnvelope));
     assert.equal(approval.envelope.kind, 'approval');
-    assert.equal(approval.envelope.aiGenerated, true);
+    assert.equal(approval.envelope.aiGenerated, false, 'host approval factory owns the non-model action envelope');
+    assert.equal(approval.envelope.actions.length, 2, 'host approval factory supplies approve/cancel actions');
     assert.deepEqual(approvalTools, ['workspaceApproval']);
     assert.deepEqual(
       approvalService.submitted.map(({ prompt, mode }) => ({ prompt, mode })),

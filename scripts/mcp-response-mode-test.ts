@@ -4,6 +4,7 @@ import http from 'node:http';
 
 import express from 'express';
 
+import type { AgentJob } from '../src/server/agent-job-store.js';
 import {
   createMcpGenUiRouter,
   MCP_GENUI_RESOURCE_MIME_TYPE,
@@ -23,6 +24,19 @@ const publicResponseMode: GenUiResponseMode = {
   ],
 };
 
+const credentialedJob = {
+  id: 'job-mcp-secret',
+  prompt: 'Bearer abcdefghijklmnop https://user:password@example.test/v1?api_key=url-secret 작업 결과를 확인해줘',
+  mode: 'read-only',
+  status: 'completed',
+  scope: { requesterId: 'mcp-user', conversationId: 'mcp-thread', tenantId: 'mcp-tenant' },
+  progress: ['Bearer abcdefghijklmnop 진행 기록'],
+  result: 'sk-proj-mcpabcdefghijklmnop 결과가 포함된 것처럼 보이는 텍스트',
+  createdAt: '2026-08-08T00:00:00.000Z',
+  updatedAt: '2026-08-08T00:00:01.000Z',
+  finishedAt: '2026-08-08T00:00:01.000Z',
+} as AgentJob;
+
 const dependencies: McpGenUiServerOptions = {
   itemStore: {
     list: () => [
@@ -32,7 +46,7 @@ const dependencies: McpGenUiServerOptions = {
     summary: () => ({ total: 2, open: 1, done: 1 }),
   },
   agentService: {
-    getLocalOnly: () => undefined,
+    getLocalOnly: () => credentialedJob,
     listLocalOnly: () => [],
     countActiveLocalOnly: () => 0,
   },
@@ -221,9 +235,12 @@ async function verifyStructuredResults(baseUrl: string, sessionId: string): Prom
   const weatherEnvelope = GenUiEnvelopeV1Schema.parse(weather.structuredContent);
   assert.equal(weather.content?.[0]?.text, weatherEnvelope.fallbackText, 'weather fallback text is identical to structured fallback text');
 
-  const job = await callTool(baseUrl, sessionId, 8, 'get_job_status', {});
+  const job = await callTool(baseUrl, sessionId, 8, 'get_job_status', { jobId: 'job-mcp-secret' });
   const jobEnvelope = GenUiEnvelopeV1Schema.parse(job.structuredContent);
   assert.equal(job.content?.[0]?.text, jobEnvelope.fallbackText, 'job fallback text is identical to structured fallback text');
+  const jobJson = JSON.stringify(jobEnvelope);
+  assert.doesNotMatch(jobJson, /abcdefghijklmnop|url-secret|user:password/);
+  assert.match(jobJson, /\[REDACTED\]/);
 }
 
 async function verifyReadOnlyBoundary(baseUrl: string, sessionId: string): Promise<void> {

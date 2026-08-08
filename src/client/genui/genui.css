@@ -2,7 +2,6 @@
 .genui-card * {
   box-sizing: border-box;
 }
-
 .genui-card {
   --genui-accent: #6264a7;
   --genui-accent-strong: #4f518e;
@@ -581,4 +580,3 @@
     transition-duration: 0.001ms !important;
   }
 }
-

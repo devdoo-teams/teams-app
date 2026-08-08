@@ -14,7 +14,11 @@ import type { AgentJobScope } from './agent-job-store.js';
 import { ItemStore } from './item-store.js';
 import { DeterministicResponseEngine } from './response-engine-deterministic.js';
 import { OpenAIResponseEngine } from './response-engine-openai.js';
-import { ResponseEngineRouter, type ResponseToolEvent } from './response-engine.js';
+import {
+  ResponseEngineRouter,
+  type ApprovalEnvelopeFactory,
+  type ResponseToolEvent,
+} from './response-engine.js';
 
 const AGENT_ID = 'default';
 
@@ -45,6 +49,7 @@ export class TeamsCodexAgent extends AbstractAgent {
     private readonly itemStore: ItemStore,
     private readonly agentService: AgentService,
     private readonly identity: CopilotIdentity,
+    private readonly approvalEnvelope?: ApprovalEnvelopeFactory,
   ) {
     super({
       agentId: AGENT_ID,
@@ -53,7 +58,7 @@ export class TeamsCodexAgent extends AbstractAgent {
   }
 
   override clone(): TeamsCodexAgent {
-    return new TeamsCodexAgent(this.itemStore, this.agentService, this.identity);
+    return new TeamsCodexAgent(this.itemStore, this.agentService, this.identity, this.approvalEnvelope);
   }
 
   override async getCapabilities(): Promise<AgentCapabilities> {
@@ -162,6 +167,7 @@ export class TeamsCodexAgent extends AbstractAgent {
       onTool: (tool) => this.emitTool(subscriber, tool),
       setActiveJobId,
       isCancelled,
+      approvalEnvelope: this.approvalEnvelope,
     });
     return output.text;
   }
@@ -183,6 +189,7 @@ export class TeamsCodexAgent extends AbstractAgent {
       onTool: (tool) => this.emitTool(subscriber, tool),
       setActiveJobId,
       isCancelled,
+      approvalEnvelope: this.approvalEnvelope,
     });
     return output.text;
   }

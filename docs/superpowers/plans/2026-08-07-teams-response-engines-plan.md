@@ -409,4 +409,3 @@ Include version, commit SHA, ZIP hash, upload result, public health summary, mod
 - Any Critical/Important finding enters a fix-and-scoped-rereview loop; it is not silently ignored.
 - After Task 8, a whole-branch reviewer receives the full branch diff and deferred-minor ledger.
 - Task 9 is not marked complete from local tests alone; it requires observed Developer Portal, public health, and Teams mobile evidence.
-
