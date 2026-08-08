@@ -36,6 +36,21 @@ curl -fsS https://<현재-portUri>/tabs/home/
 
 `COMMAND_ONLY` 또는 공개 HTTP 통과는 Developer Portal 업로드, 실제 Teams 설치 버전, 데스크톱 스크린샷, iPhone 위치 권한·모바일 왕복을 완료했다는 뜻이 아니다. 각 항목은 `PORTAL_UPLOAD_UNVERIFIED`, `INSTALLED_VERSION_UNVERIFIED`, `DESKTOP_UNVERIFIED`, `MOBILE_UNVERIFIED`로 계속 표시하고, 모든 UI 게이트가 확인되기 전에는 Teams 완료 메시지를 보내지 않는다.
 
+### 단일 릴리스 loop가 중간에 멈춤
+
+기존 run을 버리거나 새 탭·새 인증 세션을 만들지 말고 상태부터 확인한다.
+
+```bash
+npm run release:loop -- status
+npm run release:loop -- machine
+npm run release:loop -- package
+npm run release:loop -- public
+```
+
+`machine`, `package`, `public`은 성공 결과만 `.release/current.json`에 반영한다. 실패하면 `lastFailure`와 다음 게이트가 남고, 공개 서버·Dev Tunnel은 종료하지 않는다. UI 확인 뒤에는 현재 run의 commit·version·package SHA를 포함한 evidence JSON을 `npm run release:loop -- evidence --file ...`로 등록한다. `complete`가 `BLOCKED`이면 메시지를 보내지 말고 출력된 게이트만 해결한다.
+
+상태 파일에는 증거 요약과 파일 경로만 남으며 bearer token, API key, 비밀번호, Teams 원문 메시지는 넣지 않는다. 설치본이 이전 버전이면 새 모바일 스크린샷이 있어도 `installed` 증거로 등록하지 않는다.
+
 ### `Browser is not available`, `iab unavailable`
 
 Teams Bot에서 실행된 하위 Codex 프로세스가 부모 Codex 앱의 인앱 브라우저를 직접 제어하려고 시도한 것이다. 하위 프로세스에서 브라우저 재연결을 반복하지 않는다. 부모 Codex 오케스트레이터가 기존 로그인 탭을 URL·제목으로 확인해 재사용하고, 없을 때만 사용자에게 탭을 열도록 요청한다.

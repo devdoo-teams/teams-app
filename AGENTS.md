@@ -53,3 +53,5 @@ Teams 앱 변경 요청에는 별도 예외 승인이 없는 한 다음 순서�
 - 클라이언트 빌드는 `dist/client`를 먼저 지우지 않고 형제 임시 디렉터리에서 빌드·후처리한 뒤 성공할 때만 원자적으로 교체한다. 따라서 빌드 실패가 공개 탭을 빈 404 상태로 만들면 안 된다. 현재 CopilotKit v2 대형 번들의 source map 생성은 Node 24 + esbuild API에서 무기한 대기하므로 운영 번들은 source map을 끈다.
 - 화면이 잠겨 있으면 명령어 게이트·공개 HTTPS·이미 로그인된 인앱 브라우저 탭 검증은 계속할 수 있다. 로그인·Auth 앱 승인·파일 선택·Teams 데스크톱 스크린샷처럼 네이티브 UI가 필요한 항목만 `DESKTOP_UNVERIFIED` 또는 `BLOCKED`로 분리하고 잠금 해제 우회나 자격 증명 추측을 하지 않는다.
 - 명령어 게이트 통과는 포털 업로드·설치 버전·Teams 데스크톱·모바일 사용자 확인을 대신하지 않는다. 최종 완료 상태에는 `PORTAL_UPLOAD_UNVERIFIED`, `INSTALLED_VERSION_UNVERIFIED`, `DESKTOP_UNVERIFIED`, `MOBILE_UNVERIFIED`가 남아 있지 않아야 한다.
+- 모든 버그 수정·신규 기능은 `release:loop start → machine → package → public → evidence(portal/installed/desktop/mobile) → complete` 순서로 진행한다. `.release/current.json`의 run identity와 현재 Git commit·앱 버전·ZIP SHA가 일치하지 않으면 다음 단계로 넘어가지 않는다.
+- `release:loop complete`가 `READY`를 반환하기 전에는 Teams 완료 메시지를 보내지 않는다. 이 명령은 실제 UI 증거를 만들지 않으며, 포털 업로드·설치본·데스크톱·모바일을 직접 확인한 뒤 제공된 증거 파일만 검증한다.

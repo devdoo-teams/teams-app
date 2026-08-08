@@ -45,6 +45,13 @@ nodeRepl.write(state.text);
    - 장시간 작업이면 진행·승인·취소·완료 상태가 순서대로 보이는가
 
 7. 보고서에 창 제목, 시각, 명령, 작업 ID, 접근성 핵심 텍스트, 스크린샷, 앱 버전, 공개 health, 커밋 SHA를 기록한다.
+8. 현재 release loop의 package SHA와 커밋을 포함한 evidence JSON을 만들고 등록한다.
+
+```bash
+npm run release:loop -- evidence --file /absolute/path/desktop-evidence.json
+```
+
+등록된 증거는 포털·설치본 확인 이후의 현재 run에만 귀속된다. 화면을 확인하지 못한 경우 파일을 만들거나 명령을 실행해 `DESKTOP_READY`로 바꾸지 않는다.
 
 ## 판정
 

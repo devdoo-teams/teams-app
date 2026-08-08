@@ -47,6 +47,39 @@ npm run release:gate
 
 화면이 잠겨 있으면 `COMMAND_ONLY` 단계는 진행하고, 네이티브 UI 단계만 해당 상태로 보류한다. 잠금 해제·비밀번호·Auth 앱 승인·파일 선택을 자동화하거나 우회하지 않는다.
 
+### 0.1 단일 재개 가능 릴리스 루프
+
+기능 추가와 버그 수정은 모두 아래 loop를 사용한다. `release-gate`가 기계 검증을 담당하고 `release-loop`가 동일 run의 커밋·패키지·공개 health·외부 UI 증거를 묶는다.
+
+```bash
+npm run release:loop -- start
+npm run release:loop -- machine
+npm run release:loop -- package
+npm run release:loop -- public
+# 포털/설치본/데스크톱/모바일을 실제로 확인한 뒤 각각 evidence JSON 등록
+npm run release:loop -- evidence --file <evidence.json>
+npm run release:loop -- status
+npm run release:loop -- complete
+```
+
+상태는 `.release/current.json`에 저장되며 토큰·비밀번호·API key·원문 Teams 메시지는 저장하지 않는다. `start`, `package`, `complete`는 현재 Git 커밋과 clean worktree를 확인한다. `machine`, `package`, `public` 실패는 마지막 성공 상태를 보존하고 다시 실행할 수 있다. `complete`는 네 개 UI 증거가 모두 현재 커밋·버전·ZIP SHA와 일치할 때만 `READY`와 Teams 전송용 보고서를 출력한다.
+
+외부 증거 파일의 최소 형식은 다음과 같다.
+
+```json
+{
+  "surface": "desktop",
+  "observedAt": "2026-08-09T12:00:00.000Z",
+  "commit": "<현재 커밋>",
+  "version": "1.0.12",
+  "packageSha256": "<release:package 결과>",
+  "summary": "실제 배포 Teams 데스크톱에서 status 답장과 카드/탭을 확인함",
+  "artifactPaths": ["/absolute/path/teams-desktop.png"]
+}
+```
+
+이 JSON은 화면 확인 사실을 입력하는 계약이며, loop가 화면을 합성하거나 모바일 확인을 추정하는 기능이 아니다. 포털 업로드·설치 버전·데스크톱·모바일 순서가 어긋나거나 증거 identity가 다르면 등록을 거부한다.
+
 ### 1. 구현과 로컬 검증
 
 - 사용자의 요청사항을 코드·매니페스트·문서에 반영한다.
