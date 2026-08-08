@@ -56,6 +56,10 @@ TEAMS_LOCAL_DEV=true TEAMS_SKIP_AUTH=true npm run dev
 
 CopilotKit 채팅은 `OPENAI_API_KEY`가 설정된 경우에만 실제 GenAI 경로를 사용합니다. 선택적으로 `OPENAI_MODEL`(기본 `gpt-4o-mini`)과 OpenAI-compatible `OPENAI_BASE_URL`을 지정할 수 있습니다. 키가 없는 운영 프로세스는 결정형 응답으로 위장하지 않고 GenAI 설정 오류를 반환합니다. `COPILOTKIT_DETERMINISTIC_MODE=true`는 자동 테스트 전용이며 운영에서 사용하면 안 됩니다.
 
+로컬/엔터프라이즈 OpenAI-compatible provider는 서버에서 `LOCAL_MODEL_BASE_URL`(필수), `LOCAL_MODEL_NAME`(기본 `local-model`), `LOCAL_MODEL_API_KEY`(선택)를 읽습니다. Teams 모바일 클라이언트는 이 URL·키를 입력하거나 덮어쓸 수 없으며, local provider가 설정되지 않거나 실패하면 OpenAI나 결정형 응답으로 자동 전환하지 않고 안전한 GenUI 오류를 반환합니다. 주소는 서버 환경변수의 `http://` 또는 `https://` URL만 허용하고 URL 안의 사용자명·비밀번호는 거부합니다. `LOCAL_MODEL_API_KEY`가 없어도 인증 없는 호환 서버를 사용할 수 있습니다.
+
+공개 Teams에서 실행되는 서버는 개발자 노트북의 `localhost`에 접근할 수 없습니다. 노트북에서만 실행하는 모델은 로컬 테스트에만 사용하고, 실제 Teams 모바일 검증에서는 서버 프로세스가 접근할 수 있는 허용된 사설 네트워크 경로 또는 공개 HTTPS 엔드포인트를 `LOCAL_MODEL_BASE_URL`로 지정해야 합니다. 이 provider는 기존 `GenUiEnvelopeV1`, 날씨·업무·승인 도구와 서버 측 ACL/취소 경계를 그대로 사용합니다.
+
 모바일 Teams 탭은 시작할 때 현재 위치 권한을 요청하고, 실패하면 서울 데모로 대체하지 않고 위치 권한 안내만 표시합니다. `내 위치 사용` 버튼으로 다시 요청할 수 있습니다. iPhone/iPad Teams 호스트에서 구형 네이티브 TeamsJS 위치 API가 지원되면 먼저 사용하고, 실패하거나 지원되지 않으면 HTML5 Geolocation을 시도합니다. New Teams·웹에서는 HTML5 위치를 먼저 사용하며, 호스트가 명시적으로 지원할 때만 TeamsJS `geoLocation` Preview API를 보조 경로로 사용합니다. 위치가 거부되면 Teams 탭 메뉴의 `앱 권한`에서 위치를 허용하고, iPhone 설정의 개인정보 보호 및 보안 > 위치 서비스 > Teams도 `앱 사용 중`으로 설정한 뒤 다시 시도해야 합니다. 위치 권한을 새로 선언한 뒤에는 버전이 올라간 Teams 앱 패키지를 다시 업로드해야 합니다. Bot 대화에는 기기 위치가 자동 전달되지 않으므로 `날씨`만 입력해 서울을 추측하지 않으며, Teams 탭에서 위치를 허용하거나 `weather <위도> <경도>`를 입력해야 합니다.
 
 모바일 구현 참고: [Teams 모바일 탭 설계](https://learn.microsoft.com/en-us/microsoftteams/platform/tabs/design/tabs?tabs=mobile), [Teams 모바일 앱 모범 사례](https://learn.microsoft.com/en-us/microsoftteams/platform/resources/teams-mobile-best-practices), [Teams 위치 기능](https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/device-capabilities/location-capability), [Teams 브라우저 장치 권한](https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/device-capabilities/browser-device-permissions).
