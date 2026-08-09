@@ -93,11 +93,11 @@ For every future live write, first resolve the current signed-in user's Jira acc
 
 ## Current release evidence snapshot
 
-The current Core release is `1.0.26` at Git commit `1fec85b`. The locally generated package was verified with SHA-256 `f5655b15aa85669de4ce9bc3b806d2a2d480947b60b1f4dfd7d3a82cd213d078`. The same app ID was updated through the authenticated Teams Developer CLI and read back as portal version `1.0.26`; the downloaded portal package manifest contains `geolocation`, the current public tab URL, and `token.botframework.com`. The public runtime also reports `version=1.0.26`, `environment=production`, `auth=teams-authenticated`, `bot=teams-sdk`, and `outbound=teams-sdk`.
+The current Core runtime release is `1.0.26` at app/runtime commit `e4e1265`. Later commits only update the release evidence ledger and matrix documentation; they do not change the packaged runtime. The locally generated package was verified with SHA-256 `f5655b15aa85669de4ce9bc3b806d2a2d480947b60b1f4dfd7d3a82cd213d078`. The same app ID was updated through the authenticated Teams Developer CLI and read back as portal version `1.0.26`; the downloaded portal package manifest contains `geolocation`, the current public tab URL, and `token.botframework.com`. The public runtime also reports `version=1.0.26`, `environment=production`, `auth=teams-authenticated`, `bot=teams-sdk`, and `outbound=teams-sdk`.
 
 The remaining release item is a real installed-client/UI evidence blocker, not a source or public-runtime failure:
 
-- idempotency key: `teams-core:release-blocker:installed-ui-evidence:1fec85b`;
+- idempotency key: `teams-core:release-blocker:installed-ui-evidence:e4e1265`;
 - issue type: `Bug` (only when the live Jira write is available);
 - default assignee: current Jira user (`self`);
 - local state: `BLOCKED` until installed version, desktop screenshots/accessibility evidence, and mobile user confirmation are captured for this exact release;
