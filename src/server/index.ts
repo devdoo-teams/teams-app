@@ -97,7 +97,10 @@ const localAccessToken = process.env.TEAMS_LOCAL_ACCESS_TOKEN?.trim() ?? '';
 const legacyPublicMcp = process.env.MCP_PUBLIC_ENABLED?.trim().toLowerCase() === 'true';
 const fileJsonMultiWorker = numericEnvGreaterThan('WEB_CONCURRENCY', 1)
   || numericEnvGreaterThan('NODE_APP_INSTANCE', 0);
-const clientDist = path.resolve(process.cwd(), 'dist/client');
+const runtimeDistRoot = process.env.TEAMS_RUNTIME_DIST_DIR?.trim()
+  ? path.resolve(process.env.TEAMS_RUNTIME_DIST_DIR)
+  : path.resolve(process.cwd(), 'dist');
+const clientDist = path.join(runtimeDistRoot, 'client');
 const itemStorePath = process.env.ITEM_STORE_PATH ?? path.resolve(process.cwd(), 'data/items.json');
 const workItemStorePath = process.env.WORK_ITEM_STORE_PATH ?? path.resolve(process.cwd(), 'data/work-items.json');
 const collaborationStorePath = process.env.COLLABORATION_STORE_PATH ?? path.resolve(process.cwd(), 'data/collaboration.json');

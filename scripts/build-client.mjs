@@ -4,9 +4,10 @@ import path from 'node:path';
 import { build } from 'esbuild';
 
 import { buildClientAtomically } from './build-client-atomic.mjs';
+import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 
 const root = process.cwd();
-const outputDir = path.join(root, 'dist/client');
+const outputDir = path.join(resolveRuntimeDistRoot(root), 'client');
 const coreBuild = process.argv.includes('--core');
 
 await buildClientAtomically({

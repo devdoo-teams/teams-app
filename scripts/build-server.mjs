@@ -1,8 +1,9 @@
 import path from 'node:path';
 import { build } from 'esbuild';
+import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 
 const root = process.cwd();
-const outputDir = path.join(root, 'dist/server');
+const outputDir = path.join(resolveRuntimeDistRoot(root), 'server');
 const coreBuild = process.argv.includes('--core');
 
 await build({

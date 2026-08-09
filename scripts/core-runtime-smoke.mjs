@@ -5,8 +5,11 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import net from 'node:net';
 
+import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
+
 const root = process.cwd();
-const entry = path.join(root, 'dist/server/index.js');
+const runtimeDistRoot = resolveRuntimeDistRoot(root);
+const entry = path.join(runtimeDistRoot, 'server/index.js');
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -39,6 +42,7 @@ const tabDomain = 'runtime-smoke.example.com';
 const botClientId = '11111111-2222-4333-8444-555555555555';
 const env = {
   ...process.env,
+  TEAMS_RUNTIME_DIST_DIR: runtimeDistRoot,
   NODE_ENV: 'production',
   PORT: String(port),
   TEAMS_USE_SDK: 'true',
