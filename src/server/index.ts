@@ -2305,11 +2305,17 @@ if (teamsApp) {
     response.json({ messages, activities });
   });
 
-  http.get('/tabs/home', (_request: any, response: any) => {
-    response.sendFile(path.join(clientDist, 'index.html'));
-  });
-  http.use('/tabs/home', express.static(clientDist));
 }
+
+// The Teams SDK owns bot/event registration, but it does not replace the
+// HTTP origin that hosts a personal tab. Serve the tab in every runtime mode,
+// including production when `teamsApp` is configured. Keeping this outside
+// the bot fallback branch prevents an installed Teams tab from receiving 404
+// while the bot health endpoint still reports healthy.
+http.get('/tabs/home', (_request: any, response: any) => {
+  response.sendFile(path.join(clientDist, 'index.html'));
+});
+http.use('/tabs/home', express.static(clientDist));
 
 if (skipAuth) {
   http.get('/api/debug/agent-jobs', (_request: any, response: any) => {

@@ -72,6 +72,7 @@ npm run release:gate
 `release:public`은 `--url`을 우선 사용하고, 없으면 `TEAMS_PUBLIC_URL`, `PUBLIC_BASE_URL`, `.env.runtime`의 `TAB_DOMAIN` 순서로 현재 공개 origin을 해석한다. 별도 URL을 매번 복사해 넣지 않아도 되지만, 실제 `portUri`가 바뀌면 `.env.runtime`을 먼저 갱신하고 패키지·업로드 절차를 다시 시작한다. 운영 `typecheck`는 `tsconfig.release.json`의 작은 vendor type stub으로 선언 그래프 폭주를 차단하며, 실제 패키지 선언을 별도로 진단할 때만 `npm run typecheck:vendor`를 사용한다.
 
 클라이언트는 `dist/client`를 선삭제하지 않고 임시 디렉터리에서 성공적으로 만든 뒤 교체한다. CopilotKit v2 대형 번들에서 현재 Node 24 + esbuild API의 source map 생성이 무기한 대기하는 회귀가 있으므로 운영 빌드 source map은 끈다. 이 문제를 다시 만나도 제한시간 게이트가 공개 산출물을 비우지 않은 채 중단되어야 한다.
+`/api/health`가 200이어도 탭이 정상이라는 뜻은 아니다. 공개 프로세스 교체 직후에는 반드시 같은 origin에서 `/api/health` 200 → `/tabs/home/` 200 → HTML에 선언된 해시 자산 200을 연속 확인한다. health만 살아 있고 탭이 404이면 `TAB_RUNTIME_UNAVAILABLE`로 실패 처리하고, 이전 공개 프로세스를 유지한 채 산출물 경로·FileProvider 상태를 조사한다. Teams SDK 봇 분기에서도 개인 탭 HTTP 라우트가 항상 등록되어야 한다. `dist/client`가 `dist/client <n>`처럼 충돌 이름으로 바뀌었거나 원래 경로가 사라진 경우에는 빌드 성공으로 간주하지 않고, 새 `index.html`과 해시 자산을 확인한 뒤 3단계 HTTP probe를 재실행한다.
 
 Core 서버 번들은 Teams SDK·Express 등 필수 런타임을 포함하고 CopilotKit/MCP는 선택 청크로 분리한다. 기본 `npm run build`는 `build:core`만 실행하고, 선택 provider는 `npm run build:all` 또는 명시적 optional 명령에서만 만든다. `npm run test:core`는 `scripts/core-runtime-smoke.mjs`로 API 키 없이 production Teams SDK 프로세스를 실제 기동해 `listen()`, `/api/health`, `/tabs/home/`을 확인한다. 이 스모크가 통과하지 않은 상태에서 기존 공개 서버나 포털 업로드를 최신 버전으로 교체하지 않는다.
 
