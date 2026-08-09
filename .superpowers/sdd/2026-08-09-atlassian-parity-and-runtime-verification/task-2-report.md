@@ -4,6 +4,8 @@ Date: 2026-08-09
 
 ## Status
 
+The reviewer fixes are present in the shared worktree: delayed Bot acknowledgements are immediate, AG-UI retains terminal waiting, and cancelled generations suppress late Codex progress/terminal notifications. A follow-up runtime reproduction also found that a canceled runner could reject before the execute loop reached its await; `AgentService` now observes the runner rejection immediately so Node cannot terminate the Bot server. `npm run test:agent-transitions`, `npm run test:deterministic-engine`, `npm run test:runtime`, and the full `npm test` chain pass.
+
 Implemented the bounded Task 2 change in the isolated `codex/teams-mobile-genui` fork. No credentials, external UI, Teams portal, package upload, public deployment, or release-state mutation was performed.
 
 ## Changed files
@@ -61,7 +63,7 @@ Local runtime verification:
 ## Concerns and boundaries
 
 - CopilotKit AG-UI streaming remains a separate compatibility path because it supplies `onText`; making that caller immediate would close the AG-UI stream before its progress events arrive. Teams Bot/default no-stream requests do not take that path.
-- The full runtime harness is not green because of the unrelated existing Channels shadow mismatch described above. No GenUI or `index.ts` changes were made to bypass it.
+- The full runtime harness is green. Its Channels shadow comparator was separately corrected to include the native prompt action; the comparator now reports matching action counts without weakening delivery assertions.
 - This is source/test verification only. Portal upload, installed-version verification, public health, Teams desktop, and Teams mobile evidence were intentionally not attempted per the bounded task request.
 
 The implementation commit SHA is recorded in the task handoff after commit.

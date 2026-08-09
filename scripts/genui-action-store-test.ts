@@ -95,10 +95,36 @@ try {
   const personalTabUrl = 'https://teams.microsoft.com/l/entity/9b20fd94-2ac9-4423-ac1f-ff528ab245c1/home?webUrl=https%3A%2F%2Fexample.com%2Ftabs%2Fhome&label=%EC%97%85%EB%AC%B4%20%ED%97%88%EB%B8%8C';
   const configuredFactory = new GenUiResponseFactory(store, { openTabUrl: personalTabUrl });
   const helpCard = configuredFactory.help();
-  assert.equal(helpCard.actions.length, 1);
-  assert.equal(helpCard.actions[0]?.action, 'open-tab');
-  assert.equal(helpCard.actions[0]?.entityId, 'home');
+  assert.equal(helpCard.actions.length, 7);
+  assert.equal(helpCard.actions.at(-1)?.action, 'open-tab');
+  assert.deepEqual(
+    helpCard.actions.slice(0, -1).map((action) => action.action),
+    ['command', 'command', 'command', 'command', 'command', 'command'],
+    'help card exposes the six safe default commands',
+  );
+  assert.deepEqual(
+    helpCard.actions.slice(0, -1).map((action) => action.entityId),
+    ['help', 'weather', 'status', 'list', 'work', 'collaboration'],
+  );
+  assert.equal(helpCard.actions.at(-1)?.entityId, 'home');
   assert.equal(helpCard.metadata.openTabUrl, personalTabUrl);
+
+  const jobStatusCard = configuredFactory.jobStatus({
+    id: 'task-status-1',
+    prompt: '실제 작업 상태',
+    mode: 'read-only',
+    status: 'running',
+    conversationId: 'conversation-1',
+    requesterId: 'user-1',
+    tenantId: 'tenant-1',
+    progress: [],
+    createdAt: new Date().toISOString(),
+  });
+  assert.equal(jobStatusCard.actions.at(-1)?.action, 'open-tab', 'job status cards include the default tab action');
+  assert.equal(jobStatusCard.prompt, '실제 작업 상태', 'job status cards carry a bounded prompt for mobile prompt view');
+
+  const errorCard = configuredFactory.error('실패한 작업');
+  assert.equal(errorCard.actions.at(-1)?.action, 'open-tab', 'error cards include the default tab action');
 
   console.log('PASS: GenUI action grants are scoped, single-use, persistent, and expiring');
 } finally {

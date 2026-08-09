@@ -47,6 +47,9 @@ export const GENUI_ACTIONS = [
   'feedback',
 ] as const;
 
+/** Commands exposed as safe, payload-free quick actions on the help card. */
+export const GENUI_COMMANDS = ['help', 'weather', 'status', 'list', 'work', 'collaboration'] as const;
+
 export const GENUI_ACTION_PAYLOAD_KEYS = [
   'schemaVersion',
   'action',
@@ -58,7 +61,8 @@ export const GENUI_ACTION_PAYLOAD_KEYS = [
 export const GenUiKindSchema = z.enum(GENUI_KINDS);
 export const GenUiStateSchema = z.enum(GENUI_STATUSES);
 export const GenUiSectionTypeSchema = z.enum(GENUI_SECTION_TYPES);
-export const GenUiActionNameSchema = z.enum(GENUI_ACTIONS);
+const GENUI_ACTION_NAMES = [...GENUI_ACTIONS, 'command'] as const;
+export const GenUiActionNameSchema = z.enum(GENUI_ACTION_NAMES);
 export const GenUiToneSchema = z.enum(['neutral', 'info', 'success', 'warning', 'danger']);
 export const GenUiActionStyleSchema = z.enum(['default', 'positive', 'destructive']);
 
@@ -205,6 +209,7 @@ export const GenUiEnvelopeV1BaseSchema = z.object({
   correlationId: z.string().min(1).max(200),
   title: z.string().max(240).optional(),
   summary: z.string().max(2_000).optional(),
+  prompt: z.string().max(2_000).optional(),
   sections: z.array(GenUiSectionSchema).max(32).default([]),
   actions: z.array(GenUiActionSchema).max(8).default([]),
   citations: z.array(GenUiCitationSchema).max(8).default([]),

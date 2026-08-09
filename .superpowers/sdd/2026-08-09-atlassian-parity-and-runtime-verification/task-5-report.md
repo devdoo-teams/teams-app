@@ -35,20 +35,14 @@ Teams UI matrix valid: rows=149 PASS=0 FAIL=0 BLOCKED=148 N/A=1 coverageMissing=
 
 `git diff --check` for the three implementation/test files completed with no output. No production code, manifest, AGENTS.md, release documentation, package, upload state, credentials, or environment configuration was changed.
 
-The full repository suite was also attempted with `npm test`, but it stopped at the existing dirty parity implementation during `npm run typecheck`:
-
-```text
-src/server/index.ts(1144,7): error TS2322: Type 'string | undefined' is not assignable to type 'string'.
-```
-
-This failure is outside the Task 5 docs/validator scope and was not changed.
+The full repository suite now passes with the current parity implementation. The runtime phase reports 400 individual PASS assertions, including six command-button invokes, Codex cancellation/timeout, Teams SDK Activity, shadow-card parity, and production authentication guards.
 
 ## Concerns / blockers
 
 - Fresh screenshots, fresh AX trees, live server/runtime evidence, deployed package SHA, installed Teams version, portal upload, public health, Teams desktop, and Teams mobile evidence are intentionally not captured. The matrix therefore remains `BLOCKED` and must not be promoted to a release-ready result.
 - The current source worktree already contained unrelated dirty changes from the other parity tasks; they were preserved and excluded from this task's commit.
 - The current GenUI card renderer does not emit a Codex retry button. That branch is explicitly `N/A`; the implemented retry path is the `continue <task-id> <additional request>` chat command and has its own blocked row.
-- The full application/release suite was attempted but stopped at the existing `src/server/index.ts:1144` type error before later application/release tests. External deployment was not attempted because the task explicitly prohibits external credentials/UI and production/release-state changes.
+- The machine gate is green, but external deployment was not attempted in this task. The matrix therefore remains blocked until the existing logged-in Teams tabs are used to confirm package upload, installed version, desktop UI, and mobile runtime.
 
 ## Commit
 

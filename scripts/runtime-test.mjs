@@ -13,6 +13,7 @@ const execFileAsync = promisify(execFile);
 const LOCAL_ACCESS_TOKEN_HEADER = 'x-teams-local-access-token';
 const localAccessTokens = new Map();
 const manifestVersion = JSON.parse(await fs.readFile(path.join(root, 'appPackage/manifest.json'), 'utf8')).version;
+const runtimeOutputReaders = new Map();
 
 function assert(condition, message) {
   if (!condition) throw new Error(`FAIL: ${message}`);
@@ -54,14 +55,20 @@ async function waitForHealth(baseUrl) {
 
 async function request(baseUrl, pathname, init = {}) {
   const { localAccessToken = localAccessTokens.get(baseUrl), ...fetchInit } = init;
-  const response = await fetch(`${baseUrl}${pathname}`, {
-    ...fetchInit,
-    headers: {
-      ...(fetchInit.body ? { 'content-type': 'application/json' } : {}),
-      ...(fetchInit.headers ?? {}),
-      ...(localAccessToken ? { [LOCAL_ACCESS_TOKEN_HEADER]: localAccessToken } : {}),
-    },
-  });
+  let response;
+  try {
+    response = await fetch(`${baseUrl}${pathname}`, {
+      ...fetchInit,
+      headers: {
+        ...(fetchInit.body ? { 'content-type': 'application/json' } : {}),
+        ...(fetchInit.headers ?? {}),
+        ...(localAccessToken ? { [LOCAL_ACCESS_TOKEN_HEADER]: localAccessToken } : {}),
+      },
+    });
+  } catch (error) {
+    const output = runtimeOutputReaders.get(baseUrl)?.() ?? '<server output unavailable>';
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\nServer output for ${baseUrl}:\n${output}`);
+  }
   const text = await response.text();
   let body = text;
   try {
@@ -342,10 +349,12 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
 
   try {
     await waitForHealth(baseUrl);
+    runtimeOutputReaders.set(baseUrl, () => output);
     return { child, baseUrl, localAccessToken, getOutput: () => output };
   } catch (error) {
     child.kill('SIGTERM');
     localAccessTokens.delete(baseUrl);
+    runtimeOutputReaders.delete(baseUrl);
     throw new Error(`${error.message}\n${output}`);
   }
 }
@@ -975,7 +984,38 @@ async function runLocalFlow(dataFile, jobDataFile) {
       body: JSON.stringify(activity('help', server.baseUrl, 'help')),
     });
     assert(help.response.status === 200, 'Bot help activity completes locally');
-    assertAdaptiveCardActivity(help.body.activities[0], 'help');
+    const helpCard = assertAdaptiveCardActivity(help.body.activities[0], 'help');
+    const commandActions = helpCard.actions?.filter((action) => genUiActionFromCard(action) === 'command') ?? [];
+    assert(commandActions.length === 6, 'help card exposes all six default command buttons');
+    assert(
+      JSON.stringify(commandActions.map((action) => action.type)) === JSON.stringify(Array.from({ length: 6 }, () => 'Action.Execute')),
+      'default command buttons use direct Adaptive Card Execute actions',
+    );
+    assert(commandActions.every((action) => action.verb === 'genui.command'), 'default command buttons route through the GenUI command verb');
+    assert(commandActions.every((action) => action.fallback?.type === 'Action.Submit'), 'default command buttons keep Submit compatibility fallback');
+    assert(commandActions.every((action) => {
+      const payload = actionPayloadFromCard(action);
+      return payload?.action === 'command'
+        && ['help', 'weather', 'status', 'list', 'work', 'collaboration'].includes(payload?.entityId)
+        && typeof payload?.actionToken === 'string';
+    }), 'default command buttons carry bounded command payloads');
+
+    for (const command of ['help', 'weather', 'status', 'list', 'work', 'collaboration']) {
+      const commandAction = commandActions.find((action) => actionPayloadFromCard(action)?.entityId === command);
+      const commandPayload = actionPayloadFromCard(commandAction);
+      const commandInvoke = await request(server.baseUrl, '/api/messages', {
+        method: 'POST',
+        body: JSON.stringify(genUiInvokeActivity(
+          server.baseUrl,
+          commandPayload,
+          `genui-command-${command}`,
+          'runtime-conversation-genui-command',
+        )),
+      });
+      assert(commandInvoke.response.status === 200 && commandInvoke.body.statusCode === 200, `${command} command button reaches the invoke route`);
+      assert(commandInvoke.body.value?.type === 'AdaptiveCard', `${command} command button returns an Adaptive Card invoke response`);
+      assert(!JSON.stringify(commandInvoke.body.value).includes('AI 생성 콘텐츠'), `${command} command response stays deterministic and unlabeled`);
+    }
 
     const status = await request(server.baseUrl, '/api/messages', {
       method: 'POST',
@@ -1346,7 +1386,11 @@ async function runChannelsShadowFlow(dataFile, jobDataFile) {
     const helpSerialized = JSON.stringify(help.body.activities[0]);
     assert(!helpSerialized.includes('copilotkit-channels-shadow'), 'delivered help activity omits the shadow renderer marker');
     assert(!helpSerialized.includes('"shadow":true'), 'delivered help activity omits shadow-only action data');
-    assert((helpCard.actions?.length ?? 0) === 0, 'help keeps the native card action set unchanged');
+    assert((helpCard.actions?.length ?? 0) === 6, 'help keeps the native command action set in shadow mode');
+    assert(
+      helpCard.actions?.filter((action) => genUiActionFromCard(action) === 'command').length === 6,
+      'shadow mode keeps all six native command buttons without shadow metadata',
+    );
 
     const approval = await request(server.baseUrl, '/api/messages', {
       method: 'POST',

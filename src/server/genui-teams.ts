@@ -1,5 +1,6 @@
 import {
   GENUI_ACTION_PAYLOAD_KEYS,
+  GENUI_COMMANDS,
   GENUI_SCHEMA_VERSION,
   GenUiEnvelopeV1Schema,
   isSafeGenUiUrl,
@@ -262,6 +263,24 @@ function renderAction(
     };
   }
 
+  if (action.action === 'command' && GENUI_COMMANDS.includes(action.entityId as (typeof GENUI_COMMANDS)[number])) {
+    const payload = actionPayload(action);
+    return {
+      // Universal Actions invoke the bot directly on current Teams clients.
+      // Keep the Submit fallback for older clients that do not render
+      // Action.Execute, as required by the Teams Adaptive Cards contract.
+      type: 'Action.Execute',
+      title: action.label,
+      verb: `genui.${action.action}`,
+      data: payload,
+      fallback: {
+        type: 'Action.Submit',
+        data: payload,
+      },
+      style: action.style,
+    };
+  }
+
   const payload = actionPayload(action);
   return {
     type: 'Action.Submit',
@@ -269,6 +288,20 @@ function renderAction(
     title: action.label,
     data: payload,
     style: action.style,
+  };
+}
+
+function renderPromptViewAction(prompt: string): AdaptiveCardAction {
+  return {
+    type: 'Action.ShowCard',
+    title: '프롬프트 보기',
+    card: {
+      type: 'AdaptiveCard',
+      $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+      version: '1.2',
+      msteams: { width: 'Full' },
+      body: [textBlock(prompt, { wrap: true, isSubtle: true })],
+    },
   };
 }
 
@@ -312,8 +345,13 @@ function renderGenUiCardFromEnvelope(
     msteams: { width: 'Full' },
     speak: `상태: ${STATUS_PRESENTATION[envelope.status].label}`,
     body,
-    ...(envelope.actions.length > 0
-      ? { actions: envelope.actions.map((action, index) => renderAction(action, envelope, index)) }
+    ...(envelope.prompt || envelope.actions.length > 0
+      ? {
+        actions: [
+          ...(envelope.prompt ? [renderPromptViewAction(envelope.prompt)] : []),
+          ...envelope.actions.map((action, index) => renderAction(action, envelope, index)),
+        ],
+      }
       : {}),
   };
 }

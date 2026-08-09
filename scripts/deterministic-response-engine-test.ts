@@ -196,6 +196,64 @@ async function main(): Promise<void> {
     assert.equal(natural.envelope.status, 'loading');
     assert.match(natural.text, /작업 job-test-1을 시작했습니다/);
 
+    const botTrace: AgentServiceFakeTrace = { submissions: [], continuations: [], waitForTerminalCalls: 0 };
+    const botResponse = await engine.run(await createInput(
+      itemStore,
+      createAgentServiceFake(job('completed'), undefined, botTrace),
+      'Bot no-stream request',
+    ));
+    assert.equal(botTrace.waitForTerminalCalls, 0, 'Bot requests without onText acknowledge without waiting for terminal state');
+    assert.equal(botTrace.submissions[0]?.notify, true, 'Bot requests enable same-conversation proactive notifications');
+    assert.equal(botResponse.envelope.status, 'loading');
+
+    const agUiTrace: AgentServiceFakeTrace = { submissions: [], continuations: [], waitForTerminalCalls: 0 };
+    const agUiText: string[] = [];
+    const agUiResponse = await engine.run(await createInput(
+      itemStore,
+      createAgentServiceFake(job('completed'), undefined, agUiTrace),
+      'AG-UI streamed request',
+      [],
+      () => undefined,
+      undefined,
+      (text) => { agUiText.push(text); },
+    ));
+    assert.equal(agUiTrace.waitForTerminalCalls, 1, 'AG-UI requests with onText wait for terminal state');
+    assert.equal(agUiResponse.envelope.status, 'complete');
+    assert.ok(agUiText.length === 0, 'terminal-only fake runner does not invent streamed text');
+
+    const failedResponse = await engine.run(await createInput(
+      itemStore,
+      createAgentServiceFake(job('failed', 'failed request'), undefined, { submissions: [], continuations: [], waitForTerminalCalls: 0 }),
+      'failed envelope request',
+      [],
+      () => undefined,
+      undefined,
+      () => undefined,
+    ));
+    assert.equal(failedResponse.envelope.kind, 'job-status');
+    assert.equal(failedResponse.envelope.status, 'error', 'failed terminal jobs preserve the error envelope');
+
+    const runningResponse = await engine.run(await createInput(
+      itemStore,
+      createAgentServiceFake(job('running', 'running request')),
+      'running envelope request',
+    ));
+    assert.equal(runningResponse.envelope.kind, 'job-status');
+    assert.equal(runningResponse.envelope.status, 'loading', 'running jobs preserve the immediate loading envelope');
+
+    const oversizedResponse = await engine.run(await createInput(
+      itemStore,
+      createAgentServiceFake(job('completed', 'oversized request', '결과 '.repeat(2_000))),
+      'oversized envelope request',
+      [],
+      () => undefined,
+      undefined,
+      () => undefined,
+    ));
+    assert.equal(oversizedResponse.envelope.kind, 'job-status');
+    assert.equal(oversizedResponse.envelope.status, 'complete');
+    assert.ok(oversizedResponse.text.length <= 4_000, 'oversized terminal results use the bounded fallback envelope');
+
     const previous = job('completed', '이전 요청');
     const continuedTrace: AgentServiceFakeTrace = { submissions: [], continuations: [], waitForTerminalCalls: 0 };
     const continued = await engine.run(await createInput(

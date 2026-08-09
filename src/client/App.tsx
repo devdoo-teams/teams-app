@@ -22,6 +22,8 @@ import {
   getPublicResponseMode,
   useResponseMode,
 } from './ResponseModeSelector.js';
+import { WorkItemPanel } from './WorkItemPanel.js';
+import { CollaborationPanel } from './CollaborationPanel.js';
 
 export type LatestRequest = {
   generation: number;
@@ -811,6 +813,9 @@ export function App() {
           </ul>
         )}
       </section>
+
+      <WorkItemPanel />
+      <CollaborationPanel />
 
       <footer>Teams SDK · TypeScript · React · Express · CopilotKit</footer>
     </main>

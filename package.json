@@ -1,6 +1,6 @@
 {
   "name": "teams-sdk-mvp",
-  "version": "1.0.18",
+  "version": "1.0.19",
   "private": true,
   "type": "module",
   "scripts": {
@@ -41,6 +41,8 @@
     "test:copilot-item-seeding-failure": "node scripts/copilot-item-seeding-failure-test.mjs",
     "test:process-lease-hardening": "tsx scripts/process-lease-hardening-test.ts",
     "test:agent-transitions": "tsx scripts/agent-service-transition-test.ts",
+    "test:work-item-parity": "tsx scripts/work-item-parity-test.ts",
+    "test:collaboration-parity": "tsx scripts/collaboration-parity-test.ts",
     "test:genui-contract": "tsx scripts/genui-contract-test.ts",
     "test:teams-tab-link": "tsx scripts/teams-tab-link-test.ts",
     "test:channels-shadow": "tsx scripts/channels-shadow-test.ts",
@@ -64,7 +66,7 @@
     "test:mcp-direct-factory": "tsx scripts/mcp-direct-factory-test.ts",
     "check": "npm run build:client && npm run validate:manifest",
     "test:runtime": "node scripts/runtime-test.mjs",
-    "test": "npm run test:typecheck-boundary && npm run typecheck && npm run check && npm run test:deployment-env && npm run test:manifest && npm run test:package-determinism && npm run test:build-client-atomic && npm run test:release-gate && npm run test:release-loop && npm run build && npm run test:troubleshooting && npm run test:atomic-stores && npm run test:agent-job-hardening && npm run test:agent-authorization && npm run test:codex-runner-security && npm run test:genui-action-hardening && npm run test:genui-redaction && npm run test:genui-actions && npm run test:item-store-hardening && npm run test:item-store-ownership && npm run test:copilot-item-seeding-failure && npm run test:process-lease-hardening && npm run test:agent-transitions && npm run test:genui-contract && npm run test:teams-tab-link && npm run test:channels-shadow && npm run test:response-mode-store && npm run test:deterministic-engine && npm run test:openai-engine && npm run test:local-engine && npm run test:response-mode-api && npm run test:client-auth && npm run test:user-auth-hardening && npm run test:auth-startup-gate && npm run test:operator-allowlist && npm run test:client-location && npm run test:client-bootstrap && npm run test:client-refresh-recovery && npm run test:client-genui-adapter && npm run test:client-response-mode && npm run test:local-auth && npm run test:weather-service && npm run test:mcp-response-mode && npm run test:mcp-direct-factory && npm run test:runtime"
+    "test": "npm run test:typecheck-boundary && npm run typecheck && npm run check && npm run test:deployment-env && npm run test:manifest && npm run test:package-determinism && npm run test:build-client-atomic && npm run test:release-gate && npm run test:release-loop && npm run build && npm run test:troubleshooting && npm run test:atomic-stores && npm run test:agent-job-hardening && npm run test:agent-authorization && npm run test:codex-runner-security && npm run test:genui-action-hardening && npm run test:genui-redaction && npm run test:genui-actions && npm run test:item-store-hardening && npm run test:item-store-ownership && npm run test:copilot-item-seeding-failure && npm run test:process-lease-hardening && npm run test:agent-transitions && npm run test:work-item-parity && npm run test:collaboration-parity && npm run test:genui-contract && npm run test:teams-tab-link && npm run test:channels-shadow && npm run test:response-mode-store && npm run test:deterministic-engine && npm run test:openai-engine && npm run test:local-engine && npm run test:response-mode-api && npm run test:client-auth && npm run test:user-auth-hardening && npm run test:auth-startup-gate && npm run test:operator-allowlist && npm run test:client-location && npm run test:client-bootstrap && npm run test:client-refresh-recovery && npm run test:client-genui-adapter && npm run test:client-response-mode && npm run test:local-auth && npm run test:weather-service && npm run test:mcp-response-mode && npm run test:mcp-direct-factory && npm run test:runtime"
   },
   "dependencies": {
     "@copilotkit/channels-teams": "0.7.3",

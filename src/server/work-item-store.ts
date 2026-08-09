@@ -52,6 +52,7 @@ type PersistedStore = {
 export class WorkItemStore {
   private items: WorkItem[] = [];
   private mutations: WorkItemMutationRecord[] = [];
+  private nextActivitySequence = 0;
   private writeQueue: Promise<void> = Promise.resolve();
   private mutationQueue: Promise<void> = Promise.resolve();
   private initialized = false;
@@ -64,11 +65,16 @@ export class WorkItemStore {
       const loaded = loadStore(JSON.parse(raw) as unknown, this.filePath);
       this.items = loaded.items;
       this.mutations = loaded.mutations;
+      this.nextActivitySequence = this.items.reduce(
+        (max, item) => Math.max(max, item.activitySequence ?? 0),
+        0,
+      );
       this.initialized = true;
     } catch (error) {
       if (!isFileNotFound(error)) throw error;
       this.items = [];
       this.mutations = [];
+      this.nextActivitySequence = 0;
       this.initialized = true;
       await this.persist();
     }
@@ -95,6 +101,7 @@ export class WorkItemStore {
     operation: WorkItemMutationOperation,
     fingerprint: string,
     action: (context: WorkItemMutationContext) => WorkItem,
+    replayCheck: (context: WorkItemMutationContext) => void,
   ): Promise<WorkItem> {
     this.assertInitialized();
     assertMutationKey(mutationKey);
@@ -106,6 +113,7 @@ export class WorkItemStore {
         if (previous.operation !== operation || previous.fingerprint !== fingerprint) {
           throw new WorkItemIdempotencyConflictError(mutationKey);
         }
+        replayCheck(this.createMutationContext(scope));
         return clone(previous.result);
       }
 
@@ -155,6 +163,7 @@ export class WorkItemStore {
           throw new Error(`work item id already exists: ${item.id}`);
         }
         const stored = clone(item);
+        stored.activitySequence = ++this.nextActivitySequence;
         this.items.unshift(stored);
         return clone(stored);
       },
@@ -192,6 +201,7 @@ export class WorkItemStore {
     const original = this.items[index];
     const updated = clone(original);
     updater(updated);
+    updated.activitySequence = ++this.nextActivitySequence;
     validateWorkItem(updated, 'updated work item');
     if (
       updated.id !== original.id ||
@@ -332,6 +342,11 @@ function validateWorkItem(item: WorkItem, label: string): void {
   }
   assertTimestamp(item.createdAt, `${label}.createdAt`);
   assertTimestamp(item.updatedAt, `${label}.updatedAt`);
+  if (item.activitySequence !== undefined) {
+    if (!Number.isSafeInteger(item.activitySequence) || item.activitySequence < 1) {
+      throw new Error(`${label}.activitySequence must be a positive safe integer`);
+    }
+  }
 }
 
 function validateComment(comment: WorkItemComment, label: string): void {

@@ -78,6 +78,7 @@ export function normalizeAgentPrompt(prompt: unknown): string {
 }
 
 type ProgressState = {
+  generation: number;
   notifiedKeys: Set<string>;
   pendingAgentMessage?: string;
   notify: boolean;
@@ -97,6 +98,7 @@ export class AgentService {
   ) {}
 
   private readonly progressStates = new Map<string, ProgressState>();
+  private readonly progressGenerations = new Map<string, number>();
   private readonly mutationChains = new Map<string, Promise<void>>();
 
   async initialize(): Promise<void> {
@@ -229,6 +231,7 @@ export class AgentService {
         return undefined;
       }
 
+      this.invalidateProgressState(job.id);
       if (job.status === 'running') this.runner.cancel(id);
       const refreshed = await this.store.update(id, scope, {
         status: 'cancelled',
@@ -346,6 +349,7 @@ export class AgentService {
     let runningJob: AgentJob | undefined;
     let runPromise: ReturnType<CodexRunner['run']> | undefined;
     let workspaceSnapshot: GitWorkspaceSnapshot | undefined;
+    let progressState: ProgressState | undefined;
 
     try {
       runningJob = await this.withJobMutationLock(job.id, scope, async () => {
@@ -358,7 +362,7 @@ export class AgentService {
         });
         if (!started) return undefined;
 
-        this.progressStates.set(job.id, { notifiedKeys: new Set(), notify: shouldNotify, onProgress });
+        progressState = this.createProgressState(job.id, shouldNotify, onProgress);
         await this.store.appendProgress(job.id, scope, 'Codex 작업을 시작했습니다.');
         if (started.mode === 'workspace-write') {
           workspaceSnapshot = await this.gitService.captureWorkspaceSnapshot();
@@ -373,13 +377,18 @@ export class AgentService {
           workspace: this.workspace,
           mode: started.mode,
           threadId: started.threadId,
-          onEvent: (event) => this.handleEvent(started, event),
+          onEvent: (event) => this.handleEvent(started, progressState!.generation, event),
         });
+        // A cancellation can reject the runner before this execute loop reaches
+        // the await below (for example while the initial Teams notification is
+        // still being persisted). Observe that rejection immediately so Node's
+        // strict unhandled-rejection policy cannot tear down the Bot server.
+        void runPromise.catch(() => undefined);
         return started;
       });
 
       if (!runningJob || !runPromise) {
-        this.progressStates.delete(job.id);
+        this.clearProgressState(job.id, progressState?.generation);
         return;
       }
 
@@ -387,7 +396,7 @@ export class AgentService {
         kind: 'progress',
         phase: 'analysis',
         message: `작업 ${runningJob.id}이 실행을 시작했습니다.`,
-      });
+      }, progressState);
 
       const result = await runPromise;
       const changedPaths = runningJob.mode === 'workspace-write' && workspaceSnapshot
@@ -398,7 +407,11 @@ export class AgentService {
       const diagnosticMessage = formatRemoteTroubleshooting(diagnostic);
       const terminal = await this.withJobMutationLock(job.id, scope, async () => {
         const latest = this.store.get(job.id, scope);
-        if (!latest || latest.status !== 'running') return undefined;
+        if (!latest || latest.status !== 'running') {
+          this.invalidateProgressState(job.id, progressState?.generation);
+          return undefined;
+        }
+        this.invalidateProgressState(job.id, progressState?.generation);
         return diagnosticMessage
           ? this.store.update(job.id, scope, {
             status: 'failed',
@@ -444,7 +457,11 @@ export class AgentService {
       }
       const failed = await this.withJobMutationLock(job.id, scope, async () => {
         const latest = this.store.get(job.id, scope);
-        if (!latest || latest.status !== 'running') return undefined;
+        if (!latest || latest.status !== 'running') {
+          this.invalidateProgressState(job.id, progressState?.generation);
+          return undefined;
+        }
+        this.invalidateProgressState(job.id, progressState?.generation);
         return this.store.update(job.id, scope, {
           status: 'failed',
           error: message,
@@ -461,17 +478,22 @@ export class AgentService {
         message: `작업 ${job.id}이 실패했습니다.\n\n${message}`,
       });
     } finally {
-      this.progressStates.delete(job.id);
+      this.clearProgressState(job.id, progressState?.generation);
     }
   }
 
-  private async handleEvent(job: AgentJob, event: CodexRunEvent): Promise<void> {
-    const state = this.progressStates.get(job.id) ?? { notifiedKeys: new Set<string>(), notify: true };
-    this.progressStates.set(job.id, state);
+  private async handleEvent(job: AgentJob, generation: number, event: CodexRunEvent): Promise<void> {
+    const state = this.progressStates.get(job.id);
+    if (!state || state.generation !== generation || !this.isCurrentRunningProgress(job, state)) return;
 
     if (event.type === 'thread.started' && event.thread_id) {
       const scope = scopeForJob(job);
-      if (scope) await this.store.update(job.id, scope, { threadId: event.thread_id });
+      if (scope) {
+        await this.withJobMutationLock(job.id, scope, async () => {
+          if (!this.isCurrentRunningProgress(job, state)) return;
+          await this.store.update(job.id, scope, { threadId: event.thread_id });
+        });
+      }
       return;
     }
 
@@ -489,7 +511,8 @@ export class AgentService {
     if (event.type === 'item.completed' && event.item?.type === 'agent_message') {
       const message = event.item.text?.trim();
       if (message && message !== state.pendingAgentMessage) {
-        if (state.pendingAgentMessage) await this.publishAgentUpdate(job, state.pendingAgentMessage);
+        if (state.pendingAgentMessage) await this.publishAgentUpdate(job, state, state.pendingAgentMessage);
+        if (!this.isCurrentRunningProgress(job, state)) return;
         state.pendingAgentMessage = message;
       }
     }
@@ -497,26 +520,29 @@ export class AgentService {
 
   private async flushPendingAgentMessage(job: AgentJob, state: ProgressState): Promise<void> {
     if (!state.pendingAgentMessage) return;
-    await this.publishAgentUpdate(job, state.pendingAgentMessage);
+    await this.publishAgentUpdate(job, state, state.pendingAgentMessage);
+    if (!this.isCurrentRunningProgress(job, state)) return;
     state.pendingAgentMessage = undefined;
   }
 
-  private async publishAgentUpdate(job: AgentJob, message: string): Promise<void> {
+  private async publishAgentUpdate(job: AgentJob, state: ProgressState, message: string): Promise<void> {
     const compact = message.length > 1200 ? `${message.slice(0, 1200)}\n\n(중간 업데이트가 일부 생략되었습니다.)` : message;
-    const state = this.progressStates.get(job.id);
-    if (!state) return;
+    if (!this.isCurrentRunningProgress(job, state)) return;
     const key = `agent:${compact}`;
     if (state.notifiedKeys.has(key)) return;
     state.notifiedKeys.add(key);
     const scope = scopeForJob(job);
     if (!scope) return;
+    if (!this.isCurrentRunningProgress(job, state)) return;
     await this.store.appendProgress(job.id, scope, `Codex 업데이트: ${compact}`);
+    if (!this.isCurrentRunningProgress(job, state)) return;
     await state.onProgress?.(`Codex 업데이트: ${compact}`);
+    if (!this.isCurrentRunningProgress(job, state)) return;
     await this.notifyIfEnabled(job, {
       kind: 'progress',
       phase: 'agent-update',
       message: `작업 ${job.id}: Codex 업데이트\n\n${compact}`,
-    });
+    }, state);
   }
 
   private async publishProgress(
@@ -527,34 +553,82 @@ export class AgentService {
     storedMessage: string,
     notification: string,
   ): Promise<void> {
+    if (!this.isCurrentRunningProgress(job, state)) return;
     if (state.notifiedKeys.has(key)) return;
     state.notifiedKeys.add(key);
     const scope = scopeForJob(job);
     if (!scope) return;
+    if (!this.isCurrentRunningProgress(job, state)) return;
     await this.store.appendProgress(job.id, scope, storedMessage);
+    if (!this.isCurrentRunningProgress(job, state)) return;
     await state.onProgress?.(storedMessage);
+    if (!this.isCurrentRunningProgress(job, state)) return;
     await this.notifyIfEnabled(job, {
       kind: 'progress',
       phase,
       message: `작업 ${job.id}: ${notification}`,
-    });
+    }, state);
   }
 
   private async notifyIfEnabled(
     job: AgentJob,
     event: Omit<AgentNotification, 'conversationId' | 'job'>,
+    progressState?: ProgressState,
   ): Promise<void> {
     const state = this.progressStates.get(job.id);
     if (state?.notify === false) return;
 
     const scope = scopeForJob(job);
     if (!scope) return;
-    const current = this.store.get(job.id, scope) ?? job;
-    await this.notify({
-      ...event,
-      conversationId: current.conversationId,
-      job: current,
+    if (!progressState) {
+      const current = this.store.get(job.id, scope) ?? job;
+      await this.notify({
+        ...event,
+        conversationId: current.conversationId,
+        job: current,
+      });
+      return;
+    }
+
+    await this.withJobMutationLock(job.id, scope, async () => {
+      if (!this.isCurrentRunningProgress(job, progressState)) return;
+      const current = this.store.get(job.id, scope);
+      if (!current) return;
+      await this.notify({
+        ...event,
+        conversationId: current.conversationId,
+        job: current,
+      });
     });
+  }
+
+  private createProgressState(id: string, notify: boolean, onProgress?: ProgressListener): ProgressState {
+    const generation = (this.progressGenerations.get(id) ?? 0) + 1;
+    this.progressGenerations.set(id, generation);
+    const state: ProgressState = { generation, notifiedKeys: new Set(), notify, onProgress };
+    this.progressStates.set(id, state);
+    return state;
+  }
+
+  private invalidateProgressState(id: string, generation?: number): void {
+    const current = this.progressStates.get(id);
+    if (!current || generation === undefined || current.generation === generation) {
+      this.progressStates.delete(id);
+    }
+  }
+
+  private clearProgressState(id: string, generation?: number): void {
+    const current = this.progressStates.get(id);
+    if (current && (generation === undefined || current.generation === generation)) {
+      this.progressStates.delete(id);
+    }
+  }
+
+  private isCurrentRunningProgress(job: AgentJob, state: ProgressState): boolean {
+    const currentState = this.progressStates.get(job.id);
+    if (!currentState || currentState.generation !== state.generation) return false;
+    const scope = scopeForJob(job);
+    return Boolean(scope && this.store.get(job.id, scope)?.status === 'running');
   }
 
   private async withJobMutationLock<T>(

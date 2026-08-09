@@ -19,6 +19,9 @@ type RunResult = { threadId: string; finalMessage: string; eventCount: number };
 const execFileAsync = promisify(execFile);
 
 class ControlledRunner {
+  private readonly runs: Array<{
+    onEvent?: (event: { type?: string; item?: { type?: string; text?: string }; thread_id?: string }) => Promise<void> | void;
+  }> = [];
   private readonly completions: Array<{
     resolve: (result: RunResult) => void;
     reject: (error: Error) => void;
@@ -36,7 +39,9 @@ class ControlledRunner {
       if (this.starts >= waiter.count) waiter.resolve();
       else this.startWaiters.push(waiter);
     }
-    return new Promise<RunResult>((resolve, reject) => this.completions.push({ resolve, reject, onEvent: options.onEvent }));
+    const run = { onEvent: options.onEvent };
+    this.runs.push(run);
+    return new Promise<RunResult>((resolve, reject) => this.completions.push({ resolve, reject, onEvent: run.onEvent }));
   }
 
   cancel(id: string): boolean {
@@ -67,6 +72,12 @@ class ControlledRunner {
     const completion = this.completions[index];
     assert.ok(completion, `missing controlled run ${index}`);
     await completion.onEvent?.(event);
+  }
+
+  async emitRun(runIndex: number, event: { type?: string; item?: { type?: string; text?: string }; thread_id?: string }): Promise<void> {
+    const run = this.runs[runIndex];
+    assert.ok(run, `missing historical controlled run ${runIndex}`);
+    await run.onEvent?.(event);
   }
 }
 
@@ -185,6 +196,15 @@ try {
   assert.equal(cancellations.filter((result) => result.status === 'rejected').length, 1, 'stale cancellation conflicts');
   assert.equal(store.get(cancellationJob.id, scope)?.status, 'cancelled');
   assert.deepEqual(runner.cancelled, [cancellationJob.id], 'running cancellation signals the runner once');
+  const lateNotificationCount = notifications.filter((notification) => notification.job.id === cancellationJob.id).length;
+  await runner.emitRun(3, { type: 'turn.started' });
+  await runner.emitRun(3, { type: 'item.completed', item: { type: 'agent_message', text: 'late agent update' } });
+  await runner.emitRun(3, { type: 'item.started', item: { type: 'command_execution' } });
+  assert.equal(
+    notifications.filter((notification) => notification.job.id === cancellationJob.id).length,
+    lateNotificationCount,
+    'late running/agent/tool progress is suppressed after cancellation',
+  );
   runner.release(0);
 
   const cancellationNotifications = notifications.filter((notification) => notification.job.id === cancellationJob.id);

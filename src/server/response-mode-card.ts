@@ -5,6 +5,7 @@ import {
   type ResponseModeAvailability,
 } from '../shared/response-mode.js';
 import type { AdaptiveCardAction, TeamsAdaptiveCard, TeamsMessageActivity } from './genui-teams.js';
+import { isSafeGenUiUrl } from '../shared/genui.js';
 
 export const RESPONSE_MODE_ACTION = 'response-mode.select' as const;
 
@@ -38,6 +39,7 @@ export function createResponseModeCard(
   current: ResponseMode,
   availability: readonly PublicResponseModeAvailability[],
   notice?: string,
+  tabUrl?: string,
 ): TeamsAdaptiveCard {
   const actions: AdaptiveCardAction[] = availability.filter((entry) => entry.configured).map((entry) => ({
     type: 'Action.Submit',
@@ -63,7 +65,12 @@ export function createResponseModeCard(
         })),
       },
     ],
-    actions,
+    actions: [
+      ...actions,
+      ...(tabUrl && isSafeGenUiUrl(tabUrl)
+        ? [{ type: 'Action.OpenUrl', title: '업무 허브 탭 열기', url: tabUrl }]
+        : []),
+    ],
   };
 }
 
@@ -71,8 +78,9 @@ export function createResponseModeCardActivity(
   current: ResponseMode,
   availability: readonly PublicResponseModeAvailability[],
   notice?: string,
+  tabUrl?: string,
 ): TeamsMessageActivity {
-  const card = createResponseModeCard(current, availability, notice);
+  const card = createResponseModeCard(current, availability, notice, tabUrl);
   return {
     type: 'message',
     attachmentLayout: 'list',

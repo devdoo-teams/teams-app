@@ -12,6 +12,8 @@ import {
   type WorkItemEditInput,
   type WorkItemEditPatch,
   type WorkItemMutationOperation,
+  type WorkItemMembershipContract,
+  type WorkItemMembershipRequest,
   type WorkItemPriority,
   type WorkItemQuery,
   type WorkItemScope,
@@ -64,16 +66,22 @@ export class WorkItemForbiddenError extends Error {
 
 export type WorkItemServiceOptions = {
   clock?: () => Date;
+  /** Trusted server-side membership lookup used before assigning another user. */
+  membership?: WorkItemMembershipContract;
 };
 
 export class WorkItemService {
   private readonly clock: () => Date;
+  private readonly membership: WorkItemMembershipContract;
 
   constructor(
     private readonly store: WorkItemStore,
     options: WorkItemServiceOptions = {},
   ) {
     this.clock = options.clock ?? (() => new Date());
+    this.membership = options.membership ?? {
+      isMember: (request) => request.userId === request.requesterId,
+    };
   }
 
   async initialize(): Promise<void> {
@@ -169,6 +177,7 @@ export class WorkItemService {
         codexJobRelation: normalized.codexJobRelation,
       },
       (context) => context.insert(item),
+      () => undefined,
     );
   }
 
@@ -189,6 +198,10 @@ export class WorkItemService {
         });
         if (!updated) throw new WorkItemNotFoundError(normalized.itemId);
         return updated;
+      },
+      (context) => {
+        const current = requireVisibleItem(context, normalized.itemId);
+        assertCanManage(current, normalizedScope.requesterId);
       },
     );
   }
@@ -211,6 +224,10 @@ export class WorkItemService {
         if (!updated) throw new WorkItemNotFoundError(normalized.itemId);
         return updated;
       },
+      (context) => {
+        const current = requireVisibleItem(context, normalized.itemId);
+        assertCanManage(current, normalizedScope.requesterId);
+      },
     );
   }
 
@@ -225,6 +242,7 @@ export class WorkItemService {
       (context) => {
         const current = requireVisibleItem(context, normalized.itemId);
         assertCanManage(current, normalizedScope.requesterId);
+        this.assertAssigneeAllowed(normalizedScope, normalized.itemId, normalized.assigneeId);
         const updated = context.update(normalized.itemId, (item) => {
           if (normalized.assigneeId) item.assigneeId = normalized.assigneeId;
           else delete item.assigneeId;
@@ -232,6 +250,11 @@ export class WorkItemService {
         });
         if (!updated) throw new WorkItemNotFoundError(normalized.itemId);
         return updated;
+      },
+      (context) => {
+        const current = requireVisibleItem(context, normalized.itemId);
+        assertCanManage(current, normalizedScope.requesterId);
+        this.assertAssigneeAllowed(normalizedScope, normalized.itemId, normalized.assigneeId);
       },
     );
   }
@@ -260,6 +283,9 @@ export class WorkItemService {
         if (!updated) throw new WorkItemNotFoundError(normalized.itemId);
         return updated;
       },
+      (context) => {
+        requireVisibleItem(context, normalized.itemId);
+      },
     );
   }
 
@@ -283,6 +309,9 @@ export class WorkItemService {
         if (!updated) throw new WorkItemNotFoundError(normalized.itemId);
         return updated;
       },
+      (context) => {
+        if (!context.getInConversation(normalized.itemId)) throw new WorkItemNotFoundError(normalized.itemId);
+      },
     );
   }
 
@@ -305,7 +334,29 @@ export class WorkItemService {
         if (!updated) throw new WorkItemNotFoundError(normalized.itemId);
         return updated;
       },
+      (context) => {
+        requireVisibleItem(context, normalized.itemId);
+      },
     );
+  }
+
+  private assertAssigneeAllowed(
+    scope: WorkItemScope,
+    itemId: string,
+    assigneeId: string | null,
+  ): void {
+    if (
+      assigneeId &&
+      assigneeId !== scope.requesterId &&
+      !this.membership.isMember({
+        tenantId: scope.tenantId,
+        conversationId: scope.conversationId,
+        requesterId: scope.requesterId,
+        userId: assigneeId,
+      } satisfies WorkItemMembershipRequest)
+    ) {
+      throw new WorkItemForbiddenError(itemId);
+    }
   }
 
   private async runMutation(
@@ -314,6 +365,7 @@ export class WorkItemService {
     mutationKey: string,
     payload: unknown,
     action: Parameters<WorkItemStore['runMutation']>[4],
+    replayCheck: Parameters<WorkItemStore['runMutation']>[5],
   ): Promise<WorkItem> {
     return this.store.runMutation(
       scope,
@@ -321,6 +373,7 @@ export class WorkItemService {
       operation,
       stableStringify({ operation, payload }),
       action,
+      replayCheck,
     );
   }
 
@@ -543,7 +596,9 @@ function sortByUpdated(items: WorkItem[]): WorkItem[] {
 }
 
 function compareUpdated(left: WorkItem, right: WorkItem): number {
-  return right.updatedAt.localeCompare(left.updatedAt) || right.id.localeCompare(left.id);
+  return (right.activitySequence ?? 0) - (left.activitySequence ?? 0) ||
+    right.updatedAt.localeCompare(left.updatedAt) ||
+    right.id.localeCompare(left.id);
 }
 
 function normalizeText(value: unknown, label: string, maxLength: number): string {

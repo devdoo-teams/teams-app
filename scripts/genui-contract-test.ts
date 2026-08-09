@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   GENUI_ACTIONS,
   GENUI_ACTION_PAYLOAD_KEYS,
+  GENUI_COMMANDS,
   GENUI_KINDS,
   GENUI_SCHEMA_VERSION,
   GENUI_SECTION_TYPES,
@@ -120,6 +121,46 @@ const tabCard = renderGenUiCard(tabEnvelope);
 assert.equal(tabCard.actions?.[0]?.type, 'Action.OpenUrl');
 assert.equal(tabCard.actions?.[0]?.url, personalTabUrl);
 
+const commandEnvelope = GenUiEnvelopeV1Schema.parse({
+  ...nonAiEnvelope,
+  id: 'command-palette',
+  actions: GENUI_COMMANDS.map((command) => ({
+    id: `command-${command}`,
+    action: 'command',
+    label: command,
+    entityId: command,
+    correlationId: 'command-palette',
+    actionToken: `command-${command}`,
+  })),
+});
+const commandCard = renderGenUiCard(commandEnvelope);
+assert.deepEqual(
+  commandCard.actions?.map((action) => ({
+    type: action.type,
+    verb: action.verb,
+    entityId: (action.data as Record<string, unknown>)?.entityId,
+    fallbackType: (action.fallback as Record<string, unknown>)?.type,
+  })),
+  GENUI_COMMANDS.map((command) => ({
+    type: 'Action.Execute',
+    verb: 'genui.command',
+    entityId: command,
+    fallbackType: 'Action.Submit',
+  })),
+);
+
+const promptEnvelope = GenUiEnvelopeV1Schema.parse({
+  ...nonAiEnvelope,
+  id: 'prompt-view-answer',
+  prompt: '현재 작업의 원본 요청을 모바일에서 확인합니다.',
+  actions: [],
+});
+const promptCard = renderGenUiCard(promptEnvelope);
+const promptAction = promptCard.actions?.find((action) => action.title === '프롬프트 보기');
+assert.equal(promptAction?.type, 'Action.ShowCard');
+assert.equal((promptAction?.card as Record<string, unknown>)?.type, 'AdaptiveCard');
+assert.ok(JSON.stringify(promptAction?.card).includes('현재 작업의 원본 요청을 모바일에서 확인합니다.'));
+
 const unsafeTabCard = renderGenUiCard(GenUiEnvelopeV1Schema.parse({
   ...tabEnvelope,
   metadata: { openTabUrl: 'javascript:alert(1)' },
@@ -185,15 +226,17 @@ assert.equal(activity.attachmentLayout, 'list');
 const responseModeActivity = createResponseModeCardActivity('deterministic', [
   { mode: 'deterministic', label: '결정형', configured: true },
   { mode: 'openai', label: 'OpenAI', configured: false },
-]);
+], undefined, personalTabUrl);
 assert.equal(responseModeActivity.type, 'message');
 assert.equal('text' in responseModeActivity, false);
 assert.equal(responseModeActivity.attachments?.length, 1);
 assert.equal(responseModeActivity.attachmentLayout, 'list');
 const responseModeCard = responseModeActivity.attachments?.[0]?.content;
 assert.equal(responseModeCard?.version, '1.2');
-assert.equal(responseModeCard?.actions?.length, 1);
+assert.equal(responseModeCard?.actions?.length, 2);
 assert.ok(responseModeCard?.actions?.every((action) => !('isEnabled' in action)));
+assert.equal(responseModeCard?.actions?.at(-1)?.type, 'Action.OpenUrl');
+assert.equal(responseModeCard?.actions?.at(-1)?.url, personalTabUrl);
 const responseModeFacts = responseModeCard?.body.find((element) => element.type === 'FactSet') as Record<string, unknown> | undefined;
 const responseModeFactEntries = responseModeFacts?.facts as Array<Record<string, unknown>> | undefined;
 assert.ok(responseModeFactEntries?.some((fact) => fact.title === 'OpenAI'));

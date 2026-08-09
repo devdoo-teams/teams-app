@@ -2,7 +2,9 @@
 
 ## Status
 
-The Task 3 server-side work-item domain is implemented and locally verified. It is intentionally not wired into `src/server/index.ts`, chat commands, Adaptive Cards, or client UI; those integrations are controller/UI work owned by the later integration tasks.
+Reviewer fixes are present in the shared worktree: idempotent replays re-check current visibility, assignee changes use a server-side membership contract, and recent ordering uses a persisted activity sequence for tied timestamps. `npm run test:work-item-parity` passes.
+
+The Task 3 server-side work-item domain is implemented and locally verified. It is wired into `src/server/index.ts` REST routes, the responsive `src/client/WorkItemPanel.tsx`, and the deterministic `work` chat/Adaptive Card shortcut. Live external provider synchronization remains a later integration phase.
 
 ## API design
 
@@ -48,15 +50,17 @@ Stored items are owned by the tenant and conversation and record their creator. 
 
 ## Changed files
 
-Only the requested new files were added:
+The domain and integration touched:
 
 - `src/shared/work-item.ts` — shared types, constants, deep-link builder, and idempotency error.
 - `src/server/work-item-store.ts` — scoped persistent store, ownership checks, transaction context, and idempotency records.
 - `src/server/work-item-service.ts` — normalized domain API, validation, queries, permissions, and mutations.
 - `scripts/work-item-parity-test.ts` — focused executable parity test.
+- `src/server/index.ts` — authenticated REST controller for list, search, create, edit, transition, assignment, comments, watch, and deep links.
+- `src/client/WorkItemPanel.tsx` and `src/client/styles.css` — mobile-responsive real API UI.
 - `.superpowers/sdd/2026-08-09-atlassian-parity-and-runtime-verification/task-3-report.md` — this report.
 
-No package script was added because the focused test runs directly with the existing `tsx` dependency. Existing controller, GenUI, client, manifest, release, and instruction files were not modified by this task.
+The package script `test:work-item-parity` runs the focused test in the normal test chain.
 
 ## Tests and outputs
 
@@ -87,7 +91,7 @@ The focused test covers create retry/conflict, tenant/conversation isolation, as
 
 ## Concerns and follow-up
 
-- Chat command routing, actionable cards, card result handling, and client rendering are intentionally deferred; this task provides the controller-ready service contract only.
+- The `work` chat command and default command card shortcut are wired to the scoped recent-work response. Provider-specific Jira/Trello synchronization is intentionally deferred.
 - No Teams desktop/mobile, public HTTPS, portal, or external-service verification was performed, per the bounded task scope and the instruction not to use external credentials/UI.
 - The store is a local versioned JSON implementation with a single-process mutation queue. A multi-instance deployment should move the same contract to a transactional shared datastore before relying on cross-process idempotency.
 - Status values are validated, but no product-specific transition graph is imposed; the later controller/product policy can restrict allowed transitions without changing storage or query contracts.

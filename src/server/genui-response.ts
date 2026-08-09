@@ -8,6 +8,7 @@ import type { WeatherResponse } from './weather-service.js';
 import { redactSensitiveText } from './sensitive-text.js';
 import {
   GENUI_SCHEMA_VERSION,
+  GENUI_COMMANDS,
   GenUiEnvelopeV1Schema,
   type GenUiAction,
   type GenUiEnvelopeV1,
@@ -214,6 +215,26 @@ export class GenUiResponseFactory {
     }];
   }
 
+  private commandActions(): GenUiAction[] {
+    const labels: Record<(typeof GENUI_COMMANDS)[number], string> = {
+      help: '도움말',
+      weather: '날씨',
+      status: '상태',
+      list: '업무 목록',
+      work: '탭 업무',
+      collaboration: '알림 digest',
+    };
+    return GENUI_COMMANDS.map((command) => ({
+      id: `command-${command}`,
+      action: 'command' as const,
+      label: labels[command],
+      entityId: command,
+      correlationId: 'command-palette',
+      actionToken: randomUUID(),
+      style: 'default' as const,
+    }));
+  }
+
   private create(input: {
     kind: GenUiEnvelopeV1['kind'];
     id: string;
@@ -221,13 +242,14 @@ export class GenUiResponseFactory {
     status?: GenUiState;
     title: string;
     summary?: string;
+    prompt?: string;
     sections: Array<Record<string, unknown>>;
     fallbackText: string;
     actions?: GenUiAction[];
     includeTabAction?: boolean;
     metadata?: Record<string, string | number | boolean | null>;
   }): GenUiEnvelopeV1 {
-    const { includeTabAction = false, ...envelopeInput } = input;
+    const { includeTabAction = true, ...envelopeInput } = input;
     return GenUiEnvelopeV1Schema.parse({
       schemaVersion: GENUI_SCHEMA_VERSION,
       correlationId: randomUUID(),
@@ -237,6 +259,7 @@ export class GenUiResponseFactory {
       id: identifierText(envelopeInput.id, 200, 'genui-response'),
       title: displayText(envelopeInput.title, 240),
       summary: envelopeInput.summary === undefined ? undefined : displayText(envelopeInput.summary, 2_000),
+      prompt: envelopeInput.prompt === undefined ? undefined : displayText(envelopeInput.prompt, 2_000),
       sections: redactSharedSections(envelopeInput.sections),
       fallbackText: displayText(envelopeInput.fallbackText, 4_000, '요청 결과를 확인하세요.'),
       actions: [
@@ -265,7 +288,7 @@ export class GenUiResponseFactory {
   }
 
   help(): GenUiEnvelopeV1 {
-    const text = '사용 가능한 명령: help, weather [위도 경도], status, list, run <작업>, continue <작업 ID> <추가 요청>, write <작업>, approve <작업 ID>, commit <작업 ID> [메시지], cancel <작업 ID>';
+    const text = '사용 가능한 명령: help, weather [위도 경도], status, list, work, collaboration, run <작업>, continue <작업 ID> <추가 요청>, write <작업>, approve <작업 ID>, commit <작업 ID> [메시지], cancel <작업 ID>';
     return this.create({
       kind: 'answer',
       id: 'help',
@@ -273,6 +296,7 @@ export class GenUiResponseFactory {
       summary: 'Teams 모바일에서 사용할 수 있는 명령입니다.',
       sections: [{ type: 'text', title: '명령', text }],
       fallbackText: text,
+      actions: this.commandActions(),
       includeTabAction: true,
       metadata: { source: 'teams-bot', deterministic: true },
     });
@@ -399,6 +423,7 @@ export class GenUiResponseFactory {
       status: stateForJob(job),
       title: 'Codex 작업 상태',
       summary: text,
+      prompt: safeJobPrompt(job),
       sections: [
         { type: 'status', status: jobStatus, description: [error, result, progress.at(-1)].filter(Boolean).join('\n').slice(0, 2_000) },
         { type: 'list', title: '최근 진행 기록', items: progress.map((message, index) => ({ id: `${jobId}-${index}`.slice(0, 120), label: message })) },
@@ -439,6 +464,7 @@ export class GenUiResponseFactory {
         status: 'approval',
         title: '쓰기 작업 승인 필요',
         summary: text,
+        prompt,
         sections: [{ type: 'status', title: '승인 경계', status: 'awaiting_approval', description: prompt }],
         fallbackText: `${text}\napprove ${jobId} 또는 cancel ${jobId}`,
         actions,
@@ -458,6 +484,7 @@ export class GenUiResponseFactory {
       status: stateForJob(job),
       title: '쓰기 작업 승인 처리',
       summary: text,
+      prompt: safeJobPrompt(job),
       sections: [{ type: 'status', title: '승인 결과', status: jobStatus, description: safeJobPrompt(job) }],
       fallbackText: text,
       metadata: { source: 'teams-bot', deterministic: true },
@@ -474,6 +501,7 @@ export class GenUiResponseFactory {
       status: jobStatus === 'cancelled' ? 'complete' : stateForJob(job),
       title: '작업 취소 결과',
       summary: text,
+      prompt: safeJobPrompt(job),
       sections: [{ type: 'status', title: '취소 결과', status: jobStatus, description: safeJobPrompt(job) }],
       fallbackText: text,
       metadata: { source: 'teams-bot', deterministic: true },
@@ -489,6 +517,7 @@ export class GenUiResponseFactory {
       status: 'loading',
       title: 'Codex 대화 이어서 실행',
       summary: text,
+      prompt: safeJobPrompt(job),
       sections: [{ type: 'status', title: '재개 결과', status: safeJobStatus(job), description: safeJobPrompt(job) }],
       fallbackText: text,
       metadata: { source: 'teams-bot', deterministic: true },
@@ -504,6 +533,7 @@ export class GenUiResponseFactory {
       status: 'loading',
       title: '자연어 Codex 작업 시작',
       summary: text,
+      prompt: safeJobPrompt(job),
       sections: [{ type: 'status', title: '작업 요청', status: safeJobStatus(job), description: safeJobPrompt(job) }],
       fallbackText: text,
       metadata: { source: 'teams-bot', deterministic: true },
@@ -523,6 +553,7 @@ export class GenUiResponseFactory {
       status: missing ? 'error' : 'complete',
       title: missing ? '커밋 대기 중' : '커밋 결과',
       summary: text,
+      prompt: safeJobPrompt(job),
       sections: [{ type: 'status', title: 'Git 결과', status: jobStatus, description: text }],
       fallbackText: text,
       metadata: { source: 'teams-bot', deterministic: true },
@@ -538,6 +569,7 @@ export class GenUiResponseFactory {
     const text = `${safeJobMode(job) === 'workspace-write' ? '쓰기' : '읽기 전용'} Codex 작업 ${jobId}을 시작했습니다. status ${jobId}로 진행 상태를 확인할 수 있습니다.`;
     return this.create({
       kind: 'job-status', id: jobId, status: 'loading', title: 'Codex 작업 시작', summary: text,
+      prompt: safeJobPrompt(job),
       sections: [{ type: 'status', status: safeJobStatus(job), description: safeJobPrompt(job) }], fallbackText: text,
       metadata: { source: 'teams-bot', deterministic: true },
     });
@@ -578,6 +610,7 @@ export class GenUiResponseFactory {
       summary,
       sections: [{ type: 'status', title: '작업 상태', status: sectionStatus, description: summary }],
       fallbackText,
+      prompt: safeJobPrompt(notification.job),
       metadata: { source: 'agent-service', event: displayText(notification.phase, 64, 'unknown'), deterministic: true },
     });
   }

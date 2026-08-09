@@ -53,6 +53,7 @@ import { buildTeamsPersonalTabDeepLink } from './teams-tab-link.js';
 import { isLocalModelBaseUrlConfigured } from './local-model-url.js';
 import {
   GENUI_ACTION_PAYLOAD_KEYS,
+  GENUI_COMMANDS,
   GENUI_SCHEMA_VERSION,
   GenUiEnvelopeV1Schema,
   type GenUiEnvelopeV1,
@@ -63,6 +64,26 @@ import {
   type ResponseMode,
 } from '../shared/response-mode.js';
 import { isValidPublicHostname } from '../shared/public-hostname.js';
+import {
+  WorkItemForbiddenError,
+  WorkItemNotFoundError,
+  WorkItemService,
+  WorkItemValidationError,
+} from './work-item-service.js';
+import { WorkItemStore } from './work-item-store.js';
+import {
+  WORK_ITEM_STATUSES,
+  type WorkItem,
+  type WorkItemScope,
+} from '../shared/work-item.js';
+import {
+  CollaborationForbiddenError,
+  CollaborationNotFoundError,
+  CollaborationService,
+  CollaborationValidationError,
+} from './collaboration-service.js';
+import { CollaborationStore } from './collaboration-store.js';
+import type { CollaborationScope } from '../shared/collaboration.js';
 import type { RunAgentInput } from '@ag-ui/core';
 
 const port = Number(process.env.PORT ?? 3978);
@@ -81,12 +102,16 @@ const fileJsonMultiWorker = numericEnvGreaterThan('WEB_CONCURRENCY', 1)
   || numericEnvGreaterThan('NODE_APP_INSTANCE', 0);
 const clientDist = path.resolve(process.cwd(), 'dist/client');
 const itemStorePath = process.env.ITEM_STORE_PATH ?? path.resolve(process.cwd(), 'data/items.json');
+const workItemStorePath = process.env.WORK_ITEM_STORE_PATH ?? path.resolve(process.cwd(), 'data/work-items.json');
+const collaborationStorePath = process.env.COLLABORATION_STORE_PATH ?? path.resolve(process.cwd(), 'data/collaboration.json');
 const agentJobStorePath = process.env.AGENT_JOB_STORE_PATH ?? path.resolve(process.cwd(), 'data/agent-jobs.json');
 const genUiActionStorePath = process.env.GENUI_ACTION_STORE_PATH ?? path.resolve(process.cwd(), 'data/genui-actions.json');
 const responseModeStorePath = process.env.RESPONSE_MODE_STORE_PATH ?? path.resolve(process.cwd(), 'data/response-modes.json');
 const itemStore = new ItemStore(
   itemStorePath,
 );
+const workItemService = new WorkItemService(new WorkItemStore(workItemStorePath));
+const collaborationService = new CollaborationService(new CollaborationStore(collaborationStorePath));
 const agentJobStore = new AgentJobStore(
   agentJobStorePath,
 );
@@ -236,6 +261,8 @@ if (isProduction && weatherMode === 'demo') {
 let storeProcessLease: StoreProcessLease | undefined;
 storeProcessLease = await acquireStoreProcessLease([
   itemStorePath,
+  workItemStorePath,
+  collaborationStorePath,
   agentJobStorePath,
   genUiActionStorePath,
   responseModeStorePath,
@@ -243,6 +270,8 @@ storeProcessLease = await acquireStoreProcessLease([
 process.once('exit', () => storeProcessLease?.releaseSync());
 
 await itemStore.initialize();
+await workItemService.initialize();
+await collaborationService.initialize();
 await genUiActionStore.initialize();
 await responseModeStore.initialize();
 
@@ -274,7 +303,7 @@ const localOutbox = new Map<string, string[]>();
 const localOutboxActivities = new Map<string, unknown[]>();
 
 type BotSend = (text: string, envelope?: GenUiEnvelopeV1, activityOverride?: unknown) => Promise<void>;
-type GenUiCardAction = Extract<GenUiActionName, 'approve' | 'cancel' | 'refresh' | 'feedback'>;
+type GenUiCardAction = Extract<GenUiActionName, 'approve' | 'cancel' | 'refresh' | 'feedback'> | 'command';
 type GenUiActionPayload = {
   schemaVersion: typeof GENUI_SCHEMA_VERSION;
   action: GenUiCardAction;
@@ -285,7 +314,7 @@ type GenUiActionPayload = {
 
 type UserClaims = Record<string, unknown>;
 
-const GENUI_CARD_ACTIONS = ['approve', 'cancel', 'refresh', 'feedback'] as const satisfies readonly GenUiCardAction[];
+const GENUI_CARD_ACTIONS = ['approve', 'cancel', 'refresh', 'feedback', 'command'] as const satisfies readonly GenUiCardAction[];
 const inFlightGenUiActions = new Set<string>();
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -374,6 +403,79 @@ function restScope(request: any, response: any): { scope?: AgentJobScope; status
   }
   if (!requesterId || !tenantId) return { status: 401, error: 'validated user identity is required' };
   return { scope: { requesterId, tenantId, conversationId: conversation.conversationId! } };
+}
+
+function workItemRestScope(request: any, response: any): { scope?: WorkItemScope; status?: number; error?: string } {
+  const resolved = restScope(request, response);
+  if (!resolved.scope) return resolved;
+  return {
+    scope: {
+      tenantId: resolved.scope.tenantId,
+      requesterId: resolved.scope.requesterId,
+      conversationId: resolved.scope.conversationId,
+    },
+  };
+}
+
+function collaborationRestScope(request: any, response: any): { scope?: CollaborationScope; status?: number; error?: string } {
+  const resolved = restScope(request, response);
+  if (!resolved.scope) return resolved;
+  return {
+    scope: {
+      tenantId: resolved.scope.tenantId,
+      requesterId: resolved.scope.requesterId,
+      conversationId: resolved.scope.conversationId,
+    },
+  };
+}
+
+function sendWorkItemError(response: any, error: unknown): void {
+  if (error instanceof WorkItemValidationError) {
+    response.status(400).json({ error: error.message, code: error.code });
+    return;
+  }
+  if (error instanceof WorkItemNotFoundError) {
+    response.status(404).json({ error: error.message, code: error.code, itemId: error.itemId });
+    return;
+  }
+  if (error instanceof WorkItemForbiddenError) {
+    response.status(403).json({ error: error.message, code: error.code, itemId: error.itemId });
+    return;
+  }
+  if (error && typeof error === 'object' && 'code' in error && (error as { code?: unknown }).code === 'WORK_ITEM_IDEMPOTENCY_CONFLICT') {
+    response.status(409).json({ error: error instanceof Error ? error.message : 'mutation key conflict', code: 'WORK_ITEM_IDEMPOTENCY_CONFLICT' });
+    return;
+  }
+  console.error('Work item request failed', error);
+  response.status(500).json({ error: '업무 항목 요청을 처리하지 못했습니다.' });
+}
+
+function presentWorkItem(item: WorkItem, scope: WorkItemScope): WorkItem & { watching: boolean } {
+  return {
+    ...item,
+    watching: item.watcherIds.includes(scope.requesterId),
+  };
+}
+
+function sendCollaborationError(response: any, error: unknown): void {
+  if (error instanceof CollaborationValidationError) {
+    response.status(400).json({ error: error.message, code: error.code });
+    return;
+  }
+  if (error instanceof CollaborationNotFoundError) {
+    response.status(404).json({ error: error.message, code: error.code, resource: error.resource });
+    return;
+  }
+  if (error instanceof CollaborationForbiddenError) {
+    response.status(403).json({ error: error.message, code: error.code, resource: error.resource });
+    return;
+  }
+  if (error && typeof error === 'object' && 'code' in error && (error as { code?: unknown }).code === 'COLLABORATION_IDEMPOTENCY_CONFLICT') {
+    response.status(409).json({ error: error instanceof Error ? error.message : 'mutation key conflict', code: 'COLLABORATION_IDEMPOTENCY_CONFLICT' });
+    return;
+  }
+  console.error('Collaboration request failed', error);
+  response.status(500).json({ error: '협업 요청을 처리하지 못했습니다.' });
 }
 
 function copilotIdentity(request: any, response: any): { requesterId: string; tenantId: string } | undefined {
@@ -906,6 +1008,380 @@ http.delete('/api/items/:id', async (request: any, response: any) => {
   response.json({ item });
 });
 
+http.use(
+  '/api/work-items',
+  createUserAuthMiddleware({
+    allowUnauthenticated: skipAuth,
+    validator: userAuthValidator,
+    configuredTenantId: configuredTenantId || undefined,
+    acceptedAudiences: acceptedUserAudiences,
+  }),
+);
+
+http.get('/api/work-items', async (request: any, response: any) => {
+  const resolved = workItemRestScope(request, response);
+  if (!resolved.scope) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid work item scope' });
+    return;
+  }
+
+  try {
+    const view = nonEmptyString(request.query?.view, 32) ?? 'search';
+    const limit = request.query?.limit === undefined ? undefined : Number(request.query.limit);
+    const text = nonEmptyString(request.query?.q, 400);
+    const status = nonEmptyString(request.query?.status, 200);
+    const statuses = status
+      ? status.split(',').map((value) => value.trim()).filter((value): value is typeof WORK_ITEM_STATUSES[number] => (WORK_ITEM_STATUSES as readonly string[]).includes(value))
+      : undefined;
+    if (status && (!statuses || statuses.length !== status.split(',').filter((value: string) => value.trim()).length)) {
+      response.status(400).json({ error: 'status contains an unsupported work item status' });
+      return;
+    }
+
+    const items = view === 'assigned'
+      ? workItemService.assigned(resolved.scope, limit)
+      : view === 'recent'
+        ? workItemService.recent(resolved.scope, limit)
+        : view === 'calendar'
+          ? workItemService.calendar(resolved.scope, {
+            from: nonEmptyString(request.query?.from, 10),
+            to: nonEmptyString(request.query?.to, 10),
+            limit,
+          })
+          : workItemService.search(resolved.scope, {
+            text,
+            status: statuses,
+            dueDateFrom: nonEmptyString(request.query?.from, 10),
+            dueDateTo: nonEmptyString(request.query?.to, 10),
+            limit,
+          });
+    response.json({ items: items.map((item) => presentWorkItem(item, resolved.scope!)), view });
+  } catch (error) {
+    sendWorkItemError(response, error);
+  }
+});
+
+http.get('/api/work-items/:id', async (request: any, response: any) => {
+  const resolved = workItemRestScope(request, response);
+  if (!resolved.scope) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid work item scope' });
+    return;
+  }
+  try {
+    const item = workItemService.get(resolved.scope, request.params.id);
+    if (!item) {
+      response.status(404).json({ error: 'work item not found', code: 'WORK_ITEM_NOT_FOUND' });
+      return;
+    }
+    response.json({ item: presentWorkItem(item, resolved.scope) });
+  } catch (error) {
+    sendWorkItemError(response, error);
+  }
+});
+
+http.post('/api/work-items', async (request: any, response: any) => {
+  const resolved = workItemRestScope(request, response);
+  if (!resolved.scope) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid work item scope' });
+    return;
+  }
+  try {
+    const item = await workItemService.create(resolved.scope, request.body ?? {});
+    response.status(201).json({ item: presentWorkItem(item, resolved.scope) });
+  } catch (error) {
+    sendWorkItemError(response, error);
+  }
+});
+
+http.put('/api/work-items/:id', async (request: any, response: any) => {
+  const resolved = workItemRestScope(request, response);
+  if (!resolved.scope) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid work item scope' });
+    return;
+  }
+  try {
+    const item = await workItemService.edit(resolved.scope, {
+      itemId: request.params.id,
+      mutationKey: request.body?.mutationKey,
+      patch: request.body?.patch ?? request.body,
+    });
+    response.json({ item: presentWorkItem(item, resolved.scope) });
+  } catch (error) {
+    sendWorkItemError(response, error);
+  }
+});
+
+http.patch('/api/work-items/:id/status', async (request: any, response: any) => {
+  const resolved = workItemRestScope(request, response);
+  if (!resolved.scope) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid work item scope' });
+    return;
+  }
+  try {
+    const item = await workItemService.transition(resolved.scope, {
+      itemId: request.params.id,
+      status: request.body?.status,
+      mutationKey: request.body?.mutationKey,
+    });
+    response.json({ item: presentWorkItem(item, resolved.scope) });
+  } catch (error) {
+    sendWorkItemError(response, error);
+  }
+});
+
+http.patch('/api/work-items/:id/assignee', async (request: any, response: any) => {
+  const resolved = workItemRestScope(request, response);
+  if (!resolved.scope) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid work item scope' });
+    return;
+  }
+  try {
+    const requestedAssignee = request.body?.assigneeId === 'self'
+      ? resolved.scope.requesterId
+      : request.body?.assigneeId ?? null;
+    const item = await workItemService.assign(resolved.scope, {
+      itemId: request.params.id,
+      assigneeId: requestedAssignee,
+      mutationKey: request.body?.mutationKey,
+    });
+    response.json({ item: presentWorkItem(item, resolved.scope) });
+  } catch (error) {
+    sendWorkItemError(response, error);
+  }
+});
+
+http.post('/api/work-items/:id/comments', async (request: any, response: any) => {
+  const resolved = workItemRestScope(request, response);
+  if (!resolved.scope) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid work item scope' });
+    return;
+  }
+  try {
+    const item = await workItemService.comment(resolved.scope, {
+      itemId: request.params.id,
+      body: request.body?.body,
+      mutationKey: request.body?.mutationKey,
+    });
+    response.json({ item: presentWorkItem(item, resolved.scope) });
+  } catch (error) {
+    sendWorkItemError(response, error);
+  }
+});
+
+http.post('/api/work-items/:id/watch', async (request: any, response: any) => {
+  const resolved = workItemRestScope(request, response);
+  if (!resolved.scope) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid work item scope' });
+    return;
+  }
+  try {
+    const item = await workItemService.watch(resolved.scope, {
+      itemId: request.params.id,
+      mutationKey: request.body?.mutationKey,
+    });
+    response.json({ item: presentWorkItem(item, resolved.scope) });
+  } catch (error) {
+    sendWorkItemError(response, error);
+  }
+});
+
+http.delete('/api/work-items/:id/watch', async (request: any, response: any) => {
+  const resolved = workItemRestScope(request, response);
+  if (!resolved.scope) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid work item scope' });
+    return;
+  }
+  try {
+    const item = await workItemService.unwatch(resolved.scope, {
+      itemId: request.params.id,
+      mutationKey: nonEmptyString(request.query?.mutationKey, 200) ?? `unwatch-${Date.now()}`,
+    });
+    response.json({ item: presentWorkItem(item, resolved.scope) });
+  } catch (error) {
+    sendWorkItemError(response, error);
+  }
+});
+
+http.use(
+  '/api/collaboration',
+  createUserAuthMiddleware({
+    allowUnauthenticated: skipAuth,
+    validator: userAuthValidator,
+    configuredTenantId: configuredTenantId || undefined,
+    acceptedAudiences: acceptedUserAudiences,
+  }),
+);
+
+http.get('/api/collaboration/subscriptions', async (request: any, response: any) => {
+  const resolved = collaborationRestScope(request, response);
+  if (!resolved.scope) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid collaboration scope' });
+    return;
+  }
+  try {
+    const type = nonEmptyString(request.query?.targetType, 32);
+    const id = nonEmptyString(request.query?.targetId, 200);
+    const subscriptions = type && id
+      ? (() => {
+        const subscription = collaborationService.getSubscription(resolved.scope!, {
+          target: { type: type as any, id },
+          delivery: nonEmptyString(request.query?.delivery, 16) as any,
+          channelId: nonEmptyString(request.query?.channelId, 256),
+        });
+        return subscription ? [subscription] : [];
+      })()
+      : collaborationService.listSubscriptions(resolved.scope);
+    response.json({ subscriptions });
+  } catch (error) {
+    sendCollaborationError(response, error);
+  }
+});
+
+http.get('/api/collaboration/bindings', async (request: any, response: any) => {
+  const resolved = collaborationRestScope(request, response);
+  if (!resolved.scope) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid collaboration scope' });
+    return;
+  }
+  try {
+    response.json({ bindings: collaborationService.listChannelBindings(resolved.scope) });
+  } catch (error) {
+    sendCollaborationError(response, error);
+  }
+});
+
+http.get('/api/collaboration/preferences', async (request: any, response: any) => {
+  const resolved = collaborationRestScope(request, response);
+  if (!resolved.scope) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid collaboration scope' });
+    return;
+  }
+  try {
+    response.json({ preferences: collaborationService.listNotificationPreferences(resolved.scope) });
+  } catch (error) {
+    sendCollaborationError(response, error);
+  }
+});
+
+http.get('/api/collaboration/notifications', async (request: any, response: any) => {
+  const resolved = collaborationRestScope(request, response);
+  if (!resolved.scope) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid collaboration scope' });
+    return;
+  }
+  try {
+    response.json({ notifications: collaborationService.notifications(resolved.scope, {
+      from: nonEmptyString(request.query?.from, 40),
+      to: nonEmptyString(request.query?.to, 40),
+      limit: request.query?.limit === undefined ? undefined : Number(request.query.limit),
+    }) });
+  } catch (error) {
+    sendCollaborationError(response, error);
+  }
+});
+
+http.get('/api/collaboration/digest', async (request: any, response: any) => {
+  const resolved = collaborationRestScope(request, response);
+  if (!resolved.scope) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid collaboration scope' });
+    return;
+  }
+  try {
+    response.json({ digest: collaborationService.digest(resolved.scope, {
+      period: request.query?.period,
+      at: nonEmptyString(request.query?.at, 40),
+    }) });
+  } catch (error) {
+    sendCollaborationError(response, error);
+  }
+});
+
+http.post('/api/collaboration/follow', async (request: any, response: any) => {
+  const resolved = collaborationRestScope(request, response);
+  if (!resolved.scope) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid collaboration scope' });
+    return;
+  }
+  try {
+    response.status(201).json({ subscription: await collaborationService.follow(resolved.scope, request.body ?? {}) });
+  } catch (error) {
+    sendCollaborationError(response, error);
+  }
+});
+
+http.post('/api/collaboration/unfollow', async (request: any, response: any) => {
+  const resolved = collaborationRestScope(request, response);
+  if (!resolved.scope) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid collaboration scope' });
+    return;
+  }
+  try {
+    response.json({ subscription: await collaborationService.unfollow(resolved.scope, request.body ?? {}) });
+  } catch (error) {
+    sendCollaborationError(response, error);
+  }
+});
+
+http.post('/api/collaboration/bindings', async (request: any, response: any) => {
+  const resolved = collaborationRestScope(request, response);
+  if (!resolved.scope) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid collaboration scope' });
+    return;
+  }
+  try {
+    response.status(201).json({ binding: await collaborationService.bindChannel(resolved.scope, request.body ?? {}) });
+  } catch (error) {
+    sendCollaborationError(response, error);
+  }
+});
+
+http.delete('/api/collaboration/bindings', async (request: any, response: any) => {
+  const resolved = collaborationRestScope(request, response);
+  if (!resolved.scope) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid collaboration scope' });
+    return;
+  }
+  try {
+    response.json({ binding: await collaborationService.unbindChannel(resolved.scope, {
+      target: { type: request.query?.targetType, id: request.query?.targetId },
+      channelId: request.query?.channelId,
+      mutationKey: nonEmptyString(request.query?.mutationKey, 200) ?? `unbind-${Date.now()}`,
+    }) });
+  } catch (error) {
+    sendCollaborationError(response, error);
+  }
+});
+
+http.post('/api/collaboration/preferences', async (request: any, response: any) => {
+  const resolved = collaborationRestScope(request, response);
+  if (!resolved.scope) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid collaboration scope' });
+    return;
+  }
+  try {
+    response.json({ preference: await collaborationService.setNotificationPreference(resolved.scope, request.body ?? {}) });
+  } catch (error) {
+    sendCollaborationError(response, error);
+  }
+});
+
+http.post('/api/collaboration/notifications', async (request: any, response: any) => {
+  const resolved = collaborationRestScope(request, response);
+  if (!resolved.scope) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid collaboration scope' });
+    return;
+  }
+  try {
+    const input = request.body ?? {};
+    const notification = input.kind === 'reminder'
+      ? await collaborationService.recordReminder(resolved.scope, input)
+      : await collaborationService.recordUpdate(resolved.scope, input);
+    response.status(201).json({ notification });
+  } catch (error) {
+    sendCollaborationError(response, error);
+  }
+});
+
 let agentService: AgentService;
 
 const notifyConversation = async (notification: AgentNotification): Promise<void> => {
@@ -1180,6 +1656,51 @@ function actionRejectionMessage(reason: string): string {
   }
 }
 
+type GenUiCommand = (typeof GENUI_COMMANDS)[number];
+
+function isGenUiCommand(value: string): value is GenUiCommand {
+  return GENUI_COMMANDS.includes(value as GenUiCommand);
+}
+
+async function resolveGenUiCommand(activity: any, command: GenUiCommand): Promise<GenUiEnvelopeV1> {
+  if (command === 'help') return genUi.help();
+  if (command === 'weather') return genUi.weatherUnavailable();
+
+  const scope = activityScope(activity);
+  if (!scope) return genUi.error('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', 'command-scope-missing');
+
+  return itemStore.runWithScope(itemScopeFromAgentScope(scope), async () => {
+    await itemStore.ensureScope();
+    if (command === 'status') {
+      return genUi.status(itemStore.countOpen(), agentService.countActive(scope));
+    }
+    if (command === 'work') {
+      const items = workItemService.recent({
+        tenantId: scope.tenantId,
+        requesterId: scope.requesterId,
+        conversationId: scope.conversationId,
+      }, 8);
+      const text = items.length === 0
+        ? '탭 업무가 없습니다. 업무 허브 탭에서 첫 업무를 추가하세요.'
+        : `탭 업무 ${items.length}개\n\n${items.map((item) => `- ${item.title} · ${item.status}${item.dueDate ? ` · 기한 ${item.dueDate}` : ''}`).join('\n')}`;
+      return genUi.answer(text, 'work-items-command');
+    }
+    if (command === 'collaboration') {
+      const collaborationScope = {
+        tenantId: scope.tenantId,
+        requesterId: scope.requesterId,
+        conversationId: scope.conversationId,
+      };
+      const subscriptions = collaborationService.listSubscriptions(collaborationScope);
+      const digest = collaborationService.weeklyDigest(collaborationScope);
+      const text = `팔로우 ${subscriptions.length}개 · 이번 주 업데이트 ${digest.totalCount}건\n\n${digest.entries.slice(0, 5).map((entry) => `- ${entry.title} · ${entry.count}건`).join('\n') || '새 업데이트가 없습니다.'}`;
+      return genUi.answer(text, 'collaboration-digest-command');
+    }
+    const jobs = agentService.list(scope, 5);
+    return genUi.list(itemStore.list(), jobs);
+  });
+}
+
 function mutationConflictEnvelope(error: unknown, fallbackId = 'agent-mutation-error'): GenUiEnvelopeV1 {
   if (error instanceof AgentJobConflictError) {
     return genUi.error(error.message, `${error.action}-${error.job.id}-conflict`);
@@ -1232,6 +1753,11 @@ async function resolveGenUiAction(activity: any): Promise<GenUiEnvelopeV1> {
   if (inFlightGenUiActions.has(actionKey)) {
     const job = agentService.get(payload.entityId, scope);
     return job ? genUi.jobStatus(job) : genUi.error(`작업 ${payload.entityId}을 찾을 수 없습니다.`, `action-${payload.entityId}`);
+  }
+
+  if (payload.action === 'command') {
+    if (!isGenUiCommand(payload.entityId)) return genUi.actionError('지원하지 않는 기본 명령입니다.');
+    return resolveGenUiCommand(activity, payload.entityId);
   }
 
   inFlightGenUiActions.add(actionKey);
@@ -1304,20 +1830,20 @@ async function handleResponseModeCommand(activity: any, send: BotSend): Promise<
   const scope = responseModeActivityScope(activity);
   if (!scope) {
     const text = '응답 모드에는 사용자·대화·테넌트 정보가 필요합니다.';
-    await send(text, undefined, createResponseModeCardActivity('deterministic', publicResponseModeAvailability(), text));
+    await send(text, undefined, createResponseModeCardActivity('deterministic', publicResponseModeAvailability(), text, personalTabDeepLink));
     return;
   }
 
   const status = await responseModeStatus(scope);
   const text = `현재 응답 모드는 ${responseModeLabel(status.mode)}입니다.`;
-  await send(text, undefined, createResponseModeCardActivity(status.mode, status.availability));
+  await send(text, undefined, createResponseModeCardActivity(status.mode, status.availability, undefined, personalTabDeepLink));
 }
 
 async function handleResponseModeSubmit(activity: any, send: BotSend): Promise<void> {
   const scope = responseModeActivityScope(activity);
   if (!scope) {
     const text = '응답 모드에는 사용자·대화·테넌트 정보가 필요합니다.';
-    await send(text, undefined, createResponseModeCardActivity('deterministic', publicResponseModeAvailability(), text));
+    await send(text, undefined, createResponseModeCardActivity('deterministic', publicResponseModeAvailability(), text, personalTabDeepLink));
     return;
   }
 
@@ -1325,7 +1851,7 @@ async function handleResponseModeSubmit(activity: any, send: BotSend): Promise<v
   const parsed = parseResponseModeCardAction(activity.value);
   if (!parsed) {
     const text = '유효하지 않은 응답 모드 선택입니다.';
-    await send(text, undefined, createResponseModeCardActivity(current, publicResponseModeAvailability(), text));
+    await send(text, undefined, createResponseModeCardActivity(current, publicResponseModeAvailability(), text, personalTabDeepLink));
     return;
   }
 
@@ -1333,13 +1859,13 @@ async function handleResponseModeSubmit(activity: any, send: BotSend): Promise<v
   const selected = availability.find((entry) => entry.mode === parsed.mode);
   if (!selected?.configured) {
     const text = `${responseModeLabel(parsed.mode)} 응답 모드는 아직 서버에 설정되지 않았습니다. 결정형 또는 사용 가능한 모드를 선택하세요.`;
-    await send(text, undefined, createResponseModeCardActivity(current, availability, text));
+    await send(text, undefined, createResponseModeCardActivity(current, availability, text, personalTabDeepLink));
     return;
   }
 
   await responseModeStore.set(scope, parsed.mode);
   const text = `응답 모드를 ${responseModeLabel(parsed.mode)}으로 변경했습니다.`;
-  await send(text, undefined, createResponseModeCardActivity(parsed.mode, publicResponseModeAvailability(), text));
+  await send(text, undefined, createResponseModeCardActivity(parsed.mode, publicResponseModeAvailability(), text, personalTabDeepLink));
 }
 
 function botResponseRequest(activity: any, prompt: string, scope: AgentJobScope): RunAgentInput {
@@ -1400,7 +1926,7 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
     }
 
     if (normalizedText === 'help') {
-      const responseText = '사용 가능한 명령: help, mode, weather [위도 경도], status, list, run <작업>, continue <작업 ID> <추가 요청>, write <작업>, approve <작업 ID>, commit <작업 ID> [메시지], cancel <작업 ID>';
+      const responseText = '사용 가능한 명령: help, mode, weather [위도 경도], status, list, work, collaboration, run <작업>, continue <작업 ID> <추가 요청>, write <작업>, approve <작업 ID>, commit <작업 ID> [메시지], cancel <작업 ID>';
       const envelope = genUi.help();
       await send(responseText, envelope);
       return;

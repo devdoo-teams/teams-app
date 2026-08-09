@@ -21,6 +21,17 @@ export type WorkItemScope = {
   conversationId: string;
 };
 
+export type WorkItemMembershipRequest = {
+  tenantId: string;
+  conversationId: string;
+  requesterId: string;
+  userId: string;
+};
+
+export type WorkItemMembershipContract = {
+  isMember(request: WorkItemMembershipRequest): boolean;
+};
+
 export type WorkItemDeepLink = {
   kind: 'work-item';
   itemId: string;
@@ -58,6 +69,8 @@ export type WorkItem = {
   codexJobLink?: WorkItemCodexLink;
   createdAt: string;
   updatedAt: string;
+  /** Monotonic, persisted activity order for deterministic recent views. */
+  activitySequence?: number;
 };
 
 export type WorkItemCreateInput = {

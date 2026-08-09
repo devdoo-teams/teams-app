@@ -218,6 +218,26 @@ function shadowButton(action: GenUiAction, index: number, envelope: GenUiEnvelop
   });
 }
 
+function promptAction(prompt: string): Record<string, unknown> {
+  return {
+    type: 'Action.ShowCard',
+    title: '프롬프트 보기',
+    card: {
+      type: 'AdaptiveCard',
+      $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+      version: '1.2',
+      msteams: { width: 'Full' },
+      body: [{
+        type: 'TextBlock',
+        text: prompt,
+        wrap: true,
+        spacing: 'Small',
+        isSubtle: true,
+      }],
+    },
+  };
+}
+
 function citationSection(envelope: GenUiEnvelopeV1): ChannelNode | undefined {
   if (!envelope.aiGenerated || envelope.citations.length === 0) return undefined;
   return Section({
@@ -326,7 +346,15 @@ function fitTeamsBudget(card: AdaptiveCard): AdaptiveCard {
 export function renderChannelsShadow(input: GenUiEnvelopeV1): ChannelsShadowResult {
   const envelope = GenUiEnvelopeV1Schema.parse(input);
   const irResult = envelopeToChannelsIRDiagnostic(envelope);
-  const card = fitTeamsBudget(renderAdaptiveCard(irResult.ir));
+  const rawCard = renderAdaptiveCard(irResult.ir);
+  // The native Teams renderer exposes the request prompt as an additional
+  // Action.ShowCard. Keep the comparison card structurally aligned so shadow
+  // diagnostics compare the mobile-visible action surface, not just the
+  // provider-neutral execution actions.
+  if (envelope.prompt) {
+    rawCard.actions = [...(rawCard.actions ?? []), promptAction(envelope.prompt)];
+  }
+  const card = fitTeamsBudget(rawCard);
   const payloadBytes = cardBytes(card);
 
   return {

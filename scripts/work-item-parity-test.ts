@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
+  WorkItemForbiddenError,
   WorkItemIdempotencyConflictError,
   WorkItemNotFoundError,
   WorkItemService,
@@ -36,9 +37,22 @@ const otherConversationScope: WorkItemScope = {
   conversationId: 'conversation-b',
 };
 
+const membership = {
+  isMember: (request: {
+    tenantId: string;
+    conversationId: string;
+    requesterId: string;
+    userId: string;
+  }): boolean =>
+    request.tenantId === 'tenant-a' &&
+    request.conversationId === 'conversation-a' &&
+    request.requesterId === 'user-a' &&
+    request.userId === 'user-b',
+};
+
 try {
   const store = new WorkItemStore(filePath);
-  const service = new WorkItemService(store);
+  const service = new WorkItemService(store, { membership });
   await service.initialize();
 
   const createInput = {
@@ -85,6 +99,15 @@ try {
     }),
     (error: unknown) => error instanceof WorkItemNotFoundError,
     'an unrelated user cannot mutate an item by id');
+  await assert.rejects(
+    () => service.assign(scopeA, {
+      itemId: created.id,
+      assigneeId: 'user-c',
+      mutationKey: 'assign-to-untrusted-user',
+    }),
+    (error: unknown) => error instanceof WorkItemForbiddenError,
+    'assignment requires an explicitly allowed membership, not only a string user id',
+  );
 
   const assigned = await service.assign(scopeA, {
     itemId: created.id,
@@ -143,6 +166,21 @@ try {
   });
   assert.deepEqual(unwatched.watcherIds, []);
 
+  const unassigned = await service.assign(scopeA, {
+    itemId: created.id,
+    assigneeId: null,
+    mutationKey: 'unassign-user-b',
+  });
+  await assert.rejects(
+    () => service.transition(scopeB, {
+      itemId: created.id,
+      status: 'in_progress',
+      mutationKey: 'move-to-progress',
+    }),
+    (error: unknown) => error instanceof WorkItemNotFoundError,
+    'idempotent replay rechecks current visibility before returning a prior result',
+  );
+
   const second = await service.create(scopeA, {
     mutationKey: 'create-second-item',
     title: 'Review release checklist',
@@ -188,11 +226,47 @@ try {
   const restartedService = new WorkItemService(new WorkItemStore(filePath));
   await restartedService.initialize();
   const restored = restartedService.get(scopeA, created.id);
-  assert.deepEqual(restored, unwatched, 'persisted work items survive a store restart');
+  assert.deepEqual(restored, unassigned, 'persisted work items survive a store restart');
   assert.deepEqual(
     await restartedService.create(scopeA, createInput),
     created,
     'persisted idempotency records replay the original create after restart',
+  );
+
+  const equalTimestampPath = path.join(root, 'equal-timestamp-items.json');
+  const equalTimestampService = new WorkItemService(
+    new WorkItemStore(equalTimestampPath),
+    {
+      clock: () => new Date('2026-08-09T12:00:00.000Z'),
+      membership,
+    },
+  );
+  await equalTimestampService.initialize();
+  const equalTimestampItems = [];
+  for (let index = 0; index < 8; index += 1) {
+    equalTimestampItems.push(await equalTimestampService.create(scopeA, {
+      mutationKey: `equal-timestamp-${index}`,
+      title: `Equal timestamp ${index}`,
+    }));
+  }
+  await equalTimestampService.edit(scopeA, {
+    itemId: equalTimestampItems[0]!.id,
+    mutationKey: 'equal-timestamp-revise-oldest',
+    patch: { description: 'Revised last while timestamp remains equal.' },
+  });
+  assert.deepEqual(
+    equalTimestampService.recent(scopeA).map((item) => item.title),
+    [
+      'Equal timestamp 0',
+      'Equal timestamp 7',
+      'Equal timestamp 6',
+      'Equal timestamp 5',
+      'Equal timestamp 4',
+      'Equal timestamp 3',
+      'Equal timestamp 2',
+      'Equal timestamp 1',
+    ],
+    'recent ordering uses a persisted deterministic activity sequence when timestamps tie',
   );
 
   console.log('PASS: Work Hub parity domain covers scoped CRUD, transitions, collaboration, queries, deep links, Codex linkage, and persistent idempotency');
