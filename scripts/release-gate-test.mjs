@@ -3,6 +3,7 @@ import process from 'node:process';
 
 import {
   assertPackagedManifest,
+  assertPublicTab,
   assertPublicHealth,
   formatReleaseFailure,
   parseDotEnv,
@@ -33,6 +34,7 @@ const validManifest = {
 
 const validHealth = {
   ok: true,
+  service: 'teams-sdk-mvp',
   version: expected.version,
   environment: 'production',
   auth: 'teams-authenticated',
@@ -81,6 +83,28 @@ assert.throws(
 assert.throws(
   () => assertPackagedManifest({ ...validManifest, webApplicationInfo: { ...validManifest.webApplicationInfo, resource: '${{APPLICATION_ID_URI}}' } }, expected),
   /placeholder|resource/i,
+);
+const validTabResponse = {
+  status: 200,
+  url: `https://${expected.tabDomain}/tabs/home`,
+  headers: { get: (name) => name === 'content-type' ? 'text/html; charset=utf-8' : null },
+};
+assert.doesNotThrow(() => assertPublicTab(
+  validTabResponse,
+  '<title>Teams SDK MVP</title><div id="root"></div><script type="module" src="./assets/main.js?v=abcdef123456"></script>',
+  validManifest,
+));
+assert.throws(
+  () => assertPublicTab(
+    { ...validTabResponse, url: 'https://interstitial.example.com/login' },
+    '<title>Teams SDK MVP</title><div id="root"></div>',
+    validManifest,
+  ),
+  /origin|path|URL/i,
+);
+assert.throws(
+  () => assertPublicTab(validTabResponse, '<title>Sign in</title><p>interstitial</p>', validManifest),
+  /marker|Teams SDK|root|build/i,
 );
 await assert.rejects(
   runWithTimeout(process.execPath, ['-e', 'setTimeout(() => {}, 1000)'], { timeoutMs: 25 }),

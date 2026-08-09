@@ -89,9 +89,39 @@ export function assertPackagedManifest(manifest, expected) {
   return true;
 }
 
+function originAndPath(value, label) {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${label} must be an absolute URL`);
+  }
+  const pathname = parsed.pathname.replace(/\/+$/, '') || '/';
+  return `${parsed.origin}${pathname}`;
+}
+
+export function assertPublicTab(response, text, manifest) {
+  assert.equal(response?.status, 200, 'public Teams tab must resolve to HTTP 200');
+  const expectedUrl = manifest?.staticTabs?.[0]?.contentUrl;
+  assert.ok(expectedUrl, 'packaged manifest must contain a tab content URL');
+  assert.equal(
+    originAndPath(response.url, 'public Teams tab final URL'),
+    originAndPath(expectedUrl, 'packaged tab content URL'),
+    'public Teams tab final URL must match the packaged origin and path',
+  );
+  const contentType = response.headers?.get?.('content-type') ?? '';
+  assert.match(contentType, /text\/html/i, 'public Teams tab must return HTML');
+  const appMarker = String(manifest.developer?.name || 'Teams SDK MVP');
+  assert.ok(String(text).includes(appMarker), 'public Teams tab is missing the expected app marker');
+  assert.match(String(text), /<div\s+id=["']root["']\s*>/i, 'public Teams tab is missing the app root marker');
+  assert.match(String(text), /assets\/main\.js\?v=[a-f0-9]{12}/i, 'public Teams tab is missing the expected build marker');
+  return true;
+}
+
 export function assertPublicHealth(health, expectedVersion) {
   const required = {
     ok: true,
+    service: 'teams-sdk-mvp',
     environment: 'production',
     auth: 'teams-authenticated',
     userAuth: 'entra-sso',
@@ -325,19 +355,34 @@ async function runPublic({ url, timeoutOverride } = {}) {
   assert.ok(url, 'public phase requires --url or TEAMS_PUBLIC_URL');
   const baseUrl = String(url).replace(/\/$/, '');
   const timeoutMs = timeoutOverride ?? defaultTimeouts.public;
+  const env = await readRuntimeEnv();
+  const expected = await expectedDeployment(env);
+  const packageShaBefore = await sha256(packagePath);
+  const packageManifest = await readZipManifest();
+  assertPackagedManifest(packageManifest, expected);
+  const publicOrigin = new URL(baseUrl).origin;
+  const packagedOrigin = new URL(packageManifest.staticTabs[0].contentUrl).origin;
+  assert.equal(
+    publicOrigin,
+    packagedOrigin,
+    'public release URL must match the packaged tab origin',
+  );
   const healthResult = await fetchWithTimeout(`${baseUrl}/api/health`, timeoutMs);
   assert.equal(healthResult.response.status, 200, 'public health endpoint must return HTTP 200');
   const health = JSON.parse(healthResult.text);
-  const packageManifest = await readZipManifest();
   assertPublicHealth(health, packageManifest.version);
 
   const tabResult = await fetchWithTimeout(`${baseUrl}/tabs/home`, timeoutMs);
-  assert.equal(tabResult.response.status, 200, 'public Teams tab must resolve to HTTP 200');
+  assertPublicTab(tabResult.response, tabResult.text, packageManifest);
+  const packageShaAfter = await sha256(packagePath);
+  assert.equal(packageShaAfter, packageShaBefore, 'package SHA changed during public validation');
   return {
     evidence: [
+      { package: packagePath, version: packageManifest.version, sha256: packageShaAfter },
       {
         health: {
           status: healthResult.response.status,
+          service: health.service,
           version: health.version,
           auth: health.auth,
           userAuth: health.userAuth,
