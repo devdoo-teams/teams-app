@@ -51,6 +51,10 @@ if (['cancel-group', 'timeout-group', 'overflow-group'].includes(caseName)) {
   });
 }
 
+if (caseName.startsWith('callback-hang')) {
+  console.log(JSON.stringify({ type: 'turn.started' }));
+}
+
 await fs.writeFile(path.join(root, caseName + '.json'), JSON.stringify({
   args,
   env: selectedEnv,
@@ -93,6 +97,8 @@ if (caseName === 'initial-option' || caseName === 'resume-option') {
   lingerThenExit();
 } else if (caseName === 'callback-failure') {
   console.log(JSON.stringify({ type: 'turn.started' }));
+} else if (caseName.startsWith('callback-hang')) {
+  lingerThenExit();
 } else if (caseName === 'exit-failure') {
   console.error('expected fake child failure');
   process.exit(7);
@@ -142,7 +148,7 @@ async function withEnvironment<T>(
 async function runCase(
   runner: CodexRunner,
   caseName: string,
-  options: { prompt?: string; threadId?: string; timeoutMs?: number; onEvent?: () => Promise<void> } = {},
+  options: { prompt?: string; threadId?: string; timeoutMs?: number; guardMs?: number; onEvent?: () => Promise<void> } = {},
 ) {
   const jobId = `job-${caseName}`;
   const execution = withEnvironment({
@@ -157,10 +163,15 @@ async function runCase(
     onEvent: options.onEvent,
   }));
 
+  let guardHandle: NodeJS.Timeout | undefined;
   const guard = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error(`security test timed out: ${caseName}`)), 4_000).unref();
+    guardHandle = setTimeout(() => reject(new Error(`security test timed out: ${caseName}`)), options.guardMs ?? 4_000);
   });
-  return Promise.race([execution, guard]);
+  try {
+    return await Promise.race([execution, guard]);
+  } finally {
+    if (guardHandle) clearTimeout(guardHandle);
+  }
 }
 
 async function readCapture(caseName: string): Promise<Capture> {
@@ -218,6 +229,21 @@ await fs.mkdir(codexHomePath, { recursive: true });
 await fs.writeFile(fakeCodexPath, fakeCodexSource, { mode: 0o700 });
 
 try {
+  await test('rejects non-UUID resume thread IDs before spawning Codex', async () => {
+    const runner = new CodexRunner();
+    await assert.rejects(
+      () => withEnvironment(baseEnvironment, () => runner.run({
+        jobId: 'job-invalid-resume-id',
+        prompt: 'security test CASE:invalid-resume-id',
+        workspace: root,
+        mode: 'read-only',
+        threadId: '--dangerously-bypass-approvals-and-sandbox',
+      })),
+      /invalid.*thread/i,
+    );
+    assert.equal(runner.cancel('job-invalid-resume-id'), false);
+  });
+
   await test('initial prompt is after the POSIX option terminator', async () => {
     const runner = new CodexRunner();
     const result = await runCase(runner, 'initial-option', {
@@ -237,11 +263,11 @@ try {
     const runner = new CodexRunner();
     await runCase(runner, 'resume-option', {
       prompt: '--version CASE:resume-option',
-      threadId: 'thread-security-existing',
+      threadId: '019fd700-51cd-7862-a4ef-74ccae0f2b4e',
     });
     const capture = await readCapture('resume-option');
     assert.deepEqual(capture.args.slice(0, 5), [
-      'exec', 'resume', 'thread-security-existing', '--json', '--',
+      'exec', 'resume', '019fd700-51cd-7862-a4ef-74ccae0f2b4e', '--json', '--',
     ]);
     assert.equal(capture.args.length, 6);
     assert.match(capture.args[5] ?? '', /USER REQUEST:\n--version/);
@@ -372,6 +398,42 @@ try {
       /expected callback failure/,
     );
     assert.equal(runner.cancel('job-callback-failure'), false);
+  });
+
+  await test('a never-settling event callback cannot defeat timeout cleanup', async () => {
+    let callbackStarted = false;
+    const runner = new CodexRunner();
+    const runPromise = runCase(runner, 'callback-hang-timeout', {
+      timeoutMs: 500,
+      guardMs: 1_500,
+      onEvent: async () => {
+        callbackStarted = true;
+        await new Promise<never>(() => {});
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(callbackStarted, true, 'the hanging callback started before the deadline');
+    await assert.rejects(() => runPromise, /시간 제한/);
+    assert.equal(runner.cancel('job-callback-hang-timeout'), false);
+  });
+
+  await test('a never-settling event callback cannot defeat cancellation cleanup', async () => {
+    let callbackStarted = false;
+    const runner = new CodexRunner();
+    const runPromise = runCase(runner, 'callback-hang-cancel', {
+      guardMs: 500,
+      onEvent: async () => {
+        callbackStarted = true;
+        await new Promise<never>(() => {});
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(callbackStarted, true, 'the hanging callback started before cancellation');
+    assert.equal(runner.cancel('job-callback-hang-cancel'), true);
+    await assert.rejects(() => runPromise, /취소되었습니다/);
+    assert.equal(runner.cancel('job-callback-hang-cancel'), false);
   });
 } finally {
   await fs.rm(root, { recursive: true, force: true });

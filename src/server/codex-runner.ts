@@ -31,6 +31,7 @@ const FORCE_KILL_DELAY_MS = 5_000;
 const MAX_STDOUT_BUFFER_CHARS = 64 * 1024;
 const MAX_STDERR_CHARS = 8 * 1024;
 const MAX_EVENT_COUNT = 10_000;
+const CODEX_THREAD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const CODEX_CHILD_ENV_ALLOWLIST = [
   'PATH',
@@ -106,6 +107,9 @@ export class CodexRunner {
     const command = process.env.CODEX_BIN ?? 'codex';
     const script = process.env.CODEX_SCRIPT;
     const enrichedPrompt = `${REMOTE_AGENT_GUIDANCE}\n\nUSER REQUEST:\n${options.prompt}`;
+    if (options.threadId && !CODEX_THREAD_ID_PATTERN.test(options.threadId)) {
+      throw new Error('Invalid Codex thread ID.');
+    }
     const args = [...(script ? [script] : []), 'exec'];
     if (options.threadId) {
       args.push('resume', options.threadId, '--json', '--', enrichedPrompt);
@@ -130,15 +134,20 @@ export class CodexRunner {
     let terminationRequested = false;
     let timeoutHandle: NodeJS.Timeout | undefined;
     let forceKillHandle: NodeJS.Timeout | undefined;
+    let resolveTermination!: (error: Error) => void;
+    const terminationPromise = new Promise<Error>((resolve) => {
+      resolveTermination = resolve;
+    });
     const configuredTimeout = Number(process.env.CODEX_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS);
     const timeoutMs = Number.isFinite(configuredTimeout) && configuredTimeout > 0
       ? configuredTimeout
       : DEFAULT_TIMEOUT_MS;
 
     const terminate = (error?: Error): void => {
-      if (error && !terminationError) terminationError = error;
+      if (!terminationError) terminationError = error ?? new Error('Codex process terminated.');
       if (terminationRequested) return;
       terminationRequested = true;
+      resolveTermination(terminationError);
       signalProcessGroup(child, 'SIGTERM');
       forceKillHandle = setTimeout(() => signalProcessGroup(child, 'SIGKILL'), FORCE_KILL_DELAY_MS);
       forceKillHandle.unref();
@@ -240,7 +249,7 @@ export class CodexRunner {
       });
 
       if (!terminationError && stdoutBuffer.trim()) handleLine(stdoutBuffer);
-      await eventQueue;
+      await Promise.race([eventQueue, terminationPromise]);
       if (terminationError) throw terminationError;
 
       if (exitCode !== 0) {
