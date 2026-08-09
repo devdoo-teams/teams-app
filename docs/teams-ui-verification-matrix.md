@@ -1,6 +1,6 @@
 # Teams UI verification matrix
 
-This document is the authoritative machine-readable matrix for Task 5. Each row is an independent verification unit for one Teams surface, location, and branch. The current source-only run intentionally leaves external UI evidence blocked because this task does not use credentials or Teams UI; the validator still requires every evidence slot and every status reason so no branch can be silently treated as passing.
+This document is the authoritative machine-readable matrix for Task 5. Each row is an independent verification unit for one Teams surface, location, and branch. The current command-gated run leaves external UI evidence blocked until same-release portal, installed, desktop, and mobile screenshots are captured; the validator still requires every evidence slot and every status reason so no branch can be silently treated as passing.
 
 A control being visible is never the action result. Reviewers must capture fresh AX and screenshot proof for visibleControl, then separately capture the Teams/server/runtime proof required by serverAction and result. For PASS or FAIL, replace the blocked evidence objects with same-run artifacts that identify the exact app version, source commit, package SHA-256, and installed version.
 
@@ -10,14 +10,14 @@ A control being visible is never the action result. Reviewers must capture fresh
   "schemaVersion": 1,
   "matrixId": "teams-work-hub-task-5-ui-verification",
   "task": "Task 5 — Mobile-first GenUI and verification matrix",
-  "generatedOn": "2026-08-09",
+  "generatedOn": "2026-08-10",
   "releaseIdentity": {
-    "appVersion": "1.0.18",
-    "sourceCommit": "1e1bcc8139fe2434b335e09901cfaa4d553c908d",
-    "packageSha256": null,
+    "appVersion": "1.0.22",
+    "sourceCommit": "eead42f1011c0d24d5e8cf3c19c07a4cca4d05df",
+    "packageSha256": "95dc21c6caa8034ce62aed05ae71a4f0ff73b3e2ed98fa4c5f90dbd006cf1e67",
     "installedVersion": null,
-    "environment": "source-only-unverified",
-    "publicOrigin": null
+    "environment": "public-command-only-ui-unverified",
+    "publicOrigin": "https://dxshc7dx-3978.jpe1.devtunnels.ms"
   },
   "evidencePolicy": {
     "freshDefinition": "A PASS or FAIL row requires before/after screenshots, AX evidence, and runtime evidence captured in the same verification run.",
@@ -235,7 +235,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -251,7 +251,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -267,7 +267,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands Help."
         ]
@@ -286,7 +286,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.help and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.help."
@@ -294,7 +294,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -350,7 +350,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -366,7 +366,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -382,7 +382,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands Mode."
         ]
@@ -401,7 +401,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.mode and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.mode."
@@ -409,7 +409,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -465,7 +465,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -481,7 +481,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -497,7 +497,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands Weather No Coordinate."
         ]
@@ -516,7 +516,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.weather.no-coordinate and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.weather.no-coordinate."
@@ -524,7 +524,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -580,7 +580,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -596,7 +596,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -612,7 +612,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands Weather Valid Coordinate."
         ]
@@ -631,7 +631,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.weather.valid-coordinate and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.weather.valid-coordinate."
@@ -639,7 +639,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -695,7 +695,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -711,7 +711,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -727,7 +727,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands Weather Invalid Coordinate."
         ]
@@ -746,7 +746,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.weather.invalid-coordinate and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.weather.invalid-coordinate."
@@ -754,7 +754,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -810,7 +810,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -826,7 +826,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -842,7 +842,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Chat Commands Weather Server Error."
         ]
@@ -861,7 +861,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.weather.server-error and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.weather.server-error."
@@ -869,7 +869,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -925,7 +925,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -941,7 +941,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -957,7 +957,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands Status Summary."
         ]
@@ -976,7 +976,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.status.summary and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.status.summary."
@@ -984,7 +984,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -1040,7 +1040,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -1056,7 +1056,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -1072,7 +1072,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands Status Job."
         ]
@@ -1091,7 +1091,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.status.job and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.status.job."
@@ -1099,7 +1099,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -1155,7 +1155,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -1171,7 +1171,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -1187,7 +1187,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands Status Scope Missing."
         ]
@@ -1206,7 +1206,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.status.scope-missing and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.status.scope-missing."
@@ -1214,7 +1214,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -1270,7 +1270,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -1286,7 +1286,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -1302,7 +1302,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands List Populated."
         ]
@@ -1321,7 +1321,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.list.populated and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.list.populated."
@@ -1329,7 +1329,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -1385,7 +1385,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -1401,7 +1401,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -1417,7 +1417,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Chat Commands List Empty."
         ]
@@ -1436,7 +1436,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.list.empty and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.list.empty."
@@ -1444,7 +1444,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -1500,7 +1500,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -1516,7 +1516,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -1532,7 +1532,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands Run Read Only."
         ]
@@ -1551,7 +1551,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.run.read-only and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.run.read-only."
@@ -1559,7 +1559,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -1615,7 +1615,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -1631,7 +1631,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -1647,7 +1647,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands Run Invalid Prompt."
         ]
@@ -1666,7 +1666,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.run.invalid-prompt and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.run.invalid-prompt."
@@ -1674,7 +1674,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -1730,7 +1730,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -1746,7 +1746,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -1762,7 +1762,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands Write Approval."
         ]
@@ -1781,7 +1781,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.write.approval and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.write.approval."
@@ -1789,7 +1789,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -1845,7 +1845,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -1861,7 +1861,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -1877,7 +1877,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands Approve Success."
         ]
@@ -1896,7 +1896,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.approve.success and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.approve.success."
@@ -1904,7 +1904,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -1960,7 +1960,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -1976,7 +1976,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -1992,7 +1992,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands Approve Conflict."
         ]
@@ -2011,7 +2011,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.approve.conflict and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.approve.conflict."
@@ -2019,7 +2019,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -2075,7 +2075,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -2091,7 +2091,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -2107,7 +2107,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands Approve Forbidden."
         ]
@@ -2126,7 +2126,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.approve.forbidden and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.approve.forbidden."
@@ -2134,7 +2134,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -2190,7 +2190,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -2206,7 +2206,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -2222,7 +2222,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands Continue Retry."
         ]
@@ -2241,7 +2241,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.continue.retry and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.continue.retry."
@@ -2249,7 +2249,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -2305,7 +2305,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -2321,7 +2321,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -2337,7 +2337,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands Continue Missing."
         ]
@@ -2356,7 +2356,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.continue.missing and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.continue.missing."
@@ -2364,7 +2364,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -2420,7 +2420,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -2436,7 +2436,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -2452,7 +2452,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands Continue Invalid Prompt."
         ]
@@ -2471,7 +2471,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.continue.invalid-prompt and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.continue.invalid-prompt."
@@ -2479,7 +2479,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -2535,7 +2535,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -2551,7 +2551,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -2567,7 +2567,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands Commit Success."
         ]
@@ -2586,7 +2586,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.commit.success and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.commit.success."
@@ -2594,7 +2594,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -2650,7 +2650,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -2666,7 +2666,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -2682,7 +2682,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands Commit Pending."
         ]
@@ -2701,7 +2701,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.commit.pending and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.commit.pending."
@@ -2709,7 +2709,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -2765,7 +2765,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -2781,7 +2781,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -2797,7 +2797,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands Commit Missing."
         ]
@@ -2816,7 +2816,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.commit.missing and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.commit.missing."
@@ -2824,7 +2824,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -2880,7 +2880,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -2896,7 +2896,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -2912,7 +2912,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands Cancel Success."
         ]
@@ -2931,7 +2931,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.cancel.success and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.cancel.success."
@@ -2939,7 +2939,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -2995,7 +2995,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -3011,7 +3011,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -3027,7 +3027,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands Cancel Conflict."
         ]
@@ -3046,7 +3046,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.cancel.conflict and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.cancel.conflict."
@@ -3054,7 +3054,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -3110,7 +3110,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -3126,7 +3126,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -3142,7 +3142,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands Cancel Missing."
         ]
@@ -3161,7 +3161,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.cancel.missing and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.cancel.missing."
@@ -3169,7 +3169,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -3225,7 +3225,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -3241,7 +3241,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -3257,7 +3257,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands Natural Language Success."
         ]
@@ -3276,7 +3276,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.natural-language.success and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.natural-language.success."
@@ -3284,7 +3284,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -3340,7 +3340,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -3356,7 +3356,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -3372,7 +3372,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Commands Natural Language Invalid."
         ]
@@ -3391,7 +3391,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.natural-language.invalid and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.natural-language.invalid."
@@ -3399,7 +3399,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -3455,7 +3455,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -3471,7 +3471,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -3487,7 +3487,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Chat Commands Empty."
         ]
@@ -3506,7 +3506,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.commands.empty and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.commands.empty."
@@ -3514,7 +3514,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -3570,7 +3570,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -3586,7 +3586,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -3602,7 +3602,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Chat Scopes Personal."
         ]
@@ -3621,7 +3621,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.scopes.personal and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.scopes.personal."
@@ -3629,7 +3629,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -3685,7 +3685,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -3701,7 +3701,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -3717,7 +3717,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Chat Scopes Group."
         ]
@@ -3736,7 +3736,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.scopes.group and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.scopes.group."
@@ -3744,7 +3744,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -3800,7 +3800,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -3816,7 +3816,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -3832,7 +3832,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Chat Scopes Channel."
         ]
@@ -3851,7 +3851,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.scopes.channel and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.scopes.channel."
@@ -3859,7 +3859,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -3915,7 +3915,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -3931,7 +3931,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -3947,7 +3947,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Chat Card No Top Level Duplicate."
         ]
@@ -3966,7 +3966,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.no-top-level-duplicate and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.no-top-level-duplicate."
@@ -3974,7 +3974,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -4030,7 +4030,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -4046,7 +4046,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -4062,7 +4062,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Chat Card Prompt View."
         ]
@@ -4081,7 +4081,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.prompt-view and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.prompt-view."
@@ -4089,7 +4089,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -4145,7 +4145,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -4161,7 +4161,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -4177,7 +4177,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Chat Card Tab Link."
         ]
@@ -4196,7 +4196,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.tab-link and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.tab-link."
@@ -4204,7 +4204,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -4260,7 +4260,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -4276,7 +4276,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -4292,7 +4292,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Card Command Help."
         ]
@@ -4311,7 +4311,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.command.help and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.command.help."
@@ -4319,7 +4319,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -4375,7 +4375,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -4391,7 +4391,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -4407,7 +4407,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Card Command Weather."
         ]
@@ -4426,7 +4426,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.command.weather and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.command.weather."
@@ -4434,7 +4434,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -4490,7 +4490,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -4506,7 +4506,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -4522,7 +4522,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Card Command Status."
         ]
@@ -4541,7 +4541,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.command.status and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.command.status."
@@ -4549,7 +4549,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -4605,7 +4605,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -4621,7 +4621,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -4637,7 +4637,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible textbox or state for Chat Card Command List."
         ]
@@ -4656,7 +4656,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.command.list and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.command.list."
@@ -4664,7 +4664,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -4720,7 +4720,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -4736,7 +4736,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -4752,7 +4752,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Chat Card Approval Approve."
         ]
@@ -4771,7 +4771,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.approval.approve and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.approval.approve."
@@ -4779,7 +4779,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -4835,7 +4835,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -4851,7 +4851,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -4867,7 +4867,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Chat Card Approval Cancel."
         ]
@@ -4886,7 +4886,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.approval.cancel and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.approval.cancel."
@@ -4894,7 +4894,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -4950,7 +4950,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -4966,7 +4966,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -4982,7 +4982,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Chat Card Action Expired."
         ]
@@ -5001,7 +5001,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.action.expired and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.action.expired."
@@ -5009,7 +5009,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -5065,7 +5065,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -5081,7 +5081,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -5097,7 +5097,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Chat Card Action Consumed."
         ]
@@ -5116,7 +5116,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.action.consumed and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.action.consumed."
@@ -5124,7 +5124,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -5180,7 +5180,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -5196,7 +5196,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -5212,7 +5212,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Chat Card Action Mismatch."
         ]
@@ -5231,7 +5231,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.action.mismatch and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.action.mismatch."
@@ -5239,7 +5239,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -5410,7 +5410,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -5426,7 +5426,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -5442,7 +5442,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible radio or state for Chat Card Response Mode Deterministic."
         ]
@@ -5461,7 +5461,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.response-mode.deterministic and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.response-mode.deterministic."
@@ -5469,7 +5469,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -5525,7 +5525,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -5541,7 +5541,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -5557,7 +5557,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible radio or state for Chat Card Response Mode Openai."
         ]
@@ -5576,7 +5576,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.response-mode.openai and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.response-mode.openai."
@@ -5584,7 +5584,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -5640,7 +5640,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -5656,7 +5656,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -5672,7 +5672,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible radio or state for Chat Card Response Mode Local."
         ]
@@ -5691,7 +5691,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.response-mode.local and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.response-mode.local."
@@ -5699,7 +5699,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -5755,7 +5755,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -5771,7 +5771,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -5787,7 +5787,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible radio or state for Chat Card Response Mode Unconfigured."
         ]
@@ -5806,7 +5806,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.response-mode.unconfigured and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.response-mode.unconfigured."
@@ -5814,7 +5814,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -5870,7 +5870,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -5886,7 +5886,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -5902,7 +5902,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Chat Install."
         ]
@@ -5921,7 +5921,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.install and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.install."
@@ -5929,7 +5929,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -5985,7 +5985,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -6001,7 +6001,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -6017,7 +6017,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Chat Progress Loading."
         ]
@@ -6036,7 +6036,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.progress.loading and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.progress.loading."
@@ -6044,7 +6044,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -6100,7 +6100,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -6116,7 +6116,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -6132,7 +6132,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Chat Card State Loading."
         ]
@@ -6151,7 +6151,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.state.loading and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.state.loading."
@@ -6159,7 +6159,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -6215,7 +6215,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -6231,7 +6231,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -6247,7 +6247,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Chat Card State Ready."
         ]
@@ -6266,7 +6266,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.state.ready and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.state.ready."
@@ -6274,7 +6274,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -6330,7 +6330,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -6346,7 +6346,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -6362,7 +6362,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Chat Card State Empty."
         ]
@@ -6381,7 +6381,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.state.empty and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.state.empty."
@@ -6389,7 +6389,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -6445,7 +6445,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -6461,7 +6461,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -6477,7 +6477,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Chat Card State Error."
         ]
@@ -6496,7 +6496,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.state.error and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.state.error."
@@ -6504,7 +6504,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -6560,7 +6560,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -6576,7 +6576,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -6592,7 +6592,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Chat Card State Approval."
         ]
@@ -6611,7 +6611,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.state.approval and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.state.approval."
@@ -6619,7 +6619,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -6675,7 +6675,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -6691,7 +6691,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -6707,7 +6707,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Chat Card State Complete."
         ]
@@ -6726,7 +6726,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.state.complete and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.state.complete."
@@ -6734,7 +6734,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -6790,7 +6790,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -6806,7 +6806,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -6822,7 +6822,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Chat Card Section Text."
         ]
@@ -6841,7 +6841,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.section.text and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.section.text."
@@ -6849,7 +6849,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -6905,7 +6905,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -6921,7 +6921,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -6937,7 +6937,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Chat Card Section Facts."
         ]
@@ -6956,7 +6956,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.section.facts and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.section.facts."
@@ -6964,7 +6964,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -7020,7 +7020,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -7036,7 +7036,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -7052,7 +7052,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Chat Card Section Stats."
         ]
@@ -7071,7 +7071,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.section.stats and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.section.stats."
@@ -7079,7 +7079,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -7135,7 +7135,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -7151,7 +7151,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -7167,7 +7167,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Chat Card Section Weather."
         ]
@@ -7186,7 +7186,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.section.weather and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.section.weather."
@@ -7194,7 +7194,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -7250,7 +7250,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -7266,7 +7266,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -7282,7 +7282,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Chat Card Section List."
         ]
@@ -7301,7 +7301,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.section.list and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.section.list."
@@ -7309,7 +7309,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -7365,7 +7365,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -7381,7 +7381,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -7397,7 +7397,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Chat Card Section Progress."
         ]
@@ -7416,7 +7416,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.section.progress and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.section.progress."
@@ -7424,7 +7424,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -7480,7 +7480,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -7496,7 +7496,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -7512,7 +7512,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Chat Card Section Status."
         ]
@@ -7531,7 +7531,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.card.section.status and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.card.section.status."
@@ -7539,7 +7539,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -7595,7 +7595,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -7611,7 +7611,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -7627,7 +7627,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Chat Auth Expired."
         ]
@@ -7646,7 +7646,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.auth.expired and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.auth.expired."
@@ -7654,7 +7654,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -7710,7 +7710,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -7726,7 +7726,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -7742,7 +7742,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Chat Auth Retry."
         ]
@@ -7761,7 +7761,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for chat.auth.retry and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for chat.auth.retry."
@@ -7769,7 +7769,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -7825,7 +7825,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -7841,7 +7841,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -7857,7 +7857,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Home Hero."
         ]
@@ -7876,7 +7876,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.home.hero and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.home.hero."
@@ -7884,7 +7884,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -7940,7 +7940,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -7956,7 +7956,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -7972,7 +7972,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Home Runtime Panel."
         ]
@@ -7991,7 +7991,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.home.runtime-panel and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.home.runtime-panel."
@@ -7999,7 +7999,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -8055,7 +8055,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -8071,7 +8071,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -8087,7 +8087,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Home Response Mode."
         ]
@@ -8106,7 +8106,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.home.response-mode and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.home.response-mode."
@@ -8114,7 +8114,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -8170,7 +8170,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -8186,7 +8186,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -8202,7 +8202,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Home Weather."
         ]
@@ -8221,7 +8221,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.home.weather and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.home.weather."
@@ -8229,7 +8229,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -8285,7 +8285,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -8301,7 +8301,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -8317,7 +8317,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Home Items."
         ]
@@ -8336,7 +8336,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.home.items and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.home.items."
@@ -8344,7 +8344,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -8400,7 +8400,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -8416,7 +8416,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -8432,7 +8432,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Home Copilot."
         ]
@@ -8451,7 +8451,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.home.copilot and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.home.copilot."
@@ -8459,7 +8459,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -8515,7 +8515,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -8531,7 +8531,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -8547,7 +8547,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Home Footer."
         ]
@@ -8566,7 +8566,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.home.footer and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.home.footer."
@@ -8574,7 +8574,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -8630,7 +8630,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -8646,7 +8646,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -8662,7 +8662,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Loading Initial."
         ]
@@ -8681,7 +8681,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.loading.initial and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.loading.initial."
@@ -8689,7 +8689,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -8745,7 +8745,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -8761,7 +8761,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -8777,7 +8777,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Loading Response Mode."
         ]
@@ -8796,7 +8796,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.loading.response-mode and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.loading.response-mode."
@@ -8804,7 +8804,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -8860,7 +8860,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -8876,7 +8876,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -8892,7 +8892,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Loading Weather."
         ]
@@ -8911,7 +8911,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.loading.weather and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.loading.weather."
@@ -8919,7 +8919,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -8975,7 +8975,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -8991,7 +8991,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -9007,7 +9007,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Loading Items."
         ]
@@ -9026,7 +9026,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.loading.items and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.loading.items."
@@ -9034,7 +9034,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -9090,7 +9090,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -9106,7 +9106,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -9122,7 +9122,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Error Runtime."
         ]
@@ -9141,7 +9141,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.error.runtime and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.error.runtime."
@@ -9149,7 +9149,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -9205,7 +9205,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -9221,7 +9221,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -9237,7 +9237,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Error Response Mode."
         ]
@@ -9256,7 +9256,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.error.response-mode and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.error.response-mode."
@@ -9264,7 +9264,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -9320,7 +9320,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -9336,7 +9336,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -9352,7 +9352,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Error Weather."
         ]
@@ -9371,7 +9371,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.error.weather and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.error.weather."
@@ -9379,7 +9379,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -9435,7 +9435,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -9451,7 +9451,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -9467,7 +9467,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Error Items."
         ]
@@ -9486,7 +9486,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.error.items and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.error.items."
@@ -9494,7 +9494,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -9550,7 +9550,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -9566,7 +9566,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -9582,7 +9582,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Retry Runtime."
         ]
@@ -9601,7 +9601,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.retry.runtime and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.retry.runtime."
@@ -9609,7 +9609,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -9665,7 +9665,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -9681,7 +9681,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -9697,7 +9697,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Retry Weather."
         ]
@@ -9716,7 +9716,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.retry.weather and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.retry.weather."
@@ -9724,7 +9724,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -9780,7 +9780,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -9796,7 +9796,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -9812,7 +9812,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Retry Items."
         ]
@@ -9831,7 +9831,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.retry.items and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.retry.items."
@@ -9839,7 +9839,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -9895,7 +9895,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -9911,7 +9911,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -9927,7 +9927,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Empty Weather."
         ]
@@ -9946,7 +9946,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.empty.weather and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.empty.weather."
@@ -9954,7 +9954,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -10010,7 +10010,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -10026,7 +10026,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -10042,7 +10042,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Empty Items."
         ]
@@ -10061,7 +10061,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.empty.items and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.empty.items."
@@ -10069,7 +10069,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -10125,7 +10125,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -10141,7 +10141,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -10157,7 +10157,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Auth Expired."
         ]
@@ -10176,7 +10176,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.auth.expired and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.auth.expired."
@@ -10184,7 +10184,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -10240,7 +10240,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -10256,7 +10256,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -10272,7 +10272,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Auth Retry."
         ]
@@ -10291,7 +10291,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.auth.retry and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.auth.retry."
@@ -10299,7 +10299,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -10355,7 +10355,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -10371,7 +10371,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -10387,7 +10387,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible radio or state for Personal Response Mode Ready."
         ]
@@ -10406,7 +10406,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.response-mode.ready and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.response-mode.ready."
@@ -10414,7 +10414,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -10470,7 +10470,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -10486,7 +10486,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -10502,7 +10502,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible radio or state for Personal Response Mode Saving."
         ]
@@ -10521,7 +10521,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.response-mode.saving and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.response-mode.saving."
@@ -10529,7 +10529,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -10585,7 +10585,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -10601,7 +10601,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -10617,7 +10617,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible radio or state for Personal Response Mode Unconfigured."
         ]
@@ -10636,7 +10636,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.response-mode.unconfigured and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.response-mode.unconfigured."
@@ -10644,7 +10644,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -10700,7 +10700,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -10716,7 +10716,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -10732,7 +10732,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Weather Permission Allow Browser."
         ]
@@ -10751,7 +10751,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.weather.permission.allow.browser and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.weather.permission.allow.browser."
@@ -10759,7 +10759,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -10815,7 +10815,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -10831,7 +10831,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -10847,7 +10847,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Weather Permission Allow Teams Native."
         ]
@@ -10866,7 +10866,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.weather.permission.allow.teams-native and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.weather.permission.allow.teams-native."
@@ -10874,7 +10874,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -10930,7 +10930,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -10946,7 +10946,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -10962,7 +10962,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Weather Permission Deny Browser."
         ]
@@ -10981,7 +10981,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.weather.permission.deny.browser and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.weather.permission.deny.browser."
@@ -10989,7 +10989,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -11045,7 +11045,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -11061,7 +11061,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -11077,7 +11077,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Weather Permission Deny Teams Native."
         ]
@@ -11096,7 +11096,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.weather.permission.deny.teams-native and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.weather.permission.deny.teams-native."
@@ -11104,7 +11104,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -11160,7 +11160,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -11176,7 +11176,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -11192,7 +11192,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Weather Provider Demo."
         ]
@@ -11211,7 +11211,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.weather.provider.demo and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.weather.provider.demo."
@@ -11219,7 +11219,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -11275,7 +11275,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -11291,7 +11291,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -11307,7 +11307,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Weather Server Error."
         ]
@@ -11326,7 +11326,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.weather.server-error and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.weather.server-error."
@@ -11334,7 +11334,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -11390,7 +11390,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -11406,7 +11406,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -11422,7 +11422,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible radio or state for Personal Filter All."
         ]
@@ -11441,7 +11441,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.filter.all and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.filter.all."
@@ -11449,7 +11449,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -11505,7 +11505,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -11521,7 +11521,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -11537,7 +11537,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible radio or state for Personal Filter Open."
         ]
@@ -11556,7 +11556,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.filter.open and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.filter.open."
@@ -11564,7 +11564,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -11620,7 +11620,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -11636,7 +11636,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -11652,7 +11652,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible radio or state for Personal Filter Done."
         ]
@@ -11671,7 +11671,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.filter.done and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.filter.done."
@@ -11679,7 +11679,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -11735,7 +11735,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -11751,7 +11751,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -11767,7 +11767,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Crud Create Success."
         ]
@@ -11786,7 +11786,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.crud.create.success and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.crud.create.success."
@@ -11794,7 +11794,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -11850,7 +11850,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -11866,7 +11866,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -11882,7 +11882,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Crud Create Invalid."
         ]
@@ -11901,7 +11901,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.crud.create.invalid and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.crud.create.invalid."
@@ -11909,7 +11909,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -11965,7 +11965,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -11981,7 +11981,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -11997,7 +11997,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Crud Create Server Error."
         ]
@@ -12016,7 +12016,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.crud.create.server-error and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.crud.create.server-error."
@@ -12024,7 +12024,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -12080,7 +12080,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -12096,7 +12096,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -12112,7 +12112,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Crud Read Populated."
         ]
@@ -12131,7 +12131,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.crud.read.populated and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.crud.read.populated."
@@ -12139,7 +12139,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -12195,7 +12195,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -12211,7 +12211,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -12227,7 +12227,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Crud Read Empty."
         ]
@@ -12246,7 +12246,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.crud.read.empty and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.crud.read.empty."
@@ -12254,7 +12254,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -12310,7 +12310,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -12326,7 +12326,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -12342,7 +12342,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Crud Read Server Error."
         ]
@@ -12361,7 +12361,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.crud.read.server-error and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.crud.read.server-error."
@@ -12369,7 +12369,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -12425,7 +12425,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -12441,7 +12441,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -12457,7 +12457,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Crud Update Open."
         ]
@@ -12476,7 +12476,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.crud.update.open and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.crud.update.open."
@@ -12484,7 +12484,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -12540,7 +12540,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -12556,7 +12556,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -12572,7 +12572,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Crud Update Save."
         ]
@@ -12591,7 +12591,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.crud.update.save and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.crud.update.save."
@@ -12599,7 +12599,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -12655,7 +12655,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -12671,7 +12671,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -12687,7 +12687,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Crud Update Invalid."
         ]
@@ -12706,7 +12706,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.crud.update.invalid and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.crud.update.invalid."
@@ -12714,7 +12714,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -12770,7 +12770,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -12786,7 +12786,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -12802,7 +12802,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Crud Update Cancel."
         ]
@@ -12821,7 +12821,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.crud.update.cancel and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.crud.update.cancel."
@@ -12829,7 +12829,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -12885,7 +12885,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -12901,7 +12901,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -12917,7 +12917,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Crud Update Server Error."
         ]
@@ -12936,7 +12936,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.crud.update.server-error and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.crud.update.server-error."
@@ -12944,7 +12944,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -13000,7 +13000,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -13016,7 +13016,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -13032,7 +13032,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Crud Delete Confirm."
         ]
@@ -13051,7 +13051,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.crud.delete.confirm and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.crud.delete.confirm."
@@ -13059,7 +13059,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -13115,7 +13115,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -13131,7 +13131,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -13147,7 +13147,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Crud Delete Cancel."
         ]
@@ -13166,7 +13166,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.crud.delete.cancel and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.crud.delete.cancel."
@@ -13174,7 +13174,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -13230,7 +13230,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -13246,7 +13246,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -13262,7 +13262,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Crud Delete Success."
         ]
@@ -13281,7 +13281,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.crud.delete.success and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.crud.delete.success."
@@ -13289,7 +13289,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -13345,7 +13345,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -13361,7 +13361,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -13377,7 +13377,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Crud Delete Server Error."
         ]
@@ -13396,7 +13396,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.crud.delete.server-error and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.crud.delete.server-error."
@@ -13404,7 +13404,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -13460,7 +13460,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -13476,7 +13476,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -13492,7 +13492,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Crud Status Open To Done."
         ]
@@ -13511,7 +13511,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.crud.status.open-to-done and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.crud.status.open-to-done."
@@ -13519,7 +13519,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -13575,7 +13575,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -13591,7 +13591,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -13607,7 +13607,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Crud Status Done To Open."
         ]
@@ -13626,7 +13626,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.crud.status.done-to-open and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.crud.status.done-to-open."
@@ -13634,7 +13634,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -13690,7 +13690,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -13706,7 +13706,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -13722,7 +13722,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Crud Status Server Error."
         ]
@@ -13741,7 +13741,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.crud.status.server-error and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.crud.status.server-error."
@@ -13749,7 +13749,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -13805,7 +13805,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -13821,7 +13821,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -13837,7 +13837,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Copilot Lazy Loading."
         ]
@@ -13856,7 +13856,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.copilot.lazy-loading and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.copilot.lazy-loading."
@@ -13864,7 +13864,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -13920,7 +13920,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -13936,7 +13936,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -13952,7 +13952,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Copilot Ready."
         ]
@@ -13971,7 +13971,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.copilot.ready and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.copilot.ready."
@@ -13979,7 +13979,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -14035,7 +14035,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -14051,7 +14051,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -14067,7 +14067,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Copilot Prompt Menu."
         ]
@@ -14086,7 +14086,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.copilot.prompt-menu and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.copilot.prompt-menu."
@@ -14094,7 +14094,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -14150,7 +14150,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -14166,7 +14166,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -14182,7 +14182,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Copilot Weather Tool."
         ]
@@ -14201,7 +14201,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.copilot.weather-tool and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.copilot.weather-tool."
@@ -14209,7 +14209,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -14265,7 +14265,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -14281,7 +14281,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -14297,7 +14297,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Copilot Task Tool."
         ]
@@ -14316,7 +14316,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.copilot.task-tool and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.copilot.task-tool."
@@ -14324,7 +14324,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -14380,7 +14380,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -14396,7 +14396,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -14412,7 +14412,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Copilot Approval Visible."
         ]
@@ -14431,7 +14431,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.copilot.approval-visible and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.copilot.approval-visible."
@@ -14439,7 +14439,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -14495,7 +14495,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -14511,7 +14511,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -14527,7 +14527,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Copilot Approve Success."
         ]
@@ -14546,7 +14546,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.copilot.approve.success and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.copilot.approve.success."
@@ -14554,7 +14554,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -14610,7 +14610,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -14626,7 +14626,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -14642,7 +14642,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Copilot Cancel Success."
         ]
@@ -14661,7 +14661,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.copilot.cancel.success and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.copilot.cancel.success."
@@ -14669,7 +14669,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -14725,7 +14725,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -14741,7 +14741,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -14757,7 +14757,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Copilot Approval Conflict."
         ]
@@ -14776,7 +14776,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.copilot.approval.conflict and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.copilot.approval.conflict."
@@ -14784,7 +14784,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -14840,7 +14840,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -14856,7 +14856,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -14872,7 +14872,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Copilot Approval Missing Context."
         ]
@@ -14891,7 +14891,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.copilot.approval.missing-context and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.copilot.approval.missing-context."
@@ -14899,7 +14899,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -14955,7 +14955,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -14971,7 +14971,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -14987,7 +14987,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Copilot Approval Auth Expired."
         ]
@@ -15006,7 +15006,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.copilot.approval.auth-expired and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.copilot.approval.auth-expired."
@@ -15014,7 +15014,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -15070,7 +15070,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -15086,7 +15086,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -15102,7 +15102,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Copilot Runtime Error Retry."
         ]
@@ -15121,7 +15121,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.copilot.runtime-error.retry and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.copilot.runtime-error.retry."
@@ -15129,7 +15129,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -15185,7 +15185,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -15201,7 +15201,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -15217,7 +15217,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Personal Copilot Runtime Error Reload."
         ]
@@ -15236,7 +15236,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.copilot.runtime-error.reload and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.copilot.runtime-error.reload."
@@ -15244,7 +15244,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -15300,7 +15300,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -15316,7 +15316,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -15332,7 +15332,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Copilot Ai Feedback Positive."
         ]
@@ -15351,7 +15351,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.copilot.ai-feedback.positive and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.copilot.ai-feedback.positive."
@@ -15359,7 +15359,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -15415,7 +15415,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -15431,7 +15431,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -15447,7 +15447,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Copilot Ai Feedback Negative."
         ]
@@ -15466,7 +15466,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.copilot.ai-feedback.negative and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.copilot.ai-feedback.negative."
@@ -15474,7 +15474,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -15530,7 +15530,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -15546,7 +15546,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -15562,7 +15562,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Mobile Narrow Home."
         ]
@@ -15581,7 +15581,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.mobile.narrow-home and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.mobile.narrow-home."
@@ -15589,7 +15589,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -15645,7 +15645,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -15661,7 +15661,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -15677,7 +15677,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Personal Mobile Narrow Card."
         ]
@@ -15696,7 +15696,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for personal.mobile.narrow-card and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for personal.mobile.narrow-card."
@@ -15704,7 +15704,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -15760,7 +15760,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -15776,7 +15776,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -15792,7 +15792,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Codex Approval Allow."
         ]
@@ -15811,7 +15811,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for codex.approval.allow and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for codex.approval.allow."
@@ -15819,7 +15819,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -15875,7 +15875,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -15891,7 +15891,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -15907,7 +15907,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Codex Approval Cancel."
         ]
@@ -15926,7 +15926,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for codex.approval.cancel and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for codex.approval.cancel."
@@ -15934,7 +15934,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -15990,7 +15990,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -16006,7 +16006,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -16022,7 +16022,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Codex Approval Conflict."
         ]
@@ -16041,7 +16041,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for codex.approval.conflict and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for codex.approval.conflict."
@@ -16049,7 +16049,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -16105,7 +16105,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -16121,7 +16121,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -16137,7 +16137,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Codex Cancel Success."
         ]
@@ -16156,7 +16156,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for codex.cancel.success and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for codex.cancel.success."
@@ -16164,7 +16164,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -16220,7 +16220,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -16236,7 +16236,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -16252,7 +16252,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Codex Retry Continue."
         ]
@@ -16271,7 +16271,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for codex.retry.continue and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for codex.retry.continue."
@@ -16279,7 +16279,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -16335,7 +16335,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -16351,7 +16351,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -16367,7 +16367,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Codex Progress."
         ]
@@ -16386,7 +16386,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for codex.progress and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for codex.progress."
@@ -16394,7 +16394,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -16450,7 +16450,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -16466,7 +16466,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -16482,7 +16482,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Codex Complete."
         ]
@@ -16501,7 +16501,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for codex.complete and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for codex.complete."
@@ -16509,7 +16509,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -16565,7 +16565,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -16581,7 +16581,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -16597,7 +16597,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Codex Failed."
         ]
@@ -16616,7 +16616,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for codex.failed and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for codex.failed."
@@ -16624,7 +16624,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -16680,7 +16680,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -16696,7 +16696,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -16712,7 +16712,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible section or state for Codex Blocked."
         ]
@@ -16731,7 +16731,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for codex.blocked and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for codex.blocked."
@@ -16739,7 +16739,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -16795,7 +16795,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -16811,7 +16811,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -16827,7 +16827,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Codex Auth Expired."
         ]
@@ -16846,7 +16846,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for codex.auth-expired and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for codex.auth-expired."
@@ -16854,7 +16854,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -16910,7 +16910,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -16926,7 +16926,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -16942,7 +16942,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Deep Link Static Tab."
         ]
@@ -16961,7 +16961,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for deep-link.static-tab and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for deep-link.static-tab."
@@ -16969,7 +16969,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -17025,7 +17025,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -17041,7 +17041,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -17057,7 +17057,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Deep Link Open Tab Action."
         ]
@@ -17076,7 +17076,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for deep-link.open-tab-action and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for deep-link.open-tab-action."
@@ -17084,7 +17084,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -17140,7 +17140,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -17156,7 +17156,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -17172,7 +17172,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible radio or state for Deep Link Response Mode Card."
         ]
@@ -17191,7 +17191,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for deep-link.response-mode-card and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for deep-link.response-mode-card."
@@ -17199,7 +17199,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
@@ -17255,7 +17255,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotBefore."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotBefore."
       },
       "screenshotAfter": {
         "state": "not-captured",
@@ -17271,7 +17271,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: screenshotAfter."
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: screenshotAfter."
       },
       "accessibilityEvidence": {
         "state": "not-captured",
@@ -17287,7 +17287,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: accessibilityEvidence.",
         "assertions": [
           "AX tree must contain the visible button or state for Deep Link Trailing Slash."
         ]
@@ -17306,7 +17306,7 @@ A control being visible is never the action result. Reviewers must capture fresh
           "environment": "source-only-unverified",
           "publicOrigin": null
         },
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status. Evidence slot: runtimeEvidence.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status. Evidence slot: runtimeEvidence.",
         "command": "Run the branch-specific Teams/runtime check for deep-link.trailing-slash and record the response.",
         "assertions": [
           "Runtime evidence must prove the handler/result for deep-link.trailing-slash."
@@ -17314,7 +17314,7 @@ A control being visible is never the action result. Reviewers must capture fresh
       },
       "result": {
         "status": "BLOCKED",
-        "reason": "BLOCKED: this task cannot use external credentials or Teams UI; capture a fresh approved Teams desktop/mobile session before changing the row status.",
+        "reason": "BLOCKED: command gates are current, but same-release Teams UI evidence is not yet captured; capture a fresh approved portal, installed, desktop, or mobile session before changing the row status.",
         "visibleControl": "NOT_PROVEN",
         "serverAction": "NOT_PROVEN",
         "nextAction": "Capture fresh before/after screenshots, AX, and runtime evidence, then update this row."
