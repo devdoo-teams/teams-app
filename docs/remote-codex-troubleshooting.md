@@ -55,11 +55,12 @@ npm run release:loop -- public
 
 ### `Browser is not available`, `iab unavailable`
 
-Teams Bot에서 실행된 하위 Codex 프로세스가 부모 Codex 앱의 인앱 브라우저를 직접 제어하려고 시도한 것이다. 하위 프로세스에서 브라우저 재연결을 반복하지 않는다. 부모 Codex 오케스트레이터가 기존 로그인 탭을 URL·제목으로 확인해 재사용하고, 없을 때만 사용자에게 탭을 열도록 요청한다.
+Teams Bot에서 실행된 하위 Codex 프로세스가 부모 Codex 앱의 인앱 브라우저를 직접 제어하려고 시도한 것이다. 하위 프로세스에서 브라우저 재연결을 반복하거나 새 인앱 브라우저를 만들지 않는다. 부모 Codex 오케스트레이터가 ambient UI 상태와 현재 포커스 창을 기준으로 기존 로그인 탭을 URL·제목으로 확인해 재사용한다.
 
 1. 로컬 코드·패키지·검증을 완료한다.
-2. 부모 세션에서 로그인·Developer Portal 업로드가 필요한 정확한 단계 하나만 보고한다.
-3. 브라우저 연결이 없다는 이유로 CLI 인증 실패라고 단정하지 않는다.
+2. `tabs.list()`가 비어도 기존 탭이 화면에 있으면 연결/노출 불일치로 기록하고 현재 포커스 탭 재접속을 시도한다.
+3. 재접속이 안 되면 새 탭을 만들지 말고 사용자에게 기존 탭 포커스를 요청한다. 이때만 `BROWSER_SESSION_UNAVAILABLE` blocker를 보고한다.
+4. 브라우저 연결이 없다는 이유로 CLI 인증 실패라고 단정하지 않는다.
 
 ### Codex CLI 인증 실패
 
@@ -83,6 +84,8 @@ Teams Bot에서 실행된 하위 Codex 프로세스가 부모 Codex 앱의 인�
 
 - 기존 Developer Portal·Teams Admin Center·Teams 채팅·공개 Teams 탭을 닫지 않고 재사용한다.
 - 같은 URL을 불필요하게 다시 로드하지 않으며, 로그인·Auth 앱 승인·파일 선택 중인 탭을 새로 만들거나 교체하지 않는다.
+- ambient UI 상태에 기존 탭이 있거나 사용자가 기존 창을 열어 두었다고 말하면 `tabs.new`와 새 창 생성을 금지한다. `tabs.list()`가 비어 있는 경우도 연결/노출 불일치로 처리하고 기존 포커스 탭 재접속을 우선한다.
+- 탭 수가 늘었으면 신규 탭을 정상 흐름으로 기록하지 않는다. 탭 ID·URL·제목을 비교해 중복 원인을 기록하고, 사용자 승인 없이 기존 로그인·업로드·검증 탭을 닫거나 정리하지 않는다.
 - Dev Tunnel 디바이스 코드가 차단되면 `devtunnel user login --use-browser-auth --entra`를 사용한다. 사용자 비밀번호와 Auth 앱 승인은 사용자가 직접 처리한다.
 - `devtunnel show <tunnel-id> --json`의 `ports[].portUri`를 실제 공개 주소로 사용한다. tunnel ID와 호스트명이 같다고 가정하지 않는다.
 - 공개 주소가 바뀌면 매니페스트 도메인과 패키지를 함께 갱신하고 기존 앱 업데이트 절차를 반복한다.
