@@ -38,6 +38,63 @@ type LatestRequestController = {
   invalidate: () => void;
 };
 
+export type ItemMutationLease = {
+  key: string;
+  generation: number;
+  isCurrent: () => boolean;
+  commit: (update: () => void) => boolean;
+  release: () => boolean;
+};
+
+type ItemMutationController = {
+  begin: (key: string) => ItemMutationLease | null;
+  invalidate: () => void;
+  isBusy: (key: string) => boolean;
+};
+
+export function createItemMutationController(): ItemMutationController {
+  let generation = 0;
+  const activeGenerations = new Map<string, number>();
+
+  return {
+    begin(key) {
+      if (activeGenerations.has(key)) return null;
+
+      const leaseGeneration = generation + 1;
+      generation = leaseGeneration;
+      activeGenerations.set(key, leaseGeneration);
+      let released = false;
+
+      const isCurrent = (): boolean => !released
+        && activeGenerations.get(key) === leaseGeneration;
+
+      return {
+        key,
+        generation: leaseGeneration,
+        isCurrent,
+        commit(update) {
+          if (!isCurrent()) return false;
+          update();
+          return true;
+        },
+        release() {
+          if (!isCurrent()) return false;
+          released = true;
+          activeGenerations.delete(key);
+          return true;
+        },
+      };
+    },
+    invalidate() {
+      generation += 1;
+      activeGenerations.clear();
+    },
+    isBusy(key) {
+      return activeGenerations.has(key);
+    },
+  };
+}
+
 export function createLatestRequestController(): LatestRequestController {
   let generation = 0;
   let activeController: AbortController | null = null;
@@ -214,6 +271,9 @@ export function App() {
   const [teamsHostName, setTeamsHostName] = useState('');
   const [copilotReady, setCopilotReady] = useState(false);
   const [copilotRuntimeAttempt, setCopilotRuntimeAttempt] = useState(0);
+  const [itemMutationBusyKeys, setItemMutationBusyKeys] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const responseMode = useResponseMode();
   const selectedResponseMode = getPublicResponseMode(responseMode.state);
   const locationServiceRef = useRef<ClientLocationService | null>(null);
@@ -221,14 +281,23 @@ export function App() {
   const weatherAbortController = useRef<AbortController | null>(null);
   const runtimeRefreshControllerRef = useRef<LatestRequestController | null>(null);
   const itemsRequestControllerRef = useRef<LatestRequestController | null>(null);
+  const itemMutationControllerRef = useRef<ItemMutationController | null>(null);
   const copilotRuntimeRef = useRef<ReturnType<typeof createLazyCopilotRuntime> | null>(null);
   const mountedRef = useRef(false);
+  const titleRef = useRef(title);
+  const editingIdRef = useRef(editingId);
+
+  titleRef.current = title;
+  editingIdRef.current = editingId;
 
   if (!runtimeRefreshControllerRef.current) {
     runtimeRefreshControllerRef.current = createLatestRequestController();
   }
   if (!itemsRequestControllerRef.current) {
     itemsRequestControllerRef.current = createLatestRequestController();
+  }
+  if (!itemMutationControllerRef.current) {
+    itemMutationControllerRef.current = createItemMutationController();
   }
   if (!copilotRuntimeRef.current) {
     copilotRuntimeRef.current = createLazyCopilotRuntime();
@@ -457,6 +526,7 @@ export function App() {
       mountedRef.current = false;
       runtimeRefreshControllerRef.current?.invalidate();
       itemsRequestControllerRef.current?.invalidate();
+      itemMutationControllerRef.current?.invalidate();
       weatherRequestGeneration.current += 1;
       weatherAbortController.current?.abort();
       weatherAbortController.current = null;
@@ -465,10 +535,45 @@ export function App() {
 
   const visibleItems = items.filter((item) => filter === 'all' || item.status === filter);
 
+  function legacyItemMutationKey(itemId: number): string {
+    return `item:${itemId}`;
+  }
+
+  function beginItemMutation(key: string): ItemMutationLease | null {
+    const lease = itemMutationControllerRef.current!.begin(key);
+    if (!lease) return null;
+
+    setItemMutationBusyKeys((current) => {
+      if (current.has(key)) return current;
+      const next = new Set(current);
+      next.add(key);
+      return next;
+    });
+    return lease;
+  }
+
+  function commitItemMutation(lease: ItemMutationLease, update: () => void): boolean {
+    if (!mountedRef.current) return false;
+    return lease.commit(update);
+  }
+
+  function finishItemMutation(lease: ItemMutationLease): void {
+    if (!lease.release() || !mountedRef.current) return;
+    setItemMutationBusyKeys((current) => {
+      if (!current.has(lease.key)) return current;
+      const next = new Set(current);
+      next.delete(lease.key);
+      return next;
+    });
+  }
+
   async function addItem(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmedTitle = title.trim();
     if (!trimmedTitle) return;
+
+    const lease = beginItemMutation('create');
+    if (!lease) return;
 
     try {
       const response = await apiFetch('/api/items', {
@@ -480,24 +585,33 @@ export function App() {
       if (!response.ok) throw new Error('add failed');
 
       await response.json();
-      setTitle('');
-      setError('');
+      if (!commitItemMutation(lease, () => {
+        if (titleRef.current === trimmedTitle) setTitle('');
+        setError('');
+      })) return;
       await loadItems();
     } catch {
-      setError('업무를 추가하지 못했습니다.');
+      commitItemMutation(lease, () => setError('업무를 추가하지 못했습니다.'));
+    } finally {
+      finishItemMutation(lease);
     }
   }
 
   async function toggleItem(item: Item) {
+    const lease = beginItemMutation(legacyItemMutationKey(item.id));
+    if (!lease) return;
+
     try {
       const response = await apiFetch(`/api/items/${item.id}`, { method: 'PATCH' });
       if (!response.ok) throw new Error('toggle failed');
 
       await response.json();
-      setError('');
+      if (!commitItemMutation(lease, () => setError(''))) return;
       await loadItems();
     } catch {
-      setError('업무 상태를 변경하지 못했습니다.');
+      commitItemMutation(lease, () => setError('업무 상태를 변경하지 못했습니다.'));
+    } finally {
+      finishItemMutation(lease);
     }
   }
 
@@ -514,6 +628,9 @@ export function App() {
       return;
     }
 
+    const lease = beginItemMutation(legacyItemMutationKey(item.id));
+    if (!lease) return;
+
     try {
       const response = await apiFetch(`/api/items/${item.id}`, {
         method: 'PUT',
@@ -523,27 +640,40 @@ export function App() {
       if (!response.ok) throw new Error('update failed');
 
       await response.json();
-      setEditingId(null);
-      setEditingTitle('');
-      setError('');
+      if (!commitItemMutation(lease, () => {
+        if (editingIdRef.current === item.id) {
+          setEditingId(null);
+          setEditingTitle('');
+        }
+        setError('');
+      })) return;
       await loadItems();
     } catch {
-      setError('업무 제목을 수정하지 못했습니다.');
+      commitItemMutation(lease, () => setError('업무 제목을 수정하지 못했습니다.'));
+    } finally {
+      finishItemMutation(lease);
     }
   }
 
   async function removeItem(item: Item) {
+    const mutationKey = legacyItemMutationKey(item.id);
+    if (itemMutationBusyKeys.has(mutationKey)) return;
     if (!window.confirm(`“${item.title}” 업무를 삭제할까요?`)) return;
+
+    const lease = beginItemMutation(mutationKey);
+    if (!lease) return;
 
     try {
       const response = await apiFetch(`/api/items/${item.id}`, { method: 'DELETE' });
       if (!response.ok) throw new Error('remove failed');
 
       await response.json();
-      setError('');
+      if (!commitItemMutation(lease, () => setError(''))) return;
       await loadItems();
     } catch {
-      setError('업무를 삭제하지 못했습니다.');
+      commitItemMutation(lease, () => setError('업무를 삭제하지 못했습니다.'));
+    } finally {
+      finishItemMutation(lease);
     }
   }
 
@@ -719,7 +849,12 @@ export function App() {
             placeholder="새 업무 제목을 입력하세요"
             value={title}
           />
-          <button className="primary" type="submit">
+          <button
+            aria-busy={itemMutationBusyKeys.has('create')}
+            className="primary"
+            disabled={itemMutationBusyKeys.has('create')}
+            type="submit"
+          >
             추가
           </button>
         </form>
@@ -774,6 +909,7 @@ export function App() {
                     <input
                       aria-label="업무 제목 수정"
                       autoFocus
+                      disabled={itemMutationBusyKeys.has(legacyItemMutationKey(item.id))}
                       onChange={(event) => setEditingTitle(event.target.value)}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter') void saveEdit(item);
@@ -781,10 +917,21 @@ export function App() {
                       }}
                       value={editingTitle}
                     />
-                    <button className="primary" onClick={() => void saveEdit(item)} type="button">
+                    <button
+                      aria-busy={itemMutationBusyKeys.has(legacyItemMutationKey(item.id))}
+                      className="primary"
+                      disabled={itemMutationBusyKeys.has(legacyItemMutationKey(item.id))}
+                      onClick={() => void saveEdit(item)}
+                      type="button"
+                    >
                       저장
                     </button>
-                    <button className="secondary" onClick={() => setEditingId(null)} type="button">
+                    <button
+                      className="secondary"
+                      disabled={itemMutationBusyKeys.has(legacyItemMutationKey(item.id))}
+                      onClick={() => setEditingId(null)}
+                      type="button"
+                    >
                       취소
                     </button>
                   </div>
@@ -792,15 +939,26 @@ export function App() {
                   <>
                     <span>{item.title}</span>
                     <div className="item-actions">
-                      <button className="toggle" onClick={() => startEditing(item)} type="button">
+                      <button
+                        className="toggle"
+                        disabled={itemMutationBusyKeys.has(legacyItemMutationKey(item.id))}
+                        onClick={() => startEditing(item)}
+                        type="button"
+                      >
                         수정
                       </button>
-                      <button className="toggle danger" onClick={() => void removeItem(item)} type="button">
+                      <button
+                        className="toggle danger"
+                        disabled={itemMutationBusyKeys.has(legacyItemMutationKey(item.id))}
+                        onClick={() => void removeItem(item)}
+                        type="button"
+                      >
                         삭제
                       </button>
                       <button
                         aria-label={`업무 ${item.status === 'done' ? '다시 열기' : '완료 처리'}: ${item.title}`}
                         className="toggle"
+                        disabled={itemMutationBusyKeys.has(legacyItemMutationKey(item.id))}
                         onClick={() => void toggleItem(item)}
                         type="button"
                       >

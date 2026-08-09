@@ -5,10 +5,12 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import {
   DEFAULT_RESPONSE_MODE_STATE,
   ResponseModeSelector,
+  createResponseModeRetryGate,
   fetchResponseMode,
   normalizeResponseModePayload,
   responseModeErrorMessage,
   saveResponseMode,
+  type ResponseModeSelectionHandler,
   type ResponseModeApiFetcher,
 } from '../src/client/ResponseModeSelector.js';
 
@@ -122,10 +124,40 @@ const errorMarkup = renderToStaticMarkup(React.createElement(ResponseModeSelecto
     status: 'error',
     error: '응답 모드 상태를 확인하지 못했습니다. 잠시 후 다시 시도하세요.',
   },
-  onSelectMode: async () => undefined,
+  onSelectMode: (async () => undefined) as ResponseModeSelectionHandler,
+  onRetry: async () => undefined,
 }));
 assert.match(errorMarkup, /role="alert"/);
 assert.match(errorMarkup, /잠시 후 다시 시도하세요/);
+assert.match(errorMarkup, /응답 모드 다시 시도/);
 assert.doesNotMatch(errorMarkup, /OPENAI_API_KEY|https?:\/\//);
+
+const busyErrorMarkup = renderToStaticMarkup(React.createElement(ResponseModeSelector, {
+  state: { ...initial, status: 'saving', error: '저장 중 오류가 발생했습니다.' },
+  onSelectMode: (async () => undefined) as ResponseModeSelectionHandler,
+  onRetry: async () => undefined,
+}));
+assert.match(busyErrorMarkup, /<button[^>]*disabled=""[^>]*>응답 모드 다시 시도<\/button>/);
+
+{
+  const gate = createResponseModeRetryGate();
+  let release!: () => void;
+  let calls = 0;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  const first = gate.run(async () => {
+    calls += 1;
+    await pending;
+  });
+  const second = gate.run(async () => {
+    calls += 1;
+  });
+  assert.equal(first, second, 'a second retry while the first is in flight reuses the active request');
+  await Promise.resolve();
+  assert.equal(calls, 1, 'a retry gate runs only one operation while busy');
+  release();
+  await first;
+  await gate.run(async () => { calls += 1; });
+  assert.equal(calls, 2, 'a retry can run again after the previous operation settles');
+}
 
 console.log('Client response-mode selector tests passed');

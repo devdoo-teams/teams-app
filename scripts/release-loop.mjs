@@ -15,6 +15,7 @@ const MAX_RASTER_BYTES = 20 * 1024 * 1024;
 const MAX_RASTER_DIMENSION = 16_384;
 const MAX_RASTER_PIXELS = 50_000_000;
 const MAX_RASTER_DECODED_BYTES = 128 * 1024 * 1024;
+const MAX_SUPPORTING_ARTIFACT_BYTES = 4 * 1024 * 1024;
 
 function hashBytes(bytes) {
   if (!(bytes instanceof Uint8Array)) throw new Error('artifact must be binary data');
@@ -353,16 +354,66 @@ function inspectArtifact(bytes) {
   return { sha256: hashBytes(bytes), width, height };
 }
 
+function inspectSupportingArtifact(bytes, label) {
+  const source = bytes instanceof Uint8Array ? Buffer.from(bytes) : null;
+  if (!source) throw new Error(`${label} artifact must be binary data`);
+  if (source.length === 0 || source.length > MAX_SUPPORTING_ARTIFACT_BYTES) {
+    throw new Error(`${label} artifact size is empty or exceeds the 4 MiB safety limit`);
+  }
+  const text = source.toString('utf8');
+  if (Buffer.from(text, 'utf8').compare(source) !== 0) {
+    throw new Error(`${label} artifact must be valid UTF-8 text`);
+  }
+  if (/(?:bearer\s+\S+|sk-[A-Za-z0-9_-]{8,}|(?:client[_ -]?secret|password|api[_ -]?key)\s*[:=]\s*\S+)/i.test(text)) {
+    throw new Error(`${label} artifact contains secret or credential-like text`);
+  }
+  return { sha256: hashBytes(source), bytes: source.length };
+}
+
+function absoluteEvidencePath(value, label) {
+  if (typeof value !== 'string' || !path.isAbsolute(value)) {
+    throw new Error(`${label} path must be absolute`);
+  }
+  return path.normalize(value);
+}
+
+function allEvidenceArtifacts(evidence) {
+  return [
+    ...(Array.isArray(evidence?.artifacts) ? evidence.artifacts : []),
+    ...(Array.isArray(evidence?.supportingArtifacts) ? evidence.supportingArtifacts : []),
+  ];
+}
+
+function hasFullEvidenceCoverage(evidence) {
+  const coverage = evidence?.coverage;
+  return Boolean(
+    coverage
+    && coverage.commit === evidence.commit
+    && coverage.version === evidence.version
+    && typeof coverage.matrixPath === 'string'
+    && /^[a-f0-9]{64}$/.test(coverage.matrixSha256 ?? '')
+    && Number.isInteger(coverage.totalRows)
+    && coverage.totalRows > 0
+    && coverage.passedRows === coverage.totalRows
+    && coverage.blockedRows === 0
+    && coverage.unverifiedRows === 0,
+  );
+}
+
 function hasSurfaceEvidence(state, surface) {
   const evidence = state.evidence?.[surface];
   if (!evidence) return false;
   if (evidence.surface !== surface || evidence.commit !== state.commit || evidence.version !== state.version) return false;
-  if (!Array.isArray(evidence.artifacts) || evidence.artifacts.length === 0) return false;
+  if (!Array.isArray(evidence.artifacts) || evidence.artifacts.length < 2) return false;
+  if (!Array.isArray(evidence.supportingArtifacts) || evidence.supportingArtifacts.length < 2) return false;
+  if (!evidence.screenshotBeforePath || !evidence.screenshotAfterPath) return false;
+  if (!hasFullEvidenceCoverage(evidence)) return false;
   if (state.package?.sha256 && evidence.packageSha256 !== state.package.sha256) return false;
   // The portal's published version and the installed conversation's response
   // are different facts. Do not let a chat round-trip stand in for the
   // installed app-info version check.
   if (surface === 'installed' && evidence.installedVersion !== state.version) return false;
+  if (surface === 'mobile' && evidence.userConfirmed !== true) return false;
   return true;
 }
 
@@ -545,7 +596,21 @@ export function validateEvidence(
   { fileExists = (candidate) => true, readArtifact = (candidate) => fsSync.readFileSync(candidate), now = new Date() } = {},
 ) {
   if (!input || typeof input !== 'object') throw new Error('evidence must be an object');
-  const { surface, observedAt, commit, version, packageSha256, installedVersion, summary } = input;
+  const {
+    surface,
+    observedAt,
+    commit,
+    version,
+    packageSha256,
+    installedVersion,
+    summary,
+    screenshotBeforePath,
+    screenshotAfterPath,
+    accessibilityPath,
+    runtimeLogPath,
+    coverage,
+    userConfirmed,
+  } = input;
   const artifactPaths = Array.isArray(input.artifactPaths)
     ? input.artifactPaths
     : Array.isArray(input.artifacts) ? input.artifacts.map((artifact) => artifact?.path) : undefined;
@@ -559,25 +624,68 @@ export function validateEvidence(
   if (surface === 'installed' && installedVersion !== state.version) {
     throw new Error('installed evidence requires installedVersion equal to the release version');
   }
+  if (surface === 'mobile' && userConfirmed !== true) {
+    throw new Error('mobile evidence requires explicit userConfirmed: true');
+  }
   assertObservedAt(observedAt, state, now);
   assertEvidenceAfterPrerequisite(observedAt, state, surface);
   assertSafeSummary(summary);
-  if (!Array.isArray(artifactPaths) || artifactPaths.length === 0) {
-    throw new Error('evidence requires at least one artifact path');
+  if (typeof coverage !== 'object' || coverage === null) {
+    throw new Error('evidence requires a coverage matrix result');
   }
-  const artifacts = artifactPaths.map((candidate) => {
+  if (
+    coverage.commit !== commit
+    || coverage.version !== version
+    || typeof coverage.matrixPath !== 'string'
+    || !/^[a-f0-9]{64}$/.test(coverage.matrixSha256 ?? '')
+    || !Number.isInteger(coverage.totalRows)
+    || coverage.totalRows <= 0
+    || coverage.passedRows !== coverage.totalRows
+    || coverage.blockedRows !== 0
+    || coverage.unverifiedRows !== 0
+  ) {
+    throw new Error('evidence coverage matrix must be current and have all rows passed with no blocked or unverified rows');
+  }
+  const beforePath = absoluteEvidencePath(screenshotBeforePath, 'screenshotBefore');
+  const afterPath = absoluteEvidencePath(screenshotAfterPath, 'screenshotAfter');
+  if (beforePath === afterPath) throw new Error('before and after screenshots must use different paths');
+  const visualPaths = [...new Set([beforePath, afterPath, ...(artifactPaths ?? [])])];
+  if (visualPaths.length < 2) {
+    throw new Error('evidence requires distinct before and after screenshot paths');
+  }
+  const supportingPaths = [
+    absoluteEvidencePath(accessibilityPath, 'accessibility'),
+    absoluteEvidencePath(runtimeLogPath, 'runtime log'),
+    absoluteEvidencePath(coverage.matrixPath, 'coverage matrix'),
+  ];
+  if (new Set(supportingPaths).size !== supportingPaths.length) {
+    throw new Error('accessibility, runtime, and coverage artifacts must use distinct paths');
+  }
+  const artifacts = visualPaths.map((candidate) => {
     if (typeof candidate !== 'string' || !path.isAbsolute(candidate)) {
       throw new Error('evidence artifact paths must be absolute');
     }
     const normalized = path.normalize(candidate);
     if (!fileExists(normalized)) throw new Error(`evidence artifact does not exist: ${normalized}`);
-    return { path: normalized, ...inspectArtifact(readArtifact(normalized)) };
+    return {
+      path: normalized,
+      role: normalized === beforePath ? 'screenshot-before' : normalized === afterPath ? 'screenshot-after' : 'screenshot-extra',
+      ...inspectArtifact(readArtifact(normalized)),
+    };
+  });
+  const supportingArtifacts = supportingPaths.map((candidate) => {
+    const normalized = path.normalize(candidate);
+    if (!fileExists(normalized)) throw new Error(`supporting evidence artifact does not exist: ${normalized}`);
+    const role = normalized === path.normalize(accessibilityPath)
+      ? 'accessibility'
+      : normalized === path.normalize(runtimeLogPath) ? 'runtime-log' : 'coverage-matrix';
+    return { path: normalized, role, ...inspectSupportingArtifact(readArtifact(normalized), role) };
   });
   for (const existingSurface of surfaces) {
     if (existingSurface === surface) continue;
-    const existingArtifacts = state.evidence?.[existingSurface]?.artifacts;
-    if (!Array.isArray(existingArtifacts)) continue;
-    for (const artifact of artifacts) {
+    const existingArtifacts = allEvidenceArtifacts(state.evidence?.[existingSurface]);
+    if (existingArtifacts.length === 0) continue;
+    for (const artifact of [...artifacts, ...supportingArtifacts]) {
       if (existingArtifacts.some((existing) => path.normalize(existing.path) === artifact.path)) {
         throw new Error(`evidence artifact path is already used by ${existingSurface}; cross-surface reuse is forbidden`);
       }
@@ -594,9 +702,19 @@ export function validateEvidence(
     version,
     packageSha256,
     ...(surface === 'installed' ? { installedVersion } : {}),
+    ...(surface === 'mobile' ? { userConfirmed: true } : {}),
     summary: summary.trim(),
+    screenshotBeforePath: beforePath,
+    screenshotAfterPath: afterPath,
+    accessibilityPath: path.normalize(accessibilityPath),
+    runtimeLogPath: path.normalize(runtimeLogPath),
+    coverage: {
+      ...coverage,
+      matrixPath: path.normalize(coverage.matrixPath),
+    },
     artifactPaths: artifacts.map(({ path: artifactPath }) => artifactPath),
     artifacts,
+    supportingArtifacts,
   };
 }
 
@@ -628,6 +746,26 @@ export function reverifyEvidenceArtifacts(
       }
       if (actual.width !== artifact.width || actual.height !== artifact.height) {
         throw integrityError(`evidence artifact dimensions changed: ${artifactPath}`, surface);
+      }
+    }
+    if (!Array.isArray(evidence.supportingArtifacts) || evidence.supportingArtifacts.length < 2) {
+      throw integrityError(`${surface} evidence is missing accessibility, runtime, or coverage artifacts`, surface);
+    }
+    for (const artifact of evidence.supportingArtifacts) {
+      if (!artifact || typeof artifact.path !== 'string' || !path.isAbsolute(artifact.path)) {
+        throw integrityError(`${surface} supporting evidence artifact path is invalid`, surface);
+      }
+      const artifactPath = path.normalize(artifact.path);
+      if (!fileExists(artifactPath)) throw integrityError(`supporting evidence artifact does not exist: ${artifactPath}`, surface);
+      let actual;
+      try {
+        actual = inspectSupportingArtifact(readArtifact(artifactPath), artifact.role ?? 'supporting');
+      } catch (error) {
+        if (error?.code === 'ELOOPINTEGRITY') throw error;
+        throw integrityError(`${surface} supporting evidence artifact is invalid: ${error?.message ?? artifactPath}`, surface);
+      }
+      if (actual.sha256 !== artifact.sha256 || actual.bytes !== artifact.bytes) {
+        throw integrityError(`supporting evidence artifact hash changed: ${artifactPath}`, surface);
       }
     }
   }
@@ -670,9 +808,16 @@ export function applyEvidence(state, evidence) {
       version: evidence.version,
       packageSha256: evidence.packageSha256,
       ...(evidence.surface === 'installed' ? { installedVersion: evidence.installedVersion } : {}),
+      ...(evidence.surface === 'mobile' ? { userConfirmed: evidence.userConfirmed === true } : {}),
       summary: evidence.summary,
+      screenshotBeforePath: evidence.screenshotBeforePath,
+      screenshotAfterPath: evidence.screenshotAfterPath,
+      accessibilityPath: evidence.accessibilityPath,
+      runtimeLogPath: evidence.runtimeLogPath,
+      coverage: { ...evidence.coverage },
       artifactPaths: [...evidence.artifactPaths],
       artifacts: evidence.artifacts.map((artifact) => ({ ...artifact })),
+      supportingArtifacts: evidence.supportingArtifacts.map((artifact) => ({ ...artifact })),
     },
   };
   for (const downstream of surfaces.slice(surfaces.indexOf(evidence.surface) + 1)) {

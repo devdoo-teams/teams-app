@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 
 import { apiFetch } from './auth.js';
 
@@ -37,6 +37,45 @@ function nextMutationKey(prefix: string): string {
   return prefix + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
 }
 
+export function parseWorkItemDeepLinkId(search: string | undefined): string | null {
+  if (!search) return null;
+  const itemId = new URLSearchParams(search).get('workItemId')?.trim();
+  return itemId || null;
+}
+
+export type LatestWorkItemLoad = {
+  signal: AbortSignal;
+  commit: (callback: () => void) => boolean;
+};
+
+export function createLatestWorkItemLoadController(): {
+  begin: () => LatestWorkItemLoad;
+  dispose: () => void;
+} {
+  let active: { controller: AbortController; request: LatestWorkItemLoad } | null = null;
+
+  return {
+    begin() {
+      active?.controller.abort();
+      const controller = new AbortController();
+      const request: LatestWorkItemLoad = {
+        signal: controller.signal,
+        commit(callback) {
+          if (active?.request !== request || controller.signal.aborted) return false;
+          callback();
+          return true;
+        },
+      };
+      active = { controller, request };
+      return request;
+    },
+    dispose() {
+      active?.controller.abort();
+      active = null;
+    },
+  };
+}
+
 async function workFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set('x-conversation-id', WORK_CONVERSATION_ID);
@@ -51,41 +90,54 @@ export function WorkItemPanel() {
   const [status, setStatus] = useState<WorkItemStatus | ''>('');
   const [title, setTitle] = useState('');
   const [dueDate, setDueDate] = useState('');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(() => (
+    typeof window === 'undefined' ? null : parseWorkItemDeepLinkId(window.location.search)
+  ));
   const [editTitle, setEditTitle] = useState('');
   const [editDescription, setEditDescription] = useState('');
   const [comment, setComment] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
+  const selectedIdRef = useRef(selectedId);
+  const queryRef = useRef(query);
+  const loadControllerRef = useRef(createLatestWorkItemLoadController());
+  selectedIdRef.current = selectedId;
+  queryRef.current = query;
 
   const selected = useMemo(
     () => items.find((item) => item.id === selectedId) ?? null,
     [items, selectedId],
   );
 
-  async function loadItems(): Promise<void> {
+  const loadItems = useCallback(async (): Promise<void> => {
+    const request = loadControllerRef.current.begin();
     setLoading(true);
     setError('');
     const params = new URLSearchParams({ view });
-    if (query.trim()) params.set('q', query.trim());
+    if (queryRef.current.trim()) params.set('q', queryRef.current.trim());
     if (status) params.set('status', status);
     try {
-      const response = await workFetch('/api/work-items?' + params.toString());
+      const response = await workFetch('/api/work-items?' + params.toString(), { signal: request.signal });
       const body = (await response.json()) as { items?: WorkItem[]; error?: string };
       if (!response.ok) throw new Error(body.error || '업무 항목을 불러오지 못했습니다.');
-      setItems(body.items ?? []);
-      if (selectedId && !(body.items ?? []).some((item) => item.id === selectedId)) setSelectedId(null);
+      request.commit(() => {
+        setItems(body.items ?? []);
+        const currentSelectedId = selectedIdRef.current;
+        if (currentSelectedId && !(body.items ?? []).some((item) => item.id === currentSelectedId)) setSelectedId(null);
+      });
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : '업무 항목을 불러오지 못했습니다.');
+      request.commit(() => setError(caught instanceof Error ? caught.message : '업무 항목을 불러오지 못했습니다.'));
     } finally {
-      setLoading(false);
+      request.commit(() => setLoading(false));
     }
-  }
+  }, [status, view]);
 
   useEffect(() => {
     void loadItems();
-  }, [view, status]);
+  }, [loadItems]);
+
+  useEffect(() => () => loadControllerRef.current.dispose(), []);
 
   useEffect(() => {
     if (!selected) return;
@@ -168,7 +220,7 @@ export function WorkItemPanel() {
           <h2>업무 항목</h2>
           <p className="panel-description">검색·할당·상태·댓글·watch·캘린더를 한 탭에서 처리합니다.</p>
         </div>
-        <button className="secondary" onClick={() => void loadItems()} type="button">새로고침</button>
+        <button className="secondary" disabled={Boolean(busy)} onClick={() => void loadItems()} type="button">새로고침</button>
       </div>
 
       <div className="work-item-toolbar" aria-label="업무 항목 보기">
@@ -193,7 +245,7 @@ export function WorkItemPanel() {
           placeholder="제목·내용 검색"
           value={query}
         />
-        <select aria-label="업무 상태 필터" onChange={(event) => setStatus(event.target.value as WorkItemStatus | '')} value={status}>
+        <select aria-label="업무 상태 필터" disabled={Boolean(busy)} onChange={(event) => setStatus(event.target.value as WorkItemStatus | '')} value={status}>
           <option value="">모든 상태</option>
           {statuses.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
@@ -224,7 +276,7 @@ export function WorkItemPanel() {
                   {item.labels.map((label) => <span key={label}>#{label}</span>)}
                 </div>
                 <div className="work-item-actions" aria-label={item.title + ' 작업'}>
-                  <select aria-label={item.title + ' 상태'} onChange={(event) => void mutate(itemPath + '/status', { method: 'PATCH', body: JSON.stringify({ mutationKey: nextMutationKey('status'), status: event.target.value }) }, 'status:' + item.id)} value={item.status}>
+                  <select aria-label={item.title + ' 상태'} disabled={Boolean(busy)} onChange={(event) => void mutate(itemPath + '/status', { method: 'PATCH', body: JSON.stringify({ mutationKey: nextMutationKey('status'), status: event.target.value }) }, 'status:' + item.id)} value={item.status}>
                     {statuses.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                   </select>
                   <button className="toggle" disabled={busy === 'assign:' + item.id} onClick={() => void mutate(itemPath + '/assignee', { method: 'PATCH', body: JSON.stringify({ mutationKey: nextMutationKey('assign'), assigneeId: 'self' }) }, 'assign:' + item.id)} type="button">나에게 할당</button>

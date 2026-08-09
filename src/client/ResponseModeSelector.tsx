@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { apiFetch } from './auth.js';
 import {
@@ -32,6 +32,12 @@ export type PublicResponseMode = {
   mode: ResponseMode;
   label: string;
   configured: boolean;
+};
+
+export type ResponseModeRetryHandler = () => void | Promise<void>;
+
+export type ResponseModeSelectionHandler = ((mode: ResponseMode) => void | Promise<void>) & {
+  retry?: ResponseModeRetryHandler;
 };
 
 const GENERIC_RESPONSE_MODE_ERROR = '응답 모드 상태를 확인하지 못했습니다. 잠시 후 다시 시도하세요.';
@@ -188,37 +194,84 @@ export function getPublicResponseMode(state: ResponseModeSelectorState): PublicR
   };
 }
 
+export function createResponseModeRetryGate(): {
+  run: (operation: () => void | Promise<void>) => Promise<void>;
+} {
+  let active: Promise<void> | null = null;
+
+  return {
+    run(operation): Promise<void> {
+      if (active) return active;
+      const current = Promise.resolve().then(operation);
+      const settled = current.finally(() => {
+        if (active === settled) active = null;
+      });
+      active = settled;
+      return settled;
+    },
+  };
+}
+
 export function useResponseMode(): {
   state: ResponseModeSelectorState;
-  selectMode: (mode: ResponseMode) => Promise<void>;
+  selectMode: ResponseModeSelectionHandler;
+  retry: ResponseModeRetryHandler;
 } {
   const [state, setState] = useState<ResponseModeSelectorState>(DEFAULT_RESPONSE_MODE_STATE);
   const stateRef = useRef(state);
   const mountedRef = useRef(true);
   const saveRequestRef = useRef<Promise<void> | null>(null);
+  const requestGenerationRef = useRef(0);
+  const retryOperationRef = useRef<ResponseModeRetryHandler | null>(null);
   stateRef.current = state;
 
-  useEffect(() => {
-    let active = true;
-    mountedRef.current = true;
+  const load = useCallback(async (): Promise<void> => {
+    const generation = ++requestGenerationRef.current;
+    setState((previous) => ({ ...previous, status: 'loading', error: '' }));
 
-    void fetchResponseMode()
-      .then((nextState) => {
-        if (active) setState(nextState);
-      })
-      .catch((error: unknown) => {
-        if (!active) return;
-        setState((current) => ({
-          ...current,
-          status: 'error',
-          error: responseModeErrorMessage(error),
-        }));
-      });
+    try {
+      const nextState = await fetchResponseMode();
+      if (!mountedRef.current || generation !== requestGenerationRef.current) return;
+      retryOperationRef.current = null;
+      setState(nextState);
+    } catch (error: unknown) {
+      if (!mountedRef.current || generation !== requestGenerationRef.current) return;
+      retryOperationRef.current = load;
+      setState((current) => ({
+        ...current,
+        status: 'error',
+        error: responseModeErrorMessage(error),
+      }));
+    }
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    void load();
 
     return () => {
-      active = false;
       mountedRef.current = false;
+      requestGenerationRef.current += 1;
     };
+  }, [load]);
+
+  const runSave = useCallback(async (mode: ResponseMode): Promise<void> => {
+    const generation = ++requestGenerationRef.current;
+    setState((previous) => ({ ...previous, status: 'saving', error: '' }));
+    try {
+      const nextState = await saveResponseMode(mode);
+      if (!mountedRef.current || generation !== requestGenerationRef.current) return;
+      retryOperationRef.current = null;
+      setState(nextState);
+    } catch (error: unknown) {
+      if (!mountedRef.current || generation !== requestGenerationRef.current) return;
+      retryOperationRef.current = () => runSave(mode);
+      setState((previous) => ({
+        ...previous,
+        status: 'error',
+        error: responseModeErrorMessage(error, mode),
+      }));
+    }
   }, []);
 
   const selectMode = useCallback(async (mode: ResponseMode): Promise<void> => {
@@ -234,22 +287,21 @@ export function useResponseMode(): {
       return;
     }
 
-    const request = (async () => {
-      setState((previous) => ({ ...previous, status: 'saving', error: '' }));
-      try {
-        const nextState = await saveResponseMode(mode);
-        if (mountedRef.current) setState(nextState);
-      } catch (error) {
-        if (mountedRef.current) {
-          setState((previous) => ({
-            ...previous,
-            status: 'error',
-            error: responseModeErrorMessage(error, mode),
-          }));
-        }
-      }
-    })();
+    const request = runSave(mode);
 
+    saveRequestRef.current = request;
+    try {
+      await request;
+    } finally {
+      if (saveRequestRef.current === request) saveRequestRef.current = null;
+    }
+  }, [runSave]);
+
+  const retry = useCallback(async (): Promise<void> => {
+    const operation = retryOperationRef.current;
+    if (!operation || saveRequestRef.current) return;
+
+    const request = Promise.resolve(operation());
     saveRequestRef.current = request;
     try {
       await request;
@@ -258,12 +310,19 @@ export function useResponseMode(): {
     }
   }, []);
 
-  return { state, selectMode };
+  const selectionHandler = useMemo<ResponseModeSelectionHandler>(() => {
+    const handler = selectMode as ResponseModeSelectionHandler;
+    handler.retry = retry;
+    return handler;
+  }, [retry, selectMode]);
+
+  return { state, selectMode: selectionHandler, retry };
 }
 
 export type ResponseModeSelectorProps = {
   state: ResponseModeSelectorState;
-  onSelectMode: (mode: ResponseMode) => void | Promise<void>;
+  onSelectMode: ResponseModeSelectionHandler;
+  onRetry?: ResponseModeRetryHandler;
 };
 
 function safeDisplayError(error: string): string {
@@ -274,10 +333,11 @@ function safeDisplayError(error: string): string {
   return trimmed;
 }
 
-export function ResponseModeSelector({ state, onSelectMode }: ResponseModeSelectorProps) {
+export function ResponseModeSelector({ state, onSelectMode, onRetry }: ResponseModeSelectorProps) {
   const busy = state.status === 'loading' || state.status === 'saving';
   const current = getPublicResponseMode(state);
   const currentAvailability = state.availability.find((entry) => entry.mode === current.mode);
+  const retry = onRetry ?? onSelectMode.retry;
 
   function handleChange(value: string): void {
     const parsedMode = ResponseModeSchema.safeParse(value);
@@ -344,9 +404,16 @@ export function ResponseModeSelector({ state, onSelectMode }: ResponseModeSelect
         <p className="response-mode-status" role="status">응답 모드를 저장하는 중…</p>
       )}
       {state.error && (
-        <p aria-live="assertive" className="response-mode-error" role="alert">
-          {safeDisplayError(state.error)}
-        </p>
+        <div className="response-mode-error-group">
+          <p aria-live="assertive" className="response-mode-error" role="alert">
+            {safeDisplayError(state.error)}
+          </p>
+          {retry && (
+            <button className="secondary" disabled={busy} onClick={() => void retry()} type="button">
+              응답 모드 다시 시도
+            </button>
+          )}
+        </div>
       )}
     </section>
   );

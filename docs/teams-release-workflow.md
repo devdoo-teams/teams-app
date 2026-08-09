@@ -2,6 +2,17 @@
 
 이 문서는 Teams 앱 변경 요청의 종료 조건을 정의한다. 로컬 화면이 열리고 `npm test`가 통과한 것만으로는 완료가 아니다.
 
+## 현시점 구현 기준: Teams Core 우선
+
+현재 MVP의 필수 경로는 Microsoft Teams SDK + React 개인 탭 + Express/결정형 서버 동작이다. CopilotKit, OpenAI API, MCP, 로컬 모델은 선택 provider로 격리하며 API 키나 추가 모델 인증이 없다는 이유로 Teams Core 기능을 만들거나 검증하지 못했다고 보고하지 않는다. 새 기능은 다음 순서로 한 단위씩 추가한다.
+
+1. Teams Core에서 사용자 화면·서버 동작·오류/재시도·권한 대체 경로를 최소 기능으로 구현한다.
+2. 명령어·카드·탭 링크·API·런타임을 테스트하고, 실제 Teams 화면에서 해당 단위의 전·후 상태를 확인한다.
+3. 새 버전·새 ZIP·커밋·공개 전환·기존 탭 재사용·전수 UI 증거를 완료한다.
+4. Core가 안정된 뒤에만 선택 provider를 별도 기능 플래그와 별도 릴리스로 추가한다.
+
+따라서 선택 provider가 설정되지 않은 상태는 Core의 실패가 아니라 `OPTIONAL_PROVIDER_NOT_CONFIGURED`로 분리한다. Core 응답이 저장된 값을 단순히 되돌리는지 여부는 실제 작업 mutation, 상태 변화, 오류, 재시작 보존을 통해 검증한다.
+
 ## 인앱 브라우저 세션과 업로드 대상 보존 원칙
 
 배포 작업은 Codex 인앱 브라우저에 이미 열려 있는 로그인 세션과 탭을 기반으로 이어간다.
@@ -100,7 +111,7 @@ npm run release:loop -- complete
 
 상태는 `.release/current.json`에 저장되며 토큰·비밀번호·API key·원문 Teams 메시지는 저장하지 않는다. `start`, `package`, `complete`는 현재 Git 커밋과 clean worktree를 확인한다. `machine`, `package`, `public` 실패는 마지막 성공 상태를 보존하고 다시 실행할 수 있다. `complete`는 네 개 UI 증거가 모두 현재 커밋·버전·ZIP SHA와 일치할 때만 `READY`와 Teams 전송용 보고서를 출력한다.
 
-외부 증거 파일의 최소 형식은 다음과 같다.
+외부 증거 파일은 임의의 이미지 한 장으로 통과할 수 없다. `release-loop`는 전·후 스크린샷, 접근성 증거, 런타임 로그, 현재 커밋/버전에 결합된 전수 매트릭스 결과를 모두 요구한다. 아래는 `desktop`의 예시이며 실제 경로와 해시는 실행 결과로 채운다.
 
 ```json
 {
@@ -110,9 +121,25 @@ npm run release:loop -- complete
   "version": "X.Y.Z",
   "packageSha256": "<release:package 결과>",
   "summary": "실제 배포 Teams 데스크톱에서 status 답장과 카드/탭을 확인함",
-  "artifactPaths": ["/absolute/path/teams-desktop.png"]
+  "screenshotBeforePath": "/absolute/path/teams-desktop-before.png",
+  "screenshotAfterPath": "/absolute/path/teams-desktop-after.png",
+  "accessibilityPath": "/absolute/path/teams-desktop-ax.json",
+  "runtimeLogPath": "/absolute/path/teams-desktop-runtime.log",
+  "coverage": {
+    "matrixPath": "/absolute/path/teams-ui-matrix.json",
+    "matrixSha256": "<sha256>",
+    "commit": "<현재 커밋>",
+    "version": "X.Y.Z",
+    "totalRows": 0,
+    "passedRows": 0,
+    "blockedRows": 0,
+    "unverifiedRows": 0
+  },
+  "artifactPaths": ["/absolute/path/teams-desktop-after.png"]
 }
 ```
+
+`totalRows`는 0이 될 수 없고 `passedRows === totalRows`, `blockedRows === 0`, `unverifiedRows === 0`이어야 한다. 각 매트릭스 행에는 기능·surface·location·branch·precondition·action·expected·전/후 스크린샷·접근성·런타임 증거가 있어야 한다. 이 조건을 충족하지 못하면 해당 surface는 완료가 아니다.
 
 이 JSON은 화면 확인 사실을 입력하는 계약이며, loop가 화면을 합성하거나 모바일 확인을 추정하는 기능이 아니다. 포털 업로드·설치 버전·데스크톱·모바일 순서가 어긋나거나 증거 identity가 다르면 등록을 거부한다.
 
@@ -127,9 +154,25 @@ npm run release:loop -- complete
   "packageSha256": "<release:package 결과>",
   "installedVersion": "X.Y.Z",
   "summary": "Teams 앱 정보 화면에서 설치 버전 X.Y.Z를 확인하고 status 왕복을 확인함",
-  "artifactPaths": ["/absolute/path/teams-installed-info.png"]
+  "screenshotBeforePath": "/absolute/path/teams-installed-before.png",
+  "screenshotAfterPath": "/absolute/path/teams-installed-after.png",
+  "accessibilityPath": "/absolute/path/teams-installed-ax.json",
+  "runtimeLogPath": "/absolute/path/teams-installed-runtime.log",
+  "coverage": {
+    "matrixPath": "/absolute/path/teams-installed-matrix.json",
+    "matrixSha256": "<sha256>",
+    "commit": "<현재 커밋>",
+    "version": "X.Y.Z",
+    "totalRows": 0,
+    "passedRows": 0,
+    "blockedRows": 0,
+    "unverifiedRows": 0
+  },
+  "artifactPaths": ["/absolute/path/teams-installed-after.png"]
 }
 ```
+
+`mobile` 증거에는 위 필드와 함께 사용자가 실제 배포 앱에서 직접 확인했다는 `"userConfirmed": true`가 필요하다. 사용자가 확인하지 않은 모바일 화면, 이전 버전 채팅, API 테스트 출력은 이 값을 대신할 수 없다.
 
 관리자 센터의 게시 버전이나 채팅 응답만으로 `installedVersion`을 추정해서는 안 된다.
 

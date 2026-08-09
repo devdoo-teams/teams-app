@@ -1,10 +1,48 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { apiFetch } from './auth.js';
 
 type TargetType = 'project' | 'goal' | 'topic' | 'work-item';
 type Subscription = { target: { type: TargetType; id: string }; delivery: 'personal' | 'channel'; channelId?: string; deepLink: { href: string } };
 type Digest = { period: string; totalCount: number; entries: Array<{ target: { type: TargetType; id: string }; title: string; body: string; count: number; deepLink: { href: string } }> };
+
+export type LatestCollaborationLoad = {
+  signal: AbortSignal;
+  commit: (callback: () => void) => boolean;
+};
+
+type ActiveCollaborationLoad = {
+  controller: AbortController;
+  request: LatestCollaborationLoad;
+};
+
+export function createLatestCollaborationLoadController(): {
+  begin: () => LatestCollaborationLoad;
+  dispose: () => void;
+} {
+  let active: ActiveCollaborationLoad | null = null;
+
+  return {
+    begin(): LatestCollaborationLoad {
+      active?.controller.abort();
+      const controller = new AbortController();
+      const request: LatestCollaborationLoad = {
+        signal: controller.signal,
+        commit(callback): boolean {
+          if (active?.request !== request || controller.signal.aborted) return false;
+          callback();
+          return true;
+        },
+      };
+      active = { controller, request };
+      return request;
+    },
+    dispose(): void {
+      active?.controller.abort();
+      active = null;
+    },
+  };
+}
 
 const CONVERSATION_ID = 'personal-tab';
 const targetTypes: Array<[TargetType, string]> = [
@@ -13,6 +51,18 @@ const targetTypes: Array<[TargetType, string]> = [
   ['topic', '주제'],
   ['work-item', '업무'],
 ];
+
+export function parseCollaborationDeepLink(
+  search: string | undefined,
+): { targetType: TargetType; targetId: string } | null {
+  if (!search) return null;
+  const params = new URLSearchParams(search);
+  const rawTargetType = params.get('collaborationType')?.trim();
+  const targetId = params.get('collaborationId')?.trim();
+  const targetType = targetTypes.find(([value]) => value === rawTargetType)?.[0];
+  if (!targetType || !targetId) return null;
+  return { targetType, targetId };
+}
 
 function key(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -26,35 +76,52 @@ async function collaborationFetch(input: RequestInfo | URL, init: RequestInit = 
 }
 
 export function CollaborationPanel() {
-  const [targetType, setTargetType] = useState<TargetType>('project');
-  const [targetId, setTargetId] = useState('demo-project');
+  const [targetType, setTargetType] = useState<TargetType>(() => (
+    typeof window === 'undefined'
+      ? 'project'
+      : parseCollaborationDeepLink(window.location.search)?.targetType ?? 'project'
+  ));
+  const [targetId, setTargetId] = useState(() => (
+    typeof window === 'undefined'
+      ? 'demo-project'
+      : parseCollaborationDeepLink(window.location.search)?.targetId ?? 'demo-project'
+  ));
   const [channelId, setChannelId] = useState('general');
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [digest, setDigest] = useState<Digest | null>(null);
   const [level, setLevel] = useState('digest');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const loadControllerRef = useRef(createLatestCollaborationLoadController());
   const target = { type: targetType, id: targetId.trim() };
 
-  async function load(): Promise<void> {
+  const load = useCallback(async (): Promise<void> => {
+    const request = loadControllerRef.current.begin();
     setError('');
     try {
       const [subResponse, digestResponse] = await Promise.all([
-        collaborationFetch('/api/collaboration/subscriptions'),
-        collaborationFetch('/api/collaboration/digest?period=weekly'),
+        collaborationFetch('/api/collaboration/subscriptions', { signal: request.signal }),
+        collaborationFetch('/api/collaboration/digest?period=weekly', { signal: request.signal }),
       ]);
       const subBody = (await subResponse.json()) as { subscriptions?: Subscription[]; error?: string };
       const digestBody = (await digestResponse.json()) as { digest?: Digest; error?: string };
       if (!subResponse.ok) throw new Error(subBody.error || '구독을 불러오지 못했습니다.');
       if (!digestResponse.ok) throw new Error(digestBody.error || 'digest를 불러오지 못했습니다.');
-      setSubscriptions(subBody.subscriptions ?? []);
-      setDigest(digestBody.digest ?? null);
+      request.commit(() => {
+        setSubscriptions(subBody.subscriptions ?? []);
+        setDigest(digestBody.digest ?? null);
+      });
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : '협업 설정을 불러오지 못했습니다.');
+      request.commit(() => {
+        setError(caught instanceof Error ? caught.message : '협업 설정을 불러오지 못했습니다.');
+      });
     }
-  }
+  }, []);
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    void load();
+    return () => loadControllerRef.current.dispose();
+  }, [load]);
 
   async function mutate(path: string, body: Record<string, unknown>): Promise<void> {
     if (!target.id) {

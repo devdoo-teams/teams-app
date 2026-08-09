@@ -1,6 +1,6 @@
 {
   "name": "teams-sdk-mvp",
-  "version": "1.0.21",
+  "version": "1.0.22",
   "private": true,
   "type": "module",
   "scripts": {
@@ -67,6 +67,10 @@
     "test:client-refresh-recovery": "tsx scripts/client-refresh-recovery-test.ts",
     "test:client-genui-adapter": "tsx scripts/client-genui-adapter-test.ts",
     "test:client-response-mode": "tsx scripts/client-response-mode-test.ts",
+    "test:client-collaboration-panel": "tsx scripts/client-collaboration-panel-test.ts",
+    "test:client-item-mutation": "tsx scripts/client-item-mutation-test.ts",
+    "test:client-deep-link": "tsx scripts/client-deep-link-test.ts",
+    "test:client-work-item-load": "tsx scripts/client-work-item-load-test.ts",
     "test:local-auth": "tsx scripts/local-auth-test.ts",
     "test:weather-service": "tsx scripts/weather-service-test.ts",
     "test:mcp-response-mode": "tsx scripts/mcp-response-mode-test.ts",

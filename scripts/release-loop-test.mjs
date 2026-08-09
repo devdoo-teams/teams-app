@@ -35,6 +35,21 @@ const surfaceArtifactPaths = {
   desktop: path.join(tempDir, 'teams-desktop-proof.png'),
   mobile: path.join(tempDir, 'mobile-proof.png'),
 };
+const surfaceBeforePaths = Object.fromEntries(
+  Object.keys(surfaceArtifactPaths).map((surface) => [surface, path.join(tempDir, `${surface}-before.png`)]),
+);
+const surfaceAfterPaths = Object.fromEntries(
+  Object.keys(surfaceArtifactPaths).map((surface) => [surface, surfaceArtifactPaths[surface]]),
+);
+const surfaceAccessibilityPaths = Object.fromEntries(
+  Object.keys(surfaceArtifactPaths).map((surface) => [surface, path.join(tempDir, `${surface}-accessibility.txt`)]),
+);
+const surfaceRuntimePaths = Object.fromEntries(
+  Object.keys(surfaceArtifactPaths).map((surface) => [surface, path.join(tempDir, `${surface}-runtime.log`)]),
+);
+const surfaceCoveragePaths = Object.fromEntries(
+  Object.keys(surfaceArtifactPaths).map((surface) => [surface, path.join(tempDir, `${surface}-coverage.md`)]),
+);
 const fakeArtifactPath = path.join(tempDir, 'fake-proof.png');
 const packagePath = path.join(tempDir, 'teams-sdk-mvp.zip');
 const artifactBytes = Buffer.from([
@@ -131,8 +146,15 @@ const publicAsset = {
 const surfaceArtifactBytes = Object.fromEntries(
   Object.keys(surfaceArtifactPaths).map((surface) => [surface, pngFixture(surface)]),
 );
+const surfaceBeforeBytes = Object.fromEntries(
+  Object.keys(surfaceArtifactPaths).map((surface) => [surface, pngFixture(`${surface}-before`)]),
+);
 for (const surface of Object.keys(surfaceArtifactPaths)) {
   await fs.writeFile(surfaceArtifactPaths[surface], surfaceArtifactBytes[surface]);
+  await fs.writeFile(surfaceBeforePaths[surface], surfaceBeforeBytes[surface]);
+  await fs.writeFile(surfaceAccessibilityPaths[surface], `AX evidence for ${surface}\nrole=button\n`);
+  await fs.writeFile(surfaceRuntimePaths[surface], `Runtime evidence for ${surface}\nstatus=pass\n`);
+  await fs.writeFile(surfaceCoveragePaths[surface], `coverage-${surface}-fixture\n`);
 }
 await fs.writeFile(packagePath, packageBytes);
 await fs.writeFile(fakeArtifactPath, 'proof');
@@ -182,6 +204,7 @@ function machineReadyState() {
 }
 
 function evidence(surface, overrides = {}) {
+  const coverageBytes = Buffer.from(`coverage-${surface}-fixture\n`);
   return {
     surface,
     observedAt: '2026-08-09T00:04:00.000Z',
@@ -189,9 +212,34 @@ function evidence(surface, overrides = {}) {
     version: identity.version,
     packageSha256,
     summary: `Observed ${surface} release evidence in the deployed Teams app.`,
+    screenshotBeforePath: surfaceBeforePaths[surface],
+    screenshotAfterPath: surfaceAfterPaths[surface],
+    accessibilityPath: surfaceAccessibilityPaths[surface],
+    runtimeLogPath: surfaceRuntimePaths[surface],
+    coverage: {
+      matrixPath: surfaceCoveragePaths[surface],
+      matrixSha256: crypto.createHash('sha256').update(coverageBytes).digest('hex'),
+      commit: identity.commit,
+      version: identity.version,
+      totalRows: 4,
+      passedRows: 4,
+      blockedRows: 0,
+      unverifiedRows: 0,
+    },
+    ...(surface === 'mobile' ? { userConfirmed: true } : {}),
     artifactPaths: [surfaceArtifactPaths[surface]],
     ...overrides,
   };
+}
+
+function isEvidenceFile(surface, candidate) {
+  return new Set([
+    surfaceBeforePaths[surface],
+    surfaceAfterPaths[surface],
+    surfaceAccessibilityPaths[surface],
+    surfaceRuntimePaths[surface],
+    surfaceCoveragePaths[surface],
+  ]).has(candidate);
 }
 
 const initial = createInitialState(identity);
@@ -220,7 +268,7 @@ assert.equal(deriveStatus(mismatchedPublicPackage), 'PACKAGE_READY');
 assert.ok(missingGates(mismatchedPublicPackage).includes('PUBLIC_READY'));
 assert.throws(
   () => validateEvidence(evidence('portal'), mismatchedPublicPackage, {
-    fileExists: (candidate) => candidate === artifactPath,
+    fileExists: (candidate) => isEvidenceFile('portal', candidate),
     now: new Date('2026-08-09T00:05:00.000Z'),
   }),
   /portal.*(?:prerequisite|public)|public.*(?:current|package|prerequisite)/i,
@@ -232,33 +280,58 @@ assert.equal(deriveStatus(missingPublicAsset), 'PACKAGE_READY');
 assert.ok(missingGates(missingPublicAsset).includes('PUBLIC_READY'));
 
 const portalEvidence = validateEvidence(evidence('portal'), machineReady, {
-  fileExists: (candidate) => candidate === artifactPath,
+  fileExists: (candidate) => isEvidenceFile('portal', candidate),
   now: new Date('2026-08-09T00:05:00.000Z'),
 });
 assert.throws(
+  () => validateEvidence(evidence('portal', { screenshotBeforePath: undefined }), machineReady, {
+    fileExists: (candidate) => isEvidenceFile('portal', candidate),
+    now: new Date('2026-08-09T00:05:00.000Z'),
+  }),
+  /screenshotBefore|before.*after/i,
+  'a legacy single-image proof cannot satisfy the release evidence contract',
+);
+assert.throws(
+  () => validateEvidence(evidence('portal', { coverage: { ...evidence('portal').coverage, blockedRows: 1, passedRows: 3 } }), machineReady, {
+    fileExists: (candidate) => isEvidenceFile('portal', candidate),
+    now: new Date('2026-08-09T00:05:00.000Z'),
+  }),
+  /coverage|blocked|passed/i,
+  'a matrix with blocked rows cannot satisfy the release evidence contract',
+);
+assert.throws(
   () => validateEvidence(evidence('portal', { observedAt: '2026-08-09T00:02:59.999Z' }), machineReady, {
-    fileExists: (candidate) => candidate === artifactPath,
+    fileExists: (candidate) => isEvidenceFile('portal', candidate),
     now: new Date('2026-08-09T00:05:00.000Z'),
   }),
   /portal.*public|public.*portal|prerequisite.*time/i,
   'portal evidence must be observed after the public gate completes',
 );
 assert.deepEqual(Object.keys(portalEvidence).sort(), [
+  'accessibilityPath',
   'artifactPaths',
   'artifacts',
   'commit',
+  'coverage',
   'observedAt',
   'packageSha256',
+  'runtimeLogPath',
+  'screenshotAfterPath',
+  'screenshotBeforePath',
   'summary',
+  'supportingArtifacts',
   'surface',
   'version',
 ]);
-assert.deepEqual(portalEvidence.artifacts, [{
-  path: artifactPath,
-  sha256: crypto.createHash('sha256').update(surfaceArtifactBytes.portal).digest('hex'),
-  width: 1,
-  height: 1,
-}]);
+assert.deepEqual(portalEvidence.artifacts.map(({ path: artifactPathValue, role, width, height }) => ({
+  path: artifactPathValue,
+  role,
+  width,
+  height,
+})), [
+  { path: surfaceBeforePaths.portal, role: 'screenshot-before', width: 1, height: 1 },
+  { path: artifactPath, role: 'screenshot-after', width: 1, height: 1 },
+]);
 assert.equal(applyEvidence(machineReady, portalEvidence).status, 'PORTAL_READY');
 const portalReady = applyEvidence(machineReady, portalEvidence);
 assert.throws(
@@ -355,7 +428,7 @@ for (const surface of ['portal', 'installed', 'desktop', 'mobile']) {
   const surfaceOverrides = surface === 'installed' ? { installedVersion: identity.version } : {};
   assert.throws(
     () => validateEvidence(evidence(surface, { ...surfaceOverrides, artifactPaths: [fakeArtifactPath] }), completeState, {
-      fileExists: (candidate) => candidate === fakeArtifactPath,
+      fileExists: (candidate) => candidate === fakeArtifactPath || isEvidenceFile(surface, candidate),
       now: new Date('2026-08-09T00:05:00.000Z'),
     }),
     /evidence artifact must be .*PNG, JPEG, or WebP .* image/,
@@ -371,7 +444,7 @@ assert.deepEqual(missingGates(completeState), []);
 const replacementPortalEvidence = validateEvidence(evidence('portal', {
   observedAt: '2026-08-09T00:05:00.000Z',
 }), completeState, {
-  fileExists: (candidate) => candidate === artifactPath,
+  fileExists: (candidate) => isEvidenceFile('portal', candidate),
   now: new Date('2026-08-09T00:05:00.000Z'),
 });
 const portalReplaced = applyEvidence(completeState, replacementPortalEvidence);
