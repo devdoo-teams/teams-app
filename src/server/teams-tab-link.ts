@@ -30,7 +30,7 @@ export function buildTeamsPersonalTabDeepLink(
   if (tenantId !== undefined && !validGuid(tenantId)) return undefined;
 
   const params = new URLSearchParams({
-    webUrl: `https://${tabDomain}/tabs/home`,
+    webUrl: `https://${tabDomain}/tabs/home/`,
     label: '업무 허브',
   });
   if (tenantId) params.set('tenantId', tenantId);
