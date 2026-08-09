@@ -44,4 +44,5 @@ Teams UI matrix valid: rows=149 PASS=0 FAIL=0 BLOCKED=148 N/A=1 coverageMissing=
 
 ## Commit
 
-The implementation commit is recorded in the final handoff after the report and requested files are staged; no upload or external integration was performed.
+- Implementation commit: `a650968` (`docs: add Teams UI verification matrix validator`).
+- This report is updated in the follow-up report commit; no upload or external integration was performed.
