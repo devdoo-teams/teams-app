@@ -27,8 +27,14 @@ fs.writeFileSync(path.join(buildDir, 'manifest.json'), manifest);
 fs.copyFileSync(path.join(sourceDir, 'color.png'), path.join(buildDir, 'color.png'));
 fs.copyFileSync(path.join(sourceDir, 'outline.png'), path.join(buildDir, 'outline.png'));
 
+const packagedFiles = ['manifest.json', 'color.png', 'outline.png'];
+const archiveTimestamp = new Date('2000-01-01T00:00:00.000Z');
+for (const file of packagedFiles) {
+  fs.utimesSync(path.join(buildDir, file), archiveTimestamp, archiveTimestamp);
+}
+
 const zipPath = path.join(buildDir, 'teams-sdk-mvp.zip');
-execFileSync('zip', ['-q', '-r', zipPath, 'manifest.json', 'color.png', 'outline.png'], { cwd: buildDir });
+execFileSync('zip', ['-X', '-q', zipPath, ...packagedFiles], { cwd: buildDir });
 
 const packagedManifest = JSON.parse(execFileSync('unzip', ['-p', zipPath, 'manifest.json'], { encoding: 'utf8' }));
 if (packagedManifest.version !== JSON.parse(manifest).version) {

@@ -59,6 +59,7 @@ Teams 앱 변경 요청에는 별도 예외 승인이 없는 한 다음 순서�
 - `release:public`은 명시적 `--url` 다음 `TEAMS_PUBLIC_URL`, `PUBLIC_BASE_URL`, `.env.runtime`의 `TAB_DOMAIN`에서 공개 origin을 해석한다. `typecheck`는 런타임 패키지를 바꾸지 않는 release 전용 선언 stub을 사용하고, vendor 선언 그래프 진단은 별도 `typecheck:vendor`로 분리한다.
 - 공개 서버는 반드시 `npm start`로 실행한다. 이 명령은 존재하는 `.env.runtime`을 자동 로드한다. `node dist/server/index.js`를 직접 실행해 인증 설정을 누락하지 않으며, 재시작 직후 `/api/health`의 `environment=production`, `auth=teams-authenticated`, `userAuth=entra-sso`, `bot=teams-sdk`, `outbound=teams-sdk`를 확인한다.
 - Teams 개인 탭 `contentUrl`은 `/tabs/home/`처럼 trailing slash를 포함해야 한다. `/tabs/home`의 301 리디렉션에 의존하면 Teams Web/Desktop iframe이 빈 화면에 머물 수 있으므로 매니페스트 검증에서 이를 차단한다.
+- 패키징은 결정적이어야 한다. 같은 커밋·버전·매니페스트·아이콘으로 `release:package`를 반복해도 ZIP SHA-256이 같아야 하며 `test:package-determinism` 실패 시 업로드하지 않는다. 릴리스 루프 package 단계가 기록한 동일 ZIP만 업로드하고, 업로드 뒤 ZIP을 다시 생성해 SHA를 바꾸지 않는다.
 - 게이트가 명령어 timeout이나 비정상 종료를 만나면 `BLOCKED`로 중단한다. 실패한 하위 프로세스 그룹은 정리하지만, 이미 실행 중인 공개 Teams 서버나 Dev Tunnel은 임의로 종료하지 않는다. 원인을 고친 뒤 같은 게이트를 다시 실행한다.
 - timeout 회귀 테스트는 실제 저장소에서 짧은 `preflight`를 강제 종료하지 않는다. 빌드 중간 종료가 `dist/client`를 비울 수 있으므로 `runWithTimeout`과 실패 보고 포맷을 무해한 fixture로 검증한다.
 - 클라이언트 빌드는 `dist/client`를 먼저 지우지 않고 형제 임시 디렉터리에서 빌드·후처리한 뒤 성공할 때만 원자적으로 교체한다. 따라서 빌드 실패가 공개 탭을 빈 404 상태로 만들면 안 된다. 현재 CopilotKit v2 대형 번들의 source map 생성은 Node 24 + esbuild API에서 무기한 대기하므로 운영 번들은 source map을 끈다.

@@ -128,6 +128,7 @@ npm run release:loop -- complete
 - `npm run check:deployment`, `npm run validate:manifest`, `npm run package:app`를 실행한다.
 - 생성된 ZIP을 열어 실제 `manifest.json`의 버전, 앱 ID, 도메인, `devicePermissions`를 확인한다.
 - ZIP의 SHA-256을 기록한다. 이전 ZIP을 재사용하거나 “패키지를 만들었다”고 추정하지 않는다.
+- `npm run test:package-determinism`으로 같은 입력의 ZIP SHA-256이 항상 같은지 확인한다. 릴리스 루프 package 단계 이후에는 ZIP을 다시 생성하지 않고, 기록된 절대 경로의 동일 파일만 업로드한다.
 
 Dev Tunnel을 다시 만들었으면 tunnel ID를 공개 호스트로 간주하지 않는다. 다음 순서로 실제 호스트를 확인한다.
 
