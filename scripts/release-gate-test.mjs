@@ -1,14 +1,17 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import process from 'node:process';
 
 import {
   assertPackagedManifest,
+  assertPublicAsset,
   assertPublicTab,
   assertPublicHealth,
   formatReleaseFailure,
   parseDotEnv,
   resolvePublicUrl,
   runWithTimeout,
+  validatePublicTabDeployment,
 } from './release-gate.mjs';
 
 const expected = {
@@ -89,11 +92,56 @@ const validTabResponse = {
   url: `https://${expected.tabDomain}/tabs/home`,
   headers: { get: (name) => name === 'content-type' ? 'text/html; charset=utf-8' : null },
 };
-assert.doesNotThrow(() => assertPublicTab(
+const validBundle = Buffer.from('console.log("release build identity");');
+const validBuildId = crypto.createHash('sha256').update(validBundle).digest('hex').slice(0, 12);
+const validTab = assertPublicTab(
   validTabResponse,
-  '<title>Teams SDK MVP</title><div id="root"></div><script type="module" src="./assets/main.js?v=abcdef123456"></script>',
+  `<title>Teams SDK MVP</title><div id="root"></div><script type="module" src="./assets/main.js?v=${validBuildId}"></script>`,
   validManifest,
-));
+);
+assert.equal(validTab.buildId, validBuildId);
+assert.equal(validTab.scriptUrl, `https://${expected.tabDomain}/tabs/assets/main.js?v=${validBuildId}`);
+const validAssetResponse = {
+  status: 200,
+  url: validTab.scriptUrl,
+  headers: { get: (name) => name === 'content-type' ? 'text/javascript; charset=utf-8' : null },
+};
+assert.equal(assertPublicAsset(validAssetResponse, validBundle, validTab).buildId, validBuildId);
+assert.throws(
+  () => assertPublicAsset(validAssetResponse, Buffer.from('console.log("tampered");'), validTab),
+  /hash|build|digest|identity/i,
+  'the public script bytes must match the build ID referenced by the tab HTML',
+);
+const publicFetches = [];
+const deployedTab = await validatePublicTabDeployment({
+  tabUrl: validTabResponse.url,
+  manifest: validManifest,
+  timeoutMs: 100,
+  fetchResource: async (url, _timeoutMs, bodyType) => {
+    publicFetches.push({ url, bodyType });
+    if (bodyType === 'text') {
+      return {
+        response: validTabResponse,
+        text: `<title>Teams SDK MVP</title><div id="root"></div><script type="module" src="./assets/main.js?v=${validBuildId}"></script>`,
+      };
+    }
+    return { response: validAssetResponse, bytes: validBundle };
+  },
+});
+assert.deepEqual(publicFetches, [
+  { url: validTabResponse.url, bodyType: 'text' },
+  { url: validTab.scriptUrl, bodyType: 'bytes' },
+]);
+assert.equal(deployedTab.asset.sha256, crypto.createHash('sha256').update(validBundle).digest('hex'));
+assert.throws(
+  () => assertPublicTab(
+    validTabResponse,
+    '<title>Sign in</title><form>Dev Tunnel login</form><!-- Teams SDK MVP <div id="root"></div> assets/main.js?v=abcdef123456 -->',
+    validManifest,
+  ),
+  /sign.?in|login|interstitial|dev.?tunnel|marker|root|build/i,
+  'login and Dev Tunnel interstitial HTML cannot satisfy markers hidden in comments',
+);
 assert.throws(
   () => assertPublicTab(
     { ...validTabResponse, url: 'https://interstitial.example.com/login' },
@@ -104,7 +152,7 @@ assert.throws(
 );
 assert.throws(
   () => assertPublicTab(validTabResponse, '<title>Sign in</title><p>interstitial</p>', validManifest),
-  /marker|Teams SDK|root|build/i,
+  /marker|Teams SDK|root|build|sign.?in|login|interstitial/i,
 );
 await assert.rejects(
   runWithTimeout(process.execPath, ['-e', 'setTimeout(() => {}, 1000)'], { timeoutMs: 25 }),

@@ -4,28 +4,159 @@ import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { inflateSync } from 'node:zlib';
 
 import { runWithTimeout } from './release-gate.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const surfaces = ['portal', 'installed', 'desktop', 'mobile'];
 const phaseOrder = ['machine', 'package', 'public', ...surfaces];
+const MAX_RASTER_BYTES = 20 * 1024 * 1024;
+const MAX_RASTER_DIMENSION = 16_384;
+const MAX_RASTER_PIXELS = 50_000_000;
+const MAX_RASTER_DECODED_BYTES = 128 * 1024 * 1024;
 
 function hashBytes(bytes) {
   if (!(bytes instanceof Uint8Array)) throw new Error('artifact must be binary data');
   return crypto.createHash('sha256').update(bytes).digest('hex');
 }
 
+function integrityError(message, releasePhase) {
+  const error = new Error(message);
+  error.code = 'ELOOPINTEGRITY';
+  error.releasePhase = releasePhase;
+  return error;
+}
+
 function dimensions(width, height) {
-  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) return null;
+  if (
+    !Number.isInteger(width)
+    || !Number.isInteger(height)
+    || width <= 0
+    || height <= 0
+    || width > MAX_RASTER_DIMENSION
+    || height > MAX_RASTER_DIMENSION
+    || width * height > MAX_RASTER_PIXELS
+  ) return null;
   return { width, height };
+}
+
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngPasses(width, height, interlace) {
+  if (interlace === 0) return [{ width, height }];
+  const starts = [[0, 0], [4, 0], [0, 4], [2, 0], [0, 2], [1, 0], [0, 1]];
+  const steps = [[8, 8], [8, 8], [4, 8], [4, 4], [2, 4], [2, 2], [1, 2]];
+  return starts.map(([startX, startY], index) => ({
+    width: width <= startX ? 0 : Math.ceil((width - startX) / steps[index][0]),
+    height: height <= startY ? 0 : Math.ceil((height - startY) / steps[index][1]),
+  }));
 }
 
 function pngDimensions(bytes) {
   const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-  if (bytes.length < 24 || !signature.every((byte, index) => bytes[index] === byte)) return null;
-  if (bytes.toString('ascii', 12, 16) !== 'IHDR' || bytes.readUInt32BE(8) < 13) return null;
-  return dimensions(bytes.readUInt32BE(16), bytes.readUInt32BE(20));
+  if (!signature.every((byte, index) => bytes[index] === byte)) return null;
+  if (bytes.length < 8 + 12 + 13 + 12) throw new Error('evidence PNG is truncated');
+
+  let offset = 8;
+  let header;
+  let paletteSeen = false;
+  let imageDataStarted = false;
+  let imageDataEnded = false;
+  let endSeen = false;
+  const compressed = [];
+  while (offset < bytes.length) {
+    if (offset + 12 > bytes.length) throw new Error('evidence PNG has a truncated chunk header');
+    const length = bytes.readUInt32BE(offset);
+    const type = bytes.toString('ascii', offset + 4, offset + 8);
+    if (!/^[A-Za-z]{4}$/.test(type)) throw new Error('evidence PNG has an invalid chunk type');
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+    const chunkEnd = dataEnd + 4;
+    if (chunkEnd > bytes.length) throw new Error(`evidence PNG ${type} chunk is truncated or oversized`);
+    const expectedCrc = bytes.readUInt32BE(dataEnd);
+    const actualCrc = crc32(bytes.subarray(offset + 4, dataEnd));
+    if (expectedCrc !== actualCrc) throw new Error(`evidence PNG ${type} chunk CRC is invalid`);
+    const data = bytes.subarray(dataStart, dataEnd);
+
+    if (!header && type !== 'IHDR') throw new Error('evidence PNG must begin with IHDR');
+    if (type === 'IHDR') {
+      if (header || offset !== 8 || length !== 13) throw new Error('evidence PNG has an invalid IHDR');
+      const width = data.readUInt32BE(0);
+      const height = data.readUInt32BE(4);
+      const bitDepth = data[8];
+      const colorType = data[9];
+      const allowedDepths = {
+        0: [1, 2, 4, 8, 16],
+        2: [8, 16],
+        3: [1, 2, 4, 8],
+        4: [8, 16],
+        6: [8, 16],
+      };
+      if (!dimensions(width, height)) throw new Error('evidence PNG dimensions exceed safety limits');
+      if (!allowedDepths[colorType]?.includes(bitDepth)) throw new Error('evidence PNG has an unsupported color type or bit depth');
+      if (data[10] !== 0 || data[11] !== 0 || ![0, 1].includes(data[12])) {
+        throw new Error('evidence PNG uses unsupported compression, filtering, or interlace');
+      }
+      header = { width, height, bitDepth, colorType, interlace: data[12] };
+    } else if (type === 'PLTE') {
+      if (imageDataStarted || length === 0 || length % 3 !== 0 || length > 768) throw new Error('evidence PNG has an invalid PLTE chunk');
+      paletteSeen = true;
+    } else if (type === 'IDAT') {
+      if (imageDataEnded || length === 0) throw new Error('evidence PNG has invalid or non-contiguous image data');
+      imageDataStarted = true;
+      compressed.push(data);
+    } else if (type === 'IEND') {
+      if (!imageDataStarted || length !== 0) throw new Error('evidence PNG has an invalid IEND');
+      endSeen = true;
+      offset = chunkEnd;
+      if (offset !== bytes.length) throw new Error('evidence PNG has trailing data after IEND');
+      break;
+    } else {
+      if (imageDataStarted) imageDataEnded = true;
+      if (type[0] === type[0].toUpperCase()) throw new Error(`evidence PNG contains unsupported critical chunk ${type}`);
+    }
+    offset = chunkEnd;
+  }
+  if (!header || !imageDataStarted || !endSeen) throw new Error('evidence PNG is incomplete');
+  if (header.colorType === 3 && !paletteSeen) throw new Error('indexed evidence PNG is missing a palette');
+  if ([0, 4].includes(header.colorType) && paletteSeen) throw new Error('grayscale evidence PNG cannot contain a palette');
+
+  const channels = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 }[header.colorType];
+  const bitsPerPixel = channels * header.bitDepth;
+  const passes = pngPasses(header.width, header.height, header.interlace);
+  let decodedLength = 0;
+  for (const pass of passes) {
+    if (pass.width === 0 || pass.height === 0) continue;
+    decodedLength += pass.height * (1 + Math.ceil((pass.width * bitsPerPixel) / 8));
+  }
+  if (decodedLength > MAX_RASTER_DECODED_BYTES) throw new Error('evidence PNG decoded data exceeds safety limits');
+  let decoded;
+  try {
+    decoded = inflateSync(Buffer.concat(compressed), { maxOutputLength: decodedLength + 1 });
+  } catch {
+    throw new Error('evidence PNG image data cannot be decoded');
+  }
+  if (decoded.length !== decodedLength) throw new Error('evidence PNG decoded image length is invalid');
+  let rowOffset = 0;
+  for (const pass of passes) {
+    if (pass.width === 0 || pass.height === 0) continue;
+    const rowLength = Math.ceil((pass.width * bitsPerPixel) / 8);
+    for (let row = 0; row < pass.height; row += 1) {
+      if (decoded[rowOffset] > 4) throw new Error('evidence PNG uses an invalid row filter');
+      rowOffset += 1 + rowLength;
+    }
+  }
+  return { width: header.width, height: header.height };
 }
 
 function jpegDimensions(bytes) {
@@ -34,25 +165,117 @@ function jpegDimensions(bytes) {
     0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7,
     0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf,
   ]);
+  let frame;
+  let quantizationTableSeen = false;
+  let huffmanTableSeen = false;
+  let scanSeen = false;
+  let endSeen = false;
   let offset = 2;
-  while (offset + 3 < bytes.length) {
-    if (bytes[offset] !== 0xff) {
-      offset += 1;
+  while (offset < bytes.length) {
+    if (bytes[offset] !== 0xff) throw new Error('evidence JPEG has data outside an entropy-coded scan');
+    while (offset < bytes.length && bytes[offset] === 0xff) offset += 1;
+    if (offset >= bytes.length) throw new Error('evidence JPEG is truncated before EOI');
+    const marker = bytes[offset++];
+    if (marker === 0x00) throw new Error('evidence JPEG contains a stuffed byte outside scan data');
+    if (marker === 0xd9) {
+      endSeen = true;
+      if (offset !== bytes.length) throw new Error('evidence JPEG has trailing data after EOI');
+      break;
+    }
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      throw new Error('evidence JPEG contains an invalid standalone marker');
+    }
+    if (offset + 2 > bytes.length) throw new Error('evidence JPEG has a truncated segment length');
+    const segmentLength = bytes.readUInt16BE(offset);
+    if (segmentLength < 2 || offset + segmentLength > bytes.length) throw new Error('evidence JPEG has a truncated or invalid segment');
+    const dataStart = offset + 2;
+    const dataEnd = offset + segmentLength;
+    if (frameMarkers.has(marker)) {
+      if (frame || segmentLength < 11) throw new Error('evidence JPEG has an invalid frame header');
+      const height = bytes.readUInt16BE(dataStart + 1);
+      const width = bytes.readUInt16BE(dataStart + 3);
+      const componentCount = bytes[dataStart + 5];
+      if (segmentLength !== 8 + componentCount * 3 || !dimensions(width, height)) {
+        throw new Error('evidence JPEG frame dimensions or components are invalid');
+      }
+      const componentIds = new Set();
+      for (let index = 0; index < componentCount; index += 1) {
+        const componentOffset = dataStart + 6 + index * 3;
+        const id = bytes[componentOffset];
+        const sampling = bytes[componentOffset + 1];
+        if (componentIds.has(id) || (sampling >> 4) === 0 || (sampling & 0x0f) === 0 || bytes[componentOffset + 2] > 3) {
+          throw new Error('evidence JPEG frame components are invalid');
+        }
+        componentIds.add(id);
+      }
+      frame = { width, height, componentIds };
+    } else if (marker === 0xdb) {
+      let tableOffset = dataStart;
+      while (tableOffset < dataEnd) {
+        const precision = bytes[tableOffset] >> 4;
+        const tableLength = 1 + (precision === 0 ? 64 : precision === 1 ? 128 : 0);
+        if (tableLength === 1 || tableOffset + tableLength > dataEnd) throw new Error('evidence JPEG quantization table is invalid');
+        tableOffset += tableLength;
+      }
+      if (tableOffset !== dataEnd) throw new Error('evidence JPEG quantization table is truncated');
+      quantizationTableSeen = true;
+    } else if (marker === 0xc4) {
+      let tableOffset = dataStart;
+      while (tableOffset < dataEnd) {
+        if (tableOffset + 17 > dataEnd) throw new Error('evidence JPEG Huffman table is truncated');
+        const symbolCount = bytes.subarray(tableOffset + 1, tableOffset + 17).reduce((sum, count) => sum + count, 0);
+        if (symbolCount === 0 || symbolCount > 256 || tableOffset + 17 + symbolCount > dataEnd) {
+          throw new Error('evidence JPEG Huffman table is invalid');
+        }
+        tableOffset += 17 + symbolCount;
+      }
+      huffmanTableSeen = true;
+    } else if (marker === 0xda) {
+      if (!frame || !quantizationTableSeen || !huffmanTableSeen) throw new Error('evidence JPEG scan is missing frame or coding tables');
+      const componentCount = bytes[dataStart];
+      if (componentCount === 0 || segmentLength !== 6 + componentCount * 2) throw new Error('evidence JPEG scan header is invalid');
+      const scanComponents = new Set();
+      for (let index = 0; index < componentCount; index += 1) {
+        const componentOffset = dataStart + 1 + index * 2;
+        const id = bytes[componentOffset];
+        const tables = bytes[componentOffset + 1];
+        if (!frame.componentIds.has(id) || scanComponents.has(id) || (tables >> 4) > 3 || (tables & 0x0f) > 3) {
+          throw new Error('evidence JPEG scan components are invalid');
+        }
+        scanComponents.add(id);
+      }
+      scanSeen = true;
+      offset = dataEnd;
+      let entropyBytes = 0;
+      while (offset < bytes.length) {
+        if (bytes[offset] !== 0xff) {
+          entropyBytes += 1;
+          offset += 1;
+          continue;
+        }
+        const markerStart = offset;
+        while (offset < bytes.length && bytes[offset] === 0xff) offset += 1;
+        if (offset >= bytes.length) throw new Error('evidence JPEG scan is truncated before EOI');
+        const scanMarker = bytes[offset];
+        if (scanMarker === 0x00) {
+          entropyBytes += 1;
+          offset += 1;
+          continue;
+        }
+        if (scanMarker >= 0xd0 && scanMarker <= 0xd7) {
+          offset += 1;
+          continue;
+        }
+        if (entropyBytes === 0) throw new Error('evidence JPEG scan has no entropy-coded data');
+        offset = markerStart;
+        break;
+      }
       continue;
     }
-    while (offset < bytes.length && bytes[offset] === 0xff) offset += 1;
-    const marker = bytes[offset++];
-    if (marker === 0xd9 || marker === 0xda) break;
-    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
-    if (offset + 2 > bytes.length) return null;
-    const segmentLength = bytes.readUInt16BE(offset);
-    if (segmentLength < 2 || offset + segmentLength > bytes.length) return null;
-    if (frameMarkers.has(marker) && segmentLength >= 7) {
-      return dimensions(bytes.readUInt16BE(offset + 5), bytes.readUInt16BE(offset + 3));
-    }
-    offset += segmentLength;
+    offset = dataEnd;
   }
-  return null;
+  if (!frame || !scanSeen || !endSeen) throw new Error('evidence JPEG is incomplete or missing EOI');
+  return { width: frame.width, height: frame.height };
 }
 
 function readUInt24LE(bytes, offset) {
@@ -60,25 +283,66 @@ function readUInt24LE(bytes, offset) {
 }
 
 function webpDimensions(bytes) {
-  if (bytes.length < 30 || bytes.toString('ascii', 0, 4) !== 'RIFF' || bytes.toString('ascii', 8, 12) !== 'WEBP') return null;
-  const chunk = bytes.toString('ascii', 12, 16);
-  if (chunk === 'VP8X') {
-    return dimensions(1 + readUInt24LE(bytes, 24), 1 + readUInt24LE(bytes, 27));
+  if (bytes.length < 12 || bytes.toString('ascii', 0, 4) !== 'RIFF' || bytes.toString('ascii', 8, 12) !== 'WEBP') return null;
+  if (bytes.readUInt32LE(4) + 8 !== bytes.length) throw new Error('evidence WebP RIFF length is truncated or invalid');
+  let offset = 12;
+  let canvas;
+  let image;
+  while (offset < bytes.length) {
+    if (offset + 8 > bytes.length) throw new Error('evidence WebP has a truncated chunk header');
+    const type = bytes.toString('ascii', offset, offset + 4);
+    const length = bytes.readUInt32LE(offset + 4);
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+    const paddedEnd = dataEnd + (length % 2);
+    if (paddedEnd > bytes.length) throw new Error(`evidence WebP ${type} chunk is truncated or oversized`);
+    if (length % 2 && bytes[dataEnd] !== 0) throw new Error(`evidence WebP ${type} chunk padding is invalid`);
+
+    if (type === 'VP8X') {
+      if (canvas || image || length !== 10) throw new Error('evidence WebP has an invalid VP8X canvas chunk');
+      const flags = bytes[dataStart];
+      if (flags & 0xc1 || bytes[dataStart + 1] !== 0 || bytes[dataStart + 2] !== 0 || bytes[dataStart + 3] !== 0) {
+        throw new Error('evidence WebP VP8X reserved bits are invalid');
+      }
+      if (flags & 0x02) throw new Error('animated WebP is not accepted as static release evidence');
+      canvas = dimensions(
+        1 + readUInt24LE(bytes, dataStart + 4),
+        1 + readUInt24LE(bytes, dataStart + 7),
+      );
+      if (!canvas) throw new Error('evidence WebP dimensions exceed safety limits');
+    } else if (type === 'VP8 ') {
+      if (image || length < 10) throw new Error('evidence WebP has an invalid or duplicate VP8 image chunk');
+      const frameTag = readUInt24LE(bytes, dataStart);
+      if (
+        frameTag & 1
+        || bytes[dataStart + 3] !== 0x9d
+        || bytes[dataStart + 4] !== 0x01
+        || bytes[dataStart + 5] !== 0x2a
+        || 10 + (frameTag >>> 5) > length
+      ) throw new Error('evidence WebP VP8 frame header is invalid or truncated');
+      image = dimensions(bytes.readUInt16LE(dataStart + 6) & 0x3fff, bytes.readUInt16LE(dataStart + 8) & 0x3fff);
+      if (!image) throw new Error('evidence WebP dimensions exceed safety limits');
+    } else if (type === 'VP8L') {
+      if (image || length < 5 || bytes[dataStart] !== 0x2f) throw new Error('evidence WebP has an invalid or duplicate VP8L image chunk');
+      const width = 1 + (bytes[dataStart + 1] | ((bytes[dataStart + 2] & 0x3f) << 8));
+      const height = 1 + ((bytes[dataStart + 2] >> 6) | (bytes[dataStart + 3] << 2) | ((bytes[dataStart + 4] & 0x0f) << 10));
+      if ((bytes[dataStart + 4] >> 5) !== 0) throw new Error('evidence WebP VP8L version bits are invalid');
+      image = dimensions(width, height);
+      if (!image) throw new Error('evidence WebP dimensions exceed safety limits');
+    }
+    offset = paddedEnd;
   }
-  if (chunk === 'VP8L' && bytes[20] === 0x2f) {
-    const width = 1 + (bytes[21] | ((bytes[22] & 0x3f) << 8));
-    const height = 1 + (bytes[23] | ((bytes[24] & 0xf) << 8) | ((bytes[25] & 0x3f) << 12));
-    return dimensions(width, height);
+  if (offset !== bytes.length || !image) throw new Error('evidence WebP is incomplete or missing image data');
+  if (canvas && (canvas.width !== image.width || canvas.height !== image.height)) {
+    throw new Error('evidence WebP canvas and image dimensions do not match');
   }
-  if (chunk === 'VP8 ' && bytes[23] === 0x9d && bytes[24] === 0x01 && bytes[25] === 0x2a) {
-    return dimensions(bytes.readUInt16LE(26) & 0x3fff, bytes.readUInt16LE(28) & 0x3fff);
-  }
-  return null;
+  return canvas ?? image;
 }
 
 export function rasterDimensions(bytes) {
   const source = bytes instanceof Uint8Array ? Buffer.from(bytes) : null;
   if (!source) throw new Error('evidence artifact must be binary data');
+  if (source.length > MAX_RASTER_BYTES) throw new Error('evidence raster file size exceeds the 20 MiB safety limit');
   const result = pngDimensions(source) ?? jpegDimensions(source) ?? webpDimensions(source);
   if (!result) throw new Error('evidence artifact must be a valid PNG, JPEG, or WebP raster image with dimensions');
   return result;
@@ -103,7 +367,7 @@ function hasSurfaceEvidence(state, surface) {
 }
 
 const surfacePrerequisites = {
-  portal: () => true,
+  portal: (state) => hasCurrentPublicReady(state),
   installed: (state) => hasSurfaceEvidence(state, 'portal'),
   desktop: (state) => hasSurfaceEvidence(state, 'installed'),
   mobile: (state) => hasSurfaceEvidence(state, 'desktop'),
@@ -139,6 +403,27 @@ export function resetAfterPhaseFailure(state, phase, error, now = new Date()) {
   return next;
 }
 
+export function applyPhaseSuccess(state, phase, summary, now = new Date()) {
+  const field = phaseFieldName(phase);
+  const start = phaseOrder.indexOf(field);
+  if (!['machine', 'package', 'public'].includes(field) || start < 0) {
+    throw new Error(`unknown machine release phase: ${phase}`);
+  }
+  const next = {
+    ...state,
+    [field]: summary,
+    evidence: { ...state.evidence },
+    updatedAt: now.toISOString(),
+    lastFailure: null,
+  };
+  for (const downstream of phaseOrder.slice(start + 1)) {
+    if (surfaces.includes(downstream)) next.evidence[downstream] = null;
+    else next[downstream] = null;
+  }
+  next.status = deriveStatus(next);
+  return next;
+}
+
 export function createInitialState({ runId, commit, shortCommit, version, startedAt }) {
   for (const [name, value] of Object.entries({ runId, commit, shortCommit, version, startedAt })) {
     if (typeof value !== 'string' || value.trim() === '') {
@@ -171,10 +456,28 @@ function hasReady(record) {
   return record?.status === 'READY';
 }
 
+function hasPublicAssetIdentity(asset) {
+  return Boolean(
+    asset
+    && typeof asset.finalUrl === 'string'
+    && /^[a-f0-9]{64}$/.test(asset.sha256 ?? '')
+    && /^[a-f0-9]{12}$/.test(asset.buildId ?? '')
+    && asset.sha256.startsWith(asset.buildId),
+  );
+}
+
+function hasCurrentPublicReady(state) {
+  return hasReady(state.public)
+    && hasReady(state.package)
+    && state.public.version === state.version
+    && state.public.packageSha256 === state.package.sha256
+    && hasPublicAssetIdentity(state.public.asset);
+}
+
 export function deriveStatus(state) {
   if (!hasReady(state.machine)) return 'INIT';
   if (!hasReady(state.package)) return 'MACHINE_READY';
-  if (!hasReady(state.public)) return 'PACKAGE_READY';
+  if (!hasCurrentPublicReady(state)) return 'PACKAGE_READY';
   if (!hasSurfaceEvidence(state, 'portal')) return 'PUBLIC_READY';
   if (!hasSurfaceEvidence(state, 'installed')) return 'PORTAL_READY';
   if (!hasSurfaceEvidence(state, 'desktop')) return 'INSTALLED_READY';
@@ -186,7 +489,7 @@ export function missingGates(state) {
   const gates = [];
   if (!hasReady(state.machine)) gates.push('MACHINE_READY');
   if (!hasReady(state.package)) gates.push('PACKAGE_READY');
-  if (!hasReady(state.public)) gates.push('PUBLIC_READY');
+  if (!hasCurrentPublicReady(state)) gates.push('PUBLIC_READY');
   if (!hasSurfaceEvidence(state, 'portal')) gates.push('PORTAL_READY');
   if (!hasSurfaceEvidence(state, 'installed')) gates.push('INSTALLED_READY');
   if (!hasSurfaceEvidence(state, 'desktop')) gates.push('DESKTOP_READY');
@@ -219,6 +522,23 @@ function assertObservedAt(observedAt, state, now) {
   if (Date.parse(state.startedAt) > observed) throw new Error('evidence observedAt predates the release run');
 }
 
+function evidencePrerequisiteObservation(state, surface) {
+  if (surface === 'portal') return { surface: 'public', observedAt: state.public?.completedAt };
+  const prerequisite = surfaces[surfaces.indexOf(surface) - 1];
+  return { surface: prerequisite, observedAt: state.evidence?.[prerequisite]?.observedAt };
+}
+
+function assertEvidenceAfterPrerequisite(observedAt, state, surface) {
+  const prerequisite = evidencePrerequisiteObservation(state, surface);
+  const prerequisiteTime = Date.parse(prerequisite.observedAt);
+  if (!prerequisite.observedAt || Number.isNaN(prerequisiteTime)) {
+    throw new Error(`${surface} evidence prerequisite ${prerequisite.surface} time is missing or invalid`);
+  }
+  if (Date.parse(observedAt) < prerequisiteTime) {
+    throw new Error(`${surface} evidence observedAt predates ${prerequisite.surface} prerequisite time`);
+  }
+}
+
 export function validateEvidence(
   input,
   state,
@@ -232,7 +552,7 @@ export function validateEvidence(
   assertSurface(surface);
   if (state.status === 'COMPLETE') throw new Error('cannot add evidence to a completed release run');
   if (!hasReady(state.package) || !state.package.sha256) throw new Error('package must be READY before evidence is registered');
-  if (!surfacePrerequisites[surface](state)) throw new Error(`evidence is out of order for ${surface}`);
+  if (!surfacePrerequisites[surface](state)) throw new Error(`${surface} evidence prerequisite is not READY`);
   if (commit !== state.commit) throw new Error('evidence commit does not match the release run');
   if (version !== state.version) throw new Error('evidence version does not match the release run');
   if (packageSha256 !== state.package.sha256) throw new Error('evidence package SHA does not match the release run');
@@ -240,6 +560,7 @@ export function validateEvidence(
     throw new Error('installed evidence requires installedVersion equal to the release version');
   }
   assertObservedAt(observedAt, state, now);
+  assertEvidenceAfterPrerequisite(observedAt, state, surface);
   assertSafeSummary(summary);
   if (!Array.isArray(artifactPaths) || artifactPaths.length === 0) {
     throw new Error('evidence requires at least one artifact path');
@@ -252,6 +573,19 @@ export function validateEvidence(
     if (!fileExists(normalized)) throw new Error(`evidence artifact does not exist: ${normalized}`);
     return { path: normalized, ...inspectArtifact(readArtifact(normalized)) };
   });
+  for (const existingSurface of surfaces) {
+    if (existingSurface === surface) continue;
+    const existingArtifacts = state.evidence?.[existingSurface]?.artifacts;
+    if (!Array.isArray(existingArtifacts)) continue;
+    for (const artifact of artifacts) {
+      if (existingArtifacts.some((existing) => path.normalize(existing.path) === artifact.path)) {
+        throw new Error(`evidence artifact path is already used by ${existingSurface}; cross-surface reuse is forbidden`);
+      }
+      if (existingArtifacts.some((existing) => existing.sha256 === artifact.sha256)) {
+        throw new Error(`evidence artifact hash is already used by ${existingSurface}; cross-surface reuse is forbidden`);
+      }
+    }
+  }
 
   return {
     surface,
@@ -274,20 +608,26 @@ export function reverifyEvidenceArtifacts(
     const evidence = state.evidence?.[surface];
     if (!evidence) continue;
     if (!Array.isArray(evidence.artifacts) || evidence.artifacts.length === 0) {
-      throw new Error(`${surface} evidence is missing artifact integrity metadata`);
+      throw integrityError(`${surface} evidence is missing artifact integrity metadata`, surface);
     }
     for (const artifact of evidence.artifacts) {
       if (!artifact || typeof artifact.path !== 'string' || !path.isAbsolute(artifact.path)) {
-        throw new Error(`${surface} evidence artifact path is invalid`);
+        throw integrityError(`${surface} evidence artifact path is invalid`, surface);
       }
       const artifactPath = path.normalize(artifact.path);
-      if (!fileExists(artifactPath)) throw new Error(`evidence artifact does not exist: ${artifactPath}`);
-      const actual = inspectArtifact(readArtifact(artifactPath));
+      if (!fileExists(artifactPath)) throw integrityError(`evidence artifact does not exist: ${artifactPath}`, surface);
+      let actual;
+      try {
+        actual = inspectArtifact(readArtifact(artifactPath));
+      } catch (error) {
+        if (error?.code === 'ELOOPINTEGRITY') throw error;
+        throw integrityError(`${surface} evidence artifact is invalid: ${error?.message ?? artifactPath}`, surface);
+      }
       if (actual.sha256 !== artifact.sha256) {
-        throw new Error(`evidence artifact hash changed: ${artifactPath}`);
+        throw integrityError(`evidence artifact hash changed: ${artifactPath}`, surface);
       }
       if (actual.width !== artifact.width || actual.height !== artifact.height) {
-        throw new Error(`evidence artifact dimensions changed: ${artifactPath}`);
+        throw integrityError(`evidence artifact dimensions changed: ${artifactPath}`, surface);
       }
     }
   }
@@ -300,12 +640,12 @@ export function assertPackageIntegrity(
 ) {
   const packageEntry = state.package;
   if (!hasReady(packageEntry) || typeof packageEntry.packagePath !== 'string' || typeof packageEntry.sha256 !== 'string') {
-    throw new Error('release package integrity metadata is missing');
+    throw integrityError('release package integrity metadata is missing', 'package');
   }
-  if (!path.isAbsolute(packageEntry.packagePath)) throw new Error('release package path must be absolute');
-  if (!fileExists(packageEntry.packagePath)) throw new Error(`release package does not exist: ${packageEntry.packagePath}`);
+  if (!path.isAbsolute(packageEntry.packagePath)) throw integrityError('release package path must be absolute', 'package');
+  if (!fileExists(packageEntry.packagePath)) throw integrityError(`release package does not exist: ${packageEntry.packagePath}`, 'package');
   const actual = hashBytes(readPackage(packageEntry.packagePath));
-  if (actual !== packageEntry.sha256) throw new Error('release package SHA-256 changed after packaging');
+  if (actual !== packageEntry.sha256) throw integrityError('release package SHA-256 changed after packaging', 'package');
   return true;
 }
 
@@ -321,23 +661,27 @@ export function applyEvidence(state, evidence) {
   if (!surfacePrerequisites[evidence.surface](state)) {
     throw new Error(`evidence is out of order for ${evidence.surface}`);
   }
+  const nextEvidence = {
+    ...state.evidence,
+    [evidence.surface]: {
+      surface: evidence.surface,
+      observedAt: evidence.observedAt,
+      commit: evidence.commit,
+      version: evidence.version,
+      packageSha256: evidence.packageSha256,
+      ...(evidence.surface === 'installed' ? { installedVersion: evidence.installedVersion } : {}),
+      summary: evidence.summary,
+      artifactPaths: [...evidence.artifactPaths],
+      artifacts: evidence.artifacts.map((artifact) => ({ ...artifact })),
+    },
+  };
+  for (const downstream of surfaces.slice(surfaces.indexOf(evidence.surface) + 1)) {
+    nextEvidence[downstream] = null;
+  }
   const next = {
     ...state,
     updatedAt: new Date().toISOString(),
-    evidence: {
-      ...state.evidence,
-      [evidence.surface]: {
-        surface: evidence.surface,
-        observedAt: evidence.observedAt,
-        commit: evidence.commit,
-        version: evidence.version,
-        packageSha256: evidence.packageSha256,
-        ...(evidence.surface === 'installed' ? { installedVersion: evidence.installedVersion } : {}),
-        summary: evidence.summary,
-        artifactPaths: [...evidence.artifactPaths],
-        artifacts: evidence.artifacts.map((artifact) => ({ ...artifact })),
-      },
-    },
+    evidence: nextEvidence,
   };
   next.status = deriveStatus(next);
   return next;
@@ -354,6 +698,11 @@ function originAndPath(value, label) {
   return `${parsed.origin}${pathname}`;
 }
 
+function assertPublicAssetIdentity(asset, label) {
+  if (!hasPublicAssetIdentity(asset)) throw new Error(`${label} public asset build identity is missing or invalid`);
+  return asset;
+}
+
 export function assertPublicProbeMatches(state, currentPublic) {
   if (
     currentPublic?.version !== state.version
@@ -365,6 +714,9 @@ export function assertPublicProbeMatches(state, currentPublic) {
   }
   if (currentPublic?.packageSha256 !== state.package?.sha256) {
     throw new Error('current public package SHA does not match the recorded package');
+  }
+  if (state.public?.packageSha256 !== state.package?.sha256) {
+    throw new Error('recorded public package SHA does not match the current release package');
   }
   const packagedUrl = state.package?.manifest?.contentUrl;
   const recordedUrl = state.public?.tab?.finalUrl;
@@ -378,6 +730,19 @@ export function assertPublicProbeMatches(state, currentPublic) {
   }
   if (originAndPath(currentUrl, 'current tab URL') !== expected) {
     throw new Error('current public tab URL does not match the packaged host and path');
+  }
+  const recordedAsset = assertPublicAssetIdentity(state.public?.asset, 'recorded');
+  const currentAsset = assertPublicAssetIdentity(currentPublic?.asset, 'current');
+  if (
+    recordedAsset.buildId !== currentAsset.buildId
+    || recordedAsset.sha256 !== currentAsset.sha256
+    || recordedAsset.finalUrl !== currentAsset.finalUrl
+  ) throw new Error('current deployed asset build identity does not match the recorded public phase');
+  if (state.public?.tab?.buildId !== undefined && state.public.tab.buildId !== recordedAsset.buildId) {
+    throw new Error('recorded public tab build identity does not match its asset');
+  }
+  if (currentPublic?.tab?.buildId !== undefined && currentPublic.tab.buildId !== currentAsset.buildId) {
+    throw new Error('current public tab build identity does not match its asset');
   }
   return true;
 }
@@ -468,14 +833,17 @@ export function summarizePhase(phase, payload) {
   }
   const health = payload.evidence?.find((entry) => entry.health)?.health;
   const tab = payload.evidence?.find((entry) => entry.tab)?.tab;
+  const asset = payload.evidence?.find((entry) => entry.asset)?.asset;
   const packageEntry = payload.evidence?.find((entry) => typeof entry.package === 'string');
-  if (!health || !tab || !packageEntry) throw new Error('public gate returned incomplete public evidence');
+  if (!health || !tab || !asset || !packageEntry) throw new Error('public gate returned incomplete public asset evidence');
+  assertPublicAssetIdentity(asset, 'public gate');
   return {
     status: 'READY',
     completedAt,
     version: health.version,
     health,
     tab,
+    asset,
     packagePath: packageEntry.package,
     packageSha256: packageEntry.sha256,
   };
@@ -621,7 +989,7 @@ async function executePhase(phase, statePath) {
       if (summarized.packageSha256 !== state.package.sha256) throw new Error('public package SHA does not match the release run');
       assertPackageIntegrity(state);
     }
-    const next = { ...state, [phaseField(phase)]: summarized, status: deriveStatus({ ...state, [phaseField(phase)]: summarized }), updatedAt: new Date().toISOString(), lastFailure: null };
+    const next = applyPhaseSuccess(state, phase, summarized);
     await writeState(next, statePath);
     jsonLog({ status: 'READY', phase, runId: next.runId, state: next.status, nextAction: nextAction(next) });
   } catch (error) {
@@ -642,14 +1010,30 @@ async function addEvidence(statePath, evidencePath) {
   jsonLog({ status: 'READY', phase: 'evidence', surface: normalized.surface, runId: next.runId, state: next.status, nextAction: nextAction(next) });
 }
 
-async function completeRun(statePath) {
+export async function completeRun(
+  statePath,
+  {
+    assertGit = assertCurrentGit,
+    completeState = completeReleaseState,
+    persist = writeState,
+    log = jsonLog,
+  } = {},
+) {
   const state = await requireState(statePath);
-  assertCurrentGit(state);
-  const completed = await completeReleaseState(state);
-  assertCurrentGit(state);
-  const message = completionMessage(completed);
-  await writeState(completed, statePath);
-  jsonLog({ status: 'READY', phase: 'complete', runId: completed.runId, state: completed.status, message });
+  try {
+    assertGit(state);
+    const completed = await completeState(state);
+    assertGit(state);
+    const message = completionMessage(completed);
+    await persist(completed, statePath);
+    log({ status: 'READY', phase: 'complete', runId: completed.runId, state: completed.status, message });
+  } catch (error) {
+    if (error.code !== 'ELOOPBLOCKED') {
+      const failurePhase = phaseOrder.includes(error.releasePhase) ? error.releasePhase : 'public';
+      await persist(resetAfterPhaseFailure(state, failurePhase, error), statePath);
+    }
+    throw error;
+  }
 }
 
 function parseArgs(argv) {

@@ -111,11 +111,65 @@ export function assertPublicTab(response, text, manifest) {
   );
   const contentType = response.headers?.get?.('content-type') ?? '';
   assert.match(contentType, /text\/html/i, 'public Teams tab must return HTML');
+  const html = String(text).replace(/<!--[\s\S]*?-->/g, '');
+  const activeHtml = html
+    .replace(/<template\b[\s\S]*?<\/template\s*>/gi, ' ')
+    .replace(/<noscript\b[\s\S]*?<\/noscript\s*>/gi, ' ');
+  const visibleText = activeHtml
+    .replace(/<script\b[\s\S]*?<\/script\s*>/gi, ' ')
+    .replace(/<style\b[\s\S]*?<\/style\s*>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ');
+  assert.doesNotMatch(
+    visibleText,
+    /\b(?:sign\s*in|log\s*in|login|dev\s*tunnels?|tunnel\s+interstitial|continue\s+to\s+(?:the\s+)?site)\b/i,
+    'public Teams tab resolved to a login or Dev Tunnel interstitial',
+  );
   const appMarker = String(manifest.developer?.name || 'Teams SDK MVP');
-  assert.ok(String(text).includes(appMarker), 'public Teams tab is missing the expected app marker');
-  assert.match(String(text), /<div\s+id=["']root["']\s*>/i, 'public Teams tab is missing the app root marker');
-  assert.match(String(text), /assets\/main\.js\?v=[a-f0-9]{12}/i, 'public Teams tab is missing the expected build marker');
-  return true;
+  assert.ok(visibleText.includes(appMarker), 'public Teams tab is missing the expected visible app marker');
+  const structureHtml = activeHtml
+    .replace(/<script\b[\s\S]*?<\/script\s*>/gi, ' ')
+    .replace(/<style\b[\s\S]*?<\/style\s*>/gi, ' ');
+  assert.match(structureHtml, /<div\b(?=[^>]*\bid=["']root["'])[^>]*>/i, 'public Teams tab is missing the app root marker');
+
+  const scriptTags = [...activeHtml.matchAll(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi)];
+  const buildScripts = scriptTags.flatMap(([tag]) => {
+    const src = tag.match(/\bsrc\s*=\s*(["'])([^"']+)\1/i)?.[2];
+    const type = tag.match(/\btype\s*=\s*(["'])([^"']+)\1/i)?.[2];
+    if (!src || type?.toLowerCase() !== 'module') return [];
+    let scriptUrl;
+    try {
+      scriptUrl = new URL(src, response.url);
+    } catch {
+      return [];
+    }
+    const buildId = scriptUrl.searchParams.get('v');
+    if (!scriptUrl.pathname.endsWith('/assets/main.js') || !/^[a-f0-9]{12}$/.test(buildId ?? '')) return [];
+    return [{ scriptUrl, buildId }];
+  });
+  assert.equal(buildScripts.length, 1, 'public Teams tab must contain exactly one hashed module build script');
+  const [{ scriptUrl, buildId }] = buildScripts;
+  assert.equal(scriptUrl.origin, new URL(expectedUrl).origin, 'public Teams tab build script must remain on the packaged origin');
+  return { finalUrl: response.url, scriptUrl: scriptUrl.href, buildId };
+}
+
+export function assertPublicAsset(response, bytes, tabIdentity) {
+  assert.equal(response?.status, 200, 'public Teams tab build script must resolve to HTTP 200');
+  assert.ok(tabIdentity?.scriptUrl && tabIdentity?.buildId, 'public Teams tab build identity is missing');
+  let finalUrl;
+  try {
+    finalUrl = new URL(response.url).href;
+  } catch {
+    throw new Error('public Teams tab build script final URL must be absolute');
+  }
+  assert.equal(finalUrl, tabIdentity.scriptUrl, 'public Teams tab build script must not redirect');
+  const contentType = response.headers?.get?.('content-type') ?? '';
+  assert.match(contentType, /(?:text|application)\/(?:java|ecma)script/i, 'public Teams tab build script must return JavaScript');
+  assert.ok(bytes instanceof Uint8Array && bytes.byteLength > 0, 'public Teams tab build script body is empty');
+  assert.ok(bytes.byteLength <= 20 * 1024 * 1024, 'public Teams tab build script exceeds the 20 MiB safety limit');
+  const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+  assert.equal(sha256.slice(0, 12), tabIdentity.buildId, 'public Teams tab build script hash does not match its build identity');
+  return { finalUrl, sha256, buildId: tabIdentity.buildId };
 }
 
 export function assertPublicHealth(health, expectedVersion) {
@@ -339,16 +393,33 @@ async function runPackage({ timeoutOverride } = {}) {
   };
 }
 
-async function fetchWithTimeout(url, timeoutMs) {
+async function fetchWithTimeout(url, timeoutMs, bodyType = 'text') {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, { redirect: 'follow', signal: controller.signal });
+    if (bodyType === 'bytes') {
+      const bytes = Buffer.from(await response.arrayBuffer());
+      return { response, bytes };
+    }
     const text = await response.text();
     return { response, text };
   } finally {
     clearTimeout(timer);
   }
+}
+
+export async function validatePublicTabDeployment({
+  tabUrl,
+  manifest,
+  timeoutMs,
+  fetchResource = fetchWithTimeout,
+}) {
+  const tabResult = await fetchResource(tabUrl, timeoutMs, 'text');
+  const tab = assertPublicTab(tabResult.response, tabResult.text, manifest);
+  const assetResult = await fetchResource(tab.scriptUrl, timeoutMs, 'bytes');
+  const asset = assertPublicAsset(assetResult.response, assetResult.bytes, tab);
+  return { tabResult, tab, asset };
 }
 
 async function runPublic({ url, timeoutOverride } = {}) {
@@ -372,8 +443,11 @@ async function runPublic({ url, timeoutOverride } = {}) {
   const health = JSON.parse(healthResult.text);
   assertPublicHealth(health, packageManifest.version);
 
-  const tabResult = await fetchWithTimeout(`${baseUrl}/tabs/home`, timeoutMs);
-  assertPublicTab(tabResult.response, tabResult.text, packageManifest);
+  const tabDeployment = await validatePublicTabDeployment({
+    tabUrl: `${baseUrl}/tabs/home`,
+    manifest: packageManifest,
+    timeoutMs,
+  });
   const packageShaAfter = await sha256(packagePath);
   assert.equal(packageShaAfter, packageShaBefore, 'package SHA changed during public validation');
   return {
@@ -391,7 +465,14 @@ async function runPublic({ url, timeoutOverride } = {}) {
           environment: health.environment,
         },
       },
-      { tab: { status: tabResult.response.status, finalUrl: tabResult.response.url } },
+      {
+        tab: {
+          status: tabDeployment.tabResult.response.status,
+          finalUrl: tabDeployment.tabResult.response.url,
+          buildId: tabDeployment.tab.buildId,
+        },
+      },
+      { asset: tabDeployment.asset },
     ],
     uiGates: ['INSTALLED_VERSION_UNVERIFIED', 'DESKTOP_UNVERIFIED', 'MOBILE_UNVERIFIED'],
   };
