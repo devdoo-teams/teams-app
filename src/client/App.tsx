@@ -3,6 +3,12 @@ import { FormEvent, Suspense, lazy, useEffect, useRef, useState } from 'react';
 
 import { apiFetch, getLastAuthError, setAuthRequired } from './auth.js';
 import {
+  createClientLocationService,
+  isAbortError,
+  type ClientLocationService,
+  type LocationSource,
+} from './location.js';
+import {
   ResponseModeSelector,
   getPublicResponseMode,
   useResponseMode,
@@ -62,54 +68,6 @@ type WeatherResponse = {
   };
 };
 
-type LocationSource = 'browser' | 'teams-native' | 'demo';
-type DeviceLocation = {
-  latitude: number;
-  longitude: number;
-  accuracy?: number;
-  source: 'browser' | 'teams-native';
-};
-type TeamsLocationRuntime = {
-  available: boolean;
-  clientType: string;
-  hostName: string;
-  legacyLocationSupported: boolean;
-  geoLocationSupported: boolean;
-};
-
-function createAbortError(): Error {
-  const error = new Error('Weather request aborted');
-  error.name = 'AbortError';
-  return error;
-}
-
-function throwIfAborted(signal: AbortSignal): void {
-  if (signal.aborted) throw createAbortError();
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === 'AbortError';
-}
-
-function waitForAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(createAbortError());
-
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(createAbortError());
-    signal.addEventListener('abort', onAbort, { once: true });
-    promise.then(
-      (value) => {
-        signal.removeEventListener('abort', onAbort);
-        resolve(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener('abort', onAbort);
-        reject(error);
-      },
-    );
-  });
-}
-
 export function App() {
   const [items, setItems] = useState<Item[]>([]);
   const [title, setTitle] = useState('');
@@ -122,7 +80,7 @@ export function App() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [weather, setWeather] = useState<WeatherResponse | null>(null);
-  const [weatherLoading, setWeatherLoading] = useState(true);
+  const [weatherLoading, setWeatherLoading] = useState(false);
   const [weatherError, setWeatherError] = useState('');
   const [locationSource, setLocationSource] = useState<LocationSource>('demo');
   const [locationAccuracy, setLocationAccuracy] = useState<number | null>(null);
@@ -132,8 +90,7 @@ export function App() {
   const [copilotReady, setCopilotReady] = useState(false);
   const responseMode = useResponseMode();
   const selectedResponseMode = getPublicResponseMode(responseMode.state);
-  const teamsLocationReady = useRef<Promise<TeamsLocationRuntime> | null>(null);
-  const deviceLocationRequest = useRef<Promise<DeviceLocation> | null>(null);
+  const locationServiceRef = useRef<ClientLocationService | null>(null);
   const weatherRequestGeneration = useRef(0);
   const weatherAbortController = useRef<AbortController | null>(null);
   const mountedRef = useRef(false);
@@ -149,213 +106,43 @@ export function App() {
     return (await response.json()) as WeatherResponse;
   }
 
-  async function initializeTeamsLocation(): Promise<TeamsLocationRuntime> {
-    if (!teamsLocationReady.current) {
-      const initializationAttempt = (async (): Promise<TeamsLocationRuntime> => {
-        try {
-          if (!teamsApp.isInitialized()) {
-            await Promise.race([
-              teamsApp.initialize(),
-              new Promise<never>((_, reject) => {
-                window.setTimeout(() => reject(new Error('Teams 호스트 초기화 시간 초과')), 2_000);
-              }),
-            ]);
-          }
-
+  if (!locationServiceRef.current) {
+    locationServiceRef.current = createClientLocationService({
+      teamsApp: {
+        isInitialized: () => teamsApp.isInitialized(),
+        initialize: () => teamsApp.initialize(),
+        getContext: async () => {
           const context = await teamsApp.getContext();
-          const clientType = context.app?.host?.clientType ?? '';
-          const hostName = context.app?.host?.name ?? '';
-          let legacyLocationSupported = false;
-          let geoLocationSupported = false;
-
-          try {
-            legacyLocationSupported = teamsLocation.isSupported();
-          } catch {
-            // The SDK can still be initialized on hosts that do not expose this capability.
-          }
-
-          try {
-            geoLocationSupported = geoLocation.isSupported();
-          } catch {
-            // geoLocation is preview and may not be exposed by the current host.
-          }
-
-          if (mountedRef.current) {
-            setTeamsHost(true);
-            setTeamsClientType(clientType);
-            setTeamsHostName(hostName);
-          }
-
           return {
-            available: true,
-            clientType,
-            hostName,
-            legacyLocationSupported,
-            geoLocationSupported,
+            clientType: context.app?.host?.clientType ?? '',
+            hostName: context.app?.host?.name ?? '',
           };
-        } catch {
-          if (mountedRef.current) {
-            setTeamsHost(false);
-            setTeamsClientType('');
-            setTeamsHostName('');
-          }
-          return {
-            available: false,
-            clientType: '',
-            hostName: '',
-            legacyLocationSupported: false,
-            geoLocationSupported: false,
-          };
-        }
-      })();
-
-      const retryableInitialization = initializationAttempt.then((runtime) => {
-        // A local preview or a transient host handshake failure must not poison
-        // every later tap. Successful Teams capability discovery is cached;
-        // unavailable results are retried on the next explicit user action.
-        if (!runtime.available && teamsLocationReady.current === retryableInitialization) {
-          teamsLocationReady.current = null;
-        }
-        return runtime;
-      });
-      teamsLocationReady.current = retryableInitialization;
-    }
-
-    return teamsLocationReady.current;
-  }
-
-  function getLegacyTeamsLocation(): Promise<DeviceLocation> {
-    return new Promise((resolve, reject) => {
-      teamsLocation.getLocation(
-        { allowChooseLocation: false, showMap: false },
-        (locationError, location) => {
-          if (locationError) {
-            reject(new Error(locationError.message || 'Teams 레거시 위치 API를 사용할 수 없습니다.'));
-            return;
-          }
-
-          if (!Number.isFinite(location?.latitude) || !Number.isFinite(location?.longitude)) {
-            reject(new Error('Teams가 유효한 위치를 반환하지 않았습니다.'));
-            return;
-          }
-
-          resolve({
-            latitude: location.latitude,
-            longitude: location.longitude,
-            accuracy: location.accuracy,
-            source: 'teams-native',
-          });
         },
-      );
+      },
+      legacyLocation: {
+        isSupported: () => teamsLocation.isSupported(),
+        getLocation: (callback) => {
+          teamsLocation.getLocation(
+            { allowChooseLocation: false, showMap: false },
+            (error, location) => callback(error, location),
+          );
+        },
+      },
+      geoLocation: {
+        isSupported: () => geoLocation.isSupported(),
+        hasPermission: () => geoLocation.hasPermission(),
+        requestPermission: () => geoLocation.requestPermission(),
+        getCurrentLocation: () => geoLocation.getCurrentLocation(),
+      },
+      browserGeolocation: () => navigator.geolocation,
+    }, {
+      onRuntime: (runtime) => {
+        if (!mountedRef.current) return;
+        setTeamsHost(runtime.available);
+        setTeamsClientType(runtime.clientType);
+        setTeamsHostName(runtime.hostName);
+      },
     });
-  }
-
-  function getBrowserLocation(): Promise<DeviceLocation> {
-    return new Promise((resolve, reject) => {
-      if (!navigator.geolocation) {
-        reject(new Error('이 환경에서는 HTML5 위치 정보를 지원하지 않습니다.'));
-        return;
-      }
-
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          if (!Number.isFinite(position.coords.latitude) || !Number.isFinite(position.coords.longitude)) {
-            reject(new Error('브라우저가 유효한 위치를 반환하지 않았습니다.'));
-            return;
-          }
-
-          resolve({
-            latitude: position.coords.latitude,
-            longitude: position.coords.longitude,
-            accuracy: position.coords.accuracy,
-            source: 'browser',
-          });
-        },
-        (error) => {
-          const message = error.code === 1
-            ? '위치 권한이 거부되었습니다. Teams 탭의 앱 권한에서 위치를 허용하고, iPhone 설정의 개인정보 보호 및 보안 > 위치 서비스 > Teams도 “앱 사용 중”으로 설정한 뒤 다시 시도하세요.'
-            : error.code === 3
-              ? '위치 확인 시간이 초과되었습니다. 잠시 후 다시 시도하세요.'
-              : '브라우저 위치를 확인하지 못했습니다. Teams 앱 권한과 iPhone 위치 서비스를 확인하세요.';
-          reject(new Error(message));
-        },
-        { enableHighAccuracy: false, maximumAge: 300_000, timeout: 12_000 },
-      );
-    });
-  }
-
-  async function resolveCurrentDeviceLocation(): Promise<DeviceLocation> {
-    const locationErrors: string[] = [];
-
-    const runtime = await initializeTeamsLocation();
-    const isAppleMobile = runtime.clientType === 'ios' || runtime.clientType === 'ipados';
-
-    async function tryProvider(name: string, provider: () => Promise<DeviceLocation>): Promise<DeviceLocation | null> {
-      try {
-        return await provider();
-      } catch (caught) {
-        locationErrors.push(caught instanceof Error ? `${name}: ${caught.message}` : `${name}: 위치를 확인하지 못했습니다.`);
-        return null;
-      }
-    }
-
-    // The legacy Teams location API is deprecated, but it is the native path
-    // still exposed by some iOS Teams hosts. Prefer it there, then fall back
-    // to browser geolocation for New Teams and unsupported hosts.
-    if (isAppleMobile && runtime.legacyLocationSupported) {
-      const nativeLocation = await tryProvider('Teams iPhone 위치', getLegacyTeamsLocation);
-      if (nativeLocation) return nativeLocation;
-    }
-
-    const browserLocation = await tryProvider('HTML5 위치', getBrowserLocation);
-    if (browserLocation) return browserLocation;
-
-    // geoLocation is a preview API. Use it only after the standards-based path
-    // has failed and only when the host explicitly reports support.
-    if (runtime.geoLocationSupported) {
-      const geoLocationResult = await tryProvider('Teams geoLocation', async () => {
-        const hasPermission = await geoLocation.hasPermission();
-        if (!hasPermission && !(await geoLocation.requestPermission())) {
-          throw new Error('Teams 위치 권한이 거부되었습니다.');
-        }
-
-        const location = await geoLocation.getCurrentLocation();
-        if (!Number.isFinite(location.latitude) || !Number.isFinite(location.longitude)) {
-          throw new Error('Teams가 유효한 위치를 반환하지 않았습니다.');
-        }
-
-        return {
-          latitude: location.latitude,
-          longitude: location.longitude,
-          accuracy: location.accuracy,
-          source: 'teams-native',
-        };
-      });
-      if (geoLocationResult) return geoLocationResult;
-    }
-
-    if (runtime.legacyLocationSupported) {
-      const nativeLocation = await tryProvider('Teams 위치', getLegacyTeamsLocation);
-      if (nativeLocation) return nativeLocation;
-    }
-
-    throw new Error(
-      `${locationErrors.join(' ')} Teams 앱 권한과 iPhone 위치 서비스를 확인한 뒤 다시 시도하세요.`,
-    );
-  }
-
-  function getCurrentDeviceLocation(signal: AbortSignal): Promise<DeviceLocation> {
-    throwIfAborted(signal);
-
-    if (!deviceLocationRequest.current) {
-      const request = resolveCurrentDeviceLocation();
-      const trackedRequest = request.finally(() => {
-        if (deviceLocationRequest.current === trackedRequest) deviceLocationRequest.current = null;
-      });
-      deviceLocationRequest.current = trackedRequest;
-    }
-
-    return waitForAbort(deviceLocationRequest.current, signal);
   }
 
   async function loadWeather(useCurrentLocation: boolean): Promise<void> {
@@ -388,7 +175,7 @@ export function App() {
     let resolvedLocationAccuracy: number | null;
 
     try {
-      const position = await getCurrentDeviceLocation(controller.signal);
+      const position = await locationServiceRef.current!.getCurrentDeviceLocation(controller.signal);
       if (!isCurrentRequest()) return;
       latitude = position.latitude;
       longitude = position.longitude;
@@ -482,8 +269,6 @@ export function App() {
     void refreshRuntime().finally(() => {
       if (mountedRef.current) setCopilotReady(true);
     });
-    void initializeTeamsLocation();
-    void loadWeather(true);
 
     return () => {
       mountedRef.current = false;
