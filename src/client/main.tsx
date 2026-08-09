@@ -7,8 +7,10 @@ import { markTeamsHostReady } from './auth.js';
 import './styles.css';
 
 type BootstrapResult = 'ready' | 'preview' | 'recovery' | 'stale';
+type BootstrapMode = 'teams' | 'preview';
 
 type BootstrapOptions = {
+  mode?: BootstrapMode;
   initialize: () => Promise<void>;
   markHostReady: () => void;
   setHost: () => void;
@@ -57,15 +59,34 @@ export function createTeamsBootstrapController(options: BootstrapOptions): { sta
   const timeoutMs = options.timeoutMs ?? 2_000;
   let generation = 0;
   let activeAttempt: Promise<BootstrapResult> | null = null;
+  let activeInitialization: Promise<void> | null = null;
 
   const start = (): Promise<BootstrapResult> => {
     if (activeAttempt) return activeAttempt;
+    if (activeInitialization) {
+      // TeamsJS does not expose cancellation for app.initialize(). Wait for
+      // the native attempt to settle before allowing a fresh one.
+      return activeInitialization.then(
+        () => start(),
+        () => start(),
+      );
+    }
 
     const attemptGeneration = generation + 1;
     generation = attemptGeneration;
+    const initialization = Promise.resolve().then(options.initialize);
+    activeInitialization = initialization;
+    void initialization.then(
+      () => {
+        if (activeInitialization === initialization) activeInitialization = null;
+      },
+      () => {
+        if (activeInitialization === initialization) activeInitialization = null;
+      },
+    );
     const attempt = (async (): Promise<BootstrapResult> => {
       try {
-        await withBootstrapTimeout(options.initialize(), timeoutMs);
+        await withBootstrapTimeout(initialization, timeoutMs);
         if (attemptGeneration !== generation) return 'stale';
         options.markHostReady();
         options.setHost();
@@ -80,9 +101,15 @@ export function createTeamsBootstrapController(options: BootstrapOptions): { sta
           return 'recovery';
         }
 
-        // The local browser preview is intentionally usable outside Teams.
-        options.renderApp();
-        return 'preview';
+        if (options.mode === 'preview') {
+          options.renderApp();
+          return 'preview';
+        }
+
+        mountBootstrapRecovery(options.root, () => {
+          void start();
+        });
+        return 'recovery';
       }
     })();
 
@@ -95,6 +122,12 @@ export function createTeamsBootstrapController(options: BootstrapOptions): { sta
   };
 
   return { start };
+}
+
+function isExplicitBrowserPreview(): boolean {
+  if (typeof window === 'undefined' || window.parent !== window) return false;
+  const preview = new URLSearchParams(window.location.search).get('preview');
+  return preview === '1' || preview === 'true';
 }
 
 function renderApp(root: HTMLElement): void {
@@ -110,6 +143,7 @@ if (typeof document !== 'undefined') {
   if (!root) throw new Error('Teams app root element is missing');
 
   const controller = createTeamsBootstrapController({
+    mode: isExplicitBrowserPreview() ? 'preview' : 'teams',
     initialize: () => app.initialize(),
     markHostReady: markTeamsHostReady,
     setHost: () => {
