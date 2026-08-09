@@ -81,6 +81,73 @@ async function flushBootstrapTasks(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
+async function testInitializationCanFinishAfterLegacyTwoSecondWindow(): Promise<void> {
+  const root = new FakeRoot();
+  let hostReadyCalls = 0;
+  let renderCalls = 0;
+
+  const controller = createTeamsBootstrapController({
+    mode: 'teams',
+    initialize: () => new Promise<void>((resolve) => {
+      setTimeout(resolve, 2_050);
+    }),
+    markHostReady: () => {
+      hostReadyCalls += 1;
+    },
+    setHost: () => undefined,
+    renderApp: () => {
+      renderCalls += 1;
+    },
+    root: root as unknown as HTMLElement,
+  });
+
+  assert.equal(
+    await controller.start(),
+    'ready',
+    'a Teams host that needs slightly more than two seconds still reaches the app instead of entering recovery',
+  );
+  assert.equal(hostReadyCalls, 1, 'a slow but successful initialization marks the host ready once');
+  assert.equal(renderCalls, 1, 'a slow but successful initialization mounts the app once');
+}
+
+async function testRetryResetsTeamsInitializationBeforeStartingAgain(): Promise<void> {
+  const root = new FakeRoot();
+  let initializeCalls = 0;
+  let resetCalls = 0;
+  let hostReadyCalls = 0;
+  let renderCalls = 0;
+
+  const controller = createTeamsBootstrapController({
+    mode: 'teams',
+    initialize: async () => {
+      initializeCalls += 1;
+      if (initializeCalls === 1) throw new Error('Teams SDK rejected initialization');
+    },
+    resetInitialization: () => {
+      resetCalls += 1;
+    },
+    markHostReady: () => {
+      hostReadyCalls += 1;
+    },
+    setHost: () => undefined,
+    renderApp: () => {
+      renderCalls += 1;
+    },
+    root: root as unknown as HTMLElement,
+    timeoutMs: 10,
+  });
+
+  assert.equal(await controller.start(), 'recovery', 'an initialization error enters recovery mode');
+  root.retryButton.click();
+  assert.match(root.innerHTML, /Teams 앱 연결을 확인하고 있습니다/, 'retry immediately restores the loading state');
+  await flushBootstrapTasks();
+
+  assert.equal(resetCalls, 1, 'retry resets the TeamsJS initialization state before a new attempt');
+  assert.equal(initializeCalls, 2, 'retry starts one new initialization attempt');
+  assert.equal(hostReadyCalls, 1, 'a successful retry marks the host ready once');
+  assert.equal(renderCalls, 1, 'a successful retry mounts the app once');
+}
+
 async function testImmediateInitializationRejectionMountsTeamsRecovery(): Promise<void> {
   const root = new FakeRoot();
   let initializeCalls = 0;
@@ -162,6 +229,8 @@ async function testHungInitializationMountsRetryableRecoveryAndGuardsLateResult(
 
 await testHungInitializationMountsRetryableRecoveryAndGuardsLateResult();
 await testImmediateInitializationRejectionMountsTeamsRecovery();
+await testInitializationCanFinishAfterLegacyTwoSecondWindow();
+await testRetryResetsTeamsInitializationBeforeStartingAgain();
 
 hooks.deregister();
 console.log('PASS: bounded Teams bootstrap recovery and retry guards');

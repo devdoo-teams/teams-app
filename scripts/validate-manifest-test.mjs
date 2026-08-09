@@ -48,4 +48,24 @@ for (const requiredDomain of ['${{TAB_DOMAIN}}', 'token.botframework.com']) {
   );
 }
 
+{
+  const candidate = structuredClone(manifest);
+  candidate.staticTabs[0].contentUrl = 'https://${{TAB_DOMAIN}}/other/';
+  assert.match(
+    validate(candidate) ?? '',
+    /\/tabs\/home\//,
+    'manifest validation rejects a personal tab URL that does not target the public home route',
+  );
+}
+
+{
+  const candidate = structuredClone(manifest);
+  candidate.staticTabs[0].websiteUrl = 'https://${{TAB_DOMAIN}}';
+  assert.match(
+    validate(candidate) ?? '',
+    /websiteUrl.*trailing slash/i,
+    'manifest validation rejects a personal website URL that redirects before Teams can open the origin',
+  );
+}
+
 console.log('Source manifest contract tests passed.');

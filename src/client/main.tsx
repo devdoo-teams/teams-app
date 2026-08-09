@@ -9,9 +9,12 @@ import './styles.css';
 type BootstrapResult = 'ready' | 'preview' | 'recovery' | 'stale';
 type BootstrapMode = 'teams' | 'preview';
 
+export const DEFAULT_TEAMS_BOOTSTRAP_TIMEOUT_MS = 10_000;
+
 type BootstrapOptions = {
   mode?: BootstrapMode;
   initialize: () => Promise<void>;
+  resetInitialization?: () => void;
   markHostReady: () => void;
   setHost: () => void;
   renderApp: () => void;
@@ -42,6 +45,15 @@ function withBootstrapTimeout(promise: Promise<void>, timeoutMs: number): Promis
   });
 }
 
+export function mountBootstrapLoading(root: HTMLElement): void {
+  root.innerHTML = `
+    <main aria-live="polite" role="status">
+      <p>Teams 앱 연결을 확인하고 있습니다.</p>
+      <p>잠시만 기다려 주세요.</p>
+    </main>
+  `;
+}
+
 export function mountBootstrapRecovery(root: HTMLElement, retry: () => void): void {
   root.innerHTML = `
     <main aria-live="polite" role="alert">
@@ -56,13 +68,15 @@ export function mountBootstrapRecovery(root: HTMLElement, retry: () => void): vo
 }
 
 export function createTeamsBootstrapController(options: BootstrapOptions): { start(): Promise<BootstrapResult> } {
-  const timeoutMs = options.timeoutMs ?? 2_000;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TEAMS_BOOTSTRAP_TIMEOUT_MS;
   let generation = 0;
   let activeAttempt: Promise<BootstrapResult> | null = null;
   let activeInitialization: Promise<void> | null = null;
+  let ready = false;
 
   const start = (): Promise<BootstrapResult> => {
     if (activeAttempt) return activeAttempt;
+    if (ready) return Promise.resolve('ready');
     if (activeInitialization) {
       // TeamsJS does not expose cancellation for app.initialize(). Wait for
       // the native attempt to settle before allowing a fresh one.
@@ -74,6 +88,10 @@ export function createTeamsBootstrapController(options: BootstrapOptions): { sta
 
     const attemptGeneration = generation + 1;
     generation = attemptGeneration;
+    if (attemptGeneration > 1) {
+      options.resetInitialization?.();
+      mountBootstrapLoading(options.root);
+    }
     const initialization = Promise.resolve().then(options.initialize);
     activeInitialization = initialization;
     void initialization.then(
@@ -91,6 +109,7 @@ export function createTeamsBootstrapController(options: BootstrapOptions): { sta
         options.markHostReady();
         options.setHost();
         options.renderApp();
+        ready = true;
         return 'ready';
       } catch (error) {
         if (attemptGeneration !== generation) return 'stale';
@@ -144,7 +163,10 @@ if (typeof document !== 'undefined') {
 
   const controller = createTeamsBootstrapController({
     mode: isExplicitBrowserPreview() ? 'preview' : 'teams',
-    initialize: () => app.initialize(),
+    initialize: () => app.isInitialized() ? Promise.resolve() : app.initialize(),
+    resetInitialization: () => {
+      if (!app.isInitialized()) app._uninitialize();
+    },
     markHostReady: markTeamsHostReady,
     setHost: () => {
       document.documentElement.dataset.host = 'teams';

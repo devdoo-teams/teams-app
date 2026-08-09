@@ -6,7 +6,7 @@
   "id": "${{TEAMS_APP_ID}}",
   "developer": {
     "name": "Teams SDK MVP",
-    "websiteUrl": "https://${{TAB_DOMAIN}}",
+    "websiteUrl": "https://${{TAB_DOMAIN}}/",
     "privacyUrl": "https://${{TAB_DOMAIN}}/privacy",
     "termsOfUseUrl": "https://${{TAB_DOMAIN}}/termsOfUse"
   },
@@ -28,7 +28,7 @@
       "entityId": "home",
       "name": "업무 허브",
       "scopes": ["personal"],
-      "websiteUrl": "https://${{TAB_DOMAIN}}",
+      "websiteUrl": "https://${{TAB_DOMAIN}}/",
       "contentUrl": "https://${{TAB_DOMAIN}}/tabs/home/"
     }
   ],

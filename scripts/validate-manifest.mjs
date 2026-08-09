@@ -31,6 +31,12 @@ export function validateManifest(manifest, packageJson, { iconExists } = {}) {
   if (!homeTab?.contentUrl?.endsWith('/')) {
     return 'Manifest home tab contentUrl must include a trailing slash so the Teams iframe does not depend on an HTTP redirect.';
   }
+  if (homeTab.contentUrl !== 'https://${{TAB_DOMAIN}}/tabs/home/') {
+    return 'Manifest home tab contentUrl must target https://${{TAB_DOMAIN}}/tabs/home/ so the Teams iframe loads the public home route directly.';
+  }
+  if (homeTab.websiteUrl !== 'https://${{TAB_DOMAIN}}/') {
+    return 'Manifest home tab websiteUrl must use the public tab origin with a trailing slash so Teams does not depend on an HTTP redirect.';
+  }
 
   if (!manifest.devicePermissions?.includes('geolocation')) {
     return 'Manifest must declare geolocation device permission.';
