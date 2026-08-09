@@ -457,6 +457,23 @@ async function runStoreLeaseFlow(dataFile, jobDataFile) {
 }
 
 async function runStartupGateFlow() {
+  const productionSsoEnv = (label, overrides = {}) => ({
+    NODE_ENV: 'production',
+    TAB_DOMAIN: 'runtime.test',
+    WEATHER_MODE: 'live',
+    TEAMS_USE_SDK: 'true',
+    BOT_CLIENT_ID: '00000000-0000-4000-8000-000000000001',
+    CLIENT_ID: '00000000-0000-4000-8000-000000000002',
+    CLIENT_SECRET: 'runtime-test-secret',
+    TENANT_ID: '00000000-0000-4000-8000-000000000003',
+    APPLICATION_ID_URI: 'api://runtime.test/botid-00000000-0000-4000-8000-000000000001',
+    ITEM_STORE_PATH: path.join(tempDir, `${label}-items.json`),
+    AGENT_JOB_STORE_PATH: path.join(tempDir, `${label}-agent-jobs.json`),
+    GENUI_ACTION_STORE_PATH: path.join(tempDir, `${label}-genui-actions.json`),
+    RESPONSE_MODE_STORE_PATH: path.join(tempDir, `${label}-response-modes.json`),
+    ...overrides,
+  });
+
   await expectStartupFailure(
     'legacy public MCP configuration',
     { MCP_PUBLIC_ENABLED: 'true' },
@@ -502,22 +519,34 @@ async function runStartupGateFlow() {
   );
   await expectStartupFailure(
     'production with a mismatched combined SSO resource',
-    {
-      NODE_ENV: 'production',
-      TAB_DOMAIN: 'runtime.test',
-      WEATHER_MODE: 'live',
-      TEAMS_USE_SDK: 'true',
-      BOT_CLIENT_ID: '00000000-0000-4000-8000-000000000001',
-      CLIENT_ID: '00000000-0000-4000-8000-000000000002',
-      CLIENT_SECRET: 'runtime-test-secret',
-      TENANT_ID: '00000000-0000-4000-8000-000000000003',
+    productionSsoEnv('mismatched-sso', {
       APPLICATION_ID_URI: 'api://runtime.test/botid-00000000-0000-4000-8000-000000000002',
-      ITEM_STORE_PATH: path.join(tempDir, 'mismatched-sso-items.json'),
-      AGENT_JOB_STORE_PATH: path.join(tempDir, 'mismatched-sso-agent-jobs.json'),
-      GENUI_ACTION_STORE_PATH: path.join(tempDir, 'mismatched-sso-genui-actions.json'),
-      RESPONSE_MODE_STORE_PATH: path.join(tempDir, 'mismatched-sso-response-modes.json'),
-    },
+    }),
     'APPLICATION_ID_URI must match api://runtime.test/botid-00000000-0000-4000-8000-000000000001',
+  );
+  await expectStartupFailure(
+    'production without TAB_DOMAIN',
+    productionSsoEnv('missing-tab-domain', {
+      TAB_DOMAIN: '',
+      APPLICATION_ID_URI: 'api:///botid-00000000-0000-4000-8000-000000000001',
+    }),
+    'Production requires TAB_DOMAIN',
+  );
+  await expectStartupFailure(
+    'production without BOT_CLIENT_ID',
+    productionSsoEnv('missing-bot-client-id', {
+      BOT_CLIENT_ID: undefined,
+      APPLICATION_ID_URI: 'api://runtime.test/botid-',
+    }),
+    'Production requires BOT_CLIENT_ID',
+  );
+  await expectStartupFailure(
+    'production with a malformed TAB_DOMAIN and matching URI',
+    productionSsoEnv('malformed-tab-domain', {
+      TAB_DOMAIN: 'runtime.test:3978',
+      APPLICATION_ID_URI: 'api://runtime.test:3978/botid-00000000-0000-4000-8000-000000000001',
+    }),
+    'Production TAB_DOMAIN must be a public HTTPS hostname',
   );
   await expectStartupFailure(
     'production with demo weather mode',

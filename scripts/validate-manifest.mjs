@@ -1,10 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const manifestPath = path.resolve('appPackage/manifest.json');
-const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-const packagePath = path.resolve('package.json');
-const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
 const releaseVersion = '1.0.15';
 const required = [
   'manifestVersion',
@@ -18,53 +15,61 @@ const required = [
   'validDomains',
   'webApplicationInfo',
 ];
-const missing = required.filter((key) => !(key in manifest));
 
-if (missing.length > 0) {
-  console.error(`Manifest missing required fields: ${missing.join(', ')}`);
-  process.exit(1);
+export function validateManifest(manifest, packageJson, { iconExists } = {}) {
+  const missing = required.filter((key) => !(key in manifest));
+  if (missing.length > 0) return `Manifest missing required fields: ${missing.join(', ')}`;
+
+  if (manifest.manifestVersion !== '1.25') {
+    return `Expected manifestVersion 1.25, received ${manifest.manifestVersion}`;
+  }
+
+  if (!manifest.staticTabs.some((tab) => tab.entityId === 'home' && tab.scopes.includes('personal'))) {
+    return 'Manifest must declare a personal home static tab.';
+  }
+
+  if (!manifest.devicePermissions?.includes('geolocation')) {
+    return 'Manifest must declare geolocation device permission.';
+  }
+
+  const missingValidDomains = ['${{TAB_DOMAIN}}', 'token.botframework.com']
+    .filter((domain) => !manifest.validDomains?.includes(domain));
+  if (missingValidDomains.length > 0) {
+    return `Manifest validDomains must include ${missingValidDomains.join(', ')} for the tab origin and Teams SSO redirect handling.`;
+  }
+
+  if (packageJson.version !== releaseVersion || manifest.version !== releaseVersion) {
+    return `Expected package and manifest version ${releaseVersion}, received package=${packageJson.version}, manifest=${manifest.version}`;
+  }
+
+  if (!manifest.bots?.[0]?.commandLists?.some((list) => list.commands?.some((command) => command.title === '날씨'))) {
+    return 'Manifest must expose the 날씨 Bot command.';
+  }
+
+  if (!manifest.webApplicationInfo.id || !manifest.webApplicationInfo.resource) {
+    return 'Manifest webApplicationInfo must include id and resource.';
+  }
+
+  for (const icon of Object.values(manifest.icons)) {
+    if (iconExists && !iconExists(icon)) return `Manifest icon does not exist: ${icon}`;
+  }
+
+  return undefined;
 }
 
-if (manifest.manifestVersion !== '1.25') {
-  console.error(`Expected manifestVersion 1.25, received ${manifest.manifestVersion}`);
-  process.exit(1);
-}
+function runCli() {
+  const manifest = JSON.parse(fs.readFileSync(path.resolve('appPackage/manifest.json'), 'utf8'));
+  const packageJson = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8'));
+  const error = validateManifest(manifest, packageJson, {
+    iconExists: (icon) => fs.existsSync(path.resolve('appPackage', icon)),
+  });
 
-if (!manifest.staticTabs.some((tab) => tab.entityId === 'home' && tab.scopes.includes('personal'))) {
-  console.error('Manifest must declare a personal home static tab.');
-  process.exit(1);
-}
-
-if (!manifest.devicePermissions?.includes('geolocation')) {
-  console.error('Manifest must declare geolocation device permission.');
-  process.exit(1);
-}
-
-if (!manifest.validDomains?.includes('token.botframework.com')) {
-  console.error('Manifest validDomains must include token.botframework.com for Teams SSO redirect handling.');
-  process.exit(1);
-}
-
-if (packageJson.version !== releaseVersion || manifest.version !== releaseVersion) {
-  console.error(`Expected package and manifest version ${releaseVersion}, received package=${packageJson.version}, manifest=${manifest.version}`);
-  process.exit(1);
-}
-
-if (!manifest.bots?.[0]?.commandLists?.some((list) => list.commands?.some((command) => command.title === '날씨'))) {
-  console.error('Manifest must expose the 날씨 Bot command.');
-  process.exit(1);
-}
-
-if (!manifest.webApplicationInfo.id || !manifest.webApplicationInfo.resource) {
-  console.error('Manifest webApplicationInfo must include id and resource.');
-  process.exit(1);
-}
-
-for (const icon of Object.values(manifest.icons)) {
-  if (!fs.existsSync(path.resolve('appPackage', icon))) {
-    console.error(`Manifest icon does not exist: ${icon}`);
+  if (error) {
+    console.error(error);
     process.exit(1);
   }
+
+  console.log(`Manifest OK: v${manifest.manifestVersion}, ${manifest.staticTabs.length} static tab(s)`);
 }
 
-console.log(`Manifest OK: v${manifest.manifestVersion}, ${manifest.staticTabs.length} static tab(s)`);
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) runCli();

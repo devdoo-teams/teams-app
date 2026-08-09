@@ -56,6 +56,7 @@ import {
   responseModeLabel,
   type ResponseMode,
 } from '../shared/response-mode.js';
+import { isValidPublicHostname } from '../shared/public-hostname.js';
 import type { RunAgentInput } from '@ag-ui/core';
 
 const port = Number(process.env.PORT ?? 3978);
@@ -86,8 +87,10 @@ const agentJobStore = new AgentJobStore(
 const codexRunner = new CodexRunner();
 const agentWorkspace = path.resolve(process.env.AGENT_WORKSPACE ?? process.cwd());
 const gitService = new GitService(agentWorkspace);
-const botClientId = process.env.BOT_CLIENT_ID ?? process.env.CLIENT_ID;
-const botConfigured = Boolean(botClientId && process.env.CLIENT_SECRET && process.env.TENANT_ID);
+const explicitBotClientId = process.env.BOT_CLIENT_ID?.trim() ?? '';
+const botClientId = explicitBotClientId || (!isProduction ? process.env.CLIENT_ID?.trim() ?? '' : '');
+const tabDomain = process.env.TAB_DOMAIN?.trim() ?? '';
+const botConfigured = Boolean(botClientId && process.env.CLIENT_SECRET?.trim() && process.env.TENANT_ID?.trim());
 const useTeamsSdk = process.env.TEAMS_USE_SDK !== 'false' && botConfigured;
 const userAuthConfigured = Boolean(
   process.env.CLIENT_ID && process.env.TENANT_ID && process.env.APPLICATION_ID_URI,
@@ -154,6 +157,10 @@ if (safeLocal && localAccessToken.length < MIN_LOCAL_ACCESS_TOKEN_LENGTH) {
   throw new Error(`TEAMS_LOCAL_ACCESS_TOKEN must be at least ${MIN_LOCAL_ACCESS_TOKEN_LENGTH} characters in safe local mode.`);
 }
 
+if (isProduction && !explicitBotClientId) {
+  throw new Error('Production requires BOT_CLIENT_ID to be explicitly configured.');
+}
+
 if (isProduction && (!botConfigured || !useTeamsSdk)) {
   throw new Error('Production requires BOT_CLIENT_ID, CLIENT_SECRET, TENANT_ID, and the Teams SDK runtime.');
 }
@@ -162,8 +169,16 @@ if (isProduction && !userAuthConfigured) {
   throw new Error('Production requires CLIENT_ID, TENANT_ID, and APPLICATION_ID_URI for user SSO.');
 }
 
+if (isProduction && !tabDomain) {
+  throw new Error('Production requires TAB_DOMAIN for the combined bot+tab SSO resource.');
+}
+
+if (isProduction && !isValidPublicHostname(process.env.TAB_DOMAIN)) {
+  throw new Error('Production TAB_DOMAIN must be a public HTTPS hostname without a scheme, path, wildcard, or localhost.');
+}
+
 if (isProduction) {
-  const expectedApplicationIdUri = `api://${process.env.TAB_DOMAIN?.trim() ?? ''}/botid-${process.env.BOT_CLIENT_ID?.trim() ?? ''}`;
+  const expectedApplicationIdUri = `api://${tabDomain}/botid-${explicitBotClientId}`;
   if (process.env.APPLICATION_ID_URI?.trim() !== expectedApplicationIdUri) {
     throw new Error(`Production APPLICATION_ID_URI must match ${expectedApplicationIdUri}.`);
   }
