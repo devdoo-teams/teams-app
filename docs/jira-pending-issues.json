@@ -3,14 +3,14 @@
   "site": "https://devdoo.atlassian.net",
   "projectKey": "MP",
   "defaultAssignee": "self",
-  "sourceCommit": "e4e1265",
+  "sourceCommit": "1fec85b44f6045c75800b758fee024729e2b6132",
   "appVersion": "1.0.26",
   "packageSha256": "f5655b15aa85669de4ce9bc3b806d2a2d480947b60b1f4dfd7d3a82cd213d078",
   "portalVersion": "1.0.26",
   "portalPackageSha256": "fc274760c2fc8338b08c0f5d0a6b4206c62f27a2cfb063ef81a6ff8bc5ff257a",
   "issues": [
     {
-      "idempotencyKey": "teams-core:release-blocker:installed-ui-evidence:e4e1265",
+      "idempotencyKey": "teams-core:release-blocker:installed-ui-evidence:1fec85b",
       "issueType": "Bug",
       "summary": "[Teams Core 1.0.26] installed, desktop, and mobile UI evidence is missing",
       "assignee": "self",
@@ -20,7 +20,7 @@
       "acceptance": "The installed app visibly reports version 1.0.26, the desktop chat/tab and every exercised branch have fresh before/after screenshots plus AX/runtime evidence, and the mobile Teams user confirms the same release behavior. Then update this issue with evidence paths and transition it using a workflow transition discovered from Jira."
     },
     {
-      "idempotencyKey": "teams-core:bug:location-runtime-timeout-retry:e4e1265",
+      "idempotencyKey": "teams-core:bug:location-runtime-timeout-retry:1fec85b",
       "issueType": "Bug",
       "summary": "[Teams Core] Teams capability timeout permanently reused a stale location request",
       "assignee": "self",
@@ -30,7 +30,7 @@
       "acceptance": "The automated timeout-to-browser-fallback-to-fresh-retry test passes, and Teams mobile confirms that a second '내 위치 사용' action performs a new location request after a host timeout without overlapping a native prompt."
     },
     {
-      "idempotencyKey": "teams-core:bug:work-item-deep-link-page-boundary:e4e1265",
+      "idempotencyKey": "teams-core:bug:work-item-deep-link-page-boundary:1fec85b",
       "issueType": "Bug",
       "summary": "[Teams Core] deep link to an older work item was cleared when it was outside the first page",
       "assignee": "self",
@@ -40,7 +40,7 @@
       "acceptance": "A Teams tab deep link to an item outside the initial 100-item result page opens the correct item and preserves its edit/comment controls on desktop and mobile."
     },
     {
-      "idempotencyKey": "teams-core:bug:collaboration-loading-state:e4e1265",
+      "idempotencyKey": "teams-core:bug:collaboration-loading-state:1fec85b",
       "issueType": "Bug",
       "summary": "[Teams Core] collaboration panel showed empty digest text while requests were still loading",
       "assignee": "self",
@@ -50,7 +50,7 @@
       "acceptance": "Desktop and mobile screenshots show a loading state during the request, a populated/empty digest only after the request settles, and an actionable error state on failure."
     },
     {
-      "idempotencyKey": "teams-core:bug:genui-error-partial-weather:e4e1265",
+      "idempotencyKey": "teams-core:bug:genui-error-partial-weather:1fec85b",
       "issueType": "Bug",
       "summary": "[Teams Core] GenUI error retry actions and partial weather sections were hidden",
       "assignee": "self",
@@ -60,7 +60,7 @@
       "acceptance": "Teams desktop and mobile show a usable 다시 시도/새로고침 action on an error card and render available partial weather facts without falsely showing an empty card."
     },
     {
-      "idempotencyKey": "teams-core:diagnostic-discrepancy:teams-cli-sso:e4e1265",
+      "idempotencyKey": "teams-core:diagnostic-discrepancy:teams-cli-sso:1fec85b",
       "issueType": "Task",
       "summary": "[Teams Core] reconcile Teams CLI SSO doctor diagnostics with live bot+tab contract",
       "assignee": "self",
