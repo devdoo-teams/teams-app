@@ -180,7 +180,9 @@ async function readCapture(caseName: string): Promise<Capture> {
     try {
       return JSON.parse(await fs.readFile(filePath, 'utf8')) as Capture;
     } catch (error) {
-      if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error;
+      const missing = error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT';
+      const partialWrite = error instanceof SyntaxError;
+      if (!missing && !partialWrite) throw error;
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
   }

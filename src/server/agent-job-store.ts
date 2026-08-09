@@ -31,7 +31,9 @@ const AGENT_JOB_STATUSES: readonly AgentJobStatus[] = [
   'cancelled',
 ];
 const AGENT_JOB_MODES: readonly AgentJobMode[] = ['read-only', 'workspace-write'];
-const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/g;
+// Preserve the whitespace characters used by normal multi-line Codex output
+// while rejecting the remaining C0/C1 control range in persisted records.
+const CONTROL_CHARACTERS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
 
 export interface AgentJobScope {
   requesterId: string;

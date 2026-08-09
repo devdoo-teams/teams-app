@@ -117,10 +117,15 @@ try {
   );
 
   const currentPath = path.join(storeDirectory, 'current-valid.json');
-  await fs.writeFile(currentPath, JSON.stringify([currentJob({ changedPaths: ['src/owned.ts'] })]), 'utf8');
+  await fs.writeFile(currentPath, JSON.stringify([currentJob({
+    changedPaths: ['src/owned.ts'],
+    result: '첫 번째 결과 줄\n두 번째 결과 줄',
+    progress: ['첫 번째 진행 줄\n두 번째 진행 줄'],
+  })]), 'utf8');
   const currentStore = new AgentJobStore(currentPath);
   await currentStore.initialize();
   assert.equal(currentStore.get('task-current-1', scope)?.tenantId, scope.tenantId, 'valid current job is readable in its scope');
+  assert.match(currentStore.get('task-current-1', scope)?.result ?? '', /첫 번째 결과 줄\n두 번째 결과 줄/, 'multiline Codex results remain valid persisted text');
   assert.deepEqual(
     currentStore.get('task-current-1', scope)?.changedPaths,
     ['src/owned.ts'],
