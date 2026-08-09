@@ -181,6 +181,15 @@ function withEnvironment(values: Record<string, string | undefined>): () => void
   };
 }
 
+const localBaseUrlCases: Array<{ value: string; configured: boolean }> = [
+  { value: 'https://model.internal.example/v1', configured: true },
+  { value: 'https://user:password@model.internal.example/v1', configured: false },
+  { value: 'https://model.internal.example/v1?api_key=url-secret', configured: false },
+  { value: 'https://model.internal.example/v1#fragment', configured: false },
+  { value: 'file:///tmp/local-model', configured: false },
+  { value: 'https://', configured: false },
+];
+
 async function main(): Promise<void> {
   const dataDirectory = await mkdtemp(join(tmpdir(), 'teams-local-response-engine-'));
   const itemStore = new ItemStore(join(dataDirectory, 'items.json'));
@@ -192,6 +201,45 @@ async function main(): Promise<void> {
   };
 
   try {
+    for (const testCase of localBaseUrlCases) {
+      const restore = withEnvironment({
+        LOCAL_MODEL_BASE_URL: testCase.value,
+        LOCAL_MODEL_NAME: 'test-model',
+        LOCAL_MODEL_API_KEY: undefined,
+      });
+      let fetchCalls = 0;
+      let requestedUrl = '';
+      try {
+        const result = await new LocalCompatibleResponseEngine({
+          fetchImpl: async (input) => {
+            fetchCalls += 1;
+            requestedUrl = String(input);
+            return new Response(JSON.stringify(textBody('로컬 테스트 응답')), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            });
+          },
+        }).run(await createInput(itemStore, createAgentServiceFake(), '설정 확인'));
+
+        assert.equal(
+          fetchCalls,
+          testCase.configured ? 1 : 0,
+          `local engine provider call count for ${testCase.value}`,
+        );
+        if (testCase.configured) {
+          assert.equal(requestedUrl, 'https://model.internal.example/v1/chat/completions');
+          assert.equal(result.envelope.kind, 'answer');
+          assert.equal(result.text, '로컬 테스트 응답');
+        } else {
+          assert.equal(result.envelope.status, 'error');
+          assert.equal(result.envelope.metadata.errorCode, 'local-invalid-url');
+          assert.doesNotMatch(JSON.stringify(result), /user:password|url-secret|file:/);
+        }
+      } finally {
+        restore();
+      }
+    }
+
     const noUrlRestore = withEnvironment({
       LOCAL_MODEL_BASE_URL: undefined,
       LOCAL_MODEL_NAME: 'ignored-model',

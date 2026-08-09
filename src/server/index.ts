@@ -44,6 +44,7 @@ import { ChannelsShadowMonitor } from './channels-shadow-monitor.js';
 import { renderChannelsShadow } from './copilot-channels-shadow.js';
 import { acquireStoreProcessLease, type StoreProcessLease } from './process-lease.js';
 import { buildTeamsPersonalTabDeepLink } from './teams-tab-link.js';
+import { isLocalModelBaseUrlConfigured } from './local-model-url.js';
 import {
   GENUI_ACTION_PAYLOAD_KEYS,
   GENUI_SCHEMA_VERSION,
@@ -125,6 +126,12 @@ const genUi = new GenUiResponseFactory(genUiActionStore, {
 const channelsShadowMonitor = new ChannelsShadowMonitor();
 const openAiConfigured = Boolean(process.env.OPENAI_API_KEY?.trim());
 const openAiModel = process.env.OPENAI_MODEL?.trim() || 'gpt-4o-mini';
+const weatherMode = process.env.WEATHER_MODE === 'demo' ? 'demo' : 'live';
+const responseProviders = {
+  deterministic: true,
+  openai: openAiConfigured,
+  local: isLocalModelBaseUrlConfigured(process.env.LOCAL_MODEL_BASE_URL),
+} as const;
 
 if (legacyPublicMcp) {
   throw new Error('MCP_PUBLIC_ENABLED=true is no longer supported; MCP is local-only and requires the safe local gate.');
@@ -157,6 +164,10 @@ if (isProduction && !userAuthConfigured) {
 
 if (isProduction && skipAuth) {
   throw new Error('TEAMS_SKIP_AUTH must not be enabled in production.');
+}
+
+if (isProduction && weatherMode === 'demo') {
+  throw new Error('WEATHER_MODE=demo is forbidden in production.');
 }
 
 let storeProcessLease: StoreProcessLease | undefined;
@@ -554,6 +565,8 @@ http.get('/api/health', (_request: any, response: any) => {
       configured: openAiConfigured,
       model: openAiModel.slice(0, 120),
     },
+    responseProviders,
+    weatherMode,
     genUiMode,
     genUi: 'adaptive-cards',
     channelsShadow: genUiMode === 'channels-shadow'

@@ -501,6 +501,24 @@ async function runStartupGateFlow() {
     'Production requires BOT_CLIENT_ID',
   );
   await expectStartupFailure(
+    'production with demo weather mode',
+    {
+      NODE_ENV: 'production',
+      WEATHER_MODE: 'demo',
+      TEAMS_USE_SDK: 'true',
+      BOT_CLIENT_ID: '00000000-0000-4000-8000-000000000001',
+      CLIENT_ID: '00000000-0000-4000-8000-000000000002',
+      CLIENT_SECRET: 'runtime-test-secret',
+      TENANT_ID: '00000000-0000-4000-8000-000000000003',
+      APPLICATION_ID_URI: 'api://runtime.test/00000000-0000-4000-8000-000000000002',
+      ITEM_STORE_PATH: path.join(tempDir, 'demo-weather-items.json'),
+      AGENT_JOB_STORE_PATH: path.join(tempDir, 'demo-weather-agent-jobs.json'),
+      GENUI_ACTION_STORE_PATH: path.join(tempDir, 'demo-weather-genui-actions.json'),
+      RESPONSE_MODE_STORE_PATH: path.join(tempDir, 'demo-weather-response-modes.json'),
+    },
+    'WEATHER_MODE=demo',
+  );
+  await expectStartupFailure(
     'production without user SSO configuration',
     {
       NODE_ENV: 'production',
@@ -603,6 +621,10 @@ async function runLocalFlow(dataFile, jobDataFile) {
     assert(health.body.genAI === 'deterministic-test', 'local runtime reports explicit deterministic test mode');
     assert(health.body.genAIProvider?.provider === 'openai', 'health identifies the optional OpenAI provider without exposing credentials');
     assert(health.body.genAIProvider?.configured === false, 'no-key local health reports the OpenAI provider as unavailable');
+    assert(health.body.weatherMode === 'demo', 'local health reports demo weather mode');
+    assert(health.body.responseProviders?.deterministic === true, 'local health reports deterministic response provider availability');
+    assert(health.body.responseProviders?.openai === false, 'local health reports OpenAI response provider configuration');
+    assert(health.body.responseProviders?.local === false, 'local health reports local response provider configuration');
     assert(health.body.genUiMode === 'hybrid', 'health reports the hybrid GenUI mode');
     assert(health.body.genUi === 'adaptive-cards', 'health reports Adaptive Cards as the GenUI renderer');
     assert(health.body.channelsShadow?.enabled === false, 'hybrid health disables Channels shadow diagnostics');
@@ -1304,7 +1326,13 @@ async function runAgentTimeoutFlow(dataFile, jobDataFile) {
 }
 
 async function runProductionAuthFlow(dataFile, jobDataFile) {
-  const server = await startServer({ production: true, teamsSdk: true, dataFile, jobDataFile });
+  const server = await startServer({
+    production: true,
+    teamsSdk: true,
+    dataFile,
+    jobDataFile,
+    extraEnv: { WEATHER_MODE: 'live' },
+  });
 
   try {
     const health = await request(server.baseUrl, '/api/health');
@@ -1315,6 +1343,10 @@ async function runProductionAuthFlow(dataFile, jobDataFile) {
     assert(health.body.version === '1.0.14', 'production health reports the Teams manifest version');
     assert(health.body.genAI === 'not-configured', 'no-key production health does not pretend that OpenAI is configured');
     assert(health.body.genAIProvider?.provider === 'openai' && health.body.genAIProvider?.configured === false, 'no-key production health keeps the optional provider unavailable and healthy');
+    assert(health.body.weatherMode === 'live', 'production health reports live weather mode');
+    assert(health.body.responseProviders?.deterministic === true, 'production health reports deterministic response provider availability');
+    assert(health.body.responseProviders?.openai === false, 'production health reports OpenAI response provider configuration');
+    assert(health.body.responseProviders?.local === false, 'production health reports local response provider configuration');
     assert(!JSON.stringify(health.body).includes('OPENAI_API_KEY') && !JSON.stringify(health.body).includes('LOCAL_MODEL_BASE_URL'), 'production health omits provider secrets and endpoint URLs');
     assert(health.body.mcp === 'disabled' && health.body.mcpEnabled === false, 'production disables MCP unless explicitly opted in');
 

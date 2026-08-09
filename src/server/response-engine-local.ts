@@ -8,6 +8,7 @@ import {
 import type { WeatherResponse } from './weather-service.js';
 import { formatWeatherMessage } from './weather-service.js';
 import { redactSensitiveText, redactSensitiveValue } from './sensitive-text.js';
+import { parseLocalModelBaseUrl } from './local-model-url.js';
 import {
   LLM_TOOLS,
   type OpenAIChatResponse,
@@ -468,15 +469,8 @@ export class LocalCompatibleResponseEngine implements ResponseEngine {
     const rawBaseUrl = (process.env.LOCAL_MODEL_BASE_URL ?? '').trim();
     if (!rawBaseUrl) throw new LocalProviderError('configuration');
 
-    let baseUrl: URL;
-    try {
-      baseUrl = new URL(rawBaseUrl);
-    } catch {
-      throw new LocalProviderError('invalid-url');
-    }
-    if (!['http:', 'https:'].includes(baseUrl.protocol) || !baseUrl.hostname || baseUrl.username || baseUrl.password || baseUrl.search || baseUrl.hash) {
-      throw new LocalProviderError('invalid-url');
-    }
+    const baseUrl = parseLocalModelBaseUrl(rawBaseUrl);
+    if (!baseUrl) throw new LocalProviderError('invalid-url');
 
     const model = boundedModel(process.env.LOCAL_MODEL_NAME || DEFAULT_MODEL);
     if (!model) throw new LocalProviderError('configuration');

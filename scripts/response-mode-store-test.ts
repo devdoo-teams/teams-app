@@ -25,6 +25,15 @@ type ResponseModeModules = {
   responseModeLabel(mode: ResponseMode): string;
 };
 
+const localBaseUrlCases: Array<{ value: string; configured: boolean }> = [
+  { value: 'https://model.internal.example/v1', configured: true },
+  { value: 'https://user:password@model.internal.example/v1', configured: false },
+  { value: 'https://model.internal.example/v1?api_key=url-secret', configured: false },
+  { value: 'https://model.internal.example/v1#fragment', configured: false },
+  { value: 'file:///tmp/local-model', configured: false },
+  { value: 'https://', configured: false },
+];
+
 async function loadResponseModeModules(): Promise<ResponseModeModules> {
   try {
     const [contract, store] = await Promise.all([
@@ -184,6 +193,16 @@ try {
       assert.equal(JSON.stringify(availability).includes('model.internal.example'), false);
     },
   );
+
+  for (const testCase of localBaseUrlCases) {
+    await withEnvironment({ LOCAL_MODEL_BASE_URL: testCase.value }, async () => {
+      assert.equal(
+        store.availability().find((entry) => entry.mode === 'local')?.configured,
+        testCase.configured,
+        `local response mode configuration for ${testCase.value}`,
+      );
+    });
+  }
 
   console.log('PASS: response mode contract, scoped persistence, validation, and availability checks');
 } finally {

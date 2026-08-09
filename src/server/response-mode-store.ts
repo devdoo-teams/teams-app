@@ -8,6 +8,7 @@ import {
   type ResponseModeAvailability,
   type ResponseModeScope,
 } from '../shared/response-mode.js';
+import { isLocalModelBaseUrlConfigured } from './local-model-url.js';
 
 const MAX_RESPONSE_MODE_ENTRIES = 1_000;
 const RESPONSE_MODE_RECORD_KEYS = new Set(['tenantId', 'requesterId', 'mode', 'updatedAt']);
@@ -81,7 +82,7 @@ export class ResponseModeStore {
       {
         mode: 'local',
         label: responseModeLabel('local'),
-        configured: isValidServerUrl(process.env.LOCAL_MODEL_BASE_URL),
+        configured: isLocalModelBaseUrlConfigured(process.env.LOCAL_MODEL_BASE_URL),
         requiresServerConfiguration: true,
       },
     ];
@@ -188,17 +189,6 @@ function matchesScope(left: ResponseModeScope, right: ResponseModeScope): boolea
 
 function hasNonEmptyEnvironmentValue(name: string): boolean {
   return Boolean(process.env[name]?.trim());
-}
-
-function isValidServerUrl(value: string | undefined): boolean {
-  if (!value?.trim()) return false;
-
-  try {
-    const url = new URL(value.trim());
-    return (url.protocol === 'http:' || url.protocol === 'https:') && Boolean(url.hostname);
-  } catch {
-    return false;
-  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
