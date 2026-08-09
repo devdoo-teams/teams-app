@@ -25,9 +25,10 @@ if (invalidGuids.length > 0) {
   process.exit(1);
 }
 
-// A Teams/Bot registration ID and the Entra app registration used by the tab
-// and SSO can be different applications. The manifest intentionally keeps
-// bots[].botId and webApplicationInfo.id as separate environment values.
+// Teams SDK apps that combine a bot and a tab use the bot's resource URI for
+// SSO. The auth app ID in webApplicationInfo.id may remain separate (for
+// example, when a managed identity or dedicated auth registration is used),
+// but the resource must use the Teams bot client ID.
 
 if (
   values.TAB_DOMAIN.includes('://') ||
@@ -46,11 +47,11 @@ if (!values.APPLICATION_ID_URI.startsWith('api://') || /[<>$]|\$\{\{/.test(value
   process.exit(1);
 }
 
-const expectedApplicationIdUri = `api://${values.TAB_DOMAIN}/${values.CLIENT_ID}`;
+const expectedApplicationIdUri = `api://botid-${values.BOT_CLIENT_ID}`;
 if (values.APPLICATION_ID_URI !== expectedApplicationIdUri) {
   console.error(
-    `APPLICATION_ID_URI must match the Teams tab origin: expected ${expectedApplicationIdUri}. ` +
-      'Verify Entra Expose an API before creating or uploading a Teams package.',
+    `APPLICATION_ID_URI must match the Teams SDK bot resource: expected ${expectedApplicationIdUri}. ` +
+      'Verify the Bot Entra app Expose an API URI before creating or uploading a Teams package.',
   );
   process.exit(1);
 }

@@ -8,4 +8,4 @@
 - `${{CLIENT_ID}}` with the Microsoft Entra application (client) ID
 - `${{APPLICATION_ID_URI}}` with the Application ID URI from `Expose an API`
 
-The manifest's `webApplicationInfo` connects the tab SSO configuration to the Entra app registration; this ID can differ from the bot registration ID. The local MVP can be runtime-verified without sideloading by using `TEAMS_SKIP_AUTH=true` and the HTTP checks documented in the project README.
+For a Teams SDK app that combines a bot and a tab, `webApplicationInfo.id` identifies the Entra app that issues the tab token, while `webApplicationInfo.resource` must be the bot resource URI `api://botid-${{BOT_CLIENT_ID}}`. Configure that URI, the `access_as_user` scope, Teams Web/Desktop preauthorization, and the Bot Framework redirect URI on the bot Entra app before uploading. The local MVP can be runtime-verified without sideloading by using `TEAMS_SKIP_AUTH=true` and the HTTP checks documented in the project README.
