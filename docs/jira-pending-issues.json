@@ -3,11 +3,11 @@
   "site": "https://devdoo.atlassian.net",
   "projectKey": "MP",
   "defaultAssignee": "self",
-  "sourceCommit": "e4e1265e539968bccb7121545928de0492e0f42f",
+  "sourceCommit": "c549b7b202c080783bbe27938b106e5d543845f",
   "appVersion": "1.0.26",
   "packageSha256": "f5655b15aa85669de4ce9bc3b806d2a2d480947b60b1f4dfd7d3a82cd213d078",
   "portalVersion": "1.0.26",
-  "portalPackageSha256": "fc274760c2fc8338b08c0f5d0a6b4206c62f27a2cfb063ef81a6ff8bc5ff257a",
+  "portalPackageSha256": "cc2732d2a7edb687c0188d683d936cfdc3e04d13cef559718e12d7c892154f3f",
   "issues": [
     {
       "idempotencyKey": "teams-core:release-blocker:installed-ui-evidence:e4e1265",
