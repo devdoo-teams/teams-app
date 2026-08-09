@@ -1,175 +1,194 @@
-# Teams-first 최소 단위 확장·E2E 검증 계획
+# Teams-first 원자적 확장·E2E 검증 계획
 
 > 개정일: 2026-08-10
 >
-> 목적: CopilotKit, OpenAI API, MCP Apps를 전제하지 않고 Microsoft Teams에서 실제 사용 가능한 가장 작은 기능부터 하나씩 확장한다.
+> 이 문서가 이전 remediation 계획을 대체한다. 목표는 CopilotKit, OpenAI API, MCP Apps를 전제로 하지 않고, Teams에서 실제로 사용 가능한 가장 작은 수직 slice를 하나씩 릴리스하는 것이다.
 
-## 1. 재검토 결론
+## 1. 결론과 기준선
 
-현재 소스는 다음 두 축을 이미 갖고 있다.
+Microsoft 공식 문서 기준으로 이 프로젝트의 기본 구조는 유효하다.
 
-- TypeScript/Node 기반 Teams SDK 봇과 `/api/messages` 런타임
-- React + TeamsJS 기반 개인 탭과 Adaptive Card 응답
+- Teams 탭은 Teams 호스트 안의 iframe 웹 페이지이며 매니페스트의 `contentUrl`과 TeamsJS `app.initialize()`가 핵심 계약이다.
+- Teams SDK는 JavaScript/TypeScript를 지원하고 봇·Adaptive Cards·대화형 작업을 제공한다.
+- Microsoft 공식 샘플 저장소에는 Teams SDK·TeamsJS·TypeScript 샘플, personal tab, device permissions, deep link, tab UI template가 있다.
+- Adaptive Card의 새 서버 동작은 `Action.Execute`를 우선하고, 실제 Teams 호스트 호환성은 데스크톱·모바일 런타임에서 별도로 확인해야 한다.
 
-이 조합은 Microsoft 공식 구조와 일치한다. Microsoft 문서는 Teams 탭을 Teams 호스트 안의 iframe 웹 페이지로 설명하고, 매니페스트의 `contentUrl`과 TeamsJS `app.initialize()`를 요구한다. 또한 Teams SDK는 JavaScript/TypeScript를 지원하고, 공식 샘플 저장소에 Teams SDK·TeamsJS·TypeScript 샘플이 제공된다.
+따라서 기술 기준선은 다음으로 고정한다.
 
-반면 현재 1.0.19 소스의 `copilotKit: enabled`는 모델 연결을 의미하지 않고 CopilotKit 라우트가 등록되었다는 뜻이다. 현재 health는 `genAI: not-configured`이며 `OPENAI_API_KEY`가 없다. 따라서 CopilotKit/OpenAI 경로를 실제 기능의 기반으로 계속 확장하는 것은 현재 사용 가능한 인증·자격 조건과 맞지 않는다. MCP Apps 역시 Teams 호스트의 핵심 런타임이 아니므로 첫 릴리스의 필수 경로에서 제외한다.
-
-### 최종 기술 기준선
-
-| 영역 | 첫 릴리스 기준 | 제외 또는 후순위 |
+| 영역 | 기준선 | 첫 릴리스에서 전제하지 않는 것 |
 |---|---|---|
-| 봇 | `@microsoft/teams.apps` + TypeScript, 실제 Teams `/api/messages` | CopilotKit agent runtime |
-| 탭 | React + TeamsJS 개인 탭, `contentUrl`과 `/tabs/home/` 일치 | MCP widget을 기본 화면으로 사용 |
-| 응답 | 결정형 명령 라우터와 Adaptive Cards | OpenAI/모델 호출을 기본 동작으로 가정 |
-| 실제 에이전트 작업 | 로그인된 Codex CLI `codex exec` | API 키 기반 모델 호출 |
-| 보조 실행기 | 설치·로그인된 경우에만 GHCP CLI capability로 선택 가능 | GHCP CLI가 없는데 있는 것처럼 표시 |
-| 저장소 | 로컬 원본 `/Users/doosansmacbookpro/Documents/TeamsApp`의 파일 JSON | iCloud, 원격 저장소, 사본 |
-| 날씨 | 위치 권한이 실제로 허용된 뒤 공개 날씨 endpoint 사용 | 위치 추측, 권한 없는 좌표 사용 |
-| 외부 플랫폼 | Teams 기능 수렴 후 별도 검토 | KakaoTalk 등 선행 구현 |
+| Bot | `@microsoft/teams.apps` + TypeScript + `/api/messages` | CopilotKit agent runtime |
+| Tab | React + TeamsJS personal tab + `/tabs/home/` | MCP widget을 기본 화면으로 사용 |
+| 응답 | 서버 결정형 명령 + Adaptive Card | OpenAI/모델 API 호출 |
+| 실제 작업 | 로그인된 Codex CLI `codex exec` | API key 기반 LLM 작업 |
+| 보조 작업기 | 설치·로그인 확인 후에만 GHCP CLI를 선택지로 노출 | GHCP CLI를 추측하거나 자동 설치 |
+| 저장 | 로컬 원본 `/Users/doosansmacbookpro/Documents/TeamsApp`의 파일 JSON | iCloud, 원격 저장소, 사본 |
+| 외부 서비스 | 위치가 명시적으로 허용된 경우에만 날씨 조회 | 좌표 추측 또는 권한 우회 |
+| 외부 플랫폼 | Teams 핵심 기능 수렴 이후 별도 계획 | KakaoTalk·Slack 등의 선행 구현 |
 
-## 2. 현재 상태와 확인된 결함
+현재 `0a92623`의 health는 `genAI: not-configured`, `responseProviders.openai: false`, `mcpEnabled: false`를 보여주지만 `copilotKit: enabled`도 함께 보여준다. 이 값은 모델 연결이 아니라 라우트 등록 상태이므로 사용자 기능 상태로 사용하면 안 된다. 현재 소스는 React 탭과 Teams SDK 봇을 갖고 있으나 CopilotKit 패널과 MCP/OpenAI 테스트 경로가 여전히 빌드·테스트 계약에 남아 있다. 이것이 첫 구현 slice의 첫 번째 정리 대상이다.
 
-- `d0640d3`에서 매니페스트와 봇 카드의 개인 탭 deep link를 `/tabs/home/`로 정렬했다.
-- 직접 실행한 `node --import tsx/esm scripts/teams-tab-link-test.ts`는 통과했다.
-- `npm run test:teams-tab-link`는 테스트 assertion이 아니라 현재 환경의 `tsx` wrapper가 종료되지 않는 프로세스 문제가 있어 제한 시간 게이트에서 멈췄다. 테스트 명령 자체가 반드시 종료되도록 실행 경로를 정리해야 한다.
-- Codex CLI는 `codex login status`에서 ChatGPT 로그인 상태를 확인할 수 있고 실제 `CodexRunner`가 `codex exec`를 실행한다. 다만 시작 전 capability 확인과 자연어 중복 요청 idempotency가 부족하다.
-- React 탭에는 실제 업무·위치·응답 모드 UI가 있으나 CopilotKit 패널이 기본 경로로 노출되어 있고, API 미설정 상태와 사용자가 기대하는 실제 작업 실행 상태가 명확히 분리되지 않았다.
-- 공식 Teams UI, 포털 업로드, 설치 버전, 데스크톱 전수 스크린샷, 모바일 GPS/WebView는 아직 현재 커밋 기준으로 증명되지 않았다. 과거 채팅 기록이나 예전 모바일 사진은 현재 릴리스 증거로 재사용하지 않는다.
+## 2. 비목표와 정리 원칙
 
-## 3. 단계별 구현 계획
+- OpenAI API key가 없다는 이유로 Teams 핵심 기능이 빌드·테스트·배포에서 실패하지 않게 한다.
+- CopilotKit/MCP는 첫 릴리스의 UI·health·runner·완료 판정에서 제거하거나 `optional / not configured`로만 표시한다. 별도 실험 경로를 남길 수는 있지만 core 경로에 의존시키지 않는다.
+- 날씨와 Atlassian 벤치마킹은 Teams 핵심 bot/tab/card/CLI가 실제 배포에서 수렴한 뒤에 진행한다. 외부 API나 외부 플랫폼을 초기 수직 slice에 섞지 않는다.
+- 매 단계에 모든 기능을 한꺼번에 넣지 않는다. 기능 하나의 입력 → 실제 서버 처리 → 다른 Teams surface의 결과 → 오류/재시도까지 끝낸 뒤 다음 단계로 간다.
+- `npm test`가 optional MCP/OpenAI 테스트를 무조건 포함하면 안 된다. `test:core`와 `test:optional`을 분리하고, core 릴리스 게이트가 API key나 MCP 패키지에 의존하지 않는지 자체 테스트한다.
 
-각 단계는 독립된 작은 기능으로 구현하고, 한 단계의 런타임·스크린샷 증거가 확보되기 전에는 다음 기능을 사용자에게 완료로 보고하지 않는다. 구현 하위 에이전트는 단계별로 한 명씩 위임하고, 공통 파일을 동시에 수정하지 않는다.
+## 3. 원자적 구현 순서
 
-### Slice 0 — 의존성·능력 명시와 안전한 기준선
+각 항목은 독립 커밋과 독립 증거를 갖는다. 이전 항목의 공개 런타임·설치본 증거가 없으면 다음 항목의 Teams 완료를 주장하지 않는다.
 
-**목표:** 모델/API가 없어도 앱이 어떤 기능을 제공하는지 거짓 없이 표시한다.
+### Slice 0A — 결정형 `status` 카드 1개
 
-- 기본 응답 엔진을 `deterministic`으로 명시한다.
-- health와 탭 상태에 `Codex CLI: 사용 가능/로그인 필요/실행 파일 없음`, `GHCP CLI: 사용 가능/미설치/로그인 필요`를 분리 표시한다.
-- CopilotKit/MCP 라우트는 기본 UI·기능 목록·완료 판정에서 제거하거나 `optional / not configured`로 표시한다.
-- `OPENAI_API_KEY`가 없어도 typecheck, build, bot, tab, cards가 통과해야 한다.
-- `tsx`가 종료되지 않는 환경에서는 bounded direct loader를 표준 테스트 명령으로 사용하고, 장기 프로세스는 30초·60초 checkpoint로 감시한다.
+**범위:** `status` 명령 한 개와 응답 카드 한 개만 변경한다.
 
-**완료 조건:** API 키 없이 `npm run typecheck`, 전체 핵심 테스트, client/server build가 종료 코드 0이고 health가 모델 미설정을 실제 사용 가능 기능으로 오인시키지 않는다.
+- 카드에는 `Teams SDK`, `production/local`, 인증 모드, 저장소, 결정형 모드, Codex CLI capability, GHCP CLI capability만 사실대로 표시한다.
+- CopilotKit/OpenAI/MCP 선택 UI와 모델 연결 문구는 이 카드에서 노출하지 않는다.
+- 카드와 동일한 top-level 텍스트를 중복 전송하지 않는다.
+- 카드의 단일 `업무 허브 탭 열기` 링크가 현재 매니페스트와 동일한 `/tabs/home/` URL을 사용한다.
+- 테스트·health·카드 JSON만 정리하고 help/list/CRUD/location/Codex 실행은 건드리지 않는다.
 
-### Slice 1 — Bot 최소 명령 계약
+**완료 조건:** API key 없이 core build와 focused test가 종료 코드 0이고, 공개 Teams chat에서 status 카드가 실제 reply로 도착한다. 카드 표시 전·후, 최신 접근성 트리, 실제 runtime 로그, package identity를 한 matrix row에 기록한다.
 
-**목표:** 모바일 채팅에서 가장 작은 실제 동작을 안정화한다.
+### Slice 0B — core 의존성·테스트 경계
 
-순서대로 `help` → `status` → `list`만 먼저 유지한다.
+**범위:** Slice 0A를 막지 않는 범위에서만 빌드·테스트 경계를 정리한다.
 
-- `help`: 명령 설명과 탭 열기 링크를 카드로 반환한다.
-- `status`: 서비스·인증·저장소·Codex/GHCP capability를 카드로 반환한다.
-- `list`: 파일 JSON 저장소의 실제 업무 목록을 읽어 카드로 반환한다.
-- 카드 본문과 같은 내용을 top-level text로 중복 전송하지 않는다.
-- 기본 버튼은 `도움말`, `상태`, `업무 목록`, `업무 허브 탭 열기`로 제한하고, 각 버튼은 서버의 실제 명령을 유발한다.
-- 카드 action은 공식 Teams SDK 문서의 `Action.Execute` 계약을 우선 사용하고, 호스트가 지원하지 않는 경우에만 명시적인 `Action.Submit` fallback을 사용한다.
+- `build:core`는 React/Teams tab, Teams bot, cards, Codex capability만 포함한다.
+- MCP widget build와 OpenAI/CopilotKit 테스트는 `build:optional`, `test:optional`로 분리하고 core release gate에서 호출하지 않는다.
+- `copilotKit` health 값은 `optional-disabled`, `optional-unconfigured`, `optional-configured`처럼 실제 상태를 구분하거나 core health에서 제외한다.
+- `tsx` wrapper가 종료되지 않는 환경에서는 `node --import tsx/esm` 직접 loader를 bounded focused test의 표준 실행으로 삼는다.
 
-**완료 조건:** 로컬 handler, 공개 HTTPS bot, 기존 Teams 데스크톱 채팅에서 각 명령의 전·후 스크린샷과 접근성 트리, 실제 reply를 확보한다.
+**완료 조건:** 빈 API 환경에서 `test:core`, `build:core`, `validate:manifest`, package determinism이 통과하고 optional 경로를 실행하지 않아도 release preflight가 끝난다.
 
-### Slice 2 — React 개인 탭의 업무 최소 CRUD
+### Slice 1A — `help` 카드
 
-**목표:** 채팅 카드가 여는 탭에서 실제 데이터가 바뀌도록 한다.
+- `help` 명령 하나만 추가한다.
+- 카드에는 실제 지원 명령 목록과 탭 링크만 표시한다.
+- 기본 버튼은 `상태`와 `업무 허브 탭 열기` 두 개만 제공하고 각각 실제 서버 동작/탭 이동을 검증한다.
+- 공식 `Action.Execute` 계약을 우선 사용하고, 실제 호스트에서 필요한 경우에만 `Action.Submit` fallback을 남긴다.
 
-- `app.initialize()`와 host context를 먼저 확인한다.
-- 목록 로딩, 빈 상태, 로딩, 오류, 재시도, 새로고침을 구현한다.
-- 제목 추가 → 단건 상태 변경 → 상세 편집의 순서로 확장한다.
-- 각 mutation은 idempotency key를 사용하고, 실패 시 UI가 성공으로 남지 않게 한다.
-- 탭의 모든 카드와 목록 항목에는 유효한 현재 앱 deep link를 제공한다.
-- CopilotKit assistant 패널은 이 slice의 기본 경로에 두지 않는다.
+**완료 조건:** 잘못된 입력과 중복 클릭을 포함해 help 카드 한 분기의 데스크톱 before/after screenshot, 접근성 트리, 실제 reply를 확보한다.
 
-**완료 조건:** 새 업무를 추가한 뒤 채팅 `list`와 탭 목록에서 같은 실제 항목이 보이고, 오류·재시도·중복 클릭 분기를 각각 증명한다.
+### Slice 1B — `list` 읽기 전용
 
-### Slice 3 — Codex CLI 실제 작업
+- 파일 JSON 저장소의 실제 업무 목록을 읽는다.
+- 빈 목록·정상 목록·저장소 오류·재시도만 구현한다.
+- 채팅 카드와 탭이 같은 저장소를 읽는지 확인한다.
 
-**목표:** 자연어를 저장된 답변으로 흉내 내지 않고 실제 Codex 작업으로 연결한다.
+**완료 조건:** 로컬 fixture → 공개 runtime → Teams chat 카드 → 탭 목록의 실제 데이터 왕복을 증명한다. 저장된 문자열만 반환하는 가짜 응답은 실패다.
 
-- 요청 수신 전에 `codex login status`와 실행 파일 capability를 검사한다.
-- `run <작업>`은 기본 read-only로 시작하고, 실행 ID·진행 이벤트·최종 결과를 저장한다.
-- `continue <작업 ID>`는 기존 Codex thread를 재개한다.
-- write 작업은 승인 카드 전에는 파일을 수정하지 않는다.
-- `approve`, `cancel`, timeout, 재시작 복구, 중복 요청을 별도 상태로 처리한다.
-- 결정형 응답은 “결정형 미리보기”로만 라벨링하며 Codex가 실제 실행되지 않았으면 완료라고 말하지 않는다.
-- 프로세스는 timeout, SIGTERM/SIGKILL, stdout/stderr 제한을 유지하고 job store는 tenant·사용자·conversation scope를 유지한다.
+### Slice 2A — React 탭 읽기 전용
 
-**완료 조건:** 테스트용 로컬 원본에서 실제 `codex exec` read-only 1건, 승인 전 write 차단 1건, 승인 후 변경 1건, 취소 1건을 각각 실행하고 Git diff/로그/Teams reply를 연결한다.
+- TeamsJS `app.initialize()`와 host context 확인
+- 상태 카드, 업무 목록, 로딩/빈 상태/오류/재시도/새로고침
+- 모든 표시 업무 항목에 현재 앱의 유효한 deep link
+- CopilotKit assistant 패널은 core 기본 화면에 두지 않음
+
+**완료 조건:** Teams 데스크톱 탭에서 각 상태를 실제 화면으로 캡처하고, 설치된 앱 버전·패키지 SHA·공개 health와 묶는다.
+
+### Slice 2B — 업무 mutation 하나씩
+
+다음 순서를 지킨다.
+
+1. 업무 추가
+2. 단건 상태 변경
+3. 제목/설명 편집
+4. 댓글·watch·담당자
+
+각 mutation에는 idempotency key, 성공 회신, 서버 오류, 재전송/중복 클릭 방어를 넣는다. 한 mutation의 증거가 완성되기 전에는 다음 mutation을 구현하지 않는다.
+
+### Slice 3A — Codex capability와 read-only 작업
+
+- 요청 전에 `codex login status`와 실행 파일을 검사한다.
+- capability가 없으면 실행 버튼을 제공하지 않고 로그인 필요 상태를 반환한다.
+- `run`은 read-only 작업만 허용하고 실제 `codex exec`의 thread ID, 진행 이벤트, 최종 결과를 저장한다.
+- 결정형 미리보기는 실제 Codex 실행과 명확히 구분한다.
+- timeout, SIGTERM/SIGKILL, stdout/stderr 제한, 재시작 복구를 검증한다.
+
+**완료 조건:** fake runner가 아니라 실제 Codex CLI read-only 1건을 원본 작업공간에서 수행하고, Teams reply·job store·process log·Git diff(변경 없음)를 연결한다.
+
+### Slice 3B — 승인형 write·continue/cancel
+
+- `continue <jobId>`, `approve`, `cancel`을 각각 별도 slice row로 관리한다.
+- 승인 카드에는 요청자·tenant·conversation scope, 허용 작업공간, 변경 예상 범위를 포함한다.
+- 승인 전 파일 변경 0건, 승인 후 diff, 취소 후 잔여 프로세스 0건을 확인한다.
+- 동일 요청 재전송은 동일 job으로 수렴하며 중복 Codex 프로세스를 만들지 않는다.
+
+**완료 조건:** 승인 전/후·취소·timeout·재전송을 각각 Teams UI와 로컬 diff로 증명한다.
 
 ### Slice 4 — GHCP CLI 선택 실행기
 
-**목표:** 사용 가능한 경우에만 두 번째 CLI를 선택할 수 있게 한다.
+- 실제 설치·로그인·지원 명령을 먼저 capability probe한다.
+- 미설치/로그인 필요/실패 상태는 비활성화하고 Codex 성공으로 가장하지 않는다.
+- 실제 계약을 확인하기 전에는 fake runner contract test만 둔다.
+- 사용 불가하면 이 slice는 `N/A` 사유를 기록하며 Teams core 완료를 막지 않는다.
 
-- `gh copilot`의 설치·로그인·명령 capability를 시작 시 검사한다.
-- 미설치·로그인 필요·지원하지 않는 명령이면 UI에서 비활성화하고 Codex 경로를 자동으로 가장하지 않는다.
-- 실제 GHCP CLI 계약을 확인하기 전에는 실행기 코드를 만들지 않고 fake runner 계약 테스트만 만든다.
-- API key, GitHub token, 조직 권한을 코드나 환경에 추측해서 쓰지 않는다.
+### Slice 5 — 위치·날씨
 
-**완료 조건:** 실제 설치/로그인 상태와 fake runner의 성공·실패·timeout을 분리 기록한다. 사용 불가하면 이 slice는 `N/A`로 남기고 Codex 기능의 완료를 막지 않는다.
+Teams core bot/tab/card/CLI slices가 공개 설치본에서 수렴한 뒤에만 시작한다.
 
-### Slice 5 — Teams 탭 위치·날씨
+- `내 위치 사용` 버튼의 loading/success/permission denied/browser fallback/network error/retry를 분리한다.
+- Teams native location → browser geolocation 순서를 명시하고 좌표가 없으면 조회하지 않는다.
+- 데스크톱 검증은 `DESKTOP_PASS`일 뿐 iOS WebView/GPS를 증명하지 않는다. 실제 모바일 확인 전에는 `MOBILE_UNVERIFIED`다.
 
-**목표:** 위치를 추측하지 않고 Teams 호스트에서 사용자가 권한을 허용한 경우에만 날씨를 제공한다.
+### Slice 6 — 외부 제품 벤치마킹과 확장
 
-- 탭에 `내 위치 사용` 버튼, 로딩, 성공, 권한 거부, 브라우저 fallback, 네트워크 오류, 재시도를 분리한다.
-- TeamsJS/native location → browser geolocation 순서를 명시하고 좌표가 없으면 날씨 조회를 하지 않는다.
-- 응답 카드에는 위치 출처, 좌표, 관측 시각, 데이터 출처를 표시한다.
-- 모바일 WebView와 iOS 권한은 데스크톱 통과로 대체하지 않고 별도 사용자 확인으로 남긴다.
+Teams 앱의 기능 완성도와 전수 런타임 증거가 수렴한 뒤 별도 승인으로 시작한다. Jira/Trello/Atlassian Home의 UX를 비교할 수는 있지만, 외부 플랫폼 연동 구현이나 MCP Apps 확장은 이 계획의 초기 범위가 아니다.
 
-**완료 조건:** 데스크톱에서 권한 허용/거부/재시도를 캡처하고, 실제 모바일 Teams에서 사용자가 `내 위치 사용`을 누른 결과를 받아야 모바일 PASS로 올린다.
+## 4. 모든 slice의 필수 micro-release loop
 
-### Slice 6 — Atlassian 수준의 Teams 내부 확장
+각 slice를 다음 루프에 통과시킨다. Slice 0A도 예외가 아니다.
 
-**목표:** Jira/Trello/Atlassian Home을 Teams 안에서 벤치마킹하되 외부 플랫폼을 추가하지 않는다.
+1. 원본 소스에서 구현, `test:core`, typecheck, manifest/build 검증
+2. 버전 증가, 새 ZIP 생성, ZIP 내부 manifest·`devicePermissions`·SHA-256 확인
+3. Git diff 검토와 의미 있는 커밋
+4. 기존 Developer Portal/Admin Center 탭의 동일 앱 상세에서 `새 버전 → 파일 업로드`
+5. 공개 프로세스로 전환, `/api/health`의 production·Teams auth·Teams SDK 확인
+6. 공개 URL 응답과 Teams 설치 정보의 app version/package identity 확인
+7. 기존 Teams 데스크톱 앱에서 접근성 트리를 먼저 읽고, 모든 동작의 before/after screenshot을 캡처
+8. 사용자가 배포된 모바일 Teams에서 같은 기능을 확인하고 모바일 전용 결과를 회신
+9. matrix row가 모두 `PASS`, `FAIL`, `BLOCKED`, `N/A` 중 하나이고 증거 필드가 채워졌을 때만 `release:loop complete`
 
-- 검색, 최근, 내 할당, 상태 필터, 마감일, 담당자, watch, 댓글, 상세 deep link를 탭 안에서 하나씩 추가한다.
-- 각 기능은 별도 API/저장 변경과 카드·탭 양쪽의 실제 결과를 연결한다.
-- 기능 수보다 “입력 → 실제 저장 → 다른 surface에서 재조회” 왕복을 우선한다.
-- CopilotKit/MCP 기반 자동화는 이 slice의 전제에서 제외한다.
+각 slice의 증거 row에는 다음을 반드시 저장한다.
 
-### Slice 7 — 릴리스·전수 런타임 검증
+`feature`, `surface`, `location`, `branch`, `precondition`, `action`, `expected`, `screenshotBefore`, `screenshotAfter`, `accessibilityEvidence`, `runtimeEvidence`, `commit`, `appVersion`, `packageSha256`, `result`.
 
-모든 slice에 공통으로 다음 순서를 강제한다.
+포털 업로드·설치 버전·데스크톱·모바일 증거가 없으면 각각 `PORTAL_UPLOAD_UNVERIFIED`, `INSTALLED_VERSION_UNVERIFIED`, `DESKTOP_UNVERIFIED`, `MOBILE_UNVERIFIED`로 남긴다. 과거 채팅이나 이전 버전 모바일 사진은 현재 버전 증거로 재사용하지 않는다.
 
-1. 로컬 원본에서 구현·typecheck·핵심 테스트·빌드
-2. 버전 증가, 새 ZIP 생성, 내부 manifest·`devicePermissions`·SHA 확인
-3. Git diff 검토 후 커밋
-4. 기존 Developer Portal/Admin Center 탭에서 동일 앱의 `새 버전 → 파일 업로드`로 업데이트
-5. `npm start` 공개 프로세스로 전환하고 `/api/health`에서 `production`, `teams-authenticated`, `teams-sdk` 확인
-6. 공개 URL과 Teams 설치본의 버전·커밋·package SHA identity 확인
-7. 기존 Teams 데스크톱 앱의 접근성 트리와 전·후 스크린샷으로 채팅·탭·카드·모든 버튼/링크/입력 분기를 검증
-8. 사용자가 모바일 Teams에서 같은 배포본을 확인하고 GPS/WebView/권한 결과를 회신
-9. 모든 matrix row가 `PASS`, `FAIL`, `BLOCKED`, `N/A` 중 하나일 때만 완료 메시지 전송
+## 5. 하위 에이전트 위임 순서
 
-포털·설치본·데스크톱·모바일 증거가 없으면 각각 `PORTAL_UPLOAD_UNVERIFIED`, `INSTALLED_VERSION_UNVERIFIED`, `DESKTOP_UNVERIFIED`, `MOBILE_UNVERIFIED`로 보고한다.
+코드 수정은 공통 파일 충돌을 피하기 위해 한 구현 에이전트씩 통합한다. 감사·리뷰는 독립적으로 병렬 수행할 수 있다.
 
-## 4. 하위 에이전트 위임과 통합 규칙
+1. **Core boundary agent:** Slice 0A/0B의 health, core scripts, optional 경계, Codex/GHCP capability contract
+2. **Card contract agent:** Slice 1A/1B의 단일 명령, `Action.Execute`/fallback, 중복 텍스트, deep link
+3. **React tab agent:** Slice 2A/2B의 상태 분기와 한 mutation씩
+4. **Codex runner agent:** Slice 3A/3B의 capability, idempotency, 승인 경계
+5. **Evidence/release agent:** slice별 evidence schema, package identity, 종료 가능한 test/release loop
+6. 오케스트레이터가 각 커밋에 대해 diff, focused test, core build, 공식 계약, runtime evidence를 검수한 뒤 다음 에이전트를 시작
 
-현재처럼 독립 감사는 병렬로 수행하되, 코드 수정은 파일 충돌을 피하기 위해 다음 순서로 한 작업자씩 실행한다.
+하위 에이전트가 브라우저 사용 불가를 보고해도 새 브라우저·새 로그인 세션을 만들지 않는다. 기존 탭 재접속 또는 잠금/추가 인증을 별도 blocker로 기록한다.
 
-1. **Core runner agent:** Slice 0·3의 capability, Codex 상태, idempotency, runner 테스트
-2. **Teams card agent:** Slice 1의 카드 계약, action routing, 중복 텍스트 제거, tab deep link
-3. **React tab agent:** Slice 2·5의 탭 UI와 상태 분기
-4. **Release evidence agent:** Slice 7의 evidence schema, version/package identity, 종료 가능한 test command
-5. 오케스트레이터가 각 작업을 fresh build·전수 테스트·Git diff·전용 review로 검수한 뒤 다음 작업을 시작
+## 6. 공격적 러버덕 판정
 
-하위 에이전트가 “브라우저 사용 불가”라고 보고해도 새 브라우저·새 로그인 세션을 만들지 않는다. 기존 탭 재접속 또는 사용자 잠금 해제/인증을 별도 blocker로 기록한다.
+- `status/help/list`가 저장된 텍스트만 반환하고 실제 health·파일·job과 연결되지 않으면 FAIL
+- `copilotKit: enabled`가 모델 미설정을 숨기거나 core health에 모델 사용 가능처럼 표시되면 FAIL
+- 버튼이 보이지만 서버 action·reply·탭 이동이 없으면 FAIL
+- 채팅과 탭이 같은 저장소를 읽지 않으면 FAIL
+- Codex가 실행되지 않았는데 분석 시작/완료라고 말하면 FAIL
+- 승인 전 파일 변경, 취소 후 잔여 프로세스, 중복 job이 있으면 FAIL
+- 모바일에서 위치 버튼이 없거나 권한 거부가 무한 로딩이면 FAIL
+- 로컬 테스트만 통과하고 공개 설치본을 보지 않았으면 배포 완료가 아님
 
-## 5. 공격적 러버덕 기준
+## 7. 공식 참조
 
-- `help/status/list`가 저장된 문구만 반환하고 실제 상태·파일·작업과 연결되지 않으면 실패다.
-- health가 `CopilotKit enabled`만 보여주면서 모델 미설정을 숨기면 실패다.
-- 버튼이 보이지만 서버 action이 없거나 카드 회신이 오지 않으면 실패다.
-- 탭 화면에 데이터가 보이지만 채팅과 같은 저장소를 읽지 않으면 실패다.
-- Codex CLI가 실행되지 않았는데 “분석 시작/완료”라고 말하면 실패다.
-- 모바일에서 위치 버튼이 보이지 않거나 권한 거부가 무한 로딩이면 실패다.
-- 로컬 테스트만 통과하고 공개 Teams 설치본을 확인하지 않으면 배포 완료가 아니다.
-- 이전 버전 스크린샷, 예전 채팅, 포털 게시 버전으로 현재 설치본을 추정하면 실패다.
+- [Teams 개발 플랫폼 개요](https://learn.microsoft.com/en-us/microsoftteams/platform/overview)
+- [개인 탭 만들기](https://learn.microsoft.com/en-us/microsoftteams/platform/tabs/how-to/create-personal-tab)
+- [Teams 탭 구조와 모바일 요구사항](https://learn.microsoft.com/en-us/microsoftteams/platform/tabs/what-are-tabs)
+- [Teams SDK agent quickstart](https://learn.microsoft.com/en-us/microsoftteams/platform/agents-in-teams/quickstart-create-agent-teams-sdk)
+- [Adaptive Card actions with Teams SDK](https://learn.microsoft.com/en-us/microsoftteams/platform/teams-sdk/in-depth-guides/adaptive-cards/executing-actions)
+- [OfficeDev Microsoft Teams Samples](https://github.com/OfficeDev/Microsoft-Teams-Samples)
 
-## 6. 공식 참조 기준
-
-- Microsoft Teams 개발 플랫폼 개요: Teams SDK, bots, tabs, message extensions의 역할을 기준으로 삼는다.
-- 개인 탭 생성 문서와 Tabs 문서: React/TeamsJS 웹 탭, `app.initialize()`, manifest `contentUrl`, 모바일 WebView 검증을 기준으로 삼는다.
-- Teams 공식 샘플 저장소: TypeScript/JavaScript Teams SDK·TeamsJS와 personal tab, device permissions, deep link, tab UI template를 우선 벤치마킹한다.
-- Teams SDK Adaptive Cards action 문서: `Action.Execute`와 라우팅 키를 우선 사용하고, 호스트 호환성은 실제 Teams 데스크톱·모바일에서 검증한다.
-
-외부 플랫폼 또는 MCP Apps는 위 Teams 기준선이 전수 검증되고 사용자가 별도로 확장 승인을 한 뒤에만 조사한다.
+이 공식 기준선이 실제 Teams 데스크톱·모바일에서 전수 검증된 뒤에만 외부 플랫폼 또는 MCP Apps 확장을 별도 계획으로 만든다.
