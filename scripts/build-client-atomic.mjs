@@ -10,6 +10,19 @@ async function exists(filePath) {
   }
 }
 
+async function assertClientRuntime(outputDir) {
+  const requiredFiles = [
+    path.join(outputDir, 'index.html'),
+    path.join(outputDir, 'assets', 'main.js'),
+    path.join(outputDir, 'assets', 'main.css'),
+  ];
+  for (const requiredFile of requiredFiles) {
+    if (!(await exists(requiredFile))) {
+      throw new Error(`incomplete client runtime: missing ${requiredFile}`);
+    }
+  }
+}
+
 /**
  * Builds into a sibling temporary directory and swaps it into place only
  * after every build and post-processing step has completed successfully.
@@ -30,15 +43,20 @@ export async function buildClientAtomically({ outputDir, buildImplementation }) 
 
   try {
     await buildImplementation(temporaryDir);
+    await assertClientRuntime(temporaryDir);
     if (await exists(outputDir)) {
       await fs.rename(outputDir, backupDir);
       movedExisting = true;
     }
     try {
       await fs.rename(temporaryDir, outputDir);
+      await assertClientRuntime(outputDir);
       committed = true;
     } catch (error) {
-      if (movedExisting && !(await exists(outputDir))) {
+      if (await exists(outputDir)) {
+        await fs.rm(outputDir, { recursive: true, force: true });
+      }
+      if (movedExisting && (await exists(backupDir))) {
         await fs.rename(backupDir, outputDir);
         movedExisting = false;
       }

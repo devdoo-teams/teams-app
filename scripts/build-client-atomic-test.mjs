@@ -25,10 +25,24 @@ assert.equal(await fs.readFile(sentinelPath, 'utf8'), 'previous-runtime-must-sur
 await buildClientAtomically({
   outputDir,
   buildImplementation: async (temporaryDir) => {
-    await fs.mkdir(temporaryDir, { recursive: true });
+    await fs.mkdir(path.join(temporaryDir, 'assets'), { recursive: true });
     await fs.writeFile(path.join(temporaryDir, 'index.html'), 'new-runtime', 'utf8');
+    await fs.writeFile(path.join(temporaryDir, 'assets', 'main.js'), 'new-runtime-js', 'utf8');
+    await fs.writeFile(path.join(temporaryDir, 'assets', 'main.css'), 'new-runtime-css', 'utf8');
   },
 });
+assert.equal(await fs.readFile(sentinelPath, 'utf8'), 'new-runtime');
+
+await assert.rejects(
+  buildClientAtomically({
+    outputDir,
+    buildImplementation: async (temporaryDir) => {
+      await fs.mkdir(temporaryDir, { recursive: true });
+      await fs.writeFile(path.join(temporaryDir, 'index.html'), 'incomplete-runtime', 'utf8');
+    },
+  }),
+  /incomplete client runtime/,
+);
 assert.equal(await fs.readFile(sentinelPath, 'utf8'), 'new-runtime');
 
 await fs.rm(tempRoot, { recursive: true, force: true });
