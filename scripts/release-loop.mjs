@@ -109,7 +109,20 @@ function assertObservedAt(observedAt, state, now) {
   if (Date.parse(state.startedAt) > observed) throw new Error('evidence observedAt predates the release run');
 }
 
-export function validateEvidence(input, state, { fileExists = (candidate) => true, now = new Date() } = {}) {
+function isRasterImage(bytes) {
+  if (!(bytes instanceof Uint8Array)) return false;
+  const png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  const jpeg = [0xff, 0xd8, 0xff];
+  const webp = [0x52, 0x49, 0x46, 0x46, undefined, undefined, undefined, undefined, 0x57, 0x45, 0x42, 0x50];
+  const startsWith = (signature) => signature.every((byte, index) => byte === undefined || bytes[index] === byte);
+  return startsWith(png) || startsWith(jpeg) || startsWith(webp);
+}
+
+export function validateEvidence(
+  input,
+  state,
+  { fileExists = (candidate) => true, readArtifact = (candidate) => fsSync.readFileSync(candidate), now = new Date() } = {},
+) {
   if (!input || typeof input !== 'object') throw new Error('evidence must be an object');
   const { surface, observedAt, commit, version, packageSha256, installedVersion, summary, artifactPaths } = input;
   assertSurface(surface);
@@ -135,6 +148,9 @@ export function validateEvidence(input, state, { fileExists = (candidate) => tru
     if (!fileExists(normalized)) throw new Error(`evidence artifact does not exist: ${normalized}`);
     return normalized;
   });
+  if (!normalizedPaths.some((candidate) => isRasterImage(readArtifact(candidate)))) {
+    throw new Error('evidence artifact must be a real PNG, JPEG, or WebP image');
+  }
 
   return {
     surface,
@@ -374,6 +390,7 @@ async function executePhase(phase, statePath) {
 async function addEvidence(statePath, evidencePath) {
   if (!evidencePath) throw new Error('evidence requires --file <path>');
   const state = await requireState(statePath);
+  assertCurrentGit(state);
   const input = JSON.parse(await fs.readFile(path.resolve(evidencePath), 'utf8'));
   const normalized = validateEvidence(input, state, { fileExists: (candidate) => fsSync.existsSync(candidate) });
   const next = applyEvidence(state, normalized);
@@ -383,6 +400,7 @@ async function addEvidence(statePath, evidencePath) {
 
 async function completeRun(statePath) {
   const state = await requireState(statePath);
+  assertCurrentGit(state);
   const missing = missingGates(state);
   if (missing.length > 0) {
     const error = new Error(`release is blocked by: ${missing.join(', ')}`);
@@ -412,7 +430,11 @@ async function runCli(argv) {
   const statePath = statePathFromEnv();
   if (command === 'start') return startRun(statePath);
   if (command === 'machine' || command === 'package' || command === 'public') return executePhase(command, statePath);
-  if (command === 'status') return jsonLog(publicResult(await requireState(statePath)));
+  if (command === 'status') {
+    const state = await requireState(statePath);
+    assertCurrentGit(state);
+    return jsonLog(publicResult(state));
+  }
   if (command === 'evidence') return addEvidence(statePath, file);
   if (command === 'complete') return completeRun(statePath);
   throw new Error(`unknown release loop command: ${command}`);

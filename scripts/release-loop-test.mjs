@@ -18,7 +18,9 @@ import {
 
 const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-release-loop-'));
 const artifactPath = path.join(tempDir, 'desktop-proof.png');
-await fs.writeFile(artifactPath, 'proof');
+const fakeArtifactPath = path.join(tempDir, 'fake-proof.png');
+await fs.writeFile(artifactPath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+await fs.writeFile(fakeArtifactPath, 'proof');
 
 const identity = {
   runId: 'run-test-001',
@@ -170,7 +172,15 @@ assert.throws(
 
 let completeState = machineReady;
 for (const surface of ['portal', 'installed', 'desktop', 'mobile']) {
-  const normalized = validateEvidence(evidence(surface, surface === 'installed' ? { installedVersion: identity.version } : {}), completeState, {
+  const surfaceOverrides = surface === 'installed' ? { installedVersion: identity.version } : {};
+  assert.throws(
+    () => validateEvidence(evidence(surface, { ...surfaceOverrides, artifactPaths: [fakeArtifactPath] }), completeState, {
+      fileExists: (candidate) => candidate === fakeArtifactPath,
+      now: new Date('2026-08-09T00:05:00.000Z'),
+    }),
+    /evidence artifact must be a real PNG, JPEG, or WebP image/,
+  );
+  const normalized = validateEvidence(evidence(surface, surfaceOverrides), completeState, {
     fileExists: () => true,
     now: new Date('2026-08-09T00:05:00.000Z'),
   });
@@ -201,7 +211,6 @@ assert.deepEqual(parseGatePayload('', JSON.stringify({ status: 'BLOCKED', phase:
 });
 
 const cliStatePath = path.join(tempDir, 'current.json');
-await fs.writeFile(cliStatePath, JSON.stringify(machineReadyState(), null, 2));
 const runCli = (args) => spawnSync(
   process.execPath,
   ['scripts/release-loop.mjs', ...args],
@@ -211,6 +220,19 @@ const runCli = (args) => spawnSync(
     encoding: 'utf8',
   },
 );
+
+const currentCommit = spawnSync('git', ['rev-parse', 'HEAD'], {
+  cwd: process.cwd(),
+  encoding: 'utf8',
+}).stdout.trim();
+const currentShortCommit = spawnSync('git', ['rev-parse', '--short=7', 'HEAD'], {
+  cwd: process.cwd(),
+  encoding: 'utf8',
+}).stdout.trim();
+const currentState = machineReadyState();
+currentState.commit = currentCommit;
+currentState.shortCommit = currentShortCommit;
+await fs.writeFile(cliStatePath, JSON.stringify(currentState, null, 2));
 const statusResult = runCli(['status']);
 assert.equal(statusResult.status, 0);
 assert.match(statusResult.stdout, /PUBLIC_READY/);
@@ -218,6 +240,19 @@ const blockedComplete = runCli(['complete']);
 assert.notEqual(blockedComplete.status, 0);
 assert.match(`${blockedComplete.stdout}\n${blockedComplete.stderr}`, /BLOCKED/);
 assert.match(`${blockedComplete.stdout}\n${blockedComplete.stderr}`, /PORTAL_READY/);
+
+const staleState = machineReadyState();
+await fs.writeFile(cliStatePath, JSON.stringify(staleState, null, 2));
+const staleEvidencePath = path.join(tempDir, 'stale-evidence.json');
+await fs.writeFile(staleEvidencePath, JSON.stringify(evidence('portal'), null, 2));
+for (const args of [['status'], ['evidence', '--file', staleEvidencePath], ['complete']]) {
+  const staleResult = runCli(args);
+  assert.notEqual(staleResult.status, 0);
+  assert.match(
+    `${staleResult.stdout}\n${staleResult.stderr}`,
+    /current Git commit does not match the release run/,
+  );
+}
 
 await fs.rm(tempDir, { recursive: true, force: true });
 console.log('Release loop contract tests passed.');
