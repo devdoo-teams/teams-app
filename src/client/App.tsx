@@ -24,7 +24,11 @@ import {
 } from './ResponseModeSelector.js';
 import { WorkItemPanel } from './WorkItemPanel.js';
 import { CollaborationPanel } from './CollaborationPanel.js';
-import { optionalRuntimeEnabled } from './build-flags.js';
+
+declare const __TEAMS_OPTIONAL_RUNTIME__: boolean | undefined;
+const optionalRuntimeEnabled = typeof __TEAMS_OPTIONAL_RUNTIME__ === 'undefined'
+  ? false
+  : __TEAMS_OPTIONAL_RUNTIME__;
 
 export type LatestRequest = {
   generation: number;
@@ -299,7 +303,7 @@ export function App() {
   if (!itemMutationControllerRef.current) {
     itemMutationControllerRef.current = createItemMutationController();
   }
-  if (!copilotRuntimeRef.current) {
+  if (optionalRuntimeEnabled && !copilotRuntimeRef.current) {
     copilotRuntimeRef.current = createLazyCopilotRuntime();
   }
   const LazyCopilotWorkspaceRuntime = copilotRuntimeRef.current!;
@@ -678,6 +682,7 @@ export function App() {
   }
 
   function retryCopilotRuntime(): void {
+    if (!optionalRuntimeEnabled) return;
     copilotRuntimeRef.current = createLazyCopilotRuntime();
     setCopilotRuntimeAttempt((attempt) => attempt + 1);
   }
@@ -980,7 +985,7 @@ export function App() {
     </main>
   );
 
-  if (!copilotReady) return dashboard;
+  if (!optionalRuntimeEnabled || !copilotReady || !LazyCopilotWorkspaceRuntime) return dashboard;
 
   return (
     <LazyCopilotRuntimeErrorBoundary

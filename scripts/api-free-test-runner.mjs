@@ -8,6 +8,7 @@ const tests = [
   'test:core-boundary',
   'typecheck',
   'check',
+  'test:core-bundle-boundary',
   'test:deployment-env',
   'test:manifest',
   'test:package-determinism',

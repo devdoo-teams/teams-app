@@ -9,6 +9,7 @@ const plainTests = [
   'scripts/package-app-determinism-test.mjs',
   'scripts/core-runtime-smoke.mjs',
   'scripts/runtime-dist-test.mjs',
+  'scripts/core-bundle-boundary-test.mjs',
 ];
 const tsTests = [
   'scripts/status-card-test.ts',
@@ -17,6 +18,7 @@ const tsTests = [
   'scripts/deterministic-response-engine-test.ts',
   'scripts/codex-runner-security-test.ts',
   'scripts/agent-job-store-hardening-test.ts',
+  'scripts/agent-service-workspace-lock-test.ts',
   'scripts/genui-action-store-test.ts',
   'scripts/item-store-hardening-test.ts',
   'scripts/item-store-ownership-test.ts',

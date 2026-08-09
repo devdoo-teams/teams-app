@@ -125,13 +125,31 @@ try {
   })]), 'utf8');
   const currentStore = new AgentJobStore(currentPath);
   await currentStore.initialize();
-  assert.equal(currentStore.get('task-current-1', scope)?.tenantId, scope.tenantId, 'valid current job is readable in its scope');
-  assert.match(currentStore.get('task-current-1', scope)?.result ?? '', /첫 번째 결과 줄\n두 번째 결과 줄/, 'multiline Codex results remain valid persisted text');
+  const scopedSnapshot = currentStore.get('task-current-1', scope);
+  assert.ok(scopedSnapshot, 'valid current job is readable in its scope');
+  assert.equal(scopedSnapshot.tenantId, scope.tenantId, 'valid current job is readable in its scope');
+  assert.match(scopedSnapshot.result ?? '', /첫 번째 결과 줄\n두 번째 결과 줄/, 'multiline Codex results remain valid persisted text');
   assert.deepEqual(
-    currentStore.get('task-current-1', scope)?.changedPaths,
+    scopedSnapshot.changedPaths,
     ['src/owned.ts'],
     'valid changed path ownership is preserved by the declared job schema',
   );
+  // Reads must be immutable snapshots. A Teams/MCP caller must not be able to
+  // mutate the server-owned status or persisted arrays through a returned job.
+  scopedSnapshot.status = 'failed';
+  scopedSnapshot.progress.push('forged progress');
+  scopedSnapshot.changedPaths?.push('forged.ts');
+  const afterScopedMutation = currentStore.get('task-current-1', scope);
+  assert.equal(afterScopedMutation?.status, 'completed', 'scoped reads do not expose mutable job state');
+  assert.deepEqual(afterScopedMutation?.progress, ['첫 번째 진행 줄\n두 번째 진행 줄'], 'progress is cloned on scoped reads');
+  assert.deepEqual(afterScopedMutation?.changedPaths, ['src/owned.ts'], 'changed paths are cloned on scoped reads');
+  const listedSnapshot = currentStore.list(scope)[0];
+  listedSnapshot.status = 'failed';
+  assert.equal(currentStore.get('task-current-1', scope)?.status, 'completed', 'list returns immutable job snapshots');
+  const localSnapshot = currentStore.getLocalOnly('task-current-1');
+  assert.ok(localSnapshot, 'local debug reader can see the valid job');
+  localSnapshot.progress.push('forged local progress');
+  assert.deepEqual(currentStore.getLocalOnly('task-current-1')?.progress, ['첫 번째 진행 줄\n두 번째 진행 줄'], 'local reads are also cloned');
   assert.equal(
     currentStore.get('task-current-1', { ...scope, tenantId: 'other-tenant' }),
     undefined,

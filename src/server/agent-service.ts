@@ -100,6 +100,10 @@ export class AgentService {
   private readonly progressStates = new Map<string, ProgressState>();
   private readonly progressGenerations = new Map<string, number>();
   private readonly mutationChains = new Map<string, Promise<void>>();
+  // A workspace-write job's changed-path proof is a before/after observation
+  // of the shared checkout. Serialize the whole observation and runner
+  // lifetime so another job cannot contaminate that proof or the commit step.
+  private workspaceWriteChain: Promise<void> = Promise.resolve();
 
   async initialize(): Promise<void> {
     await this.store.initialize();
@@ -280,43 +284,48 @@ export class AgentService {
   }
 
   async commit(id: string, message: string, scope: AgentJobScope): Promise<AgentJob | undefined> {
-    const job = this.store.get(id, scope);
-    if (!job) return undefined;
     this.assertMutationAllowed(scope);
-    if (job.status !== 'completed') return job;
-    if (job.mode !== 'workspace-write') {
-      await this.store.update(id, scope, {
-        commitMessage: '읽기 전용 작업은 커밋할 수 없습니다. completed workspace-write 작업만 커밋할 수 있습니다.',
-      });
-      return this.store.get(id, scope);
-    }
+    // Keep lock ordering identical to execute(): workspace first, then the
+    // per-job mutation lock. This prevents a commit waiting on a running job
+    // from deadlocking with that job's terminal update.
+    return this.withWorkspaceWriteLock(() => this.withJobMutationLock(id, scope, async () => {
+      const job = this.store.get(id, scope);
+      if (!job) return undefined;
+      if (job.status !== 'completed') return job;
+      if (job.mode !== 'workspace-write') {
+        await this.store.update(id, scope, {
+          commitMessage: '읽기 전용 작업은 커밋할 수 없습니다. completed workspace-write 작업만 커밋할 수 있습니다.',
+        });
+        return this.store.get(id, scope);
+      }
 
-    const ownedPaths = recordedChangedPaths(job);
-    if (!ownedPaths) {
-      await this.store.update(id, scope, {
-        commitMessage: '작업의 기록된 변경 경로 소유권을 증명할 수 없어 커밋을 중단했습니다.',
-      });
-      return this.store.get(id, scope);
-    }
+      const ownedPaths = recordedChangedPaths(job);
+      if (!ownedPaths) {
+        await this.store.update(id, scope, {
+          commitMessage: '작업의 기록된 변경 경로 소유권을 증명할 수 없어 커밋을 중단했습니다.',
+        });
+        return this.store.get(id, scope);
+      }
 
-    const commit = await this.gitService.commit(message, { ownedPaths });
-    if (!commit.committed) {
-      await this.store.update(id, scope, { commitMessage: commit.message });
-      return this.store.get(id, scope);
-    }
+      const commit = await this.gitService.commit(message, { ownedPaths });
+      if (!commit.committed) {
+        await this.store.update(id, scope, { commitMessage: commit.message });
+        return this.store.get(id, scope);
+      }
 
-    const refreshed = await this.store.update(id, scope, {
-      commitHash: commit.hash,
-      commitMessage: commit.message,
-    });
-    if (refreshed) {
-      await this.notifyIfEnabled(refreshed, {
-        kind: 'result',
-        phase: 'commit',
-        message: `작업 ${id}: ${commit.message}`,
+      const refreshed = await this.store.update(id, scope, {
+        commitHash: commit.hash,
+        commitMessage: commit.message,
       });
-    }
-    return refreshed;
+      if (refreshed) {
+        await this.notifyIfEnabled(refreshed, {
+          kind: 'result',
+          phase: 'commit',
+          message: `작업 ${id}: ${commit.message}`,
+        });
+      }
+      return refreshed;
+    }));
   }
 
   /** Local-only MCP/debug reader. Authenticated callers must use scoped methods. */
@@ -343,6 +352,14 @@ export class AgentService {
   }
 
   private async execute(job: AgentJob, shouldNotify: boolean, onProgress?: ProgressListener): Promise<void> {
+    if (job.mode === 'workspace-write') {
+      await this.withWorkspaceWriteLock(() => this.executeUnlocked(job, shouldNotify, onProgress));
+      return;
+    }
+    await this.executeUnlocked(job, shouldNotify, onProgress);
+  }
+
+  private async executeUnlocked(job: AgentJob, shouldNotify: boolean, onProgress?: ProgressListener): Promise<void> {
     const scope = scopeForJob(job);
     if (!scope) return;
 
@@ -649,6 +666,21 @@ export class AgentService {
     } finally {
       release();
       if (this.mutationChains.get(key) === queued) this.mutationChains.delete(key);
+    }
+  }
+
+  private async withWorkspaceWriteLock<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.workspaceWriteChain;
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    const queued = previous.then(() => current);
+    this.workspaceWriteChain = queued;
+
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
     }
   }
 

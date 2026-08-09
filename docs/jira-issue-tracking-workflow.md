@@ -4,7 +4,7 @@
 
 Jira Cloud is the project-tracking system for this repository. It is not a runtime dependency of the Teams app and it does not change the rule that Teams Core must work with the deterministic engine and the available Codex CLI path.
 
-The screenshots confirm that Jira Cloud is signed in for the `devdoo` site and that the visible project is `My Project (MP)`. The actual project key, issue types, workflow states, and default assignee must still be verified in Jira before anything is created. The display name is not treated as an API identifier.
+The configured Jira target is `https://devdoo.atlassian.net`, project key `MP` (`My Project`), with the default assignee set to the currently signed-in user. The signed-in Jira/Teams account remains the source of truth for the assignee account ID; the repository never guesses or stores that ID.
 
 ## What becomes a Jira issue
 
@@ -76,14 +76,17 @@ At the end of each smallest vertical slice:
 
 If a process exceeds its bounded checkpoint, record the last observed state and create/update a blocker issue. Do not leave a generic “checking repository” message running without a next action.
 
-## Information needed before live Jira writes
+## Verified Jira target
 
-The following values are required once, preferably entered by the user in the existing signed-in Jira Cloud tab or Teams Jira app:
+The user supplied the following values in the existing signed-in Jira Cloud/Teams session:
 
-- Jira site URL (the screenshot suggests `devdoo`, but the full hostname must be verified);
-- project key for `My Project (MP)`;
-- permitted issue types and workflow transition names;
-- default assignee, or confirmation to leave issues unassigned;
-- whether the user wants one Epic for Teams Core with child tasks, or independent issues only.
+- Jira site URL: `https://devdoo.atlassian.net`;
+- project key: `MP`;
+- default assignee: the current signed-in user (`self`), resolved by Jira at creation time;
+- issue type policy: `Bug` for reproducible defects/blockers, `Task` for planned Core slices, and `Improvement` for non-blocking optimization work;
+- workflow transition names: discover from the existing project workflow at issue-creation/update time; never invent transition names;
+- grouping: independent issues by default, with parent/Epic links only when the user explicitly asks for them.
 
-Authentication must be completed in the existing Jira/Teams UI. Do not request a password, API token, or device code in chat. Until these values are verified, the repository keeps a local evidence ledger and does not claim that Jira synchronization is active.
+Authentication must remain in the existing Jira/Teams UI. Do not request or store a password, API token, or device code in chat or Git. Live issue creation still requires a Jira connector or an already authenticated browser action; repository configuration alone must not claim that a Jira issue was created.
+
+For every future live write, first resolve the current signed-in user's Jira account ID and the allowed issue type/status transitions from Jira, then use the idempotency key described above. If the Jira surface cannot be reached, record the issue payload in the local evidence ledger and report `JIRA_SYNC_UNVERIFIED` rather than retrying blindly.

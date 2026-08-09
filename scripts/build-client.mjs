@@ -33,7 +33,13 @@ await buildClientAtomically({
       sourcemap: false,
       loader: { '.css': 'css', '.woff': 'file', '.woff2': 'file', '.ttf': 'file' },
       define: { __TEAMS_OPTIONAL_RUNTIME__: coreBuild ? 'false' : 'true' },
-      external: coreBuild ? ['@copilotkit/*', '@modelcontextprotocol/*'] : [],
+      // The core tab never renders the optional CopilotKit runtime. Keep its
+      // lazy import external so esbuild does not emit an optional component or
+      // stylesheet into the API-free Teams artifact; optional builds bundle it
+      // normally when the feature flag is explicitly enabled.
+      external: coreBuild
+        ? ['@copilotkit/*', '@modelcontextprotocol/*', './CopilotWorkspaceAssistant.js']
+        : [],
       logLevel: 'info',
     });
 

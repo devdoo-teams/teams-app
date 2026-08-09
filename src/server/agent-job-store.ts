@@ -107,24 +107,29 @@ export class AgentJobStore {
 
     return this.enqueueMutation(() => {
       this.jobs = [job, ...this.jobs];
-      return job;
+      return cloneAgentJob(job);
     });
   }
 
   get(id: string, scope: AgentJobScope): AgentJob | undefined {
-    return this.jobs.find((job) => job.id === id && matchesScope(job, scope));
+    const job = this.jobs.find((candidate) => candidate.id === id && matchesScope(candidate, scope));
+    return job ? cloneAgentJob(job) : undefined;
   }
 
   list(scope: AgentJobScope, limit = 10): AgentJob[] {
-    return this.jobs.filter((job) => matchesScope(job, scope)).slice(0, limit);
+    return this.jobs
+      .filter((job) => matchesScope(job, scope))
+      .slice(0, limit)
+      .map(cloneAgentJob);
   }
 
   latestCompletedWithThread(scope: AgentJobScope): AgentJob | undefined {
-    return this.jobs.find((job) =>
-      matchesScope(job, scope) &&
-      job.status === 'completed' &&
-      Boolean(job.threadId),
+    const job = this.jobs.find((candidate) =>
+      matchesScope(candidate, scope) &&
+      candidate.status === 'completed' &&
+      Boolean(candidate.threadId),
     );
+    return job ? cloneAgentJob(job) : undefined;
   }
 
   async update(
@@ -141,7 +146,7 @@ export class AgentJobStore {
         throw new Error('completed jobs must contain a result');
       }
       this.jobs = this.jobs.map((job, jobIndex) => jobIndex === index ? updated : job);
-      return updated;
+      return cloneAgentJob(updated);
     });
   }
 
@@ -151,11 +156,11 @@ export class AgentJobStore {
       if (index === -1) return undefined;
 
       const job = this.jobs[index];
-      if (job.progress.at(-1) === message) return job;
+      if (job.progress.at(-1) === message) return cloneAgentJob(job);
 
       const updated = { ...job, progress: [...job.progress.slice(-7), message] };
       this.jobs = this.jobs.map((candidate, jobIndex) => jobIndex === index ? updated : candidate);
-      return updated;
+      return cloneAgentJob(updated);
     });
   }
 
@@ -168,12 +173,13 @@ export class AgentJobStore {
 
   /** Local-only MCP/debug reader. Never use this from an authenticated request path. */
   getLocalOnly(id: string): AgentJob | undefined {
-    return this.jobs.find((job) => job.id === id);
+    const job = this.jobs.find((candidate) => candidate.id === id);
+    return job ? cloneAgentJob(job) : undefined;
   }
 
   /** Local-only MCP/debug reader. Never use this from an authenticated request path. */
   listLocalOnly(limit = 10): AgentJob[] {
-    return this.jobs.slice(0, limit);
+    return this.jobs.slice(0, limit).map(cloneAgentJob);
   }
 
   /** Local-only MCP/debug reader. Never use this from an authenticated request path. */
@@ -200,11 +206,7 @@ export class AgentJobStore {
   }
 
   private async persist(): Promise<void> {
-    const snapshot = this.jobs.map((job) => ({
-      ...job,
-      progress: [...job.progress],
-      ...(job.changedPaths ? { changedPaths: [...job.changedPaths] } : {}),
-    }));
+    const snapshot = this.jobs.map(cloneAgentJob);
     const nextWrite = this.writeChain.then(() => atomicWriteJson(this.filePath, snapshot));
     this.writeChain = nextWrite.catch(() => undefined);
     await nextWrite;
@@ -215,7 +217,7 @@ export class AgentJobStore {
       const previousJobs = this.jobs;
       try {
         const result = mutate();
-        await atomicWriteJson(this.filePath, this.jobs);
+        await atomicWriteJson(this.filePath, this.jobs.map(cloneAgentJob));
         return result;
       } catch (error) {
         this.jobs = previousJobs;
@@ -234,6 +236,14 @@ function matchesScope(job: AgentJob, scope: AgentJobScope): boolean {
     && job.requesterId === scope.requesterId
     && job.conversationId === scope.conversationId
     && job.tenantId === scope.tenantId;
+}
+
+function cloneAgentJob(job: AgentJob): AgentJob {
+  return {
+    ...job,
+    progress: [...job.progress],
+    ...(job.changedPaths ? { changedPaths: [...job.changedPaths] } : {}),
+  };
 }
 
 type JobRecord = Record<string, unknown>;
