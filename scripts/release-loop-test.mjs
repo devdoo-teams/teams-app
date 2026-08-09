@@ -16,6 +16,7 @@ import {
   completeRun,
   completeReleaseState,
   createInitialState,
+  classifyGitStatus,
   deriveStatus,
   gatePhaseForLoop,
   missingGates,
@@ -26,6 +27,23 @@ import {
   summarizePhase,
   validateEvidence,
 } from './release-loop.mjs';
+
+assert.deepEqual(
+  classifyGitStatus('?? "user-owned artifact 2"\n'),
+  {
+    trackedDirty: false,
+    untracked: ['?? "user-owned artifact 2"'],
+  },
+  'untracked user artifacts must be recorded without blocking a clean tracked release start',
+);
+assert.deepEqual(
+  classifyGitStatus(' M scripts/release-loop.mjs\n?? "user-owned artifact 2"\n'),
+  {
+    trackedDirty: true,
+    untracked: ['?? "user-owned artifact 2"'],
+  },
+  'tracked modifications must still block a release start even when untracked artifacts exist',
+);
 
 const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-release-loop-'));
 const artifactPath = path.join(tempDir, 'desktop-proof.png');

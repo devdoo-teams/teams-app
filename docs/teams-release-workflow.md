@@ -119,7 +119,7 @@ npm run release:loop -- status
 npm run release:loop -- complete
 ```
 
-상태는 `.release/current.json`에 저장되며 토큰·비밀번호·API key·원문 Teams 메시지는 저장하지 않는다. `start`, `package`, `complete`는 현재 Git 커밋과 clean worktree를 확인한다. `machine`, `package`, `public` 실패는 마지막 성공 상태를 보존하고 다시 실행할 수 있다. `complete`는 네 개 UI 증거가 모두 현재 커밋·버전·ZIP SHA와 일치할 때만 `READY`와 Teams 전송용 보고서를 출력한다.
+상태는 `.release/current.json`에 저장되며 토큰·비밀번호·API key·원문 Teams 메시지는 저장하지 않는다. `start`, `package`, `complete`는 현재 Git 커밋과 clean worktree를 확인한다. clean 판정에서 추적 파일 수정은 차단하지만, 기존 사용자 소유 미추적 파일은 삭제하거나 원본으로 취급하지 않고 `untrackedAtStart`에 기록한 뒤 계속한다. 미추적 파일을 포함한 패키지·업로드 경로는 사용하지 않는다. `machine`, `package`, `public` 실패는 마지막 성공 상태를 보존하고 다시 실행할 수 있다. `complete`는 네 개 UI 증거가 모두 현재 커밋·버전·ZIP SHA와 일치할 때만 `READY`와 Teams 전송용 보고서를 출력한다.
 
 외부 증거 파일은 임의의 이미지 한 장으로 통과할 수 없다. `release-loop`는 전·후 스크린샷, 접근성 증거, 런타임 로그, 현재 커밋/버전에 결합된 전수 매트릭스 결과를 모두 요구한다. 아래는 `desktop`의 예시이며 실제 경로와 해시는 실행 결과로 채운다.
 

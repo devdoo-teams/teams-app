@@ -5,6 +5,7 @@
 - MCP/MCP Apps는 Teams 모바일 UI 자체로 간주하지 않는다. Teams 탭은 TeamsJS/React WebView, Bot 응답은 Adaptive Cards 1.2 호환 subset을 기준으로 구현하고, MCP는 구체적인 서버 tool 연결이 확인된 뒤 서버 측 adapter로만 검토한다.
 - 기본 `npm run build`와 기본 실행은 Core만 대상으로 한다. 선택 provider는 `build:optional`, `build:all`, `TEAMS_OPTIONAL_RUNTIME=true`처럼 명시적으로 요청한 경우에만 로드한다.
 - 소스·매니페스트·패키징·런타임 설정 변경은 Git diff를 확인하고 의미 있는 단위로 커밋한다. 완료 보고에는 해당 커밋 SHA를 포함한다.
+- 릴리스 루프의 clean 판정은 추적 파일 변경만 차단한다. 시작 시 발견된 미추적 파일은 `untrackedAtStart`로 기록하고 삭제·이동·업로드하지 않는다. 추적 파일 수정은 여전히 커밋 전 진행을 차단한다.
 - 업로드 전에 반드시 앱 패키지 버전, ZIP 내부의 실제 매니페스트, `devicePermissions`, 배포 환경 검증을 확인한다. 인증정보·환경변수·배포 대상이 없으면 추측하지 말고 업로드 단계에서 멈춘 뒤 누락 항목을 명확히 보고한다.
 - 인증정보를 임의로 만들거나 추측하지 않으며, 업로드 대상이 불명확하거나 외부 서비스에 대한 추가 권한이 필요한 경우에는 안전한 범위까지만 진행한다.
 - 인앱 브라우저 배포 작업은 기존에 로그인된 탭을 우선 재사용한다. Developer Portal, Teams Admin Center 앱 상세, Teams 채팅, 공개 Teams 탭을 매번 새로 열거나 닫지 말고, 현재 탭의 URL과 로그인 상태를 확인한 뒤 같은 탭에서 이어간다.

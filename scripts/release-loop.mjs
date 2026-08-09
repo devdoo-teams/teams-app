@@ -475,7 +475,7 @@ export function applyPhaseSuccess(state, phase, summary, now = new Date()) {
   return next;
 }
 
-export function createInitialState({ runId, commit, shortCommit, version, startedAt }) {
+export function createInitialState({ runId, commit, shortCommit, version, startedAt, untrackedAtStart = [] }) {
   for (const [name, value] of Object.entries({ runId, commit, shortCommit, version, startedAt })) {
     if (typeof value !== 'string' || value.trim() === '') {
       throw new Error(`release loop requires ${name}`);
@@ -489,6 +489,7 @@ export function createInitialState({ runId, commit, shortCommit, version, starte
     commit,
     shortCommit,
     version,
+    untrackedAtStart: [...untrackedAtStart],
     status: 'INIT',
     machine: null,
     package: null,
@@ -924,6 +925,15 @@ export async function writeState(state, statePath = statePathFromEnv()) {
 
 const GIT_SNAPSHOT_TIMEOUT_MS = 20_000;
 
+export function classifyGitStatus(porcelain) {
+  const lines = String(porcelain || '').split('\n').map((line) => line.trimEnd()).filter(Boolean);
+  const untracked = lines.filter((line) => line.startsWith('??'));
+  return {
+    trackedDirty: lines.some((line) => !line.startsWith('??')),
+    untracked,
+  };
+}
+
 function gitSnapshot() {
   const run = (args) => {
     try {
@@ -946,10 +956,12 @@ function gitSnapshot() {
     }
   };
   const porcelain = run(['status', '--porcelain']);
+  const status = classifyGitStatus(porcelain);
   return {
     commit: run(['rev-parse', 'HEAD']),
     shortCommit: run(['rev-parse', '--short=7', 'HEAD']),
-    dirty: porcelain.length > 0,
+    dirty: status.trackedDirty,
+    untracked: status.untracked,
     porcelain,
   };
 }
@@ -1135,6 +1147,7 @@ async function startRun(statePath) {
     shortCommit: git.shortCommit,
     version: sourceVersion(),
     startedAt,
+    untrackedAtStart: git.untracked,
   });
   await writeState(state, statePath);
   jsonLog({ status: 'READY', phase: 'start', runId: state.runId, state: state.status, nextAction: nextAction(state) });
