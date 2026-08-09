@@ -78,6 +78,16 @@
       "status": "To Do",
       "description": "The 1.0.26 matrix is aligned to the packaged runtime identity and correctly remains BLOCKED until screenshots, AX, and runtime evidence exist. The release-loop still needs to parse the matrix file, recompute its content hash, verify row IDs and coverage counters, and require each referenced artifact to carry the same app/runtime/package identity before any UI surface can advance.",
       "acceptance": "A stale matrix, mismatched matrix hash, fabricated counter, missing row artifact, or cross-release artifact causes the release gate to fail closed; a complete same-release matrix is the only input that can advance portal/installed/desktop/mobile evidence."
+    },
+    {
+      "idempotencyKey": "teams-core:blocker:source-io-git-status:20994c5",
+      "issueType": "Bug",
+      "summary": "[Teams Core] FileProvider placeholder state stalls local Git worktree inspection",
+      "assignee": "self",
+      "labels": ["teams-core", "release", "source-io", "fileprovider", "suspected-blocker"],
+      "status": "In Progress",
+      "description": "The authoritative local source remains readable and the release gates can run, but core files such as package.json, appPackage/manifest.json, src/client/App.tsx, and scripts/release-loop.mjs report blocks=0 with du=0B. A read-only git status --short --branch exceeded 18 seconds and was stopped; no user process or runtime was terminated. This is recorded as a FileProvider/dataless I/O suspicion, not yet a confirmed code defect.",
+      "acceptance": "After the local source bytes are materialized without copying the repository to iCloud or another source, two bounded git status scans complete within 20 seconds, core inputs and the release ZIP report non-placeholder storage, and release:preflight plus the same public runtime checks pass."
     }
   ]
 }
