@@ -116,8 +116,9 @@ async function testTeamsInitializationIsBounded(): Promise<void> {
   assert.equal(runtime.available, false, 'hung Teams initialization returns an unavailable runtime after its deadline');
 }
 
-async function testLegacyLocationTimeoutClearsForRetry(): Promise<void> {
+async function testLegacyLocationTimeoutBlocksOverlappingRetry(): Promise<void> {
   let legacyCalls = 0;
+  let firstCallback!: (error: null, location: { latitude: number; longitude: number; accuracy?: number }) => void;
   const dependencies = {
     teamsApp: {
       isInitialized: () => true,
@@ -128,7 +129,11 @@ async function testLegacyLocationTimeoutClearsForRetry(): Promise<void> {
       isSupported: () => true,
       getLocation: (callback) => {
         legacyCalls += 1;
-        if (legacyCalls === 2) callback(null, { latitude: 37.5665, longitude: 126.978, accuracy: 12 });
+        if (legacyCalls === 1) {
+          firstCallback = callback as typeof firstCallback;
+          return;
+        }
+        callback(null, { latitude: 37.5665, longitude: 126.978, accuracy: 12 });
       },
     },
     geoLocation: {
@@ -151,13 +156,25 @@ async function testLegacyLocationTimeoutClearsForRetry(): Promise<void> {
   assert.match(firstResult instanceof Error ? firstResult.message : '', /시간(?:이)? 초과/, 'legacy Teams location reports its bounded timeout');
   assert.equal(legacyCalls, 1, 'one user request invokes the iOS legacy provider at most once');
 
+  const blockedRetry = await service.getCurrentDeviceLocation(new AbortController().signal)
+    .catch((error: unknown) => error);
+  assert.match(
+    blockedRetry instanceof Error ? blockedRetry.message : '',
+    /시간(?:이)? 초과/,
+    'a retry during an unresolved native request returns the existing bounded failure',
+  );
+  assert.equal(legacyCalls, 1, 'a retry does not create an overlapping native location prompt');
+
+  firstCallback(null, { latitude: 37.5, longitude: 127, accuracy: 8 });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
   const retryResult = await service.getCurrentDeviceLocation(new AbortController().signal);
   assert.deepEqual(retryResult, {
     latitude: 37.5665,
     longitude: 126.978,
     accuracy: 12,
     source: 'teams-native',
-  }, 'a later user action retries after the timed-out request is cleared');
+  }, 'a later user action retries after the timed-out SDK request has actually settled');
   assert.equal(legacyCalls, 2, 'retry starts one fresh legacy location request');
 }
 
@@ -240,7 +257,7 @@ async function testIosLegacyDenialStopsFallbacks(): Promise<void> {
   assert.doesNotMatch(error instanceof Error ? error.message : '', /Android/, 'iOS denial does not provide Android guidance');
 }
 
-async function testAndroidBrowserDenialStopsFallbacks(): Promise<void> {
+async function testAndroidBrowserDenialFallsBackToTeamsGeoLocation(): Promise<void> {
   let legacyCalls = 0;
   let previewCalls = 0;
   const dependencies = {
@@ -262,7 +279,7 @@ async function testAndroidBrowserDenialStopsFallbacks(): Promise<void> {
         return true;
       },
       requestPermission: async () => true,
-      getCurrentLocation: async () => ({ latitude: 37.5, longitude: 127 }),
+      getCurrentLocation: async () => ({ latitude: 37.5, longitude: 127, accuracy: 9 }),
     },
     browserGeolocation: () => ({
       getCurrentPosition: (_success, error) => error({ code: 1, message: 'permission denied' }),
@@ -270,12 +287,60 @@ async function testAndroidBrowserDenialStopsFallbacks(): Promise<void> {
   } satisfies ClientLocationDependencies;
   const service = createClientLocationService(dependencies, { operationTimeoutMs: 10 });
 
-  const error = await service.getCurrentDeviceLocation(new AbortController().signal).catch((caught: unknown) => caught);
+  const result = await service.getCurrentDeviceLocation(new AbortController().signal);
 
-  assert.equal(previewCalls, 0, 'Android browser permission denial does not start preview geolocation');
+  assert.deepEqual(result, {
+    latitude: 37.5,
+    longitude: 127,
+    accuracy: 9,
+    source: 'teams-native',
+  }, 'Android browser permission denial falls back to the supported Teams native location');
+  assert.equal(previewCalls, 1, 'Android browser permission denial starts one Teams native permission check');
   assert.equal(legacyCalls, 0, 'Android browser permission denial does not start legacy geolocation');
-  assert.match(error instanceof Error ? error.message : '', /Android/, 'Android denial provides Android recovery guidance');
-  assert.doesNotMatch(error instanceof Error ? error.message : '', /iPhone|iPad/, 'Android denial does not provide Apple guidance');
+}
+
+async function testAndroidTeamsNativeDenialStopsFurtherFallbacks(): Promise<void> {
+  let browserCalls = 0;
+  let legacyCalls = 0;
+  let nativePermissionChecks = 0;
+  const dependencies = {
+    teamsApp: {
+      isInitialized: () => true,
+      initialize: async () => undefined,
+      getContext: async () => ({ clientType: 'android', hostName: 'Teams' }),
+    },
+    legacyLocation: {
+      isSupported: () => true,
+      getLocation: () => {
+        legacyCalls += 1;
+      },
+    },
+    geoLocation: {
+      isSupported: () => true,
+      hasPermission: async () => {
+        nativePermissionChecks += 1;
+        return false;
+      },
+      requestPermission: async () => false,
+      getCurrentLocation: async () => ({ latitude: 37.5, longitude: 127 }),
+    },
+    browserGeolocation: () => ({
+      getCurrentPosition: (_success, error) => {
+        browserCalls += 1;
+        error({ code: 1, message: 'permission denied' });
+      },
+    }),
+  } satisfies ClientLocationDependencies;
+  const service = createClientLocationService(dependencies, { operationTimeoutMs: 10 });
+
+  const error = await service.getCurrentDeviceLocation(new AbortController().signal)
+    .catch((caught: unknown) => caught);
+
+  assert.equal(browserCalls, 1, 'Android native fallback follows the observed browser denial');
+  assert.equal(nativePermissionChecks, 1, 'Teams native permission is checked once');
+  assert.equal(legacyCalls, 0, 'Teams native denial does not cascade into legacy location');
+  assert.match(error instanceof Error ? error.message : '', /Android/, 'Teams native denial provides Android recovery guidance');
+  assert.doesNotMatch(error instanceof Error ? error.message : '', /iPhone|iPad/, 'Android native denial does not provide Apple guidance');
 }
 
 async function testPreviewDenialStopsLegacyFallbackWithNeutralGuidance(): Promise<void> {
@@ -364,10 +429,11 @@ async function testConcurrentRequestsRemainDeduplicatedAndAbortIndependent(): Pr
 
 await testTeamsCapabilityDiscoveryIsBounded();
 await testTeamsInitializationIsBounded();
-await testLegacyLocationTimeoutClearsForRetry();
+await testLegacyLocationTimeoutBlocksOverlappingRetry();
 await testPreviewLocationStagesAreBounded();
 await testIosLegacyDenialStopsFallbacks();
-await testAndroidBrowserDenialStopsFallbacks();
+await testAndroidBrowserDenialFallsBackToTeamsGeoLocation();
+await testAndroidTeamsNativeDenialStopsFurtherFallbacks();
 await testPreviewDenialStopsLegacyFallbackWithNeutralGuidance();
 await testConcurrentRequestsRemainDeduplicatedAndAbortIndependent();
 
