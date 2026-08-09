@@ -1,4 +1,6 @@
 import { strict as assert } from 'node:assert';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 
 import {
   createApprovalResultEnvelope,
@@ -8,6 +10,7 @@ import {
   getGenAiBadgeLabel,
 } from '../src/client/genui/tool-adapters.js';
 import { GenUiEnvelopeV1Schema } from '../src/shared/genui.js';
+import { GenUiCard } from '../src/client/genui/GenUiCard.js';
 
 const weatherParameters = {
   location: '서울',
@@ -47,6 +50,49 @@ const malformedWeather = createWeatherToolEnvelope({ ...weatherParameters, tempe
 assert.equal(malformedWeather.kind, 'error');
 assert.equal(malformedWeather.status, 'error');
 assert.equal(malformedWeather.sections[0]?.type, 'status');
+
+const partialWeather = GenUiEnvelopeV1Schema.parse({
+  schemaVersion: '1',
+  kind: 'weather',
+  status: 'ready',
+  id: 'partial-weather',
+  correlationId: 'partial-weather',
+  title: '부분 날씨 데이터',
+  sections: [{ type: 'weather', humidity: 58, windSpeed: 9.4 }],
+  actions: [],
+  citations: [],
+  aiGenerated: false,
+  fallbackText: '부분 날씨 데이터',
+});
+const partialWeatherMarkup = renderToStaticMarkup(React.createElement(GenUiCard, { envelope: partialWeather }));
+assert.match(partialWeatherMarkup, /58%/, 'partial weather data still renders available humidity');
+assert.match(partialWeatherMarkup, /9\.4km\/h/, 'partial weather data still renders available wind');
+
+const errorWithRetry = GenUiEnvelopeV1Schema.parse({
+  schemaVersion: '1',
+  kind: 'error',
+  status: 'error',
+  id: 'error-retry',
+  correlationId: 'error-retry',
+  summary: '재시도할 수 있는 오류',
+  sections: [],
+  actions: [{
+    id: 'retry',
+    action: 'retry',
+    label: '다시 시도',
+    entityId: 'error-retry',
+    correlationId: 'error-retry',
+    actionToken: 'retry-token',
+  }],
+  citations: [],
+  aiGenerated: false,
+  fallbackText: '재시도할 수 있는 오류',
+});
+const errorMarkup = renderToStaticMarkup(React.createElement(GenUiCard, {
+  envelope: errorWithRetry,
+  onAction: () => undefined,
+}));
+assert.match(errorMarkup, /다시 시도/, 'error cards keep an actionable retry button');
 
 assert.equal(createTaskToolEnvelope(taskParameters, 'inProgress').status, 'loading');
 assert.equal(createTaskToolEnvelope(taskParameters, 'executing').status, 'loading');

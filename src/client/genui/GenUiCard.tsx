@@ -76,7 +76,15 @@ function sectionHasContent(section: GenUiSection): boolean {
     case 'text': return Boolean(hasText(section.text) || hasText(section.content) || section.value !== undefined);
     case 'facts': return Boolean(section.facts?.length || section.value !== undefined);
     case 'stats': return section.stats.length > 0;
-    case 'weather': return Boolean(section.location || section.temperature !== undefined || section.condition);
+    case 'weather': return Boolean(
+      section.location
+      || section.temperature !== undefined
+      || section.apparentTemperature !== undefined
+      || section.humidity !== undefined
+      || section.windSpeed !== undefined
+      || section.precipitation !== undefined
+      || section.condition,
+    );
     case 'list': return section.items.length > 0;
     case 'progress': return true;
     case 'status': return true;
@@ -423,7 +431,7 @@ export function GenUiCard({
         <CitationList citations={envelope.citations} />
       )}
 
-      {!isLoading && envelope && !isError && (
+      {!isLoading && envelope && (
         <ActionBar
           envelope={envelope}
           onAction={onAction}

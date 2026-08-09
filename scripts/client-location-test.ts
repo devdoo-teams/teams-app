@@ -116,6 +116,48 @@ async function testTeamsInitializationIsBounded(): Promise<void> {
   assert.equal(runtime.available, false, 'hung Teams initialization returns an unavailable runtime after its deadline');
 }
 
+async function testTimedOutTeamsContextDoesNotLockBrowserRetry(): Promise<void> {
+  let contextCalls = 0;
+  let browserCalls = 0;
+  const dependencies = {
+    teamsApp: {
+      isInitialized: () => true,
+      initialize: async () => undefined,
+      getContext: () => {
+        contextCalls += 1;
+        return contextCalls === 1
+          ? new Promise<never>(() => {})
+          : Promise.resolve({ clientType: 'web', hostName: 'Teams' });
+      },
+    },
+    legacyLocation: {
+      isSupported: () => false,
+      getLocation: () => undefined,
+    },
+    geoLocation: {
+      isSupported: () => false,
+      hasPermission: async () => false,
+      requestPermission: async () => false,
+      getCurrentLocation: async () => ({ latitude: 37.5, longitude: 127 }),
+    },
+    browserGeolocation: () => ({
+      getCurrentPosition: (success) => {
+        browserCalls += 1;
+        success({ coords: { latitude: 37.5665, longitude: 126.978, accuracy: 8 } });
+      },
+    }),
+  } satisfies ClientLocationDependencies;
+  const service = createClientLocationService(dependencies, { initializeTimeoutMs: 10, operationTimeoutMs: 20 });
+
+  const first = await service.getCurrentDeviceLocation(new AbortController().signal);
+  const second = await service.getCurrentDeviceLocation(new AbortController().signal);
+
+  assert.equal(first.source, 'browser', 'a timed-out Teams context falls back to browser location');
+  assert.equal(second.source, 'browser', 'the next user request can retry after a timed-out Teams context');
+  assert.equal(contextCalls, 2, 'a timed-out Teams context is not reused forever');
+  assert.equal(browserCalls, 2, 'the retry performs a fresh browser location request');
+}
+
 async function testLegacyLocationTimeoutBlocksOverlappingRetry(): Promise<void> {
   let legacyCalls = 0;
   let firstCallback!: (error: null, location: { latitude: number; longitude: number; accuracy?: number }) => void;
@@ -553,18 +595,23 @@ async function testConcurrentRequestsRemainDeduplicatedAndAbortIndependent(): Pr
   }, 'one caller aborting does not cancel the shared request for another caller');
 }
 
-await testTeamsCapabilityDiscoveryIsBounded();
-await testTeamsInitializationIsBounded();
-await testLegacyLocationTimeoutBlocksOverlappingRetry();
-await testPreviewLocationStagesAreBounded();
-await testUnresolvedNativePromiseDoesNotReuseRejectedRequest();
-await testIosLegacyDenialStopsFallbacks();
-await testAndroidBrowserDenialFallsBackToTeamsGeoLocation();
-await testAndroidBrowserDenialFallsBackToLegacyWhenGeoLocationUnsupported();
-await testAndroidTeamsNativeDenialStopsFurtherFallbacks();
-await testPreviewDenialStopsLegacyFallbackWithNeutralGuidance();
-await testBrowserDenialProvidesSiteRecoveryGuidance();
-await testConcurrentRequestsRemainDeduplicatedAndAbortIndependent();
+for (const [name, test] of [
+  ['capability', testTeamsCapabilityDiscoveryIsBounded],
+  ['initialization', testTeamsInitializationIsBounded],
+  ['runtime-retry', testTimedOutTeamsContextDoesNotLockBrowserRetry],
+  ['legacy-timeout', testLegacyLocationTimeoutBlocksOverlappingRetry],
+  ['preview-stages', testPreviewLocationStagesAreBounded],
+  ['native-timeout', testUnresolvedNativePromiseDoesNotReuseRejectedRequest],
+  ['ios-denial', testIosLegacyDenialStopsFallbacks],
+  ['android-geo', testAndroidBrowserDenialFallsBackToTeamsGeoLocation],
+  ['android-legacy', testAndroidBrowserDenialFallsBackToLegacyWhenGeoLocationUnsupported],
+  ['android-denial', testAndroidTeamsNativeDenialStopsFurtherFallbacks],
+  ['preview-denial', testPreviewDenialStopsLegacyFallbackWithNeutralGuidance],
+  ['browser-denial', testBrowserDenialProvidesSiteRecoveryGuidance],
+  ['concurrent', testConcurrentRequestsRemainDeduplicatedAndAbortIndependent],
+] as const) {
+  await test();
+}
 
 hooks.deregister();
 console.log('PASS: client location idle state, timeouts, retry, and permission-denial boundaries');

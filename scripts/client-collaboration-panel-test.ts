@@ -38,7 +38,9 @@ import {
 
 {
   const markup = renderToStaticMarkup(React.createElement(CollaborationPanel));
-  assert.match(markup, /새로고침/);
+  assert.match(markup, /불러오는 중/);
+  assert.match(markup, /aria-busy="true"/);
+  assert.match(markup, /협업 설정을 불러오는 중입니다/);
   assert.match(markup, /협업 대상 ID/);
 }
 

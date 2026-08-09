@@ -167,6 +167,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
 type TrackedAttempt = {
   track<T>(promise: Promise<T>, provider?: LocationProvider): Promise<T>;
   finish(): void;
+  abandon(): void;
   isSettled(): boolean;
   pendingProvider(): LocationProvider | null;
   settled: Promise<void>;
@@ -174,6 +175,7 @@ type TrackedAttempt = {
 
 function createTrackedAttempt(): TrackedAttempt {
   let finished = false;
+  let abandoned = false;
   let resolveSettled!: () => void;
   const pending = new Map<Promise<unknown>, LocationProvider | undefined>();
   const settled = new Promise<void>((resolve) => {
@@ -187,6 +189,12 @@ function createTrackedAttempt(): TrackedAttempt {
   return {
     track<T>(promise: Promise<T>, provider?: LocationProvider): Promise<T> {
       const tracked = Promise.resolve(promise);
+      if (abandoned) {
+        // A timed-out host call may never settle. Do not let a late call added by
+        // cleanup keep the next user request permanently locked.
+        void tracked.catch(() => undefined);
+        return tracked;
+      }
       pending.set(tracked, provider);
       tracked.then(
         () => {
@@ -204,8 +212,14 @@ function createTrackedAttempt(): TrackedAttempt {
       finished = true;
       checkSettled();
     },
+    abandon() {
+      abandoned = true;
+      finished = true;
+      pending.clear();
+      resolveSettled();
+    },
     isSettled() {
-      return finished && pending.size === 0;
+      return abandoned || (finished && pending.size === 0);
     },
     pendingProvider() {
       for (const provider of pending.values()) {
@@ -286,6 +300,10 @@ export function createClientLocationService(
         options.onRuntime?.(runtime);
         return runtime;
       } catch {
+        // `withTimeout` cannot cancel every Teams SDK promise. Release this
+        // capability-discovery attempt explicitly so a later user action can
+        // create a fresh runtime attempt instead of reusing a stale promise.
+        attempt.abandon();
         const runtime = {
           available: false,
           clientType: '',

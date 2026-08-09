@@ -90,6 +90,7 @@ export function CollaborationPanel() {
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [digest, setDigest] = useState<Digest | null>(null);
   const [level, setLevel] = useState('digest');
+  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const loadControllerRef = useRef(createLatestCollaborationLoadController());
@@ -97,6 +98,7 @@ export function CollaborationPanel() {
 
   const load = useCallback(async (): Promise<void> => {
     const request = loadControllerRef.current.begin();
+    setLoading(true);
     setError('');
     try {
       const [subResponse, digestResponse] = await Promise.all([
@@ -115,6 +117,8 @@ export function CollaborationPanel() {
       request.commit(() => {
         setError(caught instanceof Error ? caught.message : '협업 설정을 불러오지 못했습니다.');
       });
+    } finally {
+      request.commit(() => setLoading(false));
     }
   }, []);
 
@@ -145,14 +149,14 @@ export function CollaborationPanel() {
   const followed = subscriptions.some((entry) => entry.target.type === target.type && entry.target.id === target.id && entry.delivery === 'personal');
 
   return (
-    <section className="panel collaboration-panel" aria-label="Atlassian Home parity 협업 설정">
+    <section aria-busy={loading} className="panel collaboration-panel" aria-label="Atlassian Home parity 협업 설정">
       <div className="section-heading">
         <div>
           <p className="eyebrow">ATLASSIAN HOME PARITY</p>
           <h2>팔로우 · 채널 · 알림</h2>
           <p className="panel-description">프로젝트·목표·주제를 Teams 탭에 연결하고 업데이트 digest를 확인합니다.</p>
         </div>
-        <button className="secondary" onClick={() => void load()} type="button">새로고침</button>
+        <button className="secondary" disabled={loading || busy} onClick={() => void load()} type="button">{loading ? '불러오는 중…' : '새로고침'}</button>
       </div>
 
       <div className="collaboration-form">
@@ -174,7 +178,7 @@ export function CollaborationPanel() {
         <strong>팔로우 중인 대상 {subscriptions.length}개</strong>
         <span>최근 digest {digest?.totalCount ?? 0}건</span>
       </div>
-      {digest && digest.entries.length > 0 ? <div className="collaboration-digest">{digest.entries.slice(0, 5).map((entry) => <a href={entry.deepLink.href} key={`${entry.target.type}:${entry.target.id}:${entry.title}`}><b>{entry.title}</b><span>{entry.body}</span><small>{entry.count}건 · {entry.target.type}:{entry.target.id}</small></a>)}</div> : <p className="empty">아직 업데이트 digest가 없습니다.</p>}
+      {loading ? <p className="empty" role="status">협업 설정을 불러오는 중입니다…</p> : digest && digest.entries.length > 0 ? <div className="collaboration-digest">{digest.entries.slice(0, 5).map((entry) => <a href={entry.deepLink.href} key={`${entry.target.type}:${entry.target.id}:${entry.title}`}><b>{entry.title}</b><span>{entry.body}</span><small>{entry.count}건 · {entry.target.type}:{entry.target.id}</small></a>)}</div> : <p className="empty">아직 업데이트 digest가 없습니다.</p>}
     </section>
   );
 }

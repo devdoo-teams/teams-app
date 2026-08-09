@@ -23,7 +23,7 @@ registerHooks({
   },
 });
 
-const [{ parseWorkItemDeepLinkId }, { parseCollaborationDeepLink }] = await Promise.all([
+const [{ mergeDeepLinkedWorkItem, parseWorkItemDeepLinkId }, { parseCollaborationDeepLink }] = await Promise.all([
   import('../src/client/WorkItemPanel.js'),
   import('../src/client/CollaborationPanel.js'),
 ]);
@@ -33,6 +33,32 @@ assert.equal(parseWorkItemDeepLinkId('?workItemId=%20work-123%20'), 'work-123');
 assert.equal(parseWorkItemDeepLinkId('?workItemId='), null);
 assert.equal(parseWorkItemDeepLinkId('?other=value'), null);
 assert.equal(parseWorkItemDeepLinkId(undefined), null);
+
+const linkedItem = {
+  id: 'work-123',
+  title: '오래된 링크 업무',
+  description: '',
+  status: 'open' as const,
+  priority: 'medium' as const,
+  watcherIds: [],
+  watching: false,
+  labels: [],
+  comments: [],
+  deepLink: { href: '/tabs/home/?workItemId=work-123' },
+  updatedAt: '2026-08-10T00:00:00.000Z',
+};
+const merged = mergeDeepLinkedWorkItem([], 'work-123', linkedItem);
+assert.deepEqual(merged, [linkedItem], 'a deep-linked item outside the first page is retained for selection');
+assert.deepEqual(
+  mergeDeepLinkedWorkItem([linkedItem], 'work-123', linkedItem),
+  [linkedItem],
+  'a deep-linked item already in the list is not duplicated',
+);
+assert.deepEqual(
+  mergeDeepLinkedWorkItem([], 'missing', null),
+  [],
+  'a missing deep link remains absent instead of inserting an unrelated item',
+);
 
 assert.deepEqual(parseCollaborationDeepLink('?collaborationType=goal&collaborationId=goal-7'), {
   targetType: 'goal',

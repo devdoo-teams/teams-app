@@ -5,7 +5,7 @@ import { apiFetch } from './auth.js';
 type WorkItemStatus = 'backlog' | 'todo' | 'open' | 'in_progress' | 'blocked' | 'done' | 'cancelled';
 type WorkView = 'search' | 'recent' | 'assigned' | 'calendar';
 
-type WorkItem = {
+export type WorkItem = {
   id: string;
   title: string;
   description: string;
@@ -41,6 +41,15 @@ export function parseWorkItemDeepLinkId(search: string | undefined): string | nu
   if (!search) return null;
   const itemId = new URLSearchParams(search).get('workItemId')?.trim();
   return itemId || null;
+}
+
+export function mergeDeepLinkedWorkItem(
+  items: WorkItem[],
+  selectedId: string | null,
+  linkedItem: WorkItem | null,
+): WorkItem[] {
+  if (!selectedId || items.some((item) => item.id === selectedId) || linkedItem?.id !== selectedId) return items;
+  return [linkedItem, ...items];
 }
 
 export type LatestWorkItemLoad = {
@@ -126,10 +135,23 @@ export function WorkItemPanel() {
       const response = await workFetch('/api/work-items?' + params.toString(), { signal: request.signal });
       const body = (await response.json()) as { items?: WorkItem[]; error?: string };
       if (!response.ok) throw new Error(body.error || '업무 항목을 불러오지 못했습니다.');
+      const currentSelectedId = selectedIdRef.current;
+      const loadedItems = body.items ?? [];
+      let linkedItem: WorkItem | null = null;
+      if (currentSelectedId && !loadedItems.some((item) => item.id === currentSelectedId)) {
+        const detailResponse = await workFetch('/api/work-items/' + encodeURIComponent(currentSelectedId), { signal: request.signal });
+        if (detailResponse.ok) {
+          const detailBody = (await detailResponse.json()) as { item?: WorkItem; error?: string };
+          linkedItem = detailBody.item ?? null;
+        } else if (detailResponse.status !== 404) {
+          const detailBody = (await detailResponse.json()) as { error?: string };
+          throw new Error(detailBody.error || '딥링크 업무를 불러오지 못했습니다.');
+        }
+      }
       request.commit(() => {
-        setItems(body.items ?? []);
-        const currentSelectedId = selectedIdRef.current;
-        if (currentSelectedId && !(body.items ?? []).some((item) => item.id === currentSelectedId)) setSelectedId(null);
+        const nextItems = mergeDeepLinkedWorkItem(loadedItems, currentSelectedId, linkedItem);
+        setItems(nextItems);
+        if (currentSelectedId && !nextItems.some((item) => item.id === currentSelectedId)) setSelectedId(null);
       });
     } catch (caught) {
       request.commit(() => setError(caught instanceof Error ? caught.message : '업무 항목을 불러오지 못했습니다.'));
