@@ -6,7 +6,7 @@ if (prompt.includes('MUTATE')) {
   await fs.writeFile('runtime-agent-change.txt', 'created by runtime fake codex\n', 'utf8');
 }
 
-console.log(JSON.stringify({ type: 'thread.started', thread_id: 'fake-thread-runtime' }));
+console.log(JSON.stringify({ type: 'thread.started', thread_id: '00000000-0000-4000-8000-0000000000aa' }));
 console.log(JSON.stringify({ type: 'turn.started' }));
 console.log(JSON.stringify({
   type: 'item.completed',

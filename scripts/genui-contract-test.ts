@@ -124,8 +124,14 @@ const unsafeTabCard = renderGenUiCard(GenUiEnvelopeV1Schema.parse({
   ...tabEnvelope,
   metadata: { openTabUrl: 'javascript:alert(1)' },
 }));
-assert.notEqual(unsafeTabCard.actions?.[0]?.type, 'Action.OpenUrl');
+assert.equal(unsafeTabCard.actions?.[0]?.type, 'Action.Submit');
 assert.equal('url' in (unsafeTabCard.actions?.[0] ?? {}), false);
+assert.equal('fallback' in (unsafeTabCard.actions?.[0] ?? {}), false);
+assert.equal('verb' in (unsafeTabCard.actions?.[0] ?? {}), false);
+assert.deepEqual(
+  Object.keys((unsafeTabCard.actions?.[0]?.data ?? {}) as Record<string, unknown>).sort(),
+  [...GENUI_ACTION_PAYLOAD_KEYS].sort(),
+);
 
 const statusLabels: Record<string, string> = {
   loading: '로딩 중',
@@ -154,12 +160,11 @@ assert.ok(!JSON.stringify(card).includes('AI 생성 콘텐츠'));
 assert.ok(!JSON.stringify(card).includes('https://learn.microsoft.com'));
 
 for (const [index, action] of (card.actions ?? []).entries()) {
-  assert.equal(action.type, 'Action.Execute');
-  assert.equal((action.fallback as Record<string, unknown>).type, 'Action.Submit');
+  assert.equal(action.type, 'Action.Submit');
+  assert.equal('fallback' in action, false);
+  assert.equal('verb' in action, false);
   const payload = action.data as Record<string, unknown>;
-  const fallbackPayload = (action.fallback as Record<string, unknown>).data as Record<string, unknown>;
   assert.deepEqual(Object.keys(payload).sort(), [...GENUI_ACTION_PAYLOAD_KEYS].sort());
-  assert.deepEqual(Object.keys(fallbackPayload).sort(), [...GENUI_ACTION_PAYLOAD_KEYS].sort());
   assert.equal(payload.action, GENUI_ACTIONS.filter((entry) => entry !== 'feedback')[index]);
   assert.equal(payload.schemaVersion, GENUI_SCHEMA_VERSION);
 }

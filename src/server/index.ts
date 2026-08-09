@@ -1372,6 +1372,7 @@ async function handleBotNaturalLanguage(activity: any, send: BotSend, scope: Age
       agentService,
       setActiveJobId: () => undefined,
       isCancelled: () => false,
+      deferAgentCompletion: true,
       approvalEnvelope: (job) => genUi.approval(job),
     });
     await send(output.text, output.envelope);

@@ -27,6 +27,8 @@ type LocationError = {
   message?: string;
 };
 
+type LocationProvider = 'browser' | 'teams-native';
+
 class LocationPermissionDeniedError extends Error {
   constructor() {
     super('Location permission denied');
@@ -48,7 +50,10 @@ function isPermissionDenied(error: unknown): boolean {
   return candidate.code === 1 || candidate.errorCode === 1_000;
 }
 
-function locationRecoveryGuidance(clientType: string): string {
+function locationRecoveryGuidance(clientType: string, provider: LocationProvider): string {
+  if (provider === 'browser') {
+    return '브라우저 주소 표시줄의 사이트 설정에서 위치 권한을 허용하고 Teams 탭을 새로고침한 뒤 다시 시도하세요.';
+  }
   if (clientType === 'ios' || clientType === 'ipados') {
     return 'Teams 앱 권한에서 위치를 허용하고, iPhone 또는 iPad 설정의 개인정보 보호 및 보안 > 위치 서비스 > Teams도 “앱 사용 중”으로 설정한 뒤 다시 시도하세요.';
   }
@@ -56,6 +61,19 @@ function locationRecoveryGuidance(clientType: string): string {
     return 'Teams 앱 권한에서 위치를 허용하고, Android 설정 > 앱 > Teams > 권한 > 위치에서 “앱 사용 중에만 허용”으로 설정한 뒤 다시 시도하세요.';
   }
   return 'Teams 앱 권한에서 위치를 허용한 뒤 다시 시도하세요.';
+}
+
+function locationPermissionDeniedMessage(clientType: string, provider: LocationProvider): string {
+  const providerLabel = provider === 'browser' ? '브라우저 사이트' : 'Teams 네이티브';
+  return `${providerLabel} 위치 권한이 거부되었습니다. ${locationRecoveryGuidance(clientType, provider)}`;
+}
+
+function unresolvedLocationRecoveryMessage(clientType: string, provider: LocationProvider): string {
+  const providerLabel = provider === 'browser' ? '브라우저' : 'Teams 네이티브';
+  const reloadGuidance = provider === 'browser'
+    ? '브라우저 사이트 위치 권한을 확인하고 Teams 탭을 새로고침한 뒤 다시 시도하세요.'
+    : `Teams 탭을 새로고침하거나 Teams 앱을 다시 열어 요청을 복구한 뒤 다시 시도하세요. ${locationRecoveryGuidance(clientType, provider)}`;
+  return `${providerLabel} 위치 요청이 아직 완료되지 않았습니다. 새 위치 요청을 시작하지 않았습니다. ${reloadGuidance}`;
 }
 
 type BrowserPosition = {
@@ -147,15 +165,17 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
 }
 
 type TrackedAttempt = {
-  track<T>(promise: Promise<T>): Promise<T>;
+  track<T>(promise: Promise<T>, provider?: LocationProvider): Promise<T>;
   finish(): void;
+  isSettled(): boolean;
+  pendingProvider(): LocationProvider | null;
   settled: Promise<void>;
 };
 
 function createTrackedAttempt(): TrackedAttempt {
   let finished = false;
   let resolveSettled!: () => void;
-  const pending = new Set<Promise<unknown>>();
+  const pending = new Map<Promise<unknown>, LocationProvider | undefined>();
   const settled = new Promise<void>((resolve) => {
     resolveSettled = resolve;
   });
@@ -165,9 +185,9 @@ function createTrackedAttempt(): TrackedAttempt {
   };
 
   return {
-    track<T>(promise: Promise<T>): Promise<T> {
+    track<T>(promise: Promise<T>, provider?: LocationProvider): Promise<T> {
       const tracked = Promise.resolve(promise);
-      pending.add(tracked);
+      pending.set(tracked, provider);
       tracked.then(
         () => {
           pending.delete(tracked);
@@ -183,6 +203,15 @@ function createTrackedAttempt(): TrackedAttempt {
     finish() {
       finished = true;
       checkSettled();
+    },
+    isSettled() {
+      return finished && pending.size === 0;
+    },
+    pendingProvider() {
+      for (const provider of pending.values()) {
+        if (provider) return provider;
+      }
+      return null;
     },
     settled,
   };
@@ -207,6 +236,8 @@ export function createClientLocationService(
     generation: number;
     result: Promise<DeviceLocation>;
     attempt: TrackedAttempt;
+    runtime: TeamsLocationRuntime | null;
+    status: 'pending' | 'fulfilled' | 'rejected';
   };
 
   let teamsLocationReady: RuntimeAttempt | null = null;
@@ -290,7 +321,7 @@ export function createClientLocationService(
 
   async function initializeTeamsLocation(attempt?: TrackedAttempt): Promise<TeamsLocationRuntime> {
     const runtimeAttempt = getRuntimeAttempt();
-    if (attempt) attempt.track(runtimeAttempt.settled);
+    if (attempt) attempt.track(runtimeAttempt.settled, 'teams-native');
     return runtimeAttempt.result;
   }
 
@@ -318,7 +349,7 @@ export function createClientLocationService(
           source: 'teams-native',
         });
       });
-    }));
+    }), 'teams-native');
 
     return withTimeout(
       operation,
@@ -361,19 +392,19 @@ export function createClientLocationService(
         },
         { enableHighAccuracy: false, maximumAge: 300_000, timeout: 12_000 },
       );
-    }));
+    }), 'browser');
 
     return withTimeout(operation, operationTimeoutMs, '브라우저 위치 확인 시간이 초과되었습니다.');
   }
 
   async function getTeamsGeoLocation(attempt: TrackedAttempt): Promise<DeviceLocation> {
     const hasPermission = await withTimeout(
-      attempt.track(dependencies.geoLocation.hasPermission()),
+      attempt.track(dependencies.geoLocation.hasPermission(), 'teams-native'),
       operationTimeoutMs,
       'Teams 위치 권한 확인 시간이 초과되었습니다.',
     );
     if (!hasPermission && !(await withTimeout(
-      attempt.track(dependencies.geoLocation.requestPermission()),
+      attempt.track(dependencies.geoLocation.requestPermission(), 'teams-native'),
       operationTimeoutMs,
       'Teams 위치 권한 요청 시간이 초과되었습니다.',
     ))) {
@@ -381,7 +412,7 @@ export function createClientLocationService(
     }
 
     const location = await withTimeout(
-      attempt.track(dependencies.geoLocation.getCurrentLocation()),
+      attempt.track(dependencies.geoLocation.getCurrentLocation(), 'teams-native'),
       operationTimeoutMs,
       'Teams 현재 위치 확인 시간이 초과되었습니다.',
     );
@@ -397,29 +428,47 @@ export function createClientLocationService(
     };
   }
 
-  async function resolveCurrentDeviceLocation(attempt: TrackedAttempt): Promise<DeviceLocation> {
+  async function resolveCurrentDeviceLocation(
+    attempt: TrackedAttempt,
+    onRuntime: (runtime: TeamsLocationRuntime) => void,
+  ): Promise<DeviceLocation> {
     const locationErrors: string[] = [];
     const runtime = await initializeTeamsLocation(attempt);
+    onRuntime(runtime);
     const isAppleMobile = runtime.clientType === 'ios' || runtime.clientType === 'ipados';
     const isAndroidMobile = runtime.clientType === 'android';
     let legacyAttempted = false;
+    let lastProvider: LocationProvider = 'browser';
 
     async function tryProvider(
       name: string,
-      provider: () => Promise<DeviceLocation>,
+      provider: LocationProvider,
+      operation: () => Promise<DeviceLocation>,
       allowPermissionDenied = false,
     ): Promise<DeviceLocation | null> {
+      lastProvider = provider;
       try {
-        return await provider();
+        return await operation();
       } catch (caught) {
         if (isPermissionDenied(caught)) {
           if (allowPermissionDenied) {
-            locationErrors.push(`${name}: 위치 권한이 거부되었습니다.`);
+            locationErrors.push(`${name}: ${locationPermissionDeniedMessage(runtime.clientType, provider)}`);
             return null;
           }
-          throw new Error(`위치 권한이 거부되었습니다. ${locationRecoveryGuidance(runtime.clientType)}`);
+          throw new Error(locationPermissionDeniedMessage(runtime.clientType, provider));
         }
-        if (isLocationTimeoutError(caught)) throw caught;
+        if (isLocationTimeoutError(caught)) {
+          const pendingProvider = attempt.pendingProvider();
+          if (pendingProvider) {
+            const timeoutMessage = caught instanceof Error
+              ? caught.message
+              : '위치 확인 시간이 초과되었습니다.';
+            throw new LocationTimeoutError(
+              `${timeoutMessage} ${unresolvedLocationRecoveryMessage(runtime.clientType, pendingProvider)}`,
+            );
+          }
+          throw caught;
+        }
         locationErrors.push(caught instanceof Error ? `${name}: ${caught.message}` : `${name}: 위치를 확인하지 못했습니다.`);
         return null;
       }
@@ -427,51 +476,68 @@ export function createClientLocationService(
 
     if (isAppleMobile && runtime.legacyLocationSupported) {
       legacyAttempted = true;
-      const nativeLocation = await tryProvider('Teams iPhone 위치', () => getLegacyTeamsLocation(attempt));
+      const nativeLocation = await tryProvider('Teams iPhone 위치', 'teams-native', () => getLegacyTeamsLocation(attempt));
       if (nativeLocation) return nativeLocation;
     }
 
     const browserLocation = await tryProvider(
       'HTML5 위치',
+      'browser',
       () => getBrowserLocation(attempt),
-      isAndroidMobile && runtime.geoLocationSupported,
+      isAndroidMobile && (runtime.geoLocationSupported || runtime.legacyLocationSupported),
     );
     if (browserLocation) return browserLocation;
 
     if (runtime.geoLocationSupported) {
       const geoLocationResult = await tryProvider(
         'Teams geoLocation',
+        'teams-native',
         () => getTeamsGeoLocation(attempt),
       );
       if (geoLocationResult) return geoLocationResult;
     }
 
     if (runtime.legacyLocationSupported && !legacyAttempted) {
-      const nativeLocation = await tryProvider('Teams 위치', () => getLegacyTeamsLocation(attempt));
+      const nativeLocation = await tryProvider('Teams 위치', 'teams-native', () => getLegacyTeamsLocation(attempt));
       if (nativeLocation) return nativeLocation;
     }
 
     throw new Error(
-      `${locationErrors.join(' ')} ${locationRecoveryGuidance(runtime.clientType)}`,
+      `${locationErrors.join(' ')} ${locationRecoveryGuidance(runtime.clientType, lastProvider)}`.trim(),
     );
   }
 
   function getCurrentDeviceLocation(signal: AbortSignal): Promise<DeviceLocation> {
     throwIfAborted(signal);
 
+    if (deviceLocationRequest?.status === 'rejected' && deviceLocationRequest.attempt.isSettled()) {
+      deviceLocationRequest = null;
+    }
+
     if (!deviceLocationRequest) {
       const attempt = createTrackedAttempt();
-      const request = {
+      const request: DeviceLocationRequest = {
         generation: deviceLocationGeneration + 1,
-        result: resolveCurrentDeviceLocation(attempt),
+        result: null as unknown as Promise<DeviceLocation>,
         attempt,
+        runtime: null,
+        status: 'pending',
       };
+      request.result = resolveCurrentDeviceLocation(attempt, (runtime) => {
+        request.runtime = runtime;
+      });
       deviceLocationGeneration = request.generation;
       deviceLocationRequest = request;
 
       void request.result.then(
-        () => attempt.finish(),
-        () => attempt.finish(),
+        () => {
+          request.status = 'fulfilled';
+          attempt.finish();
+        },
+        () => {
+          request.status = 'rejected';
+          attempt.finish();
+        },
       );
       void attempt.settled.then(() => {
         if (deviceLocationRequest?.generation === request.generation) {
@@ -480,7 +546,16 @@ export function createClientLocationService(
       });
     }
 
-    return waitForAbort(deviceLocationRequest.result, signal);
+    const request = deviceLocationRequest;
+    if (request.status === 'rejected' && !request.attempt.isSettled()) {
+      const pendingProvider = request.attempt.pendingProvider() ?? 'teams-native';
+      return waitForAbort<DeviceLocation>(
+        Promise.reject(new Error(unresolvedLocationRecoveryMessage(request.runtime?.clientType ?? '', pendingProvider))),
+        signal,
+      );
+    }
+
+    return waitForAbort(request.result, signal);
   }
 
   return {

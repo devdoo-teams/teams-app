@@ -264,18 +264,11 @@ function renderAction(
 
   const payload = actionPayload(action);
   return {
-    type: 'Action.Execute',
+    type: 'Action.Submit',
     ...(action.id ? { id: action.id } : {}),
     title: action.label,
-    verb: `genui.${action.action}`,
     data: payload,
     style: action.style,
-    fallback: {
-      type: 'Action.Submit',
-      title: action.label,
-      data: payload,
-      style: action.style,
-    },
   };
 }
 

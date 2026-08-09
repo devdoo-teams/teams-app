@@ -261,14 +261,21 @@ export class DeterministicResponseEngine implements ResponseEngine {
     }
 
     const previous = input.agentService.latestCompletedForConversation(input.scope);
+    const notify = input.deferAgentCompletion === true;
     const onProgress = async (message: string): Promise<void> => {
       if (!cancelled()) input.onText?.(`⏳ ${message}`);
     };
     const job = previous
-      ? await input.agentService.continue(previous.id, prompt, input.scope, { notify: false, onProgress })
-      : await input.agentService.submit({ prompt, mode: 'read-only', scope: input.scope, notify: false, onProgress });
+      ? await input.agentService.continue(previous.id, prompt, input.scope, { notify, onProgress })
+      : await input.agentService.submit({ prompt, mode: 'read-only', scope: input.scope, notify, onProgress });
     if (!job) throw new Error('Codex 작업을 생성하지 못했습니다.');
     input.setActiveJobId?.(job.id);
+    if (input.deferAgentCompletion) {
+      const text = previous
+        ? `이전 Codex 대화를 이어서 작업 ${job.id}을 시작했습니다. 진행 상황과 완료 결과를 이 채팅으로 보내드립니다.`
+        : `작업 ${job.id}을 시작했습니다. 진행 상황과 완료 결과를 이 채팅으로 보내드립니다.`;
+      return output({ text, envelope: jobEnvelope(job, text, 'loading'), toolCalls });
+    }
     const completed = await input.agentService.waitForTerminal(job.id, input.scope);
     const resultText = completed.status === 'completed'
       ? completed.result || `작업 ${completed.id}이 완료되었습니다.`

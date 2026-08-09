@@ -80,6 +80,23 @@ async function request(
   return { response, body };
 }
 
+async function waitForOutboxCompletion(
+  baseUrl: string,
+  token: string,
+  conversationId: string,
+  expectedText: string,
+): Promise<string[]> {
+  const messages: string[] = [];
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const result = await request(baseUrl, `/api/debug/agent-outbox/${conversationId}`, token);
+    messages.push(...(result.body.messages ?? []));
+    if (messages.some((message) => message.includes(expectedText))) return messages;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`proactive completion did not arrive for ${conversationId}`);
+}
+
 function activity(baseUrl: string, text: string, suffix: string, value?: unknown) {
   return {
     type: 'message',
@@ -272,6 +289,23 @@ async function main(): Promise<void> {
     assertPass(
       JSON.stringify(naturalLanguage.body.activities).includes('업무 목록'),
       'Teams Bot natural-language messages use the persisted response-engine selection and return GenUI',
+    );
+
+    const asyncSuffix = 'natural-agent-async';
+    const asyncConversationId = `response-mode-conversation-${asyncSuffix}`;
+    const naturalAgent = await request(baseUrl, '/api/messages', token, {
+      method: 'POST',
+      body: JSON.stringify(activity(baseUrl, '현재 구현 상태를 분석해줘', asyncSuffix)),
+    });
+    const immediatePayload = JSON.stringify(naturalAgent.body);
+    const asyncJobId = immediatePayload.match(/task-[\w-]+/)?.[0];
+    assertPass(naturalAgent.response.status === 200 && Boolean(asyncJobId), 'Teams Bot acknowledges a natural Codex job immediately with its job id');
+    assertPass(!immediatePayload.includes('FAKE_CODEX_OK'), 'Teams Bot immediate acknowledgement does not wait for or embed the final Codex result');
+    assertPass(immediatePayload.includes('로딩 중'), 'Teams Bot immediate acknowledgement renders a loading job card');
+    const proactiveMessages = await waitForOutboxCompletion(baseUrl, token, asyncConversationId, 'FAKE_CODEX_OK');
+    assertPass(
+      proactiveMessages.some((message) => message.includes(asyncJobId!)),
+      'natural Codex completion is delivered proactively to the same Teams conversation',
     );
 
     const storePath = join(dataRoot, 'cross-tenant.json');

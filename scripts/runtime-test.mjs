@@ -12,6 +12,7 @@ const root = process.cwd();
 const execFileAsync = promisify(execFile);
 const LOCAL_ACCESS_TOKEN_HEADER = 'x-teams-local-access-token';
 const localAccessTokens = new Map();
+const manifestVersion = JSON.parse(await fs.readFile(path.join(root, 'appPackage/manifest.json'), 'utf8')).version;
 
 function assert(condition, message) {
   if (!condition) throw new Error(`FAIL: ${message}`);
@@ -178,6 +179,14 @@ function actionPayloadFromCard(action) {
   return action?.data ?? action?.fallback?.data;
 }
 
+function genUiActionFromCard(action) {
+  const payloadAction = actionPayloadFromCard(action)?.action;
+  if (typeof payloadAction === 'string') return payloadAction;
+  return typeof action?.verb === 'string' && action.verb.startsWith('genui.')
+    ? action.verb.slice('genui.'.length)
+    : undefined;
+}
+
 function assertExactGenUiActionPayload(payload, label) {
   const keys = Object.keys(payload ?? {}).sort();
   assert(
@@ -300,6 +309,12 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
       BOT_DOMAIN: '',
       DEV_TUNNEL_ID: '',
       MCP_PUBLIC_ENABLED: '',
+      TEAMS_OPERATOR_REQUESTER_ALLOWLIST: [
+        'local-tenant/local-user',
+        'runtime-tenant/runtime-user',
+        'scope-tenant/scope-owner',
+        'scope-card-tenant/scope-card-owner',
+      ].join(','),
       ...(teamsSdk
         ? {
             BOT_CLIENT_ID: '00000000-0000-4000-8000-000000000001',
@@ -307,6 +322,7 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
             CLIENT_SECRET: 'runtime-test-secret',
             TENANT_ID: '00000000-0000-4000-8000-000000000003',
             APPLICATION_ID_URI: 'api://runtime.test/botid-00000000-0000-4000-8000-000000000001',
+            TEAMS_USER_AUTH_ACCEPTED_AUDIENCES: '00000000-0000-4000-8000-000000000002',
           }
         : {}),
       ...(production ? { TEAMS_SKIP_AUTH: '' } : { TEAMS_SKIP_AUTH: 'true' }),
@@ -467,6 +483,7 @@ async function runStartupGateFlow() {
     CLIENT_SECRET: 'runtime-test-secret',
     TENANT_ID: '00000000-0000-4000-8000-000000000003',
     APPLICATION_ID_URI: 'api://runtime.test/botid-00000000-0000-4000-8000-000000000001',
+    TEAMS_USER_AUTH_ACCEPTED_AUDIENCES: '00000000-0000-4000-8000-000000000002',
     ITEM_STORE_PATH: path.join(tempDir, `${label}-items.json`),
     AGENT_JOB_STORE_PATH: path.join(tempDir, `${label}-agent-jobs.json`),
     GENUI_ACTION_STORE_PATH: path.join(tempDir, `${label}-genui-actions.json`),
@@ -560,6 +577,7 @@ async function runStartupGateFlow() {
       CLIENT_SECRET: 'runtime-test-secret',
       TENANT_ID: '00000000-0000-4000-8000-000000000003',
       APPLICATION_ID_URI: 'api://runtime.test/botid-00000000-0000-4000-8000-000000000001',
+      TEAMS_USER_AUTH_ACCEPTED_AUDIENCES: '00000000-0000-4000-8000-000000000002',
       ITEM_STORE_PATH: path.join(tempDir, 'demo-weather-items.json'),
       AGENT_JOB_STORE_PATH: path.join(tempDir, 'demo-weather-agent-jobs.json'),
       GENUI_ACTION_STORE_PATH: path.join(tempDir, 'demo-weather-genui-actions.json'),
@@ -663,7 +681,7 @@ async function runLocalFlow(dataFile, jobDataFile) {
     assert(health.body.userAuth === 'local-bypass', 'local health reports the user auth bypass truthfully');
     assert(health.body.bot === 'local-handler', 'local health reports the local Bot handler truthfully');
     assert(health.body.outbound === 'local-outbox', 'local health reports the local outbox truthfully');
-    assert(health.body.version === '1.0.15', 'health version comes from the Teams manifest');
+    assert(health.body.version === manifestVersion, 'health version comes from the Teams manifest');
     assert(!('agent' in health.body) && !('agentWorkspace' in health.body), 'health does not expose agent binary or workspace paths');
     assert(health.body.storage === 'file-json-single-process', 'local runtime reports single-process file storage');
     assert(health.body.copilotKit === 'enabled', 'CopilotKit runtime is enabled');
@@ -850,6 +868,8 @@ async function runLocalFlow(dataFile, jobDataFile) {
       body: JSON.stringify(activity('날씨', server.baseUrl, 'weather')),
     });
     assert(weatherCommand.response.status === 200, 'Bot weather command completes locally');
+    assert(weatherCommand.body.messages.length === 1, 'Bot weather fallback sends exactly one message');
+    assert(weatherCommand.body.activities.length === 1, 'Bot weather fallback sends exactly one Adaptive Card activity');
     assert(weatherCommand.body.messages[0].includes('현재 기기 위치가 자동으로 전달되지 않습니다'), 'Bot weather command does not guess a location');
     assertAdaptiveCardActivity(weatherCommand.body.activities[0], 'help/location weather fallback');
 
@@ -1039,8 +1059,8 @@ async function runLocalFlow(dataFile, jobDataFile) {
       body: JSON.stringify(activity('write GenUI 취소 액션을 검증해줘', server.baseUrl, 'genui-cancel')),
     });
     const genUiCancelCard = assertAdaptiveCardActivity(genUiCancelRequest.body.activities[0], 'write approval');
-    const approveAction = genUiCancelCard.actions?.find((action) => action.verb === 'genui.approve');
-    const cancelAction = genUiCancelCard.actions?.find((action) => action.verb === 'genui.cancel');
+    const approveAction = genUiCancelCard.actions?.find((action) => genUiActionFromCard(action) === 'approve');
+    const cancelAction = genUiCancelCard.actions?.find((action) => genUiActionFromCard(action) === 'cancel');
     const approvePayload = actionPayloadFromCard(approveAction);
     const cancelPayload = actionPayloadFromCard(cancelAction);
     assertExactGenUiActionPayload(approvePayload, 'approve');
@@ -1103,7 +1123,7 @@ async function runLocalFlow(dataFile, jobDataFile) {
     });
     const genUiSubmitCard = assertAdaptiveCardActivity(genUiSubmitRequest.body.activities[0], 'Action.Submit approval');
     const submitApprovePayload = actionPayloadFromCard(
-      genUiSubmitCard.actions?.find((action) => action.verb === 'genui.approve'),
+      genUiSubmitCard.actions?.find((action) => genUiActionFromCard(action) === 'approve'),
     );
     assertExactGenUiActionPayload(submitApprovePayload, 'Action.Submit approve');
     const submitResult = await request(server.baseUrl, '/api/messages', {
@@ -1125,8 +1145,8 @@ async function runLocalFlow(dataFile, jobDataFile) {
       body: JSON.stringify(activity('write 테스트 파일 변경 계획을 검토해줘', server.baseUrl, 'agent-write')),
     });
     const naturalApprovalCard = assertAdaptiveCardActivity(writeRequest.body.activities[0], 'natural-language workspace-write approval');
-    assert(naturalApprovalCard.actions?.some((action) => action.verb === 'genui.approve'), 'natural-language approval card includes an approve action');
-    assert(naturalApprovalCard.actions?.some((action) => action.verb === 'genui.cancel'), 'natural-language approval card includes a cancel action');
+    assert(naturalApprovalCard.actions?.some((action) => genUiActionFromCard(action) === 'approve'), 'natural-language approval card includes an approve action');
+    assert(naturalApprovalCard.actions?.some((action) => genUiActionFromCard(action) === 'cancel'), 'natural-language approval card includes a cancel action');
     const writeJobId = writeRequest.body.messages[0].match(/task-[\w-]+/)?.[0];
     assert(writeRequest.body.messages[0].includes('승인 대기'), 'workspace-write request requires approval');
 
@@ -1220,7 +1240,7 @@ async function runLocalFlow(dataFile, jobDataFile) {
       body: JSON.stringify(activity('write scoped card approval', server.baseUrl, 'scope-card-create', cardConversationId, cardOwner)),
     });
     const card = assertAdaptiveCardActivity(cardCreate.body.activities[0], 'scoped card approval');
-    const cardApprovePayload = actionPayloadFromCard(card.actions?.find((action) => action.verb === 'genui.approve'));
+    const cardApprovePayload = actionPayloadFromCard(card.actions?.find((action) => genUiActionFromCard(action) === 'approve'));
     assertExactGenUiActionPayload(cardApprovePayload, 'scoped card approve');
     const cardAttack = await request(server.baseUrl, '/api/messages', {
       method: 'POST',
@@ -1253,7 +1273,15 @@ async function runLocalFlow(dataFile, jobDataFile) {
     assert((await waitForAgentJob(server.baseUrl, cardApprovePayload.entityId)).status === 'completed', 'rightful card approval completes the job');
 
     const persisted = JSON.parse(await fs.readFile(dataFile, 'utf8'));
-    assert(Array.isArray(persisted) && persisted.length === 2, 'isolated JSON store persists final state');
+    assert(Array.isArray(persisted) && persisted.length >= 2, 'isolated JSON store persists final state');
+    assert(
+      persisted.every((item) => typeof item.requesterId === 'string' && typeof item.tenantId === 'string'),
+      'persisted items include requester and tenant ownership',
+    );
+    assert(
+      persisted.filter((item) => item.requesterId === 'runtime-user' && item.tenantId === 'runtime-tenant').length === 2,
+      'runtime Bot user retains its isolated two-item seed list',
+    );
   } finally {
     await stopServer(server.child);
   }
@@ -1293,7 +1321,7 @@ async function runChannelsShadowFlow(dataFile, jobDataFile) {
     assert(!approvalSerialized.includes('copilotkit-channels-shadow'), 'delivered approval activity omits the shadow renderer marker');
     assert(!approvalSerialized.includes('"shadow":true'), 'delivered approval activity omits shadow-only action data');
     const approvalPayload = actionPayloadFromCard(
-      approvalCard.actions?.find((action) => action.verb === 'genui.approve'),
+      approvalCard.actions?.find((action) => genUiActionFromCard(action) === 'approve'),
     );
     assertExactGenUiActionPayload(approvalPayload, 'Channels shadow native approval');
 
@@ -1389,7 +1417,7 @@ async function runProductionAuthFlow(dataFile, jobDataFile) {
     assert(health.body.auth === 'teams-authenticated', 'production does not use local auth bypass');
     assert(health.body.userAuth === 'entra-sso', 'production health reports Entra SSO only when configured');
     assert(health.body.bot === 'teams-sdk', 'production health reports the Teams SDK Bot');
-    assert(health.body.version === '1.0.15', 'production health reports the Teams manifest version');
+    assert(health.body.version === manifestVersion, 'production health reports the Teams manifest version');
     assert(health.body.genAI === 'not-configured', 'no-key production health does not pretend that OpenAI is configured');
     assert(health.body.genAIProvider?.provider === 'openai' && health.body.genAIProvider?.configured === false, 'no-key production health keeps the optional provider unavailable and healthy');
     assert(health.body.weatherMode === 'live', 'production health reports live weather mode');

@@ -34,7 +34,7 @@ Teams 앱 변경 요청에는 별도 예외 승인이 없는 한 다음 순서�
 
 `local-handler`, `local-outbox`, `local-bypass` 상태를 공개 완료 상태로 간주하지 않는다. 공개 health가 위 기준을 충족하지 않거나 Teams 응답이 확인되지 않으면 완료 메시지를 보내지 말고 `BLOCKER`로 보고한다. 순수 읽기 전용 진단으로 앱 산출물을 변경하지 않은 경우에만 패키지 업로드 절차를 생략할 수 있다.
 
-## Teams 원격 Codex 트러블슈팅 지침
+## Teams Bot Codex 트러블슈팅 지침
 
 - 이 작업은 Teams Bot이 별도 프로세스로 실행하는 Codex CLI 작업이다. 부모 Codex 앱의 인앱 브라우저, Safari, 사용자의 iPhone을 제어할 수 없으므로 `Browser is not available`, `iab unavailable`을 브라우저 재연결 루프로 처리하지 않는다.
 - 하위 에이전트가 브라우저를 사용할 수 없다는 이유로 새 인앱 브라우저·새 로그인 세션을 만들지 않는다. 브라우저 제어는 부모 오케스트레이터의 기존 탭 세션에서만 수행하며, 연결이 끊겼으면 기존 탭 재접속 또는 사용자 포커스 요청을 BLOCKER로 분리한다.
@@ -51,6 +51,10 @@ Teams 앱 변경 요청에는 별도 예외 승인이 없는 한 다음 순서�
 ## 명령어 우선 릴리스 게이트와 화면 잠금 대응
 
 - 반복 가능한 검사는 Computer Use나 화면 잠금 상태에 의존하지 않는다. 구현·타입체크·전체 테스트·배포 환경·ZIP 내부 매니페스트·공개 health·공개 탭 HTTP 응답은 명령어로 먼저 검증한다.
+- `/Users/doosansmacbookpro/Documents/TeamsApp`은 이 프로젝트의 로컬 원본 소스이자 유일한 Git 이력 기준이다. 이를 사본·미러·동기화 대상이라고 추정하거나 다른 경로를 원본으로 취급하지 않는다.
+- 이 저장소에는 Git 원격이 구성되어 있지 않다. 원격 저장소·원격 브랜치·clone·pull·push를 전제로 설명하거나 시도하지 않으며, 사용자가 명시적으로 원격을 추가하기 전에는 로컬 커밋만 관리한다.
+- 빌드·테스트·소스 수정은 원본 작업공간에서 수행한다. `/tmp`는 일회성 로그, 격리 검증, 새 ZIP 산출물에만 사용할 수 있고 `/tmp`의 Git 이력이나 파일을 원본 상태로 보고하지 않는다. 검증된 최종 변경과 커밋은 반드시 원본 작업공간에 존재해야 한다.
+- 파일 업로드는 원본에서 생성해 검증한 최신 ZIP의 명시적 로컬 경로를 브라우저 파일 선택기에 직접 전달한다. Finder, 동기화 상태, 다운로드 대기 또는 별도 소스 복제를 업로드 선행 조건으로 만들지 않는다.
 - 릴리스 판정에는 다음 제한시간 게이트를 사용한다. `release:preflight`는 타입체크(60초), 전체 테스트(300초), 배포 환경(30초)을 순서대로 실행하고, `release:package`는 검증된 새 ZIP과 내부 매니페스트·SHA-256을 생성하며, `release:public`은 공개 health와 `/tabs/home`을 확인한다. 전부 실행할 때는 `npm run release:gate`를 사용한다.
 - `release:public`은 명시적 `--url` 다음 `TEAMS_PUBLIC_URL`, `PUBLIC_BASE_URL`, `.env.runtime`의 `TAB_DOMAIN`에서 공개 origin을 해석한다. `typecheck`는 런타임 패키지를 바꾸지 않는 release 전용 선언 stub을 사용하고, vendor 선언 그래프 진단은 별도 `typecheck:vendor`로 분리한다.
 - 게이트가 명령어 timeout이나 비정상 종료를 만나면 `BLOCKED`로 중단한다. 실패한 하위 프로세스 그룹은 정리하지만, 이미 실행 중인 공개 Teams 서버나 Dev Tunnel은 임의로 종료하지 않는다. 원인을 고친 뒤 같은 게이트를 다시 실행한다.

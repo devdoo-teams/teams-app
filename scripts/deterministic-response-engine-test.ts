@@ -171,6 +171,19 @@ async function main(): Promise<void> {
     assert.equal(unsupported.envelope.aiGenerated, false);
     assert.match(unsupported.text, /테스트 작업이 완료되었습니다/);
 
+    let deferredTerminalWaits = 0;
+    const deferredAgentService = createAgentServiceFake(job('running'));
+    (deferredAgentService as unknown as { waitForTerminal: AgentService['waitForTerminal'] }).waitForTerminal = async () => {
+      deferredTerminalWaits += 1;
+      throw new Error('Teams Bot background jobs must not wait synchronously');
+    };
+    const deferredInput = await createInput(itemStore, deferredAgentService, '배포 상태를 분석해줘');
+    (deferredInput as ResponseEngineInput & { deferAgentCompletion?: boolean }).deferAgentCompletion = true;
+    const deferred = await engine.run(deferredInput);
+    assert.equal(deferredTerminalWaits, 0);
+    assert.equal(deferred.envelope.status, 'loading');
+    assert.match(deferred.text, /작업 job-test-1을 시작했습니다/);
+
     const previous = job('completed', '이전 요청');
     const continued = await engine.run(await createInput(
       itemStore,

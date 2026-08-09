@@ -1,5 +1,14 @@
 import { app as teamsApp, geoLocation, location as teamsLocation } from '@microsoft/teams-js';
-import { FormEvent, Suspense, lazy, useEffect, useRef, useState } from 'react';
+import {
+  Component,
+  Suspense,
+  lazy,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from 'react';
 
 import { apiFetch, getLastAuthError, setAuthRequired } from './auth.js';
 import {
@@ -14,10 +23,116 @@ import {
   useResponseMode,
 } from './ResponseModeSelector.js';
 
-const LazyCopilotWorkspaceRuntime = lazy(async () => {
-  const module = await import('./CopilotWorkspaceAssistant.js');
-  return { default: module.CopilotWorkspaceRuntime };
-});
+export type LatestRequest = {
+  generation: number;
+  signal: AbortSignal;
+  isCurrent: () => boolean;
+  commit: (update: () => void) => boolean;
+};
+
+type LatestRequestController = {
+  begin: () => LatestRequest;
+  invalidate: () => void;
+};
+
+export function createLatestRequestController(): LatestRequestController {
+  let generation = 0;
+  let activeController: AbortController | null = null;
+
+  return {
+    begin() {
+      activeController?.abort();
+      const controller = new AbortController();
+      const requestGeneration = generation + 1;
+      generation = requestGeneration;
+      activeController = controller;
+
+      const isCurrent = (): boolean => activeController === controller
+        && generation === requestGeneration
+        && !controller.signal.aborted;
+
+      return {
+        generation: requestGeneration,
+        signal: controller.signal,
+        isCurrent,
+        commit(update) {
+          if (!isCurrent()) return false;
+          update();
+          return true;
+        },
+      };
+    },
+    invalidate() {
+      generation += 1;
+      activeController?.abort();
+      activeController = null;
+    },
+  };
+}
+
+export type LazyCopilotRuntimeErrorBoundaryProps = {
+  children: ReactNode;
+  onRetry: () => void;
+  onReload: () => void;
+};
+
+export type LazyCopilotRuntimeErrorBoundaryState = {
+  error: Error | null;
+};
+
+export function CopilotRuntimeRecovery({
+  onRetry,
+  onReload,
+}: {
+  onRetry: () => void;
+  onReload: () => void;
+}) {
+  return (
+    <main className="shell" role="alert" aria-live="polite">
+      <section className="panel">
+        <p className="eyebrow">COPILOTKIT</p>
+        <h1>업무 도우미를 불러오지 못했습니다.</h1>
+        <p>CopilotKit 화면 파일을 불러오지 못했습니다. 다시 시도하거나 탭을 새로고침하세요.</p>
+        <div className="copilot-recovery-actions">
+          <button className="primary" onClick={onRetry} type="button">다시 시도</button>
+          <button className="secondary" onClick={onReload} type="button">새로고침</button>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+export class LazyCopilotRuntimeErrorBoundary extends Component<
+  LazyCopilotRuntimeErrorBoundaryProps,
+  LazyCopilotRuntimeErrorBoundaryState
+> {
+  state: LazyCopilotRuntimeErrorBoundaryState = { error: null };
+
+  static getDerivedStateFromError(error: unknown): LazyCopilotRuntimeErrorBoundaryState {
+    return {
+      error: error instanceof Error ? error : new Error('CopilotKit 화면 파일을 불러오지 못했습니다.'),
+    };
+  }
+
+  private handleRetry = (): void => {
+    this.props.onRetry();
+  };
+
+  private handleReload = (): void => {
+    this.props.onReload();
+  };
+
+  render() {
+    if (!this.state.error) return this.props.children;
+
+    return (
+      <CopilotRuntimeRecovery
+        onReload={this.handleReload}
+        onRetry={this.handleRetry}
+      />
+    );
+  }
+}
 
 type Item = {
   id: number;
@@ -68,6 +183,13 @@ type WeatherResponse = {
   };
 };
 
+export function createLazyCopilotRuntime() {
+  return lazy(async () => {
+    const module = await import('./CopilotWorkspaceAssistant.js');
+    return { default: module.CopilotWorkspaceRuntime };
+  });
+}
+
 export function App() {
   const [items, setItems] = useState<Item[]>([]);
   const [title, setTitle] = useState('');
@@ -88,12 +210,27 @@ export function App() {
   const [teamsClientType, setTeamsClientType] = useState('');
   const [teamsHostName, setTeamsHostName] = useState('');
   const [copilotReady, setCopilotReady] = useState(false);
+  const [copilotRuntimeAttempt, setCopilotRuntimeAttempt] = useState(0);
   const responseMode = useResponseMode();
   const selectedResponseMode = getPublicResponseMode(responseMode.state);
   const locationServiceRef = useRef<ClientLocationService | null>(null);
   const weatherRequestGeneration = useRef(0);
   const weatherAbortController = useRef<AbortController | null>(null);
+  const runtimeRefreshControllerRef = useRef<LatestRequestController | null>(null);
+  const itemsRequestControllerRef = useRef<LatestRequestController | null>(null);
+  const copilotRuntimeRef = useRef<ReturnType<typeof createLazyCopilotRuntime> | null>(null);
   const mountedRef = useRef(false);
+
+  if (!runtimeRefreshControllerRef.current) {
+    runtimeRefreshControllerRef.current = createLatestRequestController();
+  }
+  if (!itemsRequestControllerRef.current) {
+    itemsRequestControllerRef.current = createLatestRequestController();
+  }
+  if (!copilotRuntimeRef.current) {
+    copilotRuntimeRef.current = createLazyCopilotRuntime();
+  }
+  const LazyCopilotWorkspaceRuntime = copilotRuntimeRef.current!;
 
   async function requestWeather(latitude: number, longitude: number, signal: AbortSignal) {
     const query = new URLSearchParams({
@@ -216,62 +353,107 @@ export function App() {
     }
   }
 
-  async function loadItems() {
-    setLoading(true);
-    setError('');
+  async function loadItems(runtimeRequest?: LatestRequest): Promise<void> {
+    const request = itemsRequestControllerRef.current!.begin();
+    const isCurrentRequest = (): boolean => mountedRef.current
+      && request.isCurrent()
+      && (!runtimeRequest || runtimeRequest.isCurrent());
+    const commit = (update: () => void): boolean => {
+      let applied = false;
+      request.commit(() => {
+        if (!isCurrentRequest()) return;
+        applied = true;
+        update();
+      });
+      return applied;
+    };
+
+    commit(() => {
+      setLoading(true);
+      setError('');
+    });
 
     try {
-      const response = await apiFetch('/api/items');
+      const response = await apiFetch('/api/items', { signal: request.signal });
       if (!response.ok) throw new Error('업무 목록을 불러오지 못했습니다.');
       const data = (await response.json()) as ItemsResponse;
-      setItems(data.items);
-      setSummary(data.summary);
+      commit(() => {
+        setItems(data.items);
+        setSummary(data.summary);
+      });
     } catch (caught) {
-      const authError = getLastAuthError();
-      setError(
-        authError
-          ? `SSO 토큰 요청 실패: ${authError}`
-          : caught instanceof Error
-            ? caught.message
-            : '알 수 없는 오류가 발생했습니다.',
-      );
+      if (!isCurrentRequest() || isAbortError(caught)) return;
+      commit(() => {
+        const authError = getLastAuthError();
+        setError(
+          authError
+            ? `SSO 토큰 요청 실패: ${authError}`
+            : caught instanceof Error
+              ? caught.message
+              : '알 수 없는 오류가 발생했습니다.',
+        );
+      });
     } finally {
-      setLoading(false);
+      commit(() => setLoading(false));
     }
   }
 
-  async function loadHealth(): Promise<HealthResponse | null> {
-    setHealthLoading(true);
+  async function loadHealth(request: LatestRequest): Promise<HealthResponse | null> {
+    const isCurrentRequest = (): boolean => mountedRef.current && request.isCurrent();
+    const commit = (update: () => void): boolean => {
+      let applied = false;
+      request.commit(() => {
+        if (!isCurrentRequest()) return;
+        applied = true;
+        update();
+      });
+      return applied;
+    };
+
+    commit(() => setHealthLoading(true));
 
     try {
-      const response = await apiFetch('/api/health');
+      const response = await apiFetch('/api/health', { signal: request.signal });
       if (!response.ok) throw new Error('health check failed');
       const data = (await response.json()) as HealthResponse;
-      setHealth(data);
-      setAuthRequired(data.userAuth === 'entra-sso');
+      if (!commit(() => {
+        setHealth(data);
+        setAuthRequired(data.userAuth === 'entra-sso');
+      })) return null;
       return data;
-    } catch {
-      setHealth(null);
-      setAuthRequired(true);
+    } catch (caught) {
+      if (!isCurrentRequest() || isAbortError(caught)) return null;
+      commit(() => {
+        setHealth(null);
+        setAuthRequired(true);
+      });
       return null;
     } finally {
-      setHealthLoading(false);
+      commit(() => setHealthLoading(false));
     }
   }
 
   async function refreshRuntime(): Promise<void> {
-    await loadHealth();
-    await loadItems();
+    const request = runtimeRefreshControllerRef.current!.begin();
+    itemsRequestControllerRef.current!.invalidate();
+
+    await loadHealth(request);
+    if (!mountedRef.current || !request.isCurrent()) return;
+
+    await loadItems(request);
+    request.commit(() => {
+      if (mountedRef.current && request.isCurrent()) setCopilotReady(true);
+    });
   }
 
   useEffect(() => {
     mountedRef.current = true;
-    void refreshRuntime().finally(() => {
-      if (mountedRef.current) setCopilotReady(true);
-    });
+    void refreshRuntime();
 
     return () => {
       mountedRef.current = false;
+      runtimeRefreshControllerRef.current?.invalidate();
+      itemsRequestControllerRef.current?.invalidate();
       weatherRequestGeneration.current += 1;
       weatherAbortController.current?.abort();
       weatherAbortController.current = null;
@@ -360,6 +542,15 @@ export function App() {
     } catch {
       setError('업무를 삭제하지 못했습니다.');
     }
+  }
+
+  function retryCopilotRuntime(): void {
+    copilotRuntimeRef.current = createLazyCopilotRuntime();
+    setCopilotRuntimeAttempt((attempt) => attempt + 1);
+  }
+
+  function reloadCopilotRuntime(): void {
+    if (typeof window !== 'undefined') window.location.reload();
   }
 
   const runtimeBadge = healthLoading
@@ -628,17 +819,23 @@ export function App() {
   if (!copilotReady) return dashboard;
 
   return (
-    <Suspense fallback={dashboard}>
-      <LazyCopilotWorkspaceRuntime
-        health={health ? { ok: health.ok, bot: health.bot, userAuth: health.userAuth, genAI: health.genAI } : null}
-        items={items}
-        responseMode={selectedResponseMode}
-        summary={summary}
-        teamsHostName={teamsHostName}
-        weather={weather}
-      >
-        {dashboard}
-      </LazyCopilotWorkspaceRuntime>
-    </Suspense>
+    <LazyCopilotRuntimeErrorBoundary
+      key={copilotRuntimeAttempt}
+      onReload={reloadCopilotRuntime}
+      onRetry={retryCopilotRuntime}
+    >
+      <Suspense fallback={dashboard}>
+        <LazyCopilotWorkspaceRuntime
+          health={health ? { ok: health.ok, bot: health.bot, userAuth: health.userAuth, genAI: health.genAI } : null}
+          items={items}
+          responseMode={selectedResponseMode}
+          summary={summary}
+          teamsHostName={teamsHostName}
+          weather={weather}
+        >
+          {dashboard}
+        </LazyCopilotWorkspaceRuntime>
+      </Suspense>
+    </LazyCopilotRuntimeErrorBoundary>
   );
 }

@@ -16,6 +16,18 @@ const validate = (candidate) => validatorModule.validateManifest(candidate, pack
 
 assert.equal(validate(structuredClone(manifest)), undefined, 'the checked-in source manifest contract is valid');
 
+{
+  const candidate = structuredClone(manifest);
+  candidate.version = '9.9.9';
+  assert.match(validate(candidate) ?? '', /must match package version/, 'manifest validation rejects a package version mismatch');
+}
+
+{
+  const candidate = structuredClone(manifest);
+  candidate.version = 'next';
+  assert.match(validate(candidate) ?? '', /X\.Y\.Z semver/, 'manifest validation rejects an invalid semantic version');
+}
+
 for (const requiredDomain of ['${{TAB_DOMAIN}}', 'token.botframework.com']) {
   const candidate = structuredClone(manifest);
   candidate.validDomains = candidate.validDomains.filter((domain) => domain !== requiredDomain);

@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const releaseVersion = '1.0.15';
 const required = [
   'manifestVersion',
   'version',
@@ -38,8 +37,13 @@ export function validateManifest(manifest, packageJson, { iconExists } = {}) {
     return `Manifest validDomains must include ${missingValidDomains.join(', ')} for the tab origin and Teams SSO redirect handling.`;
   }
 
-  if (packageJson.version !== releaseVersion || manifest.version !== releaseVersion) {
-    return `Expected package and manifest version ${releaseVersion}, received package=${packageJson.version}, manifest=${manifest.version}`;
+  const semverPattern = /^\d+\.\d+\.\d+$/;
+  if (!semverPattern.test(packageJson.version) || !semverPattern.test(manifest.version)) {
+    return `Package and manifest versions must use X.Y.Z semver, received package=${packageJson.version}, manifest=${manifest.version}`;
+  }
+
+  if (manifest.version !== packageJson.version) {
+    return `Manifest version must match package version ${packageJson.version}, received manifest=${manifest.version}`;
   }
 
   if (!manifest.bots?.[0]?.commandLists?.some((list) => list.commands?.some((command) => command.title === '날씨'))) {

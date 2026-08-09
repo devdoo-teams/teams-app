@@ -47,6 +47,13 @@ npm run release:gate
 
 클라이언트는 `dist/client`를 선삭제하지 않고 임시 디렉터리에서 성공적으로 만든 뒤 교체한다. CopilotKit v2 대형 번들에서 현재 Node 24 + esbuild API의 source map 생성이 무기한 대기하는 회귀가 있으므로 운영 빌드 source map은 끈다. 이 문제를 다시 만나도 제한시간 게이트가 공개 산출물을 비우지 않은 채 중단되어야 한다.
 
+### 로컬 원본 소스 기준
+
+- `/Users/doosansmacbookpro/Documents/TeamsApp`이 로컬 원본 소스이며 유일한 Git 이력 기준이다. 다른 폴더나 임시 경로를 원본·원격·복구 기준으로 추정하지 않는다.
+- 현재 Git 원격은 구성되어 있지 않다. 원격 저장소, clone, pull, push를 전제로 한 절차를 수행하거나 진행 보고에 포함하지 않는다.
+- 구현·빌드·테스트·버전 증가·커밋은 원본 작업공간에서 수행한다. `/tmp`는 일회성 로그·격리 검증·업로드용 ZIP 산출물에만 사용하고, 원본 상태와 커밋의 증거는 원본 작업공간에서 다시 확인한다.
+- Teams 업로드는 원본에서 생성하고 SHA-256 및 ZIP 내부 매니페스트를 검증한 최신 ZIP의 절대 로컬 경로를 브라우저 파일 선택기에 직접 전달한다. Finder 다운로드나 동기화 대기를 선행 조건으로 만들지 않는다.
+
 기계 게이트가 통과해도 다음 UI 게이트는 별도다.
 
 | 상태 | 의미 |
@@ -83,7 +90,7 @@ npm run release:loop -- complete
   "surface": "desktop",
   "observedAt": "2026-08-09T12:00:00.000Z",
   "commit": "<현재 커밋>",
-  "version": "1.0.15",
+  "version": "X.Y.Z",
   "packageSha256": "<release:package 결과>",
   "summary": "실제 배포 Teams 데스크톱에서 status 답장과 카드/탭을 확인함",
   "artifactPaths": ["/absolute/path/teams-desktop.png"]
@@ -99,10 +106,10 @@ npm run release:loop -- complete
   "surface": "installed",
   "observedAt": "2026-08-09T12:00:00.000Z",
   "commit": "<현재 커밋>",
-  "version": "1.0.15",
+  "version": "X.Y.Z",
   "packageSha256": "<release:package 결과>",
-  "installedVersion": "1.0.15",
-  "summary": "Teams 앱 정보 화면에서 설치 버전 1.0.15을 확인하고 status 왕복을 확인함",
+  "installedVersion": "X.Y.Z",
+  "summary": "Teams 앱 정보 화면에서 설치 버전 X.Y.Z를 확인하고 status 왕복을 확인함",
   "artifactPaths": ["/absolute/path/teams-installed-info.png"]
 }
 ```

@@ -83,6 +83,8 @@ export type ResponseEngineInput = {
   onTool?: (tool: ResponseToolEvent) => void;
   setActiveJobId?: (id: string) => void;
   isCancelled?: () => boolean;
+  /** Teams Bot activities must acknowledge long-running jobs immediately. */
+  deferAgentCompletion?: boolean;
   /**
    * The Teams host injects this factory so engines never mint action tokens.
    * Direct unit callers may omit it and receive an action-free fallback.
