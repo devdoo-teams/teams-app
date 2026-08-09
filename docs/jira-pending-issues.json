@@ -1,0 +1,31 @@
+{
+  "syncState": "JIRA_SYNC_UNVERIFIED",
+  "site": "https://devdoo.atlassian.net",
+  "projectKey": "MP",
+  "defaultAssignee": "self",
+  "sourceCommit": "a58fd21",
+  "appVersion": "1.0.25",
+  "packageSha256": "23b7a1c19f96dccc4a1526cf32be59b43ffde406b49b44bee335041d1bdb7274",
+  "issues": [
+    {
+      "idempotencyKey": "teams-core:release-blocker:installed-ui-evidence:a58fd21",
+      "issueType": "Bug",
+      "summary": "[Teams Core 1.0.25] installed, desktop, and mobile UI evidence is missing",
+      "assignee": "self",
+      "labels": ["teams-core", "release", "desktop", "mobile", "portal", "blocked"],
+      "status": "In Progress",
+      "description": "Command, package, portal, and public-runtime gates passed for app version 1.0.25. The required same-release installed-client version check, desktop screenshot/AX evidence, and mobile confirmation are not yet captured. The current UI matrix has 149 rows: PASS=0, FAIL=0, BLOCKED=148, N/A=1. Reproduce by reusing the existing Teams desktop and mobile app surfaces, then capture before/after screenshots, accessibility evidence, and runtime evidence for each exercised branch. Do not close from CLI, portal, or HTTP evidence alone.",
+      "acceptance": "The installed app visibly reports version 1.0.25, the desktop chat/tab and every exercised branch have fresh before/after screenshots plus AX/runtime evidence, and the mobile Teams user confirms the same release behavior. Then update this issue with evidence paths and transition it using a workflow transition discovered from Jira."
+    },
+    {
+      "idempotencyKey": "teams-core:diagnostic-discrepancy:teams-cli-sso:a58fd21",
+      "issueType": "Task",
+      "summary": "[Teams Core] reconcile Teams CLI SSO doctor diagnostics with live bot+tab contract",
+      "assignee": "self",
+      "labels": ["teams-core", "diagnostic", "sso", "codex-cli"],
+      "status": "To Do",
+      "description": "The Teams CLI doctor reports one SSO failure and warnings for the resource URI and valid-domain pattern, while the official bot+tab SSO guidance and the portal read-back show the combined resource URI and exact token.botframework.com domain. This is a diagnostic discrepancy, not a confirmed runtime defect. Compare the doctor implementation/version with the official contract and close only after a live SSO failure is reproduced or the diagnostic is verified as stale.",
+      "acceptance": "A fresh Teams SSO runtime check either reproduces a token exchange failure with sanitized evidence and a follow-up Bug, or documents the doctor discrepancy as non-actionable with the official contract and successful runtime evidence."
+    }
+  ]
+}

@@ -93,14 +93,18 @@ For every future live write, first resolve the current signed-in user's Jira acc
 
 ## Current release evidence snapshot
 
-The current Core release is `1.0.25` at Git commit `3fd2684`. The locally generated package was verified with SHA-256 `23b7a1c19f96dccc4a1526cf32be59b43ffde406b49b44bee335041d1bdb7274`. The same app ID was updated through the authenticated Teams Developer CLI and then read back as portal version `1.0.25`; the downloaded portal manifest contains `geolocation`, the current public tab URL, and `token.botframework.com`. The public runtime also reports `version=1.0.25`, `environment=production`, `auth=teams-authenticated`, `bot=teams-sdk`, and `outbound=teams-sdk`.
+The current Core release is `1.0.25` at Git commit `a58fd21`. The locally generated package was verified with SHA-256 `23b7a1c19f96dccc4a1526cf32be59b43ffde406b49b44bee335041d1bdb7274`. The same app ID was updated through the authenticated Teams Developer CLI and then read back as portal version `1.0.25`; the downloaded portal manifest contains `geolocation`, the current public tab URL, and `token.botframework.com`. The public runtime also reports `version=1.0.25`, `environment=production`, `auth=teams-authenticated`, `bot=teams-sdk`, and `outbound=teams-sdk`.
 
 The remaining release item is a real installed-client/UI evidence blocker, not a source or public-runtime failure:
 
-- idempotency key: `teams-core:release-blocker:installed-ui-evidence:3fd2684`;
+- idempotency key: `teams-core:release-blocker:installed-ui-evidence:a58fd21`;
 - issue type: `Bug` (only when the live Jira write is available);
 - default assignee: current Jira user (`self`);
 - local state: `BLOCKED` until installed version, desktop screenshots/accessibility evidence, and mobile user confirmation are captured for this exact release;
 - next action: reuse the existing Teams desktop/mobile app surfaces, refresh/reopen the existing app installation if needed, and capture the version plus each required UI branch. Do not close the issue from CLI, portal, or HTTP evidence alone.
 
 The Teams CLI diagnostic currently reports one SSO “fail” and three warnings. They are recorded as a diagnostic discrepancy pending runtime reproduction, not silently “fixed”: [Microsoft’s Teams SSO guidance](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/authentication/bot-sso-manifest) documents `api://<fully-qualified-domain>/botid-<bot-client-id>` for a bot+tab app and the exact `https://token.botframework.com` valid domain. Therefore the CLI’s expectation of a host-less `api://botid-...` resource or `*.botframework.com` wildcard is not sufficient evidence to change the manifest. If a real SSO failure is observed in Teams, open a separate `Bug` with the exact client, token, and manifest evidence (without secrets).
+
+## Current local Jira payload ledger
+
+The prepared payloads are stored in [`docs/jira-pending-issues.json`](./jira-pending-issues.json). They are not Jira issue keys: no live create/update is claimed until an authenticated Jira connector or an already-open Jira tab returns a successful response. The ledger intentionally contains no password, token, device code, or bearer token.
