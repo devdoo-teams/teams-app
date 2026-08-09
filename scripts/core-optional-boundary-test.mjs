@@ -20,13 +20,16 @@ const optionalTests = npmRunNames(scripts['test:optional']);
 const coreBuild = npmRunNames(scripts['build:core']);
 const optionalBuild = npmRunNames(scripts['build:optional']);
 const combinedBuild = npmRunNames(scripts.build);
+const allBuild = npmRunNames(scripts['build:all']);
 
 assert.equal(scripts['test:core'], 'node scripts/core-test-runner.mjs');
 assertIncludesAll(optionalTests, ['test:openai-engine', 'test:local-engine', 'test:mcp-response-mode', 'test:mcp-direct-factory'], 'test:optional');
 assert.match(scripts['build:core'], /build-client\.mjs --core/, 'build:core must compile the core client');
 assert.match(scripts['build:core'], /build-server\.mjs --core/, 'build:core must compile the core server');
 assertIncludesAll(optionalBuild, ['build:mcp'], 'build:optional');
-assertIncludesAll(combinedBuild, ['build:core', 'build:optional'], 'build');
+assertIncludesAll(combinedBuild, ['build:core'], 'build');
+assert.equal(combinedBuild.includes('build:optional'), false, 'default build must not call optional provider build');
+assertIncludesAll(allBuild, ['build:core', 'build:optional'], 'build:all');
 
 for (const optionalCommand of ['test:openai-engine', 'test:local-engine', 'test:mcp-response-mode', 'test:mcp-direct-factory', 'build:mcp', 'test:optional', 'build:optional']) {
   assert.equal(coreTests.includes(optionalCommand), false, `test:core must not call ${optionalCommand}`);

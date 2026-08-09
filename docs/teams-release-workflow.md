@@ -4,7 +4,7 @@
 
 ## 현시점 구현 기준: Teams Core 우선
 
-현재 MVP의 필수 경로는 Microsoft Teams SDK + React 개인 탭 + Express/결정형 서버 동작이다. CopilotKit, OpenAI API, MCP, 로컬 모델은 선택 provider로 격리하며 API 키나 추가 모델 인증이 없다는 이유로 Teams Core 기능을 만들거나 검증하지 못했다고 보고하지 않는다. 새 기능은 다음 순서로 한 단위씩 추가한다.
+현재 MVP의 필수 경로는 Microsoft Teams SDK + TypeScript/React 개인 탭 + Express/결정형 서버 + Adaptive Cards 동작이다. CopilotKit, OpenAI API, MCP, 로컬 모델은 선택 provider로 격리하며 API 키나 추가 모델 인증이 없다는 이유로 Teams Core 기능을 만들거나 검증하지 못했다고 보고하지 않는다. MCP/MCP Apps는 Teams 모바일 UI의 대체재가 아니며, 구체적인 MCP 서버가 확인된 뒤 서버 adapter로만 검토한다. 단계별 범위는 [`docs/api-free-teams-roadmap.md`](api-free-teams-roadmap.md)에 고정한다.
 
 1. Teams Core에서 사용자 화면·서버 동작·오류/재시도·권한 대체 경로를 최소 기능으로 구현한다.
 2. 명령어·카드·탭 링크·API·런타임을 테스트하고, 실제 Teams 화면에서 해당 단위의 전·후 상태를 확인한다.
@@ -73,7 +73,7 @@ npm run release:gate
 
 클라이언트는 `dist/client`를 선삭제하지 않고 임시 디렉터리에서 성공적으로 만든 뒤 교체한다. CopilotKit v2 대형 번들에서 현재 Node 24 + esbuild API의 source map 생성이 무기한 대기하는 회귀가 있으므로 운영 빌드 source map은 끈다. 이 문제를 다시 만나도 제한시간 게이트가 공개 산출물을 비우지 않은 채 중단되어야 한다.
 
-Core 서버 번들은 Teams SDK·Express 등 필수 런타임을 포함하고 CopilotKit/MCP는 선택 청크로 분리한다. `npm run test:core`는 `scripts/core-runtime-smoke.mjs`로 API 키 없이 production Teams SDK 프로세스를 실제 기동해 `listen()`, `/api/health`, `/tabs/home/`을 확인한다. 이 스모크가 통과하지 않은 상태에서 기존 공개 서버나 포털 업로드를 최신 버전으로 교체하지 않는다.
+Core 서버 번들은 Teams SDK·Express 등 필수 런타임을 포함하고 CopilotKit/MCP는 선택 청크로 분리한다. 기본 `npm run build`는 `build:core`만 실행하고, 선택 provider는 `npm run build:all` 또는 명시적 optional 명령에서만 만든다. `npm run test:core`는 `scripts/core-runtime-smoke.mjs`로 API 키 없이 production Teams SDK 프로세스를 실제 기동해 `listen()`, `/api/health`, `/tabs/home/`을 확인한다. 이 스모크가 통과하지 않은 상태에서 기존 공개 서버나 포털 업로드를 최신 버전으로 교체하지 않는다.
 
 ### 로컬 원본 소스 기준
 

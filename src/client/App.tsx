@@ -976,7 +976,7 @@ export function App() {
       <WorkItemPanel />
       <CollaborationPanel />
 
-      <footer>Teams SDK · TypeScript · React · Express · CopilotKit</footer>
+      <footer>Teams SDK · TypeScript · React · Express · Adaptive Cards</footer>
     </main>
   );
 

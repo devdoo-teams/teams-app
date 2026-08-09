@@ -1,6 +1,9 @@
 # Project delivery instructions
 
 - Teams 앱 변경 요청은 아래의 필수 릴리스 워크플로우를 따른다. 구현만 끝내거나 로컬 테스트 결과만으로 완료 처리하지 않는다.
+- 현재 기술 제약에서는 `Teams Core`가 기준 제품이다. Microsoft Teams SDK + TypeScript/React 개인 탭 + Express/결정형 서버 + Adaptive Cards를 API 키 없이 먼저 구현한다. CopilotKit, OpenAI API, 로컬 모델, MCP는 Core 기능이 안정된 뒤 명시적 feature flag와 별도 검증으로만 추가하며, API 키가 없다는 이유로 Core 기능을 대체 응답·가짜 완료로 처리하지 않는다. 상세 단계는 [`docs/api-free-teams-roadmap.md`](docs/api-free-teams-roadmap.md)를 따른다.
+- MCP/MCP Apps는 Teams 모바일 UI 자체로 간주하지 않는다. Teams 탭은 TeamsJS/React WebView, Bot 응답은 Adaptive Cards 1.2 호환 subset을 기준으로 구현하고, MCP는 구체적인 서버 tool 연결이 확인된 뒤 서버 측 adapter로만 검토한다.
+- 기본 `npm run build`와 기본 실행은 Core만 대상으로 한다. 선택 provider는 `build:optional`, `build:all`, `TEAMS_OPTIONAL_RUNTIME=true`처럼 명시적으로 요청한 경우에만 로드한다.
 - 소스·매니페스트·패키징·런타임 설정 변경은 Git diff를 확인하고 의미 있는 단위로 커밋한다. 완료 보고에는 해당 커밋 SHA를 포함한다.
 - 업로드 전에 반드시 앱 패키지 버전, ZIP 내부의 실제 매니페스트, `devicePermissions`, 배포 환경 검증을 확인한다. 인증정보·환경변수·배포 대상이 없으면 추측하지 말고 업로드 단계에서 멈춘 뒤 누락 항목을 명확히 보고한다.
 - 인증정보를 임의로 만들거나 추측하지 않으며, 업로드 대상이 불명확하거나 외부 서비스에 대한 추가 권한이 필요한 경우에는 안전한 범위까지만 진행한다.
