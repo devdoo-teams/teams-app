@@ -68,6 +68,16 @@
       "status": "To Do",
       "description": "The Teams CLI doctor reports one SSO failure and warnings for the resource URI and valid-domain pattern, while the official bot+tab SSO guidance and the portal read-back show the combined resource URI and exact token.botframework.com domain. This is a diagnostic discrepancy, not a confirmed runtime defect. Compare the doctor implementation/version with the official contract and close only after a live SSO failure is reproduced or the diagnostic is verified as stale.",
       "acceptance": "A fresh Teams SSO runtime check either reproduces a token exchange failure with sanitized evidence and a follow-up Bug, or documents the doctor discrepancy as non-actionable with the official contract and successful runtime evidence."
+    },
+    {
+      "idempotencyKey": "teams-core:task:ui-matrix-artifact-integrity:e4e1265",
+      "issueType": "Task",
+      "summary": "[Teams Core] enforce UI matrix content hash and row-to-artifact identity in the release gate",
+      "assignee": "self",
+      "labels": ["teams-core", "release", "ui-matrix", "evidence", "quality"],
+      "status": "To Do",
+      "description": "The 1.0.26 matrix is aligned to the packaged runtime identity and correctly remains BLOCKED until screenshots, AX, and runtime evidence exist. The release-loop still needs to parse the matrix file, recompute its content hash, verify row IDs and coverage counters, and require each referenced artifact to carry the same app/runtime/package identity before any UI surface can advance.",
+      "acceptance": "A stale matrix, mismatched matrix hash, fabricated counter, missing row artifact, or cross-release artifact causes the release gate to fail closed; a complete same-release matrix is the only input that can advance portal/installed/desktop/mobile evidence."
     }
   ]
 }
