@@ -36,19 +36,36 @@ function job(
   };
 }
 
-function createAgentServiceFake(terminalJob = job(), previous?: AgentJob): AgentService {
+type AgentServiceFakeTrace = {
+  submissions: Array<{ notify?: boolean; prompt: string }>;
+  continuations: Array<{ notify?: boolean; prompt: string }>;
+  waitForTerminalCalls: number;
+};
+
+function createAgentServiceFake(
+  terminalJob = job(),
+  previous?: AgentJob,
+  trace: AgentServiceFakeTrace = { submissions: [], continuations: [], waitForTerminalCalls: 0 },
+): AgentService {
   const submitted: AgentJob[] = [];
   const service = {
     countActive: () => 0,
     list: () => submitted.slice(),
     latestCompletedForConversation: () => previous,
-    submit: async (input: { prompt: string; mode: AgentJob['mode']; scope: AgentJobScope }) => {
+    submit: async (input: { prompt: string; mode: AgentJob['mode']; scope: AgentJobScope; notify?: boolean }) => {
+      trace.submissions.push({ notify: input.notify, prompt: input.prompt });
       const created = { ...job(input.mode === 'workspace-write' ? 'awaiting_approval' : 'running', input.prompt), mode: input.mode };
       submitted.push(created);
       return created;
     },
-    continue: async () => previous ? terminalJob : undefined,
-    waitForTerminal: async () => terminalJob,
+    continue: async (_id: string, prompt: string, _scope: AgentJobScope, options: { notify?: boolean } = {}) => {
+      trace.continuations.push({ notify: options.notify, prompt });
+      return previous ? terminalJob : undefined;
+    },
+    waitForTerminal: async () => {
+      trace.waitForTerminalCalls += 1;
+      return terminalJob;
+    },
   } as unknown as AgentService;
   return service;
 }
@@ -60,6 +77,7 @@ async function createInput(
   context: ResponseEngineInput['request']['context'] = [],
   onTool: ResponseEngineInput['onTool'] = () => undefined,
   approvalEnvelope?: ResponseEngineInput['approvalEnvelope'],
+  onText: ResponseEngineInput['onText'],
 ): Promise<ResponseEngineInput> {
   return {
     mode: 'deterministic',
@@ -74,7 +92,7 @@ async function createInput(
       context,
     } as ResponseEngineInput['request'],
     onTool,
-    onText: () => undefined,
+    onText,
     setActiveJobId: () => undefined,
     isCancelled: () => false,
     approvalEnvelope,
@@ -166,45 +184,27 @@ async function main(): Promise<void> {
     assert.equal(write.envelope.actions.length, 2, 'host approval factory supplies approve/cancel actions');
     assert.deepEqual(approvalTools, ['workspaceApproval']);
 
-    const unsupported = await engine.run(await createInput(itemStore, agentService, '저장소를 분석해줘'));
-    assert.equal(unsupported.envelope.kind, 'job-status');
-    assert.equal(unsupported.envelope.aiGenerated, false);
-    assert.match(unsupported.text, /테스트 작업이 완료되었습니다/);
-
-    let deferredTerminalWaits = 0;
-    const deferredAgentService = createAgentServiceFake(job('running'));
-    (deferredAgentService as unknown as { waitForTerminal: AgentService['waitForTerminal'] }).waitForTerminal = async () => {
-      deferredTerminalWaits += 1;
-      throw new Error('Teams Bot background jobs must not wait synchronously');
-    };
-    const deferredInput = await createInput(itemStore, deferredAgentService, '배포 상태를 분석해줘');
-    (deferredInput as ResponseEngineInput & { deferAgentCompletion?: boolean }).deferAgentCompletion = true;
-    const deferred = await engine.run(deferredInput);
-    assert.equal(deferredTerminalWaits, 0);
-    assert.equal(deferred.envelope.status, 'loading');
-    assert.match(deferred.text, /작업 job-test-1을 시작했습니다/);
+    const naturalTrace: AgentServiceFakeTrace = { submissions: [], continuations: [], waitForTerminalCalls: 0 };
+    const natural = await engine.run(await createInput(
+      itemStore,
+      createAgentServiceFake(job('completed'), undefined, naturalTrace),
+      '저장소를 분석해줘',
+    ));
+    assert.equal(naturalTrace.waitForTerminalCalls, 0, 'natural-language requests do not wait for terminal state before acknowledging');
+    assert.equal(naturalTrace.submissions[0]?.notify, true, 'natural-language requests enable same-conversation notifications');
+    assert.equal(natural.envelope.kind, 'job-status');
+    assert.equal(natural.envelope.status, 'loading');
+    assert.match(natural.text, /작업 job-test-1을 시작했습니다/);
 
     const previous = job('completed', '이전 요청');
+    const continuedTrace: AgentServiceFakeTrace = { submissions: [], continuations: [], waitForTerminalCalls: 0 };
     const continued = await engine.run(await createInput(
       itemStore,
-      createAgentServiceFake(job('completed', '후속 요청'), previous),
+      createAgentServiceFake(job('completed', '후속 요청'), previous, continuedTrace),
       '같은 대화에서 이어서 확인해줘',
     ));
     assert.match(continued.text, /이전 Codex 대화를 이어서/);
-
-    const failed = await engine.run(await createInput(itemStore, createAgentServiceFake(job('failed')), '저장소를 분석해줘'));
-    assert.equal(failed.envelope.status, 'error');
-
-    const running = await engine.run(await createInput(itemStore, createAgentServiceFake(job('running')), '저장소를 분석해줘'));
-    assert.equal(running.envelope.status, 'loading');
-
-    const oversized = await engine.run(await createInput(
-      itemStore,
-      createAgentServiceFake(job('completed', '저장소를 분석해줘', '긴 결과'.repeat(2_000))),
-      '저장소를 분석해줘',
-    ));
-    assert.equal(oversized.envelope.kind, 'job-status');
-    assert.ok((oversized.envelope.fallbackText?.length ?? 0) <= 4_000);
+    assert.equal(continuedTrace.continuations[0]?.notify, true, 'continued natural-language requests enable same-conversation notifications');
 
     console.log('deterministic response engine tests passed');
   } finally {

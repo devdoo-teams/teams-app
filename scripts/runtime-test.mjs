@@ -881,6 +881,42 @@ async function runLocalFlow(dataFile, jobDataFile) {
     assert(explicitWeatherCommand.body.messages[0].includes('날씨 위젯'), 'Bot explicit weather command returns widget summary');
     assertAdaptiveCardActivity(explicitWeatherCommand.body.activities[0], 'explicit coordinate weather');
 
+    const naturalDelayedConversation = 'runtime-conversation-natural-delayed';
+    const naturalRequestStartedAt = performance.now();
+    const naturalDelayed = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity('SLOW 자연어 Codex 작업을 실행해줘', server.baseUrl, 'natural-delayed', naturalDelayedConversation)),
+    });
+    const naturalDelayedElapsedMs = performance.now() - naturalRequestStartedAt;
+    assert(naturalDelayed.response.status === 200, 'natural-language Codex request returns an immediate Bot response');
+    assert(naturalDelayedElapsedMs < 2_000, 'natural-language ACK does not wait for a delayed runner');
+    const naturalDelayedJobId = naturalDelayed.body.messages[0].match(/task-[\w-]+/)?.[0];
+    assert(Boolean(naturalDelayedJobId), 'natural-language ACK includes the queued/running task id');
+    assert(naturalDelayed.body.messages[0].includes('시작했습니다'), 'natural-language ACK describes the running task');
+    await waitForAgentStatus(server.baseUrl, naturalDelayedJobId, 'running');
+    const naturalDelayedOutbox = await waitForOutboxMessages(
+      server.baseUrl,
+      naturalDelayedConversation,
+      [naturalDelayedJobId, '실행을 시작했습니다', '분석을 시작했습니다'],
+    );
+    assert(
+      naturalDelayedOutbox.body.messages.every((message) => message.includes(naturalDelayedJobId)),
+      'natural-language progress notifications stay in the same conversation and identify the job',
+    );
+    const naturalCancel = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity(`cancel ${naturalDelayedJobId}`, server.baseUrl, 'natural-delayed-cancel', naturalDelayedConversation)),
+    });
+    assert(naturalCancel.response.status === 200 && naturalCancel.body.messages[0].includes('취소'), 'natural-language Codex work can be cancelled in the originating conversation');
+    const naturalCancelledJob = await waitForAgentJob(server.baseUrl, naturalDelayedJobId);
+    assert(naturalCancelledJob.status === 'cancelled', 'cancelled natural-language work stays terminally cancelled');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const naturalCancelledOutbox = await request(server.baseUrl, `/api/debug/agent-outbox/${naturalDelayedConversation}`);
+    assert(
+      !naturalCancelledOutbox.body.messages.some((message) => message.includes('실패했습니다') || message.includes('완료되었습니다')),
+      'cancelled natural-language work does not emit a later failure or completion notification',
+    );
+
     const invalid = await request(server.baseUrl, '/api/items', {
       method: 'POST',
       body: JSON.stringify({ title: '   ' }),

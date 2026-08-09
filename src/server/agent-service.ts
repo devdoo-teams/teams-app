@@ -157,7 +157,7 @@ export class AgentService {
       prompt: input.prompt,
       mode: 'read-only',
       scope: input.scope,
-      notify: false,
+      notify: true,
       onProgress: input.onProgress,
     });
 
@@ -382,6 +382,12 @@ export class AgentService {
         this.progressStates.delete(job.id);
         return;
       }
+
+      await this.notifyIfEnabled(runningJob, {
+        kind: 'progress',
+        phase: 'analysis',
+        message: `작업 ${runningJob.id}이 실행을 시작했습니다.`,
+      });
 
       const result = await runPromise;
       const changedPaths = runningJob.mode === 'workspace-write' && workspaceSnapshot

@@ -248,7 +248,7 @@ export class DeterministicResponseEngine implements ResponseEngine {
 
     if (/^(write|파일|수정|변경|작성|생성)/i.test(normalized)) {
       const requestedPrompt = safeText(prompt.replace(/^(write|파일(?:을|이)?\s*(?:변경|수정)?|수정|변경|작성|생성)\s*/i, '').trim() || '요청한 변경 작업', 2_000);
-      const job = await input.agentService.submit({ prompt: requestedPrompt, mode: 'workspace-write', scope: input.scope, notify: false });
+      const job = await input.agentService.submit({ prompt: requestedPrompt, mode: 'workspace-write', scope: input.scope });
       const args: ApprovalToolArgs = { jobId: job.id, prompt: requestedPrompt, action: 'approve' };
       const text = `쓰기 작업 ${job.id}이 승인 대기 중입니다.\n\nTeams Bot에서 “approve ${job.id}”를 보내거나 아래 승인 흐름을 사용하세요.`;
       const approvalEnvelope = input.approvalEnvelope ? await input.approvalEnvelope(job) : undefined;
@@ -261,28 +261,31 @@ export class DeterministicResponseEngine implements ResponseEngine {
     }
 
     const previous = input.agentService.latestCompletedForConversation(input.scope);
-    const notify = input.deferAgentCompletion === true;
+    // Teams Bot calls omit onText and must receive the loading card immediately.
+    // CopilotKit supplies onText so it can stream the terminal result through its
+    // AG-UI response; preserve that stream while keeping Bot delivery proactive.
+    const streamToCaller = input.deferAgentCompletion !== true && typeof input.onText === 'function';
     const onProgress = async (message: string): Promise<void> => {
       if (!cancelled()) input.onText?.(`⏳ ${message}`);
     };
     const job = previous
-      ? await input.agentService.continue(previous.id, prompt, input.scope, { notify, onProgress })
-      : await input.agentService.submit({ prompt, mode: 'read-only', scope: input.scope, notify, onProgress });
+      ? await input.agentService.continue(previous.id, prompt, input.scope, { notify: true, onProgress })
+      : await input.agentService.submit({ prompt, mode: 'read-only', scope: input.scope, notify: true, onProgress });
     if (!job) throw new Error('Codex 작업을 생성하지 못했습니다.');
     input.setActiveJobId?.(job.id);
-    if (input.deferAgentCompletion) {
-      const text = previous
-        ? `이전 Codex 대화를 이어서 작업 ${job.id}을 시작했습니다. 진행 상황과 완료 결과를 이 채팅으로 보내드립니다.`
-        : `작업 ${job.id}을 시작했습니다. 진행 상황과 완료 결과를 이 채팅으로 보내드립니다.`;
-      return output({ text, envelope: jobEnvelope(job, text, 'loading'), toolCalls });
-    }
-    const completed = await input.agentService.waitForTerminal(job.id, input.scope);
-    const resultText = completed.status === 'completed'
-      ? completed.result || `작업 ${completed.id}이 완료되었습니다.`
-      : `작업 ${completed.id}이 ${completed.status} 상태입니다.\n\n${completed.error || completed.progress.at(-1) || '추가 확인이 필요합니다.'}`;
     const text = previous
-      ? `이전 Codex 대화를 이어서 작업 ${completed.id}이 완료되었습니다.\n\n${resultText}`
-      : resultText;
-    return output({ text, envelope: jobEnvelope(completed, text), toolCalls });
+      ? `이전 Codex 대화를 이어서 작업 ${job.id}을 시작했습니다. 진행 상황과 완료 결과를 이 채팅으로 보내드립니다.`
+      : `작업 ${job.id}을 시작했습니다. 진행 상황과 완료 결과를 이 채팅으로 보내드립니다.`;
+    if (streamToCaller) {
+      const completed = await input.agentService.waitForTerminal(job.id, input.scope);
+      const resultText = completed.status === 'completed'
+        ? completed.result || `작업 ${completed.id}이 완료되었습니다.`
+        : `작업 ${completed.id}이 ${completed.status} 상태입니다.\n\n${completed.error || completed.progress.at(-1) || '추가 확인이 필요합니다.'}`;
+      const streamedText = previous
+        ? `이전 Codex 대화를 이어서 작업 ${completed.id}이 완료되었습니다.\n\n${resultText}`
+        : resultText;
+      return output({ text: streamedText, envelope: jobEnvelope(completed, streamedText), toolCalls });
+    }
+    return output({ text, envelope: jobEnvelope(job, text, 'loading'), toolCalls });
   }
 }

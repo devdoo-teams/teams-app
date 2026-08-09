@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { AgentJobStore, type AgentJobScope } from '../src/server/agent-job-store.js';
 import {
   AgentJobConflictError,
+  type AgentNotification,
   AgentPromptValidationError,
   AgentService,
 } from '../src/server/agent-service.js';
@@ -18,18 +19,24 @@ type RunResult = { threadId: string; finalMessage: string; eventCount: number };
 const execFileAsync = promisify(execFile);
 
 class ControlledRunner {
-  private readonly completions: Array<(result: RunResult) => void> = [];
+  private readonly completions: Array<{
+    resolve: (result: RunResult) => void;
+    reject: (error: Error) => void;
+    onEvent?: (event: { type?: string; item?: { type?: string; text?: string }; thread_id?: string }) => Promise<void> | void;
+  }> = [];
   private readonly startWaiters: Array<{ count: number; resolve: () => void }> = [];
   readonly cancelled: string[] = [];
   starts = 0;
 
-  async run(): Promise<RunResult> {
+  async run(options: {
+    onEvent?: (event: { type?: string; item?: { type?: string; text?: string }; thread_id?: string }) => Promise<void> | void;
+  }): Promise<RunResult> {
     this.starts += 1;
     for (const waiter of this.startWaiters.splice(0)) {
       if (this.starts >= waiter.count) waiter.resolve();
       else this.startWaiters.push(waiter);
     }
-    return new Promise<RunResult>((resolve) => this.completions.push(resolve));
+    return new Promise<RunResult>((resolve, reject) => this.completions.push({ resolve, reject, onEvent: options.onEvent }));
   }
 
   cancel(id: string): boolean {
@@ -43,10 +50,23 @@ class ControlledRunner {
   }
 
   release(index = 0): void {
-    const resolve = this.completions[index];
-    assert.ok(resolve, `missing controlled run ${index}`);
+    const completion = this.completions[index];
+    assert.ok(completion, `missing controlled run ${index}`);
     this.completions.splice(index, 1);
-    resolve({ threadId: `thread-${index + 1}`, finalMessage: 'controlled result', eventCount: 1 });
+    completion.resolve({ threadId: `thread-${index + 1}`, finalMessage: 'controlled result', eventCount: 1 });
+  }
+
+  fail(error: Error, index = 0): void {
+    const completion = this.completions[index];
+    assert.ok(completion, `missing controlled run ${index}`);
+    this.completions.splice(index, 1);
+    completion.reject(error);
+  }
+
+  async emit(event: { type?: string; item?: { type?: string; text?: string }; thread_id?: string }, index = 0): Promise<void> {
+    const completion = this.completions[index];
+    assert.ok(completion, `missing controlled run ${index}`);
+    await completion.onEvent?.(event);
   }
 }
 
@@ -64,6 +84,19 @@ async function waitForStatus(
   assert.fail(`job ${id} did not reach ${expected}: ${JSON.stringify(store.get(id, scope))}`);
 }
 
+async function waitForNotification(
+  notifications: AgentNotification[],
+  predicate: (notification: AgentNotification) => boolean,
+): Promise<AgentNotification> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const notification = notifications.find(predicate);
+    if (notification) return notification;
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(`notification did not arrive: ${JSON.stringify(notifications)}`);
+}
+
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-agent-transitions-'));
 await execFileAsync('git', ['init'], { cwd: root });
 const store = new AgentJobStore(path.join(root, 'agent-jobs.json'));
@@ -73,12 +106,12 @@ const scope: AgentJobScope = {
   conversationId: 'transition-conversation',
   tenantId: 'transition-tenant',
 };
-const notifications: string[] = [];
+const notifications: AgentNotification[] = [];
 const service = new AgentService(
   store,
   runner as unknown as CodexRunner,
   root,
-  async (notification) => notifications.push(notification.message),
+  async (notification) => notifications.push(notification),
   new GitService(root),
   { canMutateScope: () => true },
 );
@@ -111,11 +144,41 @@ try {
   await assert.rejects(() => service.approve(approvalJob.id, scope), AgentJobConflictError);
   await assert.rejects(() => service.cancelStrict(approvalJob.id, scope), AgentJobConflictError);
 
+  const delayedJob = await service.submit({ prompt: 'delayed natural-language request', mode: 'read-only', scope });
+  assert.ok(['queued', 'running'].includes(delayedJob.status), 'delayed runner returns a queued/running job ACK immediately');
+  await runner.waitForStart(2);
+  await runner.emit({ type: 'thread.started', thread_id: 'retry-thread' });
+  await runner.emit({ type: 'turn.started' });
+  await runner.emit({ type: 'item.completed', item: { type: 'agent_message', text: 'first progress update' } });
+  await runner.emit({ type: 'item.started', item: { type: 'command_execution' } });
+  runner.release(0);
+  await waitForStatus(store, delayedJob.id, scope, 'completed');
+  await waitForNotification(notifications, (notification) => notification.job.id === delayedJob.id && notification.phase === 'completed');
+  const delayedNotifications = notifications.filter((notification) => notification.job.id === delayedJob.id);
+  assert.ok(delayedNotifications.some((notification) => notification.message.includes('실행을 시작했습니다')), 'running ACK is delivered as a same-conversation notification');
+  assert.ok(delayedNotifications.some((notification) => notification.kind === 'progress' && notification.phase === 'analysis'), 'running/progress notification is emitted for a delayed runner');
+  assert.ok(delayedNotifications.some((notification) => notification.kind === 'progress' && notification.phase === 'tools'), 'tool progress notification is emitted');
+  assert.ok(delayedNotifications.some((notification) => notification.kind === 'progress' && notification.phase === 'agent-update'), 'agent update notification is emitted');
+  assert.ok(delayedNotifications.some((notification) => notification.kind === 'result' && notification.phase === 'completed'), 'terminal completion notification is emitted');
+  assert.ok(delayedNotifications.every((notification) => notification.conversationId === scope.conversationId), 'progress and completion notifications stay in the originating conversation');
+
+  const retryJob = await service.continue(delayedJob.id, 'retry after the completed request', scope);
+  assert.ok(retryJob, 'a completed Codex thread can be retried through continue');
+  assert.equal(retryJob?.parentJobId, delayedJob.id, 'retry keeps the parent job link');
+  await runner.waitForStart(3);
+  runner.release(0);
+  await waitForStatus(store, retryJob!.id, scope, 'completed');
+  await waitForNotification(notifications, (notification) => notification.job.id === retryJob!.id && notification.phase === 'completed');
+  assert.ok(
+    notifications.some((notification) => notification.job.id === retryJob!.id && notification.kind === 'result' && notification.phase === 'completed'),
+    'retry emits its own completion notification',
+  );
+
   const cancellationJob = await service.submit({ prompt: 'cancellation race', mode: 'workspace-write', scope });
   await service.approve(cancellationJob.id, scope);
-  await runner.waitForStart(2);
+  await runner.waitForStart(4);
   const cancellations = await Promise.allSettled([
-    service.cancelStrict(cancellationJob.id, scope),
+    service.cancelStrict(cancellationJob.id, scope, { notify: true }),
     service.cancelStrict(cancellationJob.id, scope),
   ]);
   assert.equal(cancellations.filter((result) => result.status === 'fulfilled').length, 1, 'cancellation transitions once');
@@ -124,8 +187,19 @@ try {
   assert.deepEqual(runner.cancelled, [cancellationJob.id], 'running cancellation signals the runner once');
   runner.release(0);
 
-  assert.equal(notifications.filter((message) => message.includes('완료')).length, 1, 'only the completed run emits a completion notification');
-  console.log('AgentService transition tests passed: prompt bound, approval/cancel races, terminal conflicts, and runner cancellation');
+  const cancellationNotifications = notifications.filter((notification) => notification.job.id === cancellationJob.id);
+  assert.equal(cancellationNotifications.filter((notification) => notification.kind === 'cancelled').length, 1, 'cancellation emits one same-conversation cancellation notification');
+  assert.equal(cancellationNotifications.filter((notification) => notification.phase === 'completed' || notification.phase === 'failed').length, 0, 'a cancelled runner cannot emit a later terminal success/failure notification');
+
+  const failedJob = await service.submit({ prompt: 'runner failure branch', mode: 'read-only', scope });
+  await runner.waitForStart(5);
+  runner.fail(new Error('controlled runner failure'));
+  await waitForStatus(store, failedJob.id, scope, 'failed');
+  const failedNotification = await waitForNotification(notifications, (notification) => notification.job.id === failedJob.id && notification.phase === 'failed');
+  assert.equal(failedNotification?.kind, 'error', 'runner failure emits an error notification');
+  assert.equal(failedNotification?.conversationId, scope.conversationId, 'runner failure notification stays in the originating conversation');
+
+  console.log('AgentService transition tests passed: prompt bound, delayed progress, retry, approval/cancel races, terminal success/failure, and runner cancellation');
 } finally {
-  await fs.rm(root, { recursive: true, force: true });
+  await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 }
