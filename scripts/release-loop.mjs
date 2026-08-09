@@ -922,8 +922,29 @@ export async function writeState(state, statePath = statePathFromEnv()) {
   await fs.rename(tempPath, statePath);
 }
 
+const GIT_SNAPSHOT_TIMEOUT_MS = 20_000;
+
 function gitSnapshot() {
-  const run = (args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const run = (args) => {
+    try {
+      return execFileSync('git', args, {
+        cwd: root,
+        encoding: 'utf8',
+        timeout: GIT_SNAPSHOT_TIMEOUT_MS,
+        maxBuffer: 4 * 1024 * 1024,
+      }).trim();
+    } catch (error) {
+      if (error?.code === 'ETIMEDOUT' || error?.killed || error?.signal) {
+        const blocker = new Error(
+          'Git worktree inspection timed out; check for macOS FileProvider/dataless files before retrying the release loop',
+        );
+        blocker.code = 'ESOURCEIOBLOCKED';
+        blocker.cause = error;
+        throw blocker;
+      }
+      throw error;
+    }
+  };
   const porcelain = run(['status', '--porcelain']);
   return {
     commit: run(['rev-parse', 'HEAD']),
@@ -1215,7 +1236,7 @@ if (isMainModule()) {
   try {
     await runCli(process.argv.slice(2));
   } catch (error) {
-    const blocked = ['ELOOPBLOCKED', 'ELOOPACTIVE', 'ELOOPINTEGRITY', 'ETIMEDOUT'].includes(error.code);
+    const blocked = ['ELOOPBLOCKED', 'ELOOPACTIVE', 'ELOOPINTEGRITY', 'ETIMEDOUT', 'ESOURCEIOBLOCKED'].includes(error.code);
     const result = {
       status: blocked ? 'BLOCKED' : 'FAILED',
       phase: process.argv[2] ?? 'status',
