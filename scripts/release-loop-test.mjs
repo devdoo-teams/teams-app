@@ -732,6 +732,15 @@ for (const args of [['status'], ['evidence', '--file', staleEvidencePath], ['com
     /current Git commit does not match the release run/,
   );
 }
+const supersedeResult = runCli(['supersede', '--reason', 'source commit changed after the previous run']);
+assert.equal(supersedeResult.status, 0);
+assert.match(supersedeResult.stdout, /SUPERSEDED/);
+const supersededStatus = runCli(['status']);
+assert.equal(supersededStatus.status, 0);
+assert.match(supersededStatus.stdout, /SUPERSEDED/);
+const restartedResult = runCli(['start']);
+assert.equal(restartedResult.status, 0);
+assert.match(restartedResult.stdout, /MACHINE_READY/);
 
 await fs.rm(tempDir, { recursive: true, force: true });
 console.log('Release loop contract tests passed.');

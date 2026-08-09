@@ -11,6 +11,7 @@ import { runWithTimeout } from './release-gate.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const surfaces = ['portal', 'installed', 'desktop', 'mobile'];
 const phaseOrder = ['machine', 'package', 'public', ...surfaces];
+const terminalReleaseStates = new Set(['COMPLETE', 'SUPERSEDED']);
 const MAX_RASTER_BYTES = 20 * 1024 * 1024;
 const MAX_RASTER_DIMENSION = 16_384;
 const MAX_RASTER_PIXELS = 50_000_000;
@@ -1107,6 +1108,7 @@ export async function completeReleaseState(
 }
 
 function nextAction(state) {
+  if (state.status === 'SUPERSEDED') return 'START';
   return missingGates(state)[0] ?? 'COMPLETE';
 }
 
@@ -1132,7 +1134,7 @@ function jsonLog(payload) {
 async function startRun(statePath) {
   if (fsSync.existsSync(statePath)) {
     const existing = await readState(statePath);
-    if (existing.status !== 'COMPLETE') {
+    if (!terminalReleaseStates.has(existing.status)) {
       const error = new Error(`an active release run already exists: ${existing.runId}`);
       error.code = 'ELOOPACTIVE';
       throw error;
@@ -1151,6 +1153,43 @@ async function startRun(statePath) {
   });
   await writeState(state, statePath);
   jsonLog({ status: 'READY', phase: 'start', runId: state.runId, state: state.status, nextAction: nextAction(state) });
+}
+
+async function supersedeRun(statePath, reason) {
+  const state = await requireState(statePath);
+  if (state.status === 'COMPLETE') {
+    const error = new Error('a completed release run cannot be superseded');
+    error.code = 'ELOOPCOMPLETE';
+    throw error;
+  }
+  if (state.status === 'SUPERSEDED') {
+    return jsonLog({
+      status: 'READY',
+      phase: 'supersede',
+      runId: state.runId,
+      state: state.status,
+      nextAction: 'START',
+    });
+  }
+  if (typeof reason !== 'string' || reason.trim().length < 8 || reason.length > 500) {
+    throw new Error('supersede requires --reason between 8 and 500 characters');
+  }
+  const timestamp = new Date().toISOString();
+  const next = {
+    ...state,
+    status: 'SUPERSEDED',
+    updatedAt: timestamp,
+    supersededAt: timestamp,
+    supersededReason: reason.trim(),
+  };
+  await writeState(next, statePath);
+  jsonLog({
+    status: 'READY',
+    phase: 'supersede',
+    runId: next.runId,
+    state: next.status,
+    nextAction: 'START',
+  });
 }
 
 async function executePhase(phase, statePath) {
@@ -1217,21 +1256,35 @@ export async function completeRun(
 
 function parseArgs(argv) {
   const [command = 'status', ...rest] = argv;
-  const options = { command, file: undefined };
+  const options = { command, file: undefined, reason: undefined };
   for (let index = 0; index < rest.length; index += 1) {
     if (rest[index] === '--file') options.file = rest[++index];
+    else if (rest[index] === '--reason') options.reason = rest[++index];
     else throw new Error(`unknown release loop argument: ${rest[index]}`);
   }
   return options;
 }
 
 async function runCli(argv) {
-  const { command, file } = parseArgs(argv);
+  const { command, file, reason } = parseArgs(argv);
   const statePath = statePathFromEnv();
   if (command === 'start') return startRun(statePath);
+  if (command === 'supersede') return supersedeRun(statePath, reason);
   if (command === 'machine' || command === 'package' || command === 'public') return executePhase(command, statePath);
   if (command === 'status') {
     const state = await requireState(statePath);
+    if (state.status === 'SUPERSEDED') {
+      return jsonLog({
+        status: 'READY',
+        phase: 'status',
+        runId: state.runId,
+        state: state.status,
+        nextAction: 'START',
+        commit: state.shortCommit,
+        version: state.version,
+        lastFailure: state.lastFailure,
+      });
+    }
     assertCurrentGit(state);
     assertCurrentReleaseArtifacts(state);
     return jsonLog(publicResult(state));

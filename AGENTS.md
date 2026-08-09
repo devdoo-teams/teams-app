@@ -105,3 +105,4 @@ Teams 앱 변경 요청에는 별도 예외 승인이 없는 한 다음 순서�
 - 명령어 게이트 통과는 포털 업로드·설치 버전·Teams 데스크톱·모바일 사용자 확인을 대신하지 않는다. 최종 완료 상태에는 `PORTAL_UPLOAD_UNVERIFIED`, `INSTALLED_VERSION_UNVERIFIED`, `DESKTOP_UNVERIFIED`, `MOBILE_UNVERIFIED`가 남아 있지 않아야 한다.
 - 모든 버그 수정·신규 기능은 `release:loop start → machine → package → public → evidence(portal/installed/desktop/mobile) → complete` 순서로 진행한다. `.release/current.json`의 run identity와 현재 Git commit·앱 버전·ZIP SHA가 일치하지 않으면 다음 단계로 넘어가지 않는다. `installed` 증거에는 Teams 앱 정보 화면의 `installedVersion`을 반드시 기록하고, 게시 카탈로그 버전이나 Bot 왕복만으로 설치본 버전을 추정하지 않는다.
 - `release:loop complete`가 `READY`를 반환하기 전에는 Teams 완료 메시지를 보내지 않는다. 이 명령은 실제 UI 증거를 만들지 않으며, 포털 업로드·설치본·데스크톱·모바일을 직접 확인한 뒤 제공된 증거 파일만 검증한다.
+- 오래된 커밋을 가리키는 활성 run 때문에 새 릴리스를 시작할 수 없으면 상태 파일을 삭제하거나 `COMPLETE`로 바꾸지 않는다. 원인을 확인한 뒤 `npm run release:loop -- supersede --reason "..."`로 기존 run을 명시적으로 `SUPERSEDED` 처리하고, 같은 상태 경로에서 새 `start`를 실행한다. `SUPERSEDED`는 완료·배포 성공을 의미하지 않는다.
