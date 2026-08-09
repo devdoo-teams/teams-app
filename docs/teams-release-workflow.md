@@ -94,6 +94,14 @@ Core 서버 번들은 Teams SDK·Express 등 필수 런타임을 포함하고 Co
 
 화면이 잠겨 있으면 `COMMAND_ONLY` 단계는 진행하고, 네이티브 UI 단계만 해당 상태로 보류한다. 잠금 해제·비밀번호·Auth 앱 승인·파일 선택을 자동화하거나 우회하지 않는다.
 
+#### FileProvider/dataless 파일과 장시간 대기
+
+macOS FileProvider가 원본 작업공간의 파일을 placeholder 상태로 만들면 코드 오류가 아니라 로컬 바이트 접근 문제일 수 있다. 빌드 전 `package.json`, `package-lock.json`, `appPackage/manifest.json`, `src/`, `scripts/`, `types/`와 실제 ZIP의 `stat` `blocks`·플래그를 확인한다. 파일 크기는 존재하지만 `blocks=0`이고 dataless/FileProvider 플래그가 있으면 `SOURCE_IO_BLOCKED`로 기록한다.
+
+이 상태에서 `cp`, Git 객체 읽기, 빌드, 서버 시작을 파일별로 무기한 반복하지 않는다. 각 PID·경과 시간·마지막 로그를 30초 간격으로 확인하고, 두 번 연속 변화가 없으면 stale 작업으로 분리한다. 의존성 캐시 재구성·이미 로컬인 산출물 검증·공개 health 확인 같은 독립 명령어 검증은 계속할 수 있지만, `/Users/doosansmacbookpro/Documents/TeamsApp` 외의 `/tmp`·iCloud·동기화 경로·Git 객체 복구 결과를 원본으로 취급하지 않는다. 복구 임시 파일은 worktree 밖의 recoverable 경로로 이동하고 clean worktree를 다시 확인한다.
+
+FileProvider 다운로드를 기다리기 위해 Finder·새 브라우저 탭·새 로그인 세션을 만들지 않는다. 업로드는 원본에서 생성하고 SHA-256 및 내부 manifest를 확인한 최신 ZIP의 절대 경로를 직접 선택한다. 화면이 잠겨 파일 선택기가 열리지 않으면 `PORTAL_UPLOAD_UNVERIFIED`로 보류하고 잠금 해제 우회나 자격 증명 추측을 하지 않는다.
+
 ### 0.1 단일 재개 가능 릴리스 루프
 
 기능 추가와 버그 수정은 모두 아래 loop를 사용한다. `release-gate`가 기계 검증을 담당하고 `release-loop`가 동일 run의 커밋·패키지·공개 health·외부 UI 증거를 묶는다.
