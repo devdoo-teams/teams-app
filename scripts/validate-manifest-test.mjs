@@ -38,4 +38,14 @@ for (const requiredDomain of ['${{TAB_DOMAIN}}', 'token.botframework.com']) {
   );
 }
 
+{
+  const candidate = structuredClone(manifest);
+  candidate.staticTabs[0].contentUrl = 'https://${{TAB_DOMAIN}}/tabs/home';
+  assert.match(
+    validate(candidate) ?? '',
+    /trailing slash/,
+    'manifest validation rejects a Teams tab URL that redirects before the iframe can load',
+  );
+}
+
 console.log('Source manifest contract tests passed.');

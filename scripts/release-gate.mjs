@@ -48,7 +48,7 @@ export function assertPackagedManifest(manifest, expected) {
   const contentUrl = manifest.staticTabs?.[0]?.contentUrl;
   assert.equal(
     contentUrl,
-    `https://${expected.tabDomain}/tabs/home`,
+    `https://${expected.tabDomain}/tabs/home/`,
     'packaged tab content URL must use the current public tab origin',
   );
   assert.equal(
@@ -444,7 +444,7 @@ async function runPublic({ url, timeoutOverride } = {}) {
   assertPublicHealth(health, packageManifest.version);
 
   const tabDeployment = await validatePublicTabDeployment({
-    tabUrl: `${baseUrl}/tabs/home`,
+    tabUrl: `${baseUrl}/tabs/home/`,
     manifest: packageManifest,
     timeoutMs,
   });

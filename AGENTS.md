@@ -55,8 +55,10 @@ Teams 앱 변경 요청에는 별도 예외 승인이 없는 한 다음 순서�
 - 이 저장소에는 Git 원격이 구성되어 있지 않다. 원격 저장소·원격 브랜치·clone·pull·push를 전제로 설명하거나 시도하지 않으며, 사용자가 명시적으로 원격을 추가하기 전에는 로컬 커밋만 관리한다.
 - 빌드·테스트·소스 수정은 원본 작업공간에서 수행한다. `/tmp`는 일회성 로그, 격리 검증, 새 ZIP 산출물에만 사용할 수 있고 `/tmp`의 Git 이력이나 파일을 원본 상태로 보고하지 않는다. 검증된 최종 변경과 커밋은 반드시 원본 작업공간에 존재해야 한다.
 - 파일 업로드는 원본에서 생성해 검증한 최신 ZIP의 명시적 로컬 경로를 브라우저 파일 선택기에 직접 전달한다. Finder, 동기화 상태, 다운로드 대기 또는 별도 소스 복제를 업로드 선행 조건으로 만들지 않는다.
-- 릴리스 판정에는 다음 제한시간 게이트를 사용한다. `release:preflight`는 타입체크(60초), 전체 테스트(300초), 배포 환경(30초)을 순서대로 실행하고, `release:package`는 검증된 새 ZIP과 내부 매니페스트·SHA-256을 생성하며, `release:public`은 공개 health와 `/tabs/home`을 확인한다. 전부 실행할 때는 `npm run release:gate`를 사용한다.
+- 릴리스 판정에는 다음 제한시간 게이트를 사용한다. `release:preflight`는 타입체크(60초), 전체 테스트(300초), 배포 환경(30초)을 순서대로 실행하고, `release:package`는 검증된 새 ZIP과 내부 매니페스트·SHA-256을 생성하며, `release:public`은 공개 health와 `/tabs/home/`을 확인한다. 전부 실행할 때는 `npm run release:gate`를 사용한다.
 - `release:public`은 명시적 `--url` 다음 `TEAMS_PUBLIC_URL`, `PUBLIC_BASE_URL`, `.env.runtime`의 `TAB_DOMAIN`에서 공개 origin을 해석한다. `typecheck`는 런타임 패키지를 바꾸지 않는 release 전용 선언 stub을 사용하고, vendor 선언 그래프 진단은 별도 `typecheck:vendor`로 분리한다.
+- 공개 서버는 반드시 `npm start`로 실행한다. 이 명령은 존재하는 `.env.runtime`을 자동 로드한다. `node dist/server/index.js`를 직접 실행해 인증 설정을 누락하지 않으며, 재시작 직후 `/api/health`의 `environment=production`, `auth=teams-authenticated`, `userAuth=entra-sso`, `bot=teams-sdk`, `outbound=teams-sdk`를 확인한다.
+- Teams 개인 탭 `contentUrl`은 `/tabs/home/`처럼 trailing slash를 포함해야 한다. `/tabs/home`의 301 리디렉션에 의존하면 Teams Web/Desktop iframe이 빈 화면에 머물 수 있으므로 매니페스트 검증에서 이를 차단한다.
 - 게이트가 명령어 timeout이나 비정상 종료를 만나면 `BLOCKED`로 중단한다. 실패한 하위 프로세스 그룹은 정리하지만, 이미 실행 중인 공개 Teams 서버나 Dev Tunnel은 임의로 종료하지 않는다. 원인을 고친 뒤 같은 게이트를 다시 실행한다.
 - timeout 회귀 테스트는 실제 저장소에서 짧은 `preflight`를 강제 종료하지 않는다. 빌드 중간 종료가 `dist/client`를 비울 수 있으므로 `runWithTimeout`과 실패 보고 포맷을 무해한 fixture로 검증한다.
 - 클라이언트 빌드는 `dist/client`를 먼저 지우지 않고 형제 임시 디렉터리에서 빌드·후처리한 뒤 성공할 때만 원자적으로 교체한다. 따라서 빌드 실패가 공개 탭을 빈 404 상태로 만들면 안 된다. 현재 CopilotKit v2 대형 번들의 source map 생성은 Node 24 + esbuild API에서 무기한 대기하므로 운영 번들은 source map을 끈다.

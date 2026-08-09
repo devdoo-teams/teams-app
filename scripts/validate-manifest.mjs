@@ -27,6 +27,11 @@ export function validateManifest(manifest, packageJson, { iconExists } = {}) {
     return 'Manifest must declare a personal home static tab.';
   }
 
+  const homeTab = manifest.staticTabs.find((tab) => tab.entityId === 'home');
+  if (!homeTab?.contentUrl?.endsWith('/')) {
+    return 'Manifest home tab contentUrl must include a trailing slash so the Teams iframe does not depend on an HTTP redirect.';
+  }
+
   if (!manifest.devicePermissions?.includes('geolocation')) {
     return 'Manifest must declare geolocation device permission.';
   }

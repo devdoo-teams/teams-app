@@ -26,7 +26,7 @@ const expected = {
 const validManifest = {
   version: expected.version,
   id: expected.appId,
-  staticTabs: [{ contentUrl: `https://${expected.tabDomain}/tabs/home` }],
+  staticTabs: [{ contentUrl: `https://${expected.tabDomain}/tabs/home/` }],
   validDomains: [expected.tabDomain, 'token.botframework.com'],
   devicePermissions: ['geolocation'],
   webApplicationInfo: {
@@ -89,7 +89,7 @@ assert.throws(
 );
 const validTabResponse = {
   status: 200,
-  url: `https://${expected.tabDomain}/tabs/home`,
+  url: `https://${expected.tabDomain}/tabs/home/`,
   headers: { get: (name) => name === 'content-type' ? 'text/html; charset=utf-8' : null },
 };
 const validBundle = Buffer.from('console.log("release build identity");');
@@ -100,7 +100,7 @@ const validTab = assertPublicTab(
   validManifest,
 );
 assert.equal(validTab.buildId, validBuildId);
-assert.equal(validTab.scriptUrl, `https://${expected.tabDomain}/tabs/assets/main.js?v=${validBuildId}`);
+assert.equal(validTab.scriptUrl, `https://${expected.tabDomain}/tabs/home/assets/main.js?v=${validBuildId}`);
 const validAssetResponse = {
   status: 200,
   url: validTab.scriptUrl,

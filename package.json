@@ -1,6 +1,6 @@
 {
   "name": "teams-sdk-mvp",
-  "version": "1.0.16",
+  "version": "1.0.17",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,7 +9,7 @@
     "build:server": "node scripts/build-server.mjs",
     "build:client": "node scripts/build-client.mjs",
     "build:mcp": "node scripts/build-mcp-widget.mjs",
-    "start": "node dist/server/index.js",
+    "start": "node --env-file-if-exists=.env.runtime dist/server/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.release.json",
     "test:typecheck-boundary": "node scripts/typecheck-boundary-test.mjs",
     "typecheck:vendor": "tsc --noEmit -p tsconfig.json",

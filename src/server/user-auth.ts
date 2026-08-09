@@ -44,6 +44,17 @@ function includesRequiredScope(rawScopes: string, requiredScope: string): boolea
   return rawScopes.split(/\s+/).includes(requiredScope);
 }
 
+function unverifiedJwtDiagnostic(token: string): string {
+  try {
+    const payload = asRecord(JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8')));
+    const aud = nonEmptyClaim(payload?.aud)?.slice(0, 256);
+    const scp = nonEmptyClaim(payload?.scp)?.slice(0, 256);
+    return [aud ? `aud=${aud}` : '', scp ? `scp=${scp}` : ''].filter(Boolean).join(' ');
+  } catch {
+    return '';
+  }
+}
+
 export function parseAcceptedAudiences(value: string | undefined): string[] {
   const audiences = (value ?? '')
     .split(',')
@@ -135,7 +146,10 @@ export function createUserAuthMiddleware(options: UserAuthOptions) {
     }
 
     if (!claims) {
-      logger.warn(`[WARN] user auth rejected (${request.method} ${request.originalUrl}): invalid bearer token`);
+      const diagnostic = unverifiedJwtDiagnostic(token);
+      logger.warn(
+        `[WARN] user auth rejected (${request.method} ${request.originalUrl}): invalid bearer token${diagnostic ? ` (${diagnostic})` : ''}`,
+      );
       response.status(401).json({ error: 'Invalid bearer token' });
       return;
     }

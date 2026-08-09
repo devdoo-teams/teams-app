@@ -154,7 +154,16 @@ const missingAudienceConfig = await invokeMiddleware({
 });
 assert.equal(missingAudienceConfig.statusCode, 401, 'auth fails closed when accepted audiences are not configured');
 
-const rawToken = 'header.very-sensitive-payload.signature';
+const rawToken = [
+  'eyJhbGciOiJub25lIn0',
+  Buffer.from(JSON.stringify({
+    aud: 'api://unexpected-teams-audience',
+    scp: 'access_as_user profile',
+    tid: 'tenant-a',
+    oid: 'sensitive-user-identifier',
+  })).toString('base64url'),
+  'signature',
+].join('.');
 const invalidLogging = await invokeMiddleware({
   token: rawToken,
   claims: null,
@@ -162,5 +171,17 @@ const invalidLogging = await invokeMiddleware({
 assert.equal(invalidLogging.statusCode, 401, 'invalid validator result is rejected');
 assert(invalidLogging.warnings.length > 0, 'invalid auth emits a warning');
 assert(invalidLogging.warnings.every((line) => !line.includes(rawToken)), 'warnings never log the raw bearer token');
+assert(
+  invalidLogging.warnings.some((line) => line.includes('aud=api://unexpected-teams-audience')),
+  'invalid auth logs only the unverified audience needed to diagnose Teams SSO configuration',
+);
+assert(
+  invalidLogging.warnings.some((line) => line.includes('scp=access_as_user profile')),
+  'invalid auth logs only the delegated scopes needed to diagnose Teams SSO configuration',
+);
+assert(
+  invalidLogging.warnings.every((line) => !line.includes('sensitive-user-identifier')),
+  'invalid auth diagnostics never log user identifiers',
+);
 
 console.log('PASS: user auth hardening rejects wrong tenant/scope/audience/app claims, derives a stable requester key, and never logs raw tokens');

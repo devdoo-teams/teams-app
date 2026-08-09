@@ -36,7 +36,7 @@
 ```bash
 npm run release:preflight   # typecheck 60s, test 300s, deployment 30s
 npm run release:package     # 새 ZIP, 내부 manifest, SHA-256
-npm run release:public      # 공개 /api/health와 /tabs/home
+npm run release:public      # 공개 /api/health와 /tabs/home/
 # 또는 위 세 단계를 순서대로 한 번에 실행
 npm run release:gate
 ```
@@ -160,13 +160,10 @@ devtunnel show <tunnel-id> --json
 로컬 테스트 프로세스가 공개 터널 포트를 점유한 채 남아 있지 않은지 확인한다. 공개 프로세스는 실제 자격 증명을 사용하고 다음 우회 설정을 사용하지 않아야 한다.
 
 ```bash
-set -a
-source .env.runtime
-set +a
-unset TEAMS_SKIP_AUTH TEAMS_SKIP_OUTBOUND
-export NODE_ENV=production TEAMS_USE_SDK=true PORT=3978
-npm run start
+npm start
 ```
+
+`npm start`는 존재하는 `.env.runtime`을 자동으로 로드한다. 운영 서버를 `node dist/server/index.js`로 직접 실행하면 인증 환경이 누락될 수 있으므로 사용하지 않는다. 재시작 직후 아래 공개 health 값이 모두 맞는지 확인한 다음 Teams UI 검증을 시작한다.
 
 공개 URL의 `/api/health`에서 다음을 직접 확인한다.
 
