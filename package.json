@@ -1,6 +1,6 @@
 {
   "name": "teams-sdk-mvp",
-  "version": "1.0.24",
+  "version": "1.0.25",
   "private": true,
   "type": "module",
   "scripts": {
@@ -18,7 +18,7 @@
     "test:typecheck-boundary": "node scripts/typecheck-boundary-test.mjs",
     "typecheck:vendor": "tsc --noEmit -p tsconfig.json",
     "check:types": "npm run typecheck",
-    "check:deployment": "node scripts/validate-deployment-env.mjs",
+    "check:deployment": "node --env-file-if-exists=.env.runtime scripts/validate-deployment-env.mjs",
     "test:deployment-env": "node scripts/deployment-env-test.mjs",
     "test:manifest": "node scripts/validate-manifest-test.mjs",
     "test:package-determinism": "node scripts/package-app-determinism-test.mjs",
@@ -27,7 +27,7 @@
     "test:core": "node scripts/core-test-runner.mjs",
     "test:optional": "npm run test:openai-engine && npm run test:local-engine && npm run test:mcp-response-mode && npm run test:mcp-direct-factory",
     "validate:manifest": "node scripts/validate-manifest.mjs",
-    "package:app": "node scripts/package-app.mjs",
+    "package:app": "node --env-file-if-exists=.env.runtime scripts/package-app.mjs",
     "release:preflight": "node scripts/release-gate.mjs preflight",
     "release:package": "node scripts/release-gate.mjs package",
     "release:public": "node scripts/release-gate.mjs public",

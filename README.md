@@ -138,7 +138,7 @@ Teams 탭이 초기화되면 TeamsJS `authentication.getAuthToken()`으로 받�
 
 실제 Teams 등록 후 발급받은 값으로 패키지를 생성합니다.
 
-이 릴리스 후보의 소스 package와 Teams manifest 버전은 `1.0.24`으로 고정되어 있으며 `npm run validate:manifest`가 두 값을 함께 검사합니다. 실제 배포 환경값이 없는 상태에서는 패키지를 업로드하거나 placeholder를 운영 자격 증명으로 간주하지 않습니다.
+이 릴리스 후보의 소스 package와 Teams manifest 버전은 `1.0.25`으로 고정되어 있으며 `npm run validate:manifest`가 두 값을 함께 검사합니다. 실제 배포 환경값이 없는 상태에서는 패키지를 업로드하거나 placeholder를 운영 자격 증명으로 간주하지 않습니다.
 
 운영 패키지를 만들기 전에 배포 환경 사전검사를 실행합니다. 이 검사는 검증용 placeholder, 로컬 호스트, 잘못된 GUID를 차단합니다. `BOT_ID`는 메시징용 Teams/Bot 등록 ID이며, 봇과 탭을 함께 사용하는 Teams SDK 앱에서는 `APPLICATION_ID_URI`가 Microsoft의 결합 봇+탭 계약인 `api://<TAB_DOMAIN>/botid-<BOT_CLIENT_ID>`여야 합니다. `webApplicationInfo.id`는 별도 인증 앱일 수 있지만 resource URI 계약은 관찰된 봇 리소스와 일치해야 합니다.
 
@@ -159,7 +159,7 @@ npm run package:app
 
 생성된 `appPackage/build/teams-sdk-mvp.zip`을 Teams Developer Portal 또는 Teams Admin Center에 업로드합니다.
 
-ZIP을 새로 만든 뒤에는 내부 `manifest.json`의 버전 `1.0.24`, `devicePermissions: ["geolocation"]`, 탭 호스트와 `token.botframework.com`을 포함한 valid domain, 해석된 ID/URI를 확인하고 SHA-256을 기록합니다. 이전 ZIP을 재사용하지 않습니다.
+ZIP을 새로 만든 뒤에는 내부 `manifest.json`의 버전 `1.0.25`, `devicePermissions: ["geolocation"]`, 탭 호스트와 `token.botframework.com`을 포함한 valid domain, 해석된 ID/URI를 확인하고 SHA-256을 기록합니다. 이전 ZIP을 재사용하지 않습니다.
 
 `APPLICATION_ID_URI`는 Microsoft Entra 앱 등록의 `Expose an API`에 표시되는 실제 Application ID URI를 사용해야 합니다. 이 값은 manifest의 `webApplicationInfo.resource`로 들어갑니다.
 
