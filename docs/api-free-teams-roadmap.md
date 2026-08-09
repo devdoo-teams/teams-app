@@ -29,9 +29,9 @@ MCP는 Teams 모바일 화면 표준이 아니다. Microsoft Teams SDK의 MCP cl
 - CopilotKit UI/runtime, OpenAI-compatible API, 로컬 모델, MCP Apps 위젯은 API·인증·서버가 준비될 때까지 구현·배포·완료 판정에 사용하지 않는다.
 - Teams 모바일 화면은 개인 웹 탭(TeamsJS + React WebView)으로 만들고, Bot 채팅은 Adaptive Cards 1.2 subset + 텍스트 fallback으로 만든다. Microsoft 공식 문서도 모바일 Adaptive Cards의 기준을 1.2로 안내한다.
 - 카드에는 작은 요약과 실제 서버 action만 넣고, 복잡한 입력·목록·위치·업무 CRUD는 탭으로 보낸다. 모든 카드에는 탭 열기 링크를 제공한다.
-- Codex/GHCP CLI는 모델 provider가 아니라 별도 작업 실행 adapter다. CLI가 없거나 로그인되지 않았으면 실패/사용 불가를 표시하며 성공을 추측하지 않는다.
+- Codex/GHCP CLI는 모델 provider가 아니라 별도 작업 실행 adapter다. Codex는 `codex login status`와 실제 `codex exec` 최종 `agent_message`를 기준으로 판정한다. GHCP는 공식 GitHub Copilot CLI 실행 파일인 `copilot`을 기본으로 사용하며, `copilot --help`만으로 로그인·라이선스·조직 정책을 성공으로 추정하지 않는다. 공식 CLI는 `copilot login`이라는 대화형 흐름을 제공하므로, 자동 health probe는 브라우저·디바이스 로그인을 시작하지 않고 `unknown`을 유지한다. `gh copilot`은 명시적으로 설정된 레거시 호환 경로에서만 사용한다.
 
-벤치마킹 기준은 Microsoft 공식 React 기본 탭 샘플, Teams SDK TypeScript quickstart, Teams Samples의 `tab-ui-templates`, `Device permissions`, `Adaptive Card Actions Bot`, `Sequential workflow adaptive cards`, `Deep Link consuming Subentity ID`로 제한한다. MCP Apps나 CopilotKit의 UI를 Teams 모바일 호환성의 근거로 사용하지 않는다.
+벤치마킹 기준은 Microsoft 공식 React 기본 탭 샘플, Teams SDK TypeScript quickstart, Teams Samples의 `tab-ui-templates`, `Device permissions`, `Adaptive Card Actions Bot`, `Sequential workflow adaptive cards`, `Deep Link consuming Subentity ID`로 제한한다. MCP Apps 공식 저장소는 UI가 MCP 서버가 제공하는 리소스로 호환 host의 sandbox iframe에 렌더링된다고 설명하고, 지원 클라이언트가 host마다 다르며 Teams 모바일 host 구현을 제공하지 않는다. 따라서 MCP Apps나 CopilotKit의 UI를 Teams 모바일 호환성의 근거로 사용하지 않고, 나중에 실제 MCP 서버·host·인증 계약이 확인된 경우에만 서버 adapter로 검토한다.
 
 공식 기준 링크:
 
@@ -55,7 +55,7 @@ MCP는 Teams 모바일 화면 표준이 아니다. Microsoft Teams SDK의 MCP cl
 5. `Codex 작업`: read-only 실행 → 진행 → 실제 최종 `agent_message` 결과 → 실패/취소. write는 승인 후에만 실행한다.
 6. `Git 경계`: 작업 소유 경로만 commit, 실제 hash 없는 결과는 오류 카드로 표시한다.
 7. `협업`: follow/unfollow, 채널 연결, 알림 저장을 각각 독립된 mutation으로 추가한다.
-8. `선택 provider`: Core와 모바일 전수 검증이 끝난 뒤에만 CopilotKit/OpenAI/MCP adapter를 별도 버전·feature flag로 실험한다.
+8. `선택 provider`: Core와 모바일 전수 검증이 끝난 뒤에만 CopilotKit/OpenAI/MCP adapter를 별도 버전·feature flag로 실험한다. API key, 모델 endpoint 또는 호환 host가 없으면 이 단계는 구현하지 않고 `N/A`로 남긴다.
 
 현재 구현은 1~6의 서버·탭·카드 계약과 명령어 테스트가 존재하지만, 실제 동일 릴리스의 포털·설치본·데스크톱·모바일 스크린샷 증거가 채워지기 전에는 기능 완성으로 판정하지 않는다. WorkItemPanel·CollaborationPanel·위치 권한·응답 모드의 각 성공/실패/권한 분기는 별도 매트릭스 행으로 추가한다.
 

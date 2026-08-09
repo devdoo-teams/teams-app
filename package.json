@@ -75,11 +75,14 @@
     "test:client-work-item-load": "tsx scripts/client-work-item-load-test.ts",
     "test:local-auth": "tsx scripts/local-auth-test.ts",
     "test:weather-service": "tsx scripts/weather-service-test.ts",
+    "test:optional:copilotkit": "npm run test:copilot-item-seeding-failure",
+    "test:optional:runtime": "node scripts/runtime-test.mjs",
     "test:mcp-response-mode": "tsx scripts/mcp-response-mode-test.ts",
     "test:mcp-direct-factory": "tsx scripts/mcp-direct-factory-test.ts",
     "check": "npm run build:core && npm run validate:manifest",
     "test:runtime": "node scripts/runtime-test.mjs",
-    "test": "npm run test:typecheck-boundary && npm run typecheck && npm run check && npm run test:deployment-env && npm run test:manifest && npm run test:package-determinism && npm run test:build-client-atomic && npm run test:release-gate && npm run test:release-loop && npm run build && npm run test:troubleshooting && npm run test:atomic-stores && npm run test:agent-job-hardening && npm run test:agent-authorization && npm run test:codex-runner-security && npm run test:genui-action-hardening && npm run test:genui-redaction && npm run test:genui-actions && npm run test:item-store-hardening && npm run test:item-store-ownership && npm run test:copilot-item-seeding-failure && npm run test:process-lease-hardening && npm run test:agent-transitions && npm run test:work-item-parity && npm run test:collaboration-parity && npm run test:genui-contract && npm run test:teams-tab-link && npm run test:channels-shadow && npm run test:response-mode-store && npm run test:deterministic-engine && npm run test:openai-engine && npm run test:local-engine && npm run test:response-mode-api && npm run test:client-auth && npm run test:user-auth-hardening && npm run test:auth-startup-gate && npm run test:operator-allowlist && npm run test:client-location && npm run test:client-bootstrap && npm run test:client-refresh-recovery && npm run test:client-genui-adapter && npm run test:client-response-mode && npm run test:local-auth && npm run test:weather-service && npm run test:mcp-response-mode && npm run test:mcp-direct-factory && npm run test:runtime"
+    "test:api-free": "node scripts/api-free-test-runner.mjs",
+    "test": "npm run test:api-free"
   },
   "dependencies": {
     "@copilotkit/channels-teams": "0.7.3",

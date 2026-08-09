@@ -76,6 +76,11 @@ export function createLatestWorkItemLoadController(): {
   };
 }
 
+/** Keep failed comment input available for a retry; only a confirmed mutation clears it. */
+export function shouldClearWorkItemComment(mutationSucceeded: boolean): boolean {
+  return mutationSucceeded;
+}
+
 async function workFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set('x-conversation-id', WORK_CONVERSATION_ID);
@@ -175,7 +180,7 @@ export function WorkItemPanel() {
     }
   }
 
-  async function mutate(path: string, init: RequestInit, busyKey: string): Promise<void> {
+  async function mutate(path: string, init: RequestInit, busyKey: string): Promise<boolean> {
     setBusy(busyKey);
     setError('');
     try {
@@ -183,8 +188,10 @@ export function WorkItemPanel() {
       const body = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(body.error || '업무 항목을 변경하지 못했습니다.');
       await loadItems();
+      return true;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '업무 항목을 변경하지 못했습니다.');
+      return false;
     } finally {
       setBusy('');
     }
@@ -205,11 +212,11 @@ export function WorkItemPanel() {
   async function addComment(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (!selected || !comment.trim()) return;
-    await mutate('/api/work-items/' + encodeURIComponent(selected.id) + '/comments', {
+    const succeeded = await mutate('/api/work-items/' + encodeURIComponent(selected.id) + '/comments', {
       method: 'POST',
       body: JSON.stringify({ mutationKey: nextMutationKey('comment'), body: comment.trim() }),
     }, 'comment:' + selected.id);
-    setComment('');
+    if (shouldClearWorkItemComment(succeeded)) setComment('');
   }
 
   return (
@@ -279,8 +286,8 @@ export function WorkItemPanel() {
                   <select aria-label={item.title + ' 상태'} disabled={Boolean(busy)} onChange={(event) => void mutate(itemPath + '/status', { method: 'PATCH', body: JSON.stringify({ mutationKey: nextMutationKey('status'), status: event.target.value }) }, 'status:' + item.id)} value={item.status}>
                     {statuses.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                   </select>
-                  <button className="toggle" disabled={busy === 'assign:' + item.id} onClick={() => void mutate(itemPath + '/assignee', { method: 'PATCH', body: JSON.stringify({ mutationKey: nextMutationKey('assign'), assigneeId: 'self' }) }, 'assign:' + item.id)} type="button">나에게 할당</button>
-                  <button className="toggle" disabled={busy === 'watch:' + item.id} onClick={() => void mutate(itemPath + '/watch' + (item.watching ? '?mutationKey=' + encodeURIComponent(nextMutationKey('unwatch')) : ''), { method: item.watching ? 'DELETE' : 'POST', body: item.watching ? undefined : JSON.stringify({ mutationKey: nextMutationKey('watch') }) }, 'watch:' + item.id)} type="button">{item.watching ? 'watch 해제' : 'watch'}</button>
+                  <button className="toggle" disabled={Boolean(busy)} onClick={() => void mutate(itemPath + '/assignee', { method: 'PATCH', body: JSON.stringify({ mutationKey: nextMutationKey('assign'), assigneeId: 'self' }) }, 'assign:' + item.id)} type="button">나에게 할당</button>
+                  <button className="toggle" disabled={Boolean(busy)} onClick={() => void mutate(itemPath + '/watch' + (item.watching ? '?mutationKey=' + encodeURIComponent(nextMutationKey('unwatch')) : ''), { method: item.watching ? 'DELETE' : 'POST', body: item.watching ? undefined : JSON.stringify({ mutationKey: nextMutationKey('watch') }) }, 'watch:' + item.id)} type="button">{item.watching ? 'watch 해제' : 'watch'}</button>
                   <a className="work-item-link" href={item.deepLink.href}>탭에서 열기</a>
                 </div>
                 {selectedItem && (

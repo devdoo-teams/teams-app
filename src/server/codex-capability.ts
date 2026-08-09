@@ -152,6 +152,10 @@ function ghcpCapability(helpResult: CliCommandResult, authResult?: CliCommandRes
   return capabilityAfterLoginProbe(authResult, 'present');
 }
 
+function isGitHubCli(command: string): boolean {
+  return command === 'gh' || command.endsWith('/gh') || command.endsWith('\\gh.exe');
+}
+
 export function normalizeCliCapability(value: unknown): CliCapability {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return unknown();
   const candidate = value as Record<string, unknown>;
@@ -181,17 +185,30 @@ export async function probeCliCapabilities(options: ProbeCliCapabilitiesOptions 
     environment.CODEX_BIN?.trim() || 'codex',
     environment.CODEX_SCRIPT?.trim() ? [environment.CODEX_SCRIPT.trim()] : [],
   );
-  const ghcpCommand = normalizedSpec(options.ghcpCommand, environment.GHCP_BIN?.trim() || 'gh');
+  const configuredGhcpCommand = environment.GHCP_BIN?.trim() || '';
+  const ghcpCommand = options.ghcpCommand
+    ? normalizedSpec(options.ghcpCommand, 'copilot')
+    : normalizedSpec(
+      undefined,
+      configuredGhcpCommand || 'copilot',
+      isGitHubCli(configuredGhcpCommand) ? ['copilot'] : [],
+    );
   const timeoutMs = normalizedTimeout(options.timeoutMs);
   const runner = options.runCommand ?? runCommand;
 
   const [codexResult, ghcpHelpResult] = await Promise.all([
     runner(codexCommand.command, [...(codexCommand.args ?? []), 'login', 'status'], timeoutMs),
-    runner(ghcpCommand.command, [...(ghcpCommand.args ?? []), 'copilot', '--help'], timeoutMs),
+    runner(ghcpCommand.command, [...(ghcpCommand.args ?? []), '--help'], timeoutMs),
   ]);
 
-  const ghcpAuthResult = ghcpHelpResult.outcome === 'success'
-    ? await runner(ghcpCommand.command, [...(ghcpCommand.args ?? []), 'auth', 'status', '--hostname', 'github.com'], timeoutMs)
+  // The official `copilot` CLI exposes an interactive `copilot login` flow,
+  // not a non-interactive auth-status command. Do not start a browser/device
+  // login from a health probe and do not infer authentication from `--help`.
+  // Keep the legacy `gh copilot` extension as an explicit compatibility path;
+  // its `gh auth status` check is only valid for that explicitly selected
+  // executable and never changes the official default.
+  const ghcpAuthResult = ghcpHelpResult.outcome === 'success' && isGitHubCli(ghcpCommand.command)
+    ? await runner(ghcpCommand.command, ['auth', 'status', '--hostname', 'github.com'], timeoutMs)
     : undefined;
 
   return {

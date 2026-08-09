@@ -23,7 +23,7 @@ registerHooks({
   },
 });
 
-const { createLatestWorkItemLoadController } = await import('../src/client/WorkItemPanel.js');
+const { createLatestWorkItemLoadController, shouldClearWorkItemComment } = await import('../src/client/WorkItemPanel.js');
 
 const controller = createLatestWorkItemLoadController();
 const first = controller.begin();
@@ -35,5 +35,8 @@ assert.equal(second.commit(() => undefined), true, 'the newest work-item respons
 controller.dispose();
 assert.equal(second.signal.aborted, true, 'disposing the panel aborts the active request');
 assert.equal(second.commit(() => undefined), false, 'a disposed panel cannot commit a late response');
+
+assert.equal(shouldClearWorkItemComment(true), true, 'confirmed comment mutation clears the input');
+assert.equal(shouldClearWorkItemComment(false), false, 'failed comment mutation preserves the input for retry');
 
 console.log('Client work-item load tests passed');

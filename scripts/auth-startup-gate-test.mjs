@@ -34,6 +34,8 @@ async function expectStartupFailure(label, overrides, expectedOutput) {
       NODE_ENV: 'production',
       PORT: String(await freePort()),
       ITEM_STORE_PATH: path.join(tempRoot, 'items.json'),
+      WORK_ITEM_STORE_PATH: path.join(tempRoot, 'work-items.json'),
+      COLLABORATION_STORE_PATH: path.join(tempRoot, 'collaboration.json'),
       AGENT_JOB_STORE_PATH: path.join(tempRoot, 'agent-jobs.json'),
       GENUI_ACTION_STORE_PATH: path.join(tempRoot, 'genui-actions.json'),
       RESPONSE_MODE_STORE_PATH: path.join(tempRoot, 'response-modes.json'),

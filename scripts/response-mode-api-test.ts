@@ -175,6 +175,8 @@ async function main(): Promise<void> {
       NODE_ENV: 'development',
       PORT: String(port),
       ITEM_STORE_PATH: join(dataRoot, 'items.json'),
+      WORK_ITEM_STORE_PATH: join(dataRoot, 'work-items.json'),
+      COLLABORATION_STORE_PATH: join(dataRoot, 'collaboration.json'),
       AGENT_JOB_STORE_PATH: join(dataRoot, 'agent-jobs.json'),
       GENUI_ACTION_STORE_PATH: join(dataRoot, 'genui-actions.json'),
       RESPONSE_MODE_STORE_PATH: join(dataRoot, 'response-modes.json'),

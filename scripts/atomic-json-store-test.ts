@@ -151,7 +151,11 @@ try {
   await queueStore.create({ prompt: 'recovered queued write', mode: 'read-only', scope });
   const restartedQueueStore = new AgentJobStore(queueFile);
   await restartedQueueStore.initialize();
-  assert.equal(restartedQueueStore.list(scope, 10).length, 2, 'AgentJobStore queue recovers after rejecting one write');
+  assert.equal(
+    restartedQueueStore.list(scope, 10).length,
+    1,
+    'AgentJobStore queue recovers after rejecting one write without retaining the failed mutation',
+  );
   await assertPrivateStore(queueFile);
 
   const grantFile = path.join(directory, 'genui-actions.json');

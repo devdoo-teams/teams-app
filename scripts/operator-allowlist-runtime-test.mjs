@@ -101,6 +101,8 @@ async function startServer(extraEnv = {}, options = {}) {
       NODE_ENV: 'development',
       PORT: String(port),
       ITEM_STORE_PATH: itemStorePath,
+      WORK_ITEM_STORE_PATH: path.join(tempRoot, 'work-items.json'),
+      COLLABORATION_STORE_PATH: path.join(tempRoot, 'collaboration.json'),
       AGENT_JOB_STORE_PATH: agentJobStorePath,
       GENUI_ACTION_STORE_PATH: path.join(tempRoot, 'genui-actions.json'),
       RESPONSE_MODE_STORE_PATH: path.join(tempRoot, 'response-modes.json'),

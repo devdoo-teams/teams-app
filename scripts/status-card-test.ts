@@ -24,7 +24,7 @@ function result(outcome: CliCommandResult['outcome'], output = ''): CliCommandRe
 
 const available = await probeCliCapabilities({
   codexCommand: { command: 'codex' },
-  ghcpCommand: { command: 'gh' },
+  ghcpCommand: { command: 'gh', args: ['copilot'] },
   runCommand: async (_command, args) => {
     if (args[0] === 'login') return result('success', 'Logged in');
     if (args[0] === 'copilot') return result('success', 'GitHub Copilot CLI');
@@ -39,12 +39,41 @@ assert.equal(available.ghcp.state, 'available');
 assert.equal(available.ghcp.executable, 'present');
 assert.equal(available.ghcp.login, 'authenticated');
 
+const officialGhcp = await probeCliCapabilities({
+  codexCommand: { command: 'codex' },
+  ghcpCommand: { command: 'copilot' },
+  runCommand: async (command, args) => {
+    if (command === 'codex' && args[0] === 'login') return result('success', 'Logged in');
+    if (command === 'copilot' && args[0] === '--help') return result('success', 'GitHub Copilot CLI');
+    return result('error', `unexpected command: ${command} ${args.join(' ')}`);
+  },
+});
+assert.equal(officialGhcp.ghcp.state, 'unknown', 'official Copilot CLI help must not pretend login is verified');
+assert.equal(officialGhcp.ghcp.executable, 'present');
+assert.equal(officialGhcp.ghcp.login, 'unknown');
+
+let defaultGhcpCommand = '';
+let defaultGhcpArgs: readonly string[] = [];
+await probeCliCapabilities({
+  codexCommand: { command: 'codex' },
+  runCommand: async (command, args) => {
+    if (command === 'copilot') {
+      defaultGhcpCommand = command;
+      defaultGhcpArgs = args;
+      return result('success', 'GitHub Copilot CLI');
+    }
+    return result('success', 'Logged in');
+  },
+});
+assert.equal(defaultGhcpCommand, 'copilot', 'GHCP defaults to the official executable');
+assert.deepEqual(defaultGhcpArgs, ['--help'], 'GHCP probe uses the official help command');
+
 const unavailable = await probeCliCapabilities({
   codexCommand: { command: 'codex' },
-  ghcpCommand: { command: 'gh' },
-  runCommand: async (_command, args) => {
+  ghcpCommand: { command: 'copilot' },
+  runCommand: async (command, args) => {
     if (args[0] === 'login') return result('missing');
-    if (args[0] === 'copilot') return result('exit', 'unknown command copilot');
+    if (command === 'copilot' && args[0] === '--help') return result('missing');
     return result('error');
   },
 });

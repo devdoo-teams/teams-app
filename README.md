@@ -25,13 +25,9 @@ TypeScript + React + Express + Microsoft Teams SDK 기반의 내부용 Teams 앱
 - Teams SDK `install.add` 설치 이벤트 welcome message와 명령 안내
 - 런타임 상태 패널과 서버 health 확인
 - 위치 권한 기반 날씨 위젯과 `날씨`/`weather` Bot 명령
-- CopilotKit v2 `CopilotChat` 기반 Teams 탭 업무 도우미
-- AG-UI 스트리밍 에이전트와 `useAgentContext` 기반 업무·날씨 컨텍스트 전달
-- CopilotKit `useRenderTool` 기반 업무 현황·날씨·workspace-write 승인 카드
-- `POST /api/copilotkit/agent/default/run` CopilotKit REST/SSE 런타임
-- OpenAI-compatible Chat Completions 기반 GenAI 에이전트와 tool-calling
-- v1.0.7 응답 엔진 선택: 결정형, OpenAI, 로컬/사내 OpenAI-compatible provider
-- Teams Bot Adaptive Card, Teams 탭 CopilotKit, MCP Apps가 공유하는 `GenUiEnvelopeV1` 응답 계약
+- 선택 기능: CopilotKit v2/AG-UI 업무 도우미는 `TEAMS_OPTIONAL_RUNTIME=true`에서만 로드되며 Core 기본 빌드에 포함되지 않음
+- 선택 기능: OpenAI-compatible Chat Completions, 로컬/사내 provider, MCP Apps adapter는 별도 설정·검증 없이는 사용하지 않음
+- Core UI: Teams Bot Adaptive Card와 React 개인 탭이 공유하는 결정형 `GenUiEnvelopeV1` 계약
 - Teams 모바일 HTML5 Geolocation 위치 조회 및 구형 호스트용 TeamsJS 위치 API fallback
 - Teams 앱 manifest `devicePermissions: ["geolocation"]` 선언
 - 환경 템플릿 기반 Teams manifest
@@ -118,11 +114,15 @@ cancel <작업 ID>
 npm test
 ```
 
-`npm run test:runtime`만 실행하면 이미 빌드된 서버를 기준으로 런타임 테스트를 반복할 수 있습니다. 테스트는 로컬 인증 우회 흐름, 업무 CRUD, Bot 명령, 설치 welcome message, Teams SDK Activity 라우팅, Codex thread 재개·취소·승인·Git commit·outbox 전달과 production bearer token 거부 흐름을 모두 확인합니다.
+`npm test`는 `npm run test:api-free`의 별칭이며 OpenAI API, 로컬 모델 endpoint, MCP host, CopilotKit 초기화를 요구하지 않습니다. 이 기본 명령이 Teams Core의 소스·패키지·서버 경계를 검증합니다.
 
-`npm test`에는 Task 0–7의 저장소 hardening, 결정형/OpenAI/local provider, response-mode 저장소·API, Teams 탭 selector, MCP GenUI, 기존 CopilotKit·Teams·ACL 런타임 검증이 모두 포함됩니다. 릴리스 assertions는 무키 provider 상태, 결정형 기본값, 응답 모드 인증 경계, MCP/Teams/CopilotKit의 공통 GenUI 계약, v1.0.15 런타임 버전을 확인합니다.
+`npm run test:optional`은 명시적으로 선택한 OpenAI/local/MCP provider 계약만 검사하고, `npm run test:optional:runtime`과 `npm run test:optional:copilotkit`은 별도 실험 경로입니다. 이 선택 경로의 실패·지연·미설정은 Core 릴리스 실패로 전파하지 않습니다.
 
-CopilotKit 런타임 검증은 `/api/copilotkit/info` 검색, 업무 현황·날씨 tool event, Codex 진행 스트림, workspace-write 승인 경계와 승인 카드 취소까지 포함합니다. Teams 탭의 CopilotKit 클라이언트는 REST/SSE 전송을 명시해 `/info`와 `/agent/default/run` 엔드포인트를 사용합니다.
+`npm run test:optional:runtime`만 실행하면 이미 빌드된 서버를 기준으로 이전 optional 통합 런타임을 반복할 수 있습니다. 이 테스트는 CopilotKit·MCP 경로까지 포함하므로 API-free Teams Core의 통과 증거로 사용하지 않습니다.
+
+`npm run test:core`에는 API 키·MCP·CopilotKit 없이 결정형 Teams Core, 저장소 hardening, Teams 탭/카드 계약, Codex 경계를 검증합니다. OpenAI/local/MCP/CopilotKit 검증은 명시적 optional 명령으로 분리되어 있으며 Core 릴리스의 통과 조건이 아닙니다.
+
+선택 CopilotKit 런타임을 별도로 켠 경우에만 `/api/copilotkit/info`와 REST/SSE 경로를 검증합니다. API key, 모델 endpoint, 또는 실제 provider가 없으면 이 경로를 구현·배포 완료로 보고하지 않습니다.
 
 배포 런타임 검증은 사용자가 모바일 스크린샷을 제공해야만 시작하는 방식이 아닙니다. 공개 프로세스가 준비되면 Computer Use의 `node_repl` + `@oai/sky`로 로그인된 Teams 데스크톱 앱을 직접 확인하고, 접근성 트리와 전·후 스크린샷으로 `업무 허브` 채팅·Bot 카드·개인 탭·변경 UI를 검증합니다. 상세 절차는 [`docs/teams-desktop-runtime-verification.md`](docs/teams-desktop-runtime-verification.md)에 있습니다. 데스크톱 검증은 일반 Teams 동작의 독립 증거이며, iOS 전용 WebView·모바일 앱 권한·iPhone GPS는 별도로 `MOBILE_UNVERIFIED`로 보고합니다.
 
@@ -138,7 +138,7 @@ Teams 탭이 초기화되면 TeamsJS `authentication.getAuthToken()`으로 받�
 
 실제 Teams 등록 후 발급받은 값으로 패키지를 생성합니다.
 
-이 릴리스 후보의 소스 package와 Teams manifest 버전은 `1.0.15`으로 고정되어 있으며 `npm run validate:manifest`가 두 값을 함께 검사합니다. 실제 배포 환경값이 없는 상태에서는 패키지를 업로드하거나 placeholder를 운영 자격 증명으로 간주하지 않습니다.
+이 릴리스 후보의 소스 package와 Teams manifest 버전은 `1.0.24`으로 고정되어 있으며 `npm run validate:manifest`가 두 값을 함께 검사합니다. 실제 배포 환경값이 없는 상태에서는 패키지를 업로드하거나 placeholder를 운영 자격 증명으로 간주하지 않습니다.
 
 운영 패키지를 만들기 전에 배포 환경 사전검사를 실행합니다. 이 검사는 검증용 placeholder, 로컬 호스트, 잘못된 GUID를 차단합니다. `BOT_ID`는 메시징용 Teams/Bot 등록 ID이며, 봇과 탭을 함께 사용하는 Teams SDK 앱에서는 `APPLICATION_ID_URI`가 Microsoft의 결합 봇+탭 계약인 `api://<TAB_DOMAIN>/botid-<BOT_CLIENT_ID>`여야 합니다. `webApplicationInfo.id`는 별도 인증 앱일 수 있지만 resource URI 계약은 관찰된 봇 리소스와 일치해야 합니다.
 
@@ -159,7 +159,7 @@ npm run package:app
 
 생성된 `appPackage/build/teams-sdk-mvp.zip`을 Teams Developer Portal 또는 Teams Admin Center에 업로드합니다.
 
-ZIP을 새로 만든 뒤에는 내부 `manifest.json`의 버전 `1.0.15`, `devicePermissions: ["geolocation"]`, 탭 호스트와 `token.botframework.com`을 포함한 valid domain, 해석된 ID/URI를 확인하고 SHA-256을 기록합니다. 이전 ZIP을 재사용하지 않습니다.
+ZIP을 새로 만든 뒤에는 내부 `manifest.json`의 버전 `1.0.24`, `devicePermissions: ["geolocation"]`, 탭 호스트와 `token.botframework.com`을 포함한 valid domain, 해석된 ID/URI를 확인하고 SHA-256을 기록합니다. 이전 ZIP을 재사용하지 않습니다.
 
 `APPLICATION_ID_URI`는 Microsoft Entra 앱 등록의 `Expose an API`에 표시되는 실제 Application ID URI를 사용해야 합니다. 이 값은 manifest의 `webApplicationInfo.resource`로 들어갑니다.
 

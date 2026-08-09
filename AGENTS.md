@@ -64,6 +64,7 @@ Teams 앱 변경 요청에는 별도 예외 승인이 없는 한 다음 순서�
 - 이 작업은 Teams Bot이 별도 프로세스로 실행하는 Codex CLI 작업이다. 부모 Codex 앱의 인앱 브라우저, Safari, 사용자의 iPhone을 제어할 수 없으므로 `Browser is not available`, `iab unavailable`을 브라우저 재연결 루프로 처리하지 않는다.
 - 하위 에이전트가 브라우저를 사용할 수 없다는 이유로 새 인앱 브라우저·새 로그인 세션을 만들지 않는다. 브라우저 제어는 부모 오케스트레이터의 기존 탭 세션에서만 수행하며, 연결이 끊겼으면 기존 탭 재접속 또는 사용자 포커스 요청을 BLOCKER로 분리한다.
 - 인증을 반드시 분리한다. `codex login status`는 Codex CLI, `teams status`는 Teams CLI이며 한쪽 결과를 다른 쪽 인증 증거로 사용하지 않는다.
+- GitHub Copilot CLI는 공식 `copilot` 실행 파일을 기준으로 한다. `copilot --help`는 실행 파일 존재만 증명하며 로그인·Copilot 라이선스·조직 정책을 증명하지 않는다. health probe에서 `copilot login` 또는 `/login`을 자동 실행하지 말고, 실제 bounded read-only 실행의 결과가 확인되기 전에는 `unknown`/사용 불가로 표시한다. `gh copilot`은 환경에서 명시적으로 지정된 레거시 호환 경로일 때만 사용하며 공식 GHCP 기본값으로 추정하지 않는다.
 - 업로드 요청 전에는 `codex login status`, 필요한 경우 `teams status`, 패키지 ZIP의 실제 매니페스트 버전·`devicePermissions`, 배포 환경 검증을 각각 확인한다.
 - `sideloading not allowed` 또는 `Upload custom apps`는 코드 오류가 아니라 Teams Admin Center 정책이다. Developer Portal 업로드와 CLI sideload를 구분하고 CLI 재시도 루프를 만들지 않는다.
 - `APPLICATION_ID_URI`는 추측값으로 덮어쓰지 않는다. 먼저 Teams SDK 봇 Entra 앱의 `Expose an API` 실제 Application ID URI가 Microsoft의 결합 봇+탭 계약인 `api://<TAB_DOMAIN>/botid-<BOT_CLIENT_ID>`인지 확인한다. 관리자 접근이 작업 범위에 있고 SSO 불일치가 실제 런타임에서 재현되면 봇 리소스 URI, `access_as_user` 범위, Teams Web/Desktop 사전 승인, Bot Framework redirect URI, 매니페스트 `webApplicationInfo.resource`와 `token.botframework.com` valid domain, 서버 환경값을 같은 계약으로 맞춘 뒤 버전 증가·새 패키지 생성·재업로드를 수행한다. 관리자 접근이 없으면 추측 변경 없이 BLOCKER로 보고한다.
