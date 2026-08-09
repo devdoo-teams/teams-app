@@ -25,8 +25,44 @@ class NoopRunner {
   }
 }
 
+class FileWritingRunner {
+  constructor(private readonly workspace: string) {}
+
+  async run(): Promise<{ threadId: string; finalMessage: string; eventCount: number }> {
+    await fs.writeFile(path.join(this.workspace, 'agent-owned.txt'), 'agent-owned v1\n', 'utf8');
+    return { threadId: 'thread-file-write', finalMessage: 'created agent-owned.txt', eventCount: 1 };
+  }
+
+  cancel(): boolean {
+    return true;
+  }
+}
+
 async function currentHead(workspace: string): Promise<string> {
   return (await execFileAsync('git', ['rev-parse', '--short', 'HEAD'], { cwd: workspace })).stdout.trim();
+}
+
+async function waitForCompletedExecution(
+  store: AgentJobStore,
+  storePath: string,
+  id: string,
+  scope: AgentJobScope,
+): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const job = store.get(id, scope);
+    const persisted = JSON.parse(await fs.readFile(storePath, 'utf8')) as Array<{ id?: string; progress?: string[] }>;
+    const persistedJob = persisted.find((entry) => entry.id === id);
+    if (
+      job?.status === 'completed'
+      && persistedJob?.progress?.some((entry) => entry.includes('Codex 작업 완료'))
+    ) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      return;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(`job ${id} did not finish completion persistence: ${JSON.stringify(store.get(id, scope))}`);
 }
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-agent-authz-'));
@@ -37,7 +73,9 @@ await execFileAsync('git', ['config', 'user.name', 'Agent Test'], { cwd: workspa
 await execFileAsync('git', ['config', 'user.email', 'agent@example.test'], { cwd: workspace });
 await fs.writeFile(path.join(workspace, 'owned.txt'), 'owned v1\n', 'utf8');
 await fs.writeFile(path.join(workspace, 'unrelated.txt'), 'unrelated v1\n', 'utf8');
-await execFileAsync('git', ['add', 'owned.txt', 'unrelated.txt'], { cwd: workspace });
+await fs.writeFile(path.join(workspace, 'concurrent.txt'), 'concurrent v1\n', 'utf8');
+await fs.writeFile(path.join(workspace, 'preexisting.txt'), 'preexisting v1\n', 'utf8');
+await execFileAsync('git', ['add', 'owned.txt', 'unrelated.txt', 'concurrent.txt', 'preexisting.txt'], { cwd: workspace });
 await execFileAsync('git', ['commit', '-m', 'test: seed workspace'], { cwd: workspace });
 
 const allowedScope: AgentJobScope = {
@@ -98,9 +136,71 @@ try {
   assert.match(blockedCommit?.commitMessage ?? '', /변경 경로|소유권|증명/, 'write commits fail closed when the job has no recorded changed paths');
   assert.equal(await currentHead(workspace), headBeforeUnownedCommit, 'unowned write commit never creates a Git commit');
 
-  await execFileAsync('git', ['restore', '--', 'owned.txt', 'unrelated.txt'], { cwd: workspace });
+  await execFileAsync('git', ['restore', '--', 'owned.txt'], { cwd: workspace });
+  await fs.writeFile(path.join(workspace, 'preexisting.txt'), 'preexisting dirty before agent\n', 'utf8');
+  const persistedJobPath = path.join(root, 'captured-agent-jobs.json');
+  const capturingStore = new AgentJobStore(persistedJobPath);
+  const capturingService = new AgentService(
+    capturingStore,
+    new FileWritingRunner(workspace) as unknown as CodexRunner,
+    workspace,
+    async () => undefined,
+    gitService,
+    { canMutateScope: () => true },
+  );
+  await capturingService.initialize();
+  const capturedJob = await capturingService.submit({
+    prompt: 'create an owned file',
+    mode: 'workspace-write',
+    scope: allowedScope,
+  });
+  await capturingService.approve(capturedJob.id, allowedScope);
+  await waitForCompletedExecution(capturingStore, persistedJobPath, capturedJob.id, allowedScope);
+  assert.deepEqual(
+    capturingStore.get(capturedJob.id, allowedScope)?.changedPaths,
+    ['agent-owned.txt'],
+    'workspace-write completion records only paths that became dirty during that execution',
+  );
+
+  const reloadedStore = new AgentJobStore(persistedJobPath);
+  const reloadedService = new AgentService(
+    reloadedStore,
+    new NoopRunner() as unknown as CodexRunner,
+    workspace,
+    async () => undefined,
+    gitService,
+    { canMutateScope: () => true },
+  );
+  await reloadedService.initialize();
+  assert.deepEqual(
+    reloadedStore.get(capturedJob.id, allowedScope)?.changedPaths,
+    ['agent-owned.txt'],
+    'captured path ownership survives an AgentJobStore restart',
+  );
+  const capturedCommit = await reloadedService.commit(capturedJob.id, 'test: captured agent path', allowedScope);
+  assert.ok(capturedCommit?.commitHash, 'a completed workspace-write job can commit its persisted changed paths');
+  const capturedCommitPaths = (await execFileAsync('git', ['show', '--name-only', '--format=', 'HEAD'], { cwd: workspace })).stdout
+    .trim()
+    .split('\n');
+  assert.deepEqual(capturedCommitPaths, ['agent-owned.txt'], 'positive agent commit contains only the captured job path');
+  assert.match(
+    (await execFileAsync('git', ['status', '--porcelain', '--', 'preexisting.txt'], { cwd: workspace })).stdout,
+    /preexisting\.txt/,
+    'a dirty path present before execution remains outside the agent commit',
+  );
+
+  await execFileAsync('git', ['restore', '--', 'owned.txt', 'unrelated.txt', 'concurrent.txt', 'preexisting.txt'], { cwd: workspace });
   await fs.writeFile(path.join(workspace, 'owned.txt'), 'owned v3\n', 'utf8');
   await fs.writeFile(path.join(workspace, 'unrelated.txt'), 'unrelated v2\n', 'utf8');
+  await fs.writeFile(path.join(workspace, 'concurrent.txt'), 'concurrent v2\n', 'utf8');
+  await execFileAsync('git', ['add', '--', 'unrelated.txt'], { cwd: workspace });
+  const postIndexChangeHook = path.join(workspace, '.git', 'hooks', 'post-index-change');
+  await fs.writeFile(
+    postIndexChangeHook,
+    '#!/bin/sh\nmarker=.git/hooks/.concurrent-staged\nif [ ! -f "$marker" ]; then\n  touch "$marker"\n  git add -- concurrent.txt\nfi\n',
+    'utf8',
+  );
+  await fs.chmod(postIndexChangeHook, 0o755);
   const scopedCommit = await gitService.commit('test: owned paths only', { ownedPaths: ['owned.txt'] });
   assert.equal(scopedCommit.committed, true, 'GitService can commit only the job-owned paths');
   const committedPaths = (await execFileAsync('git', ['show', '--name-only', '--format=', 'HEAD'], { cwd: workspace })).stdout
@@ -109,9 +209,18 @@ try {
     .filter(Boolean);
   assert.deepEqual(committedPaths, ['owned.txt'], 'unrelated pre-existing diffs are never staged into the job commit');
   const remainingStatus = (await execFileAsync('git', ['status', '--porcelain'], { cwd: workspace })).stdout;
-  assert.match(remainingStatus, /unrelated\.txt/, 'unrelated diffs remain in the working tree for a separate owner');
+  assert.match(remainingStatus, /unrelated\.txt/, 'unrelated pre-staged changes remain staged for their original owner');
+  assert.match(remainingStatus, /concurrent\.txt/, 'entries staged concurrently during commit remain outside the job commit');
+  const remainingStagedPaths = (await execFileAsync('git', ['diff', '--cached', '--name-only'], { cwd: workspace })).stdout
+    .trim()
+    .split('\n');
+  assert.deepEqual(
+    remainingStagedPaths,
+    ['concurrent.txt', 'unrelated.txt'],
+    'pre-staged and post-index-change entries both remain staged after the isolated commit',
+  );
 
   console.log('PASS: AgentService enforces operator-only mutations, blocks read-only or unowned commits, and GitService commits only owned paths');
 } finally {
-  await fs.rm(root, { recursive: true, force: true });
+  await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 }

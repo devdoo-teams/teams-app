@@ -72,7 +72,11 @@ try {
   );
 
   const persistedMigration = await fs.readFile(migrationPath, 'utf8');
-  assert.deepEqual(JSON.parse(persistedMigration), migratedItems, 'normalized legacy data must be atomically persisted');
+  assert.deepEqual(
+    JSON.parse(persistedMigration),
+    migratedItems.map((item) => ({ ...item, requesterId: '__legacy__', tenantId: '__legacy__' })),
+    'normalized legacy data must be atomically persisted under the reserved migration owner',
+  );
   assert.doesNotMatch(persistedMigration, /\\u0000|\\u001f|null|Infinity/, 'migrated data must not contain unsafe serialized values');
 
   const added = await migratedStore.add('new item');

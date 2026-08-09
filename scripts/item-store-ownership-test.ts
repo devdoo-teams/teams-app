@@ -72,7 +72,41 @@ try {
     assert.deepEqual(seeded.map((item) => item.id), [1, 2], 'private seed ids remain deterministic inside a principal scope');
   });
 
-  console.log('PASS: ItemStore isolates CRUD by tenant+user, seeds per principal exactly once, and quarantines legacy unowned items deterministically');
+  const malformedOwnerPath = path.join(root, 'malformed-owner.json');
+  await fs.writeFile(
+    malformedOwnerPath,
+    JSON.stringify([{ id: 1, title: 'corrupt owner', status: 'open', requesterId: '', tenantId: '' }]),
+    'utf8',
+  );
+  await assert.rejects(
+    () => new ItemStore(malformedOwnerPath).initialize(),
+    /requesterId|tenantId|owner/i,
+    'present but malformed owner metadata is rejected instead of being migrated as legacy data',
+  );
+
+  const failingStorePath = path.join(root, 'failing-store', 'items.json');
+  const failingStore = new ItemStore(failingStorePath);
+  await failingStore.initialize();
+  await fs.rm(failingStorePath);
+  await fs.mkdir(failingStorePath);
+  const failedScope = { tenantId: 'tenant-failure', requesterId: 'user-failure' };
+  const unhandledRejections: unknown[] = [];
+  const recordUnhandledRejection = (reason: unknown): void => { unhandledRejections.push(reason); };
+  process.on('unhandledRejection', recordUnhandledRejection);
+  try {
+    await assert.rejects(
+      () => failingStore.runWithScope(failedScope, async () => failingStore.ensureScope()),
+      /regular file|directory|EISDIR/i,
+      'a failed seed persistence rejects its caller',
+    );
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    assert.deepEqual(unhandledRejections, [], 'handled seed failures do not create a second unhandled rejection');
+    assert.deepEqual(failingStore.list(failedScope), [], 'failed seed persistence rolls back in-memory owner data');
+  } finally {
+    process.removeListener('unhandledRejection', recordUnhandledRejection);
+  }
+
+  console.log('PASS: ItemStore isolates CRUD, validates owner metadata, and handles concurrent or failed per-principal seeding safely');
 } finally {
   await fs.rm(root, { recursive: true, force: true });
 }

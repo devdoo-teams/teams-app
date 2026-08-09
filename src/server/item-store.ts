@@ -87,13 +87,20 @@ export class ItemStore {
         if (this.hasOwnedItems(scope)) return;
         const ownedSeedItems = seedItems.map((item) => ({ ...item, ...scope }));
         this.items.push(...ownedSeedItems);
-        await atomicWriteJson(this.dataFile, this.items);
+        try {
+          await atomicWriteJson(this.dataFile, this.items);
+        } catch (error) {
+          const failedSeeds = new Set<PersistedItem>(ownedSeedItems);
+          this.items = this.items.filter((item) => !failedSeeds.has(item));
+          throw error;
+        }
       });
       this.writeQueue = pending.catch(() => undefined);
       this.seededScopes.set(key, pending);
-      void pending.finally(() => {
+      const cleanup = (): void => {
         if (this.seededScopes.get(key) === pending) this.seededScopes.delete(key);
-      });
+      };
+      void pending.then(cleanup, cleanup);
     }
 
     await pending;
@@ -216,10 +223,16 @@ function loadItem(value: unknown, index: number, ids: Set<string>): { item: Pers
 }
 
 function readOwner(item: Partial<PersistedItem>, index: number): ItemScope {
+  const hasRequesterId = Object.prototype.hasOwnProperty.call(item, 'requesterId');
+  const hasTenantId = Object.prototype.hasOwnProperty.call(item, 'tenantId');
+  if (!hasRequesterId && !hasTenantId) return LEGACY_OWNER_SCOPE;
+  if (!hasRequesterId || !hasTenantId) {
+    throw invalidItem(index, 'requesterId and tenantId must be provided together');
+  }
+
   const requesterId = readOwnerField(item.requesterId);
   const tenantId = readOwnerField(item.tenantId);
-  if (!requesterId && !tenantId) return LEGACY_OWNER_SCOPE;
-  if (!requesterId || !tenantId) throw invalidItem(index, 'requesterId and tenantId must be provided together');
+  if (!requesterId || !tenantId) throw invalidItem(index, 'requesterId and tenantId must be valid owner fields');
   return { requesterId, tenantId };
 }
 

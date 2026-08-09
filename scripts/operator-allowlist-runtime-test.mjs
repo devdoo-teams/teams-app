@@ -232,7 +232,7 @@ try {
 }
 
 const operatorScoped = await startServer({
-  TEAMS_OPERATOR_REQUESTER_ALLOWLIST: 'allowed-user',
+  TEAMS_OPERATOR_REQUESTER_ALLOWLIST: 'runtime-tenant/allowed-user',
 });
 try {
   const writeRequest = await request(operatorScoped.baseUrl, operatorScoped.token, '/api/messages', {
@@ -241,6 +241,22 @@ try {
   });
   const jobId = writeRequest.body.messages?.[0]?.match(/task-[\w-]+/)?.[0];
   assert.ok(jobId, 'allowed operator can create a workspace-write job');
+
+  const crossTenant = await request(operatorScoped.baseUrl, operatorScoped.token, '/api/messages', {
+    method: 'POST',
+    body: JSON.stringify(activity(
+      'write cross-tenant mutation',
+      operatorScoped.baseUrl,
+      'write-cross-tenant',
+      'allowed-user',
+      'other-tenant',
+    )),
+  });
+  assert.match(
+    JSON.stringify(crossTenant.body),
+    /운영자|권한|허용/,
+    'an identical requester identifier in another tenant is not an operator',
+  );
 
   for (const [command, suffix] of [
     [`approve ${jobId}`, 'approve-blocked'],
@@ -263,4 +279,44 @@ try {
   await stopServer(operatorScoped);
 }
 
-console.log('PASS: bot write/approve/cancel/commit obey the explicit operator allowlist while read-only commands stay available');
+const legacySameTenant = await startServer({
+  TENANT_ID: 'runtime-tenant',
+  TEAMS_OPERATOR_REQUESTER_ALLOWLIST: 'legacy-allowed-user',
+});
+try {
+  const sameTenant = await request(legacySameTenant.baseUrl, legacySameTenant.token, '/api/messages', {
+    method: 'POST',
+    body: JSON.stringify(activity(
+      'write migrated same-tenant operator change',
+      legacySameTenant.baseUrl,
+      'legacy-same-tenant',
+      'legacy-allowed-user',
+      'runtime-tenant',
+    )),
+  });
+  assert.match(
+    sameTenant.body.messages?.[0] ?? '',
+    /task-[\w-]+/,
+    'a legacy requester-only entry maps to the one explicitly configured tenant',
+  );
+
+  const otherTenant = await request(legacySameTenant.baseUrl, legacySameTenant.token, '/api/messages', {
+    method: 'POST',
+    body: JSON.stringify(activity(
+      'write migrated cross-tenant change',
+      legacySameTenant.baseUrl,
+      'legacy-other-tenant',
+      'legacy-allowed-user',
+      'other-tenant',
+    )),
+  });
+  assert.match(
+    JSON.stringify(otherTenant.body),
+    /운영자|권한|허용/,
+    'legacy requester-only migration never authorizes a different tenant',
+  );
+} finally {
+  await stopServer(legacySameTenant);
+}
+
+console.log('PASS: bot mutations require a tenant-bound operator while safe same-tenant legacy configuration remains supported');

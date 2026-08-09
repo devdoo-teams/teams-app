@@ -9,7 +9,12 @@ import { createCopilotExpressHandler } from '@copilotkit/runtime/v2/express';
 
 import { createUserAuthMiddleware, parseAcceptedAudiences } from './user-auth.js';
 import { ItemStore, MAX_ITEM_TITLE_LENGTH, type ItemScope } from './item-store.js';
-import { AgentJobStore, type AgentJob, type AgentJobScope } from './agent-job-store.js';
+import {
+  AgentJobStore,
+  MAX_AGENT_SCOPE_VALUE_LENGTH,
+  type AgentJob,
+  type AgentJobScope,
+} from './agent-job-store.js';
 import {
   AgentMutationAuthorizationError,
   AgentJobConflictError,
@@ -89,19 +94,18 @@ const codexRunner = new CodexRunner();
 const agentWorkspace = path.resolve(process.env.AGENT_WORKSPACE ?? process.cwd());
 const gitService = new GitService(agentWorkspace);
 const explicitBotClientId = process.env.BOT_CLIENT_ID?.trim() ?? '';
-const botClientId = explicitBotClientId || (!isProduction ? process.env.CLIENT_ID?.trim() ?? '' : '');
+const configuredClientId = process.env.CLIENT_ID?.trim() ?? '';
+const configuredTenantId = process.env.TENANT_ID?.trim() ?? '';
+const configuredApplicationIdUri = process.env.APPLICATION_ID_URI?.trim() ?? '';
+const botClientId = explicitBotClientId || (!isProduction ? configuredClientId : '');
 const tabDomain = process.env.TAB_DOMAIN?.trim() ?? '';
-const botConfigured = Boolean(botClientId && process.env.CLIENT_SECRET?.trim() && process.env.TENANT_ID?.trim());
+const botConfigured = Boolean(botClientId && process.env.CLIENT_SECRET?.trim() && configuredTenantId);
 const useTeamsSdk = process.env.TEAMS_USE_SDK !== 'false' && botConfigured;
-const userAuthConfigured = Boolean(
-  process.env.CLIENT_ID && process.env.TENANT_ID && process.env.APPLICATION_ID_URI,
-);
+const userAuthConfigured = Boolean(configuredClientId && configuredTenantId && configuredApplicationIdUri);
 const acceptedUserAudiences = parseAcceptedAudiences(process.env.TEAMS_USER_AUTH_ACCEPTED_AUDIENCES);
-const operatorRequesterAllowlist = new Set(
-  (process.env.TEAMS_OPERATOR_REQUESTER_ALLOWLIST ?? '')
-    .split(',')
-    .map((entry) => entry.trim())
-    .filter(Boolean),
+const operatorAllowlist = parseOperatorAllowlist(
+  process.env.TEAMS_OPERATOR_REQUESTER_ALLOWLIST,
+  configuredTenantId,
 );
 const appVersion = (() => {
   const configured = process.env.APP_VERSION?.trim();
@@ -129,7 +133,7 @@ const responseModeStore = new ResponseModeStore(responseModeStorePath);
 const personalTabDeepLink = buildTeamsPersonalTabDeepLink({
   appId: process.env.TEAMS_APP_ID ?? '',
   tabDomain: process.env.TAB_DOMAIN ?? '',
-  tenantId: process.env.TENANT_ID,
+  tenantId: configuredTenantId || undefined,
 });
 const genUi = new GenUiResponseFactory(genUiActionStore, {
   openTabUrl: personalTabDeepLink,
@@ -177,8 +181,33 @@ if (isProduction && !userAuthConfigured) {
   throw new Error('Production requires CLIENT_ID, TENANT_ID, and APPLICATION_ID_URI for user SSO.');
 }
 
+if (isProduction && !isDeploymentGuid(explicitBotClientId)) {
+  throw new Error('Production BOT_CLIENT_ID must be a UUID.');
+}
+
+if (isProduction && !isDeploymentGuid(configuredClientId)) {
+  throw new Error('Production CLIENT_ID must be a UUID.');
+}
+
+if (isProduction && !isDeploymentGuid(configuredTenantId)) {
+  throw new Error('Production TENANT_ID must be a UUID.');
+}
+
 if (isProduction && acceptedUserAudiences.length === 0) {
   throw new Error('Production requires TEAMS_USER_AUTH_ACCEPTED_AUDIENCES for delegated user-token audience validation.');
+}
+
+if (
+  isProduction
+  && acceptedUserAudiences.some(
+    (audience) => audience !== configuredClientId && audience !== configuredApplicationIdUri,
+  )
+) {
+  throw new Error('Production TEAMS_USER_AUTH_ACCEPTED_AUDIENCES entries must match CLIENT_ID or APPLICATION_ID_URI.');
+}
+
+if (isProduction && operatorAllowlist.invalidEntries.length > 0) {
+  throw new Error('Production TEAMS_OPERATOR_REQUESTER_ALLOWLIST entries must use tenantId/requesterId or an unambiguous requesterId with TENANT_ID.');
 }
 
 if (isProduction && !tabDomain) {
@@ -191,7 +220,7 @@ if (isProduction && !isValidPublicHostname(process.env.TAB_DOMAIN)) {
 
 if (isProduction) {
   const expectedApplicationIdUri = `api://${tabDomain}/botid-${explicitBotClientId}`;
-  if (process.env.APPLICATION_ID_URI?.trim() !== expectedApplicationIdUri) {
+  if (configuredApplicationIdUri !== expectedApplicationIdUri) {
     throw new Error(`Production APPLICATION_ID_URI must match ${expectedApplicationIdUri}.`);
   }
 }
@@ -363,12 +392,12 @@ function requestItemScope(_request: any, response: any): ItemScope | undefined {
   return undefined;
 }
 
-function isOperator(scope: Pick<AgentJobScope, 'requesterId'>): boolean {
-  return operatorRequesterAllowlist.has(scope.requesterId);
+function isOperator(scope: Pick<AgentJobScope, 'requesterId' | 'tenantId'>): boolean {
+  return operatorAllowlist.principalKeys.has(operatorPrincipalKey(scope.tenantId, scope.requesterId));
 }
 
 function mutationAuthorizationMessage(): string {
-  return operatorRequesterAllowlist.size === 0
+  return operatorAllowlist.principalKeys.size === 0
     ? '운영자 권한이 필요합니다. 관리자에게 TEAMS_OPERATOR_REQUESTER_ALLOWLIST 설정을 요청하세요.'
     : '운영자 권한이 필요합니다. 허용된 요청자 ID만 쓰기·승인·취소·커밋을 실행할 수 있습니다.';
 }
@@ -537,8 +566,8 @@ if (useTeamsSdk) {
     httpServerAdapter: http,
     clientId: botClientId,
     clientSecret: process.env.CLIENT_SECRET,
-    tenantId: process.env.TENANT_ID,
-    applicationIdUri: process.env.APPLICATION_ID_URI,
+    tenantId: configuredTenantId || undefined,
+    applicationIdUri: configuredApplicationIdUri || undefined,
     dangerouslyAllowUnauthenticatedRequests: skipAuth,
   });
 
@@ -547,9 +576,9 @@ if (useTeamsSdk) {
   // Build a second public SDK App instance only to reuse its Entra validator;
   // it is never started and does not handle HTTP traffic.
   const userAuthApp = new teams.App({
-    clientId: process.env.CLIENT_ID,
-    tenantId: process.env.TENANT_ID,
-    applicationIdUri: process.env.APPLICATION_ID_URI,
+    clientId: configuredClientId || undefined,
+    tenantId: configuredTenantId || undefined,
+    applicationIdUri: configuredApplicationIdUri || undefined,
   });
   userAuthValidator = userAuthApp.entraTokenValidator;
 } else {
@@ -681,7 +710,7 @@ http.use(
   createUserAuthMiddleware({
     allowUnauthenticated: skipAuth,
     validator: userAuthValidator,
-    configuredTenantId: process.env.TENANT_ID,
+    configuredTenantId: configuredTenantId || undefined,
     acceptedAudiences: acceptedUserAudiences,
   }),
 );
@@ -749,7 +778,7 @@ http.use(
   createUserAuthMiddleware({
     allowUnauthenticated: skipAuth,
     validator: userAuthValidator,
-    configuredTenantId: process.env.TENANT_ID,
+    configuredTenantId: configuredTenantId || undefined,
     acceptedAudiences: acceptedUserAudiences,
   }),
 );
@@ -787,7 +816,7 @@ http.use(
   createUserAuthMiddleware({
     allowUnauthenticated: skipAuth,
     validator: userAuthValidator,
-    configuredTenantId: process.env.TENANT_ID,
+    configuredTenantId: configuredTenantId || undefined,
     acceptedAudiences: acceptedUserAudiences,
   }),
 );
@@ -969,11 +998,11 @@ http.use(
   createUserAuthMiddleware({
     allowUnauthenticated: skipAuth,
     validator: userAuthValidator,
-    configuredTenantId: process.env.TENANT_ID,
+    configuredTenantId: configuredTenantId || undefined,
     acceptedAudiences: acceptedUserAudiences,
   }),
 );
-http.use('/api/copilotkit', (request: any, response: any, next: any) => {
+http.use('/api/copilotkit', async (request: any, response: any, next: any) => {
   const identity = copilotIdentity(request, response);
   if (!identity) {
     response.status(401).json({ error: 'validated user identity is required' });
@@ -984,7 +1013,7 @@ http.use('/api/copilotkit', (request: any, response: any, next: any) => {
   // an identity source.
   request.headers['x-validated-user-id'] = identity.requesterId;
   request.headers['x-validated-tenant-id'] = identity.tenantId;
-  void itemStore.runWithScope(itemScopeFromAgentScope(identity), async () => {
+  await itemStore.runWithScope(itemScopeFromAgentScope(identity), async () => {
     await itemStore.ensureScope();
     next();
   });
@@ -1000,7 +1029,7 @@ http.use(
   createUserAuthMiddleware({
     allowUnauthenticated: skipAuth,
     validator: userAuthValidator,
-    configuredTenantId: process.env.TENANT_ID,
+    configuredTenantId: configuredTenantId || undefined,
     acceptedAudiences: acceptedUserAudiences,
   }),
 );
@@ -1754,6 +1783,56 @@ if (teamsApp) {
 
 console.log(`Tab URL: http://localhost:${port}/tabs/home`);
 console.log(`Teams messages: http://localhost:${port}/api/messages`);
+
+function isDeploymentGuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function parseOperatorAllowlist(
+  rawValue: string | undefined,
+  configuredTenant: string,
+): { principalKeys: Set<string>; invalidEntries: string[] } {
+  const principalKeys = new Set<string>();
+  const invalidEntries: string[] = [];
+
+  for (const rawEntry of (rawValue ?? '').split(',')) {
+    const entry = rawEntry.trim();
+    if (!entry) continue;
+    const segments = entry.split('/');
+
+    if (segments.length === 1) {
+      if (isOperatorIdentifier(configuredTenant) && isOperatorIdentifier(entry)) {
+        principalKeys.add(operatorPrincipalKey(configuredTenant, entry));
+      } else {
+        invalidEntries.push(entry);
+      }
+      continue;
+    }
+
+    if (
+      segments.length === 2
+      && isOperatorIdentifier(segments[0])
+      && isOperatorIdentifier(segments[1])
+    ) {
+      principalKeys.add(operatorPrincipalKey(segments[0], segments[1]));
+    } else {
+      invalidEntries.push(entry);
+    }
+  }
+
+  return { principalKeys, invalidEntries };
+}
+
+function isOperatorIdentifier(value: string): boolean {
+  return value.length > 0
+    && value.length <= MAX_AGENT_SCOPE_VALUE_LENGTH
+    && value === value.trim()
+    && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
+function operatorPrincipalKey(tenantId: string, requesterId: string): string {
+  return JSON.stringify([tenantId, requesterId]);
+}
 
 function numericEnvGreaterThan(name: string, threshold: number): boolean {
   const raw = process.env[name]?.trim();

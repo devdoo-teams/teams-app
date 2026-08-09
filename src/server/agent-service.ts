@@ -1,7 +1,7 @@
 import type { AgentJob, AgentJobMode, AgentJobScope } from './agent-job-store.js';
 import { AgentJobStore } from './agent-job-store.js';
 import { CodexRunner, type CodexRunEvent } from './codex-runner.js';
-import { GitService } from './git-service.js';
+import { GitService, type GitWorkspaceSnapshot } from './git-service.js';
 import { diagnoseRemoteAgentResult, formatRemoteTroubleshooting } from './remote-troubleshooting.js';
 
 export type AgentNotificationKind = 'progress' | 'result' | 'error' | 'cancelled';
@@ -345,6 +345,7 @@ export class AgentService {
 
     let runningJob: AgentJob | undefined;
     let runPromise: ReturnType<CodexRunner['run']> | undefined;
+    let workspaceSnapshot: GitWorkspaceSnapshot | undefined;
 
     try {
       runningJob = await this.withJobMutationLock(job.id, scope, async () => {
@@ -359,6 +360,9 @@ export class AgentService {
 
         this.progressStates.set(job.id, { notifiedKeys: new Set(), notify: shouldNotify, onProgress });
         await this.store.appendProgress(job.id, scope, 'Codex 작업을 시작했습니다.');
+        if (started.mode === 'workspace-write') {
+          workspaceSnapshot = await this.gitService.captureWorkspaceSnapshot();
+        }
 
         // Start the runner while the mutation lock is held. CodexRunner registers
         // the child process synchronously, so a concurrent cancel can reliably
@@ -380,6 +384,9 @@ export class AgentService {
       }
 
       const result = await runPromise;
+      const changedPaths = runningJob.mode === 'workspace-write' && workspaceSnapshot
+        ? await this.gitService.changedPathsSince(workspaceSnapshot)
+        : undefined;
 
       const diagnostic = diagnoseRemoteAgentResult(result.finalMessage);
       const diagnosticMessage = formatRemoteTroubleshooting(diagnostic);
@@ -390,12 +397,14 @@ export class AgentService {
           ? this.store.update(job.id, scope, {
             status: 'failed',
             error: diagnosticMessage,
+            ...(changedPaths ? { changedPaths } : {}),
             finishedAt: new Date().toISOString(),
           })
           : this.store.update(job.id, scope, {
             status: 'completed',
             threadId: result.threadId,
             result: result.finalMessage,
+            ...(changedPaths ? { changedPaths } : {}),
             finishedAt: new Date().toISOString(),
           });
       });
@@ -419,12 +428,21 @@ export class AgentService {
       });
     } catch (error: any) {
       const message = error?.message || '알 수 없는 Codex 실행 오류';
+      let changedPaths: string[] | undefined;
+      if (workspaceSnapshot) {
+        try {
+          changedPaths = await this.gitService.changedPathsSince(workspaceSnapshot);
+        } catch {
+          // Preserve the primary runner or Git snapshot error.
+        }
+      }
       const failed = await this.withJobMutationLock(job.id, scope, async () => {
         const latest = this.store.get(job.id, scope);
         if (!latest || latest.status !== 'running') return undefined;
         return this.store.update(job.id, scope, {
           status: 'failed',
           error: message,
+          ...(changedPaths ? { changedPaths } : {}),
           finishedAt: new Date().toISOString(),
         });
       });
@@ -562,7 +580,7 @@ export class AgentService {
 }
 
 function recordedChangedPaths(job: AgentJob): string[] | undefined {
-  const value = (job as unknown as Record<string, unknown>).changedPaths;
+  const value = job.changedPaths;
   if (!Array.isArray(value)) return undefined;
   const paths = value
     .filter((entry): entry is string => typeof entry === 'string')
@@ -581,5 +599,9 @@ function scopeForJob(job: AgentJob): AgentJobScope | undefined {
 }
 
 function snapshotAgentJob(job: AgentJob): AgentJob {
-  return { ...job, progress: [...job.progress] };
+  return {
+    ...job,
+    progress: [...job.progress],
+    ...(job.changedPaths ? { changedPaths: [...job.changedPaths] } : {}),
+  };
 }

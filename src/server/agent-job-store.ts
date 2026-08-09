@@ -19,6 +19,8 @@ export const MAX_AGENT_RESULT_LENGTH = 20_000;
 export const MAX_AGENT_ERROR_LENGTH = 10_000;
 export const MAX_AGENT_COMMIT_MESSAGE_LENGTH = 2_000;
 export const MAX_AGENT_PROGRESS_ENTRIES = 100;
+export const MAX_AGENT_CHANGED_PATH_LENGTH = 512;
+export const MAX_AGENT_CHANGED_PATHS = 256;
 
 const AGENT_JOB_STATUSES: readonly AgentJobStatus[] = [
   'queued',
@@ -51,6 +53,7 @@ export interface AgentJob {
   result?: string;
   commitHash?: string;
   commitMessage?: string;
+  changedPaths?: string[];
   error?: string;
   progress: string[];
   createdAt: string;
@@ -280,6 +283,7 @@ function loadJob(value: unknown, index: number, ids: Set<string>): { job: AgentJ
     index,
     legacy,
   );
+  const changedPaths = readChangedPaths(value, index, legacy);
   const error = readOptionalText(value, 'error', MAX_AGENT_ERROR_LENGTH, index, legacy);
   const progress = readProgress(value, index, legacy);
   const createdAt = readTimestamp(value.createdAt, 'createdAt', index, legacy);
@@ -296,6 +300,7 @@ function loadJob(value: unknown, index: number, ids: Set<string>): { job: AgentJ
     result.migrated,
     commitHash.migrated,
     commitMessage.migrated,
+    changedPaths.migrated,
     error.migrated,
     progress.migrated,
     createdAt.migrated,
@@ -316,6 +321,7 @@ function loadJob(value: unknown, index: number, ids: Set<string>): { job: AgentJ
     ...(result.value ? { result: result.value } : {}),
     ...(commitHash.value ? { commitHash: commitHash.value } : {}),
     ...(commitMessage.value ? { commitMessage: commitMessage.value } : {}),
+    ...(changedPaths.value ? { changedPaths: changedPaths.value } : {}),
     ...(error.value ? { error: error.value } : {}),
     progress: progress.value,
     createdAt: createdAt.value,
@@ -324,6 +330,44 @@ function loadJob(value: unknown, index: number, ids: Set<string>): { job: AgentJ
   };
 
   return { job, migrated };
+}
+
+function readChangedPaths(
+  value: JobRecord,
+  index: number,
+  legacy: boolean,
+): LoadedValue<string[] | undefined> {
+  if (!hasOwn(value, 'changedPaths') || value.changedPaths === undefined) {
+    return { value: undefined, migrated: false };
+  }
+  if (!Array.isArray(value.changedPaths)) throw invalidJob(index, 'changedPaths must be an array');
+  if (!legacy && value.changedPaths.length > MAX_AGENT_CHANGED_PATHS) {
+    throw invalidJob(index, `changedPaths must contain ${MAX_AGENT_CHANGED_PATHS} entries or fewer`);
+  }
+
+  const source = legacy ? value.changedPaths.slice(0, MAX_AGENT_CHANGED_PATHS) : value.changedPaths;
+  const paths: string[] = [];
+  const seen = new Set<string>();
+  let migrated = legacy && source.length !== value.changedPaths.length;
+  for (const [pathIndex, pathValue] of source.entries()) {
+    const loaded = readText(
+      pathValue,
+      `changedPaths[${pathIndex}]`,
+      MAX_AGENT_CHANGED_PATH_LENGTH,
+      index,
+      legacy,
+      true,
+    );
+    migrated ||= loaded.migrated;
+    if (seen.has(loaded.value)) {
+      if (!legacy) throw invalidJob(index, 'changedPaths entries must be unique');
+      migrated = true;
+      continue;
+    }
+    seen.add(loaded.value);
+    paths.push(loaded.value);
+  }
+  return { value: paths, migrated };
 }
 
 function readProgress(value: JobRecord, index: number, legacy: boolean): LoadedValue<string[]> {

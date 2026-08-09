@@ -1,7 +1,9 @@
 import { strict as assert } from 'node:assert';
+import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 
 import { AgentJobStore, type AgentJobScope } from '../src/server/agent-job-store.js';
 import {
@@ -13,6 +15,7 @@ import { CodexRunner } from '../src/server/codex-runner.js';
 import { GitService } from '../src/server/git-service.js';
 
 type RunResult = { threadId: string; finalMessage: string; eventCount: number };
+const execFileAsync = promisify(execFile);
 
 class ControlledRunner {
   private readonly completions: Array<(result: RunResult) => void> = [];
@@ -53,14 +56,16 @@ async function waitForStatus(
   scope: AgentJobScope,
   expected: string,
 ): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
     if (store.get(id, scope)?.status === expected) return;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
   }
-  assert.fail(`job ${id} did not reach ${expected}`);
+  assert.fail(`job ${id} did not reach ${expected}: ${JSON.stringify(store.get(id, scope))}`);
 }
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-agent-transitions-'));
+await execFileAsync('git', ['init'], { cwd: root });
 const store = new AgentJobStore(path.join(root, 'agent-jobs.json'));
 const runner = new ControlledRunner();
 const scope: AgentJobScope = {
@@ -75,6 +80,7 @@ const service = new AgentService(
   root,
   async (notification) => notifications.push(notification.message),
   new GitService(root),
+  { canMutateScope: () => true },
 );
 
 try {

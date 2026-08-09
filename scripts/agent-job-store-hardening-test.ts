@@ -85,6 +85,22 @@ try {
     [currentJob({ error: 'x'.repeat(MAX_AGENT_ERROR_LENGTH + 1) })],
   );
   await assertRejectedUnchanged(
+    'non-array-changed-paths',
+    [currentJob({ changedPaths: 'src/owned.ts' as unknown as string[] })],
+  );
+  await assertRejectedUnchanged(
+    'empty-changed-path',
+    [currentJob({ changedPaths: [''] })],
+  );
+  await assertRejectedUnchanged(
+    'oversized-changed-paths',
+    [currentJob({ changedPaths: Array.from({ length: 257 }, (_, index) => `src/file-${index}.ts`) })],
+  );
+  await assertRejectedUnchanged(
+    'oversized-changed-path',
+    [currentJob({ changedPaths: [`src/${'x'.repeat(509)}`] })],
+  );
+  await assertRejectedUnchanged(
     'duplicate-ids',
     [currentJob(), currentJob({ id: 'task-current-1', prompt: 'duplicate' })],
   );
@@ -101,10 +117,15 @@ try {
   );
 
   const currentPath = path.join(storeDirectory, 'current-valid.json');
-  await fs.writeFile(currentPath, JSON.stringify([currentJob()]), 'utf8');
+  await fs.writeFile(currentPath, JSON.stringify([currentJob({ changedPaths: ['src/owned.ts'] })]), 'utf8');
   const currentStore = new AgentJobStore(currentPath);
   await currentStore.initialize();
   assert.equal(currentStore.get('task-current-1', scope)?.tenantId, scope.tenantId, 'valid current job is readable in its scope');
+  assert.deepEqual(
+    currentStore.get('task-current-1', scope)?.changedPaths,
+    ['src/owned.ts'],
+    'valid changed path ownership is preserved by the declared job schema',
+  );
   assert.equal(
     currentStore.get('task-current-1', { ...scope, tenantId: 'other-tenant' }),
     undefined,
