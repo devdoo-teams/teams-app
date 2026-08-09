@@ -8,20 +8,27 @@ const plainTests = [
   'scripts/validate-manifest-test.mjs',
   'scripts/package-app-determinism-test.mjs',
   'scripts/core-runtime-smoke.mjs',
+  'scripts/runtime-dist-test.mjs',
 ];
 const tsTests = [
   'scripts/status-card-test.ts',
   'scripts/genui-contract-test.ts',
   'scripts/teams-tab-link-test.ts',
   'scripts/deterministic-response-engine-test.ts',
+  'scripts/codex-runner-security-test.ts',
+  'scripts/agent-job-store-hardening-test.ts',
+  'scripts/genui-action-store-test.ts',
+  'scripts/item-store-hardening-test.ts',
+  'scripts/item-store-ownership-test.ts',
 ];
+const perTestTimeoutMs = 60_000;
 
 function run(command, args) {
   const result = spawnSync(command, args, {
     cwd: process.cwd(),
     env: process.env,
     encoding: 'utf8',
-    timeout: 30_000,
+    timeout: perTestTimeoutMs,
     maxBuffer: 2 * 1024 * 1024,
   });
   const output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim();

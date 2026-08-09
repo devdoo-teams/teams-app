@@ -123,8 +123,54 @@ try {
   assert.equal(jobStatusCard.actions.at(-1)?.action, 'open-tab', 'job status cards include the default tab action');
   assert.equal(jobStatusCard.prompt, '실제 작업 상태', 'job status cards carry a bounded prompt for mobile prompt view');
 
+  const incompleteJobStatusCard = configuredFactory.jobStatus({
+    id: 'task-missing-result',
+    prompt: '결과 없는 완료 상태',
+    mode: 'read-only',
+    status: 'completed',
+    conversationId: 'conversation-1',
+    requesterId: 'user-1',
+    tenantId: 'tenant-1',
+    progress: [],
+    createdAt: new Date().toISOString(),
+  });
+  assert.equal(incompleteJobStatusCard.status, 'error', 'a completed job without a result renders an error card');
+
   const errorCard = configuredFactory.error('실패한 작업');
   assert.equal(errorCard.actions.at(-1)?.action, 'open-tab', 'error cards include the default tab action');
+
+  const failedCommitCard = configuredFactory.commitResult({
+    id: 'task-no-commit-1',
+    prompt: '실제 커밋 요청',
+    mode: 'workspace-write',
+    status: 'completed',
+    conversationId: 'conversation-1',
+    requesterId: 'user-1',
+    tenantId: 'tenant-1',
+    commitMessage: '커밋할 변경이 없습니다.',
+    result: '작업 결과는 있습니다.',
+    progress: [],
+    createdAt: new Date().toISOString(),
+  });
+  assert.equal(failedCommitCard.kind, 'error', 'a completed job without a Git hash is not a successful commit result');
+  assert.equal(failedCommitCard.status, 'error', 'a non-committed Git outcome renders an error state');
+
+  const successfulCommitCard = configuredFactory.commitResult({
+    id: 'task-commit-1',
+    prompt: '실제 커밋 요청',
+    mode: 'workspace-write',
+    status: 'completed',
+    conversationId: 'conversation-1',
+    requesterId: 'user-1',
+    tenantId: 'tenant-1',
+    commitHash: 'abc1234',
+    commitMessage: '커밋을 생성했습니다: abc1234',
+    result: '작업 결과는 있습니다.',
+    progress: [],
+    createdAt: new Date().toISOString(),
+  });
+  assert.equal(successfulCommitCard.kind, 'result');
+  assert.equal(successfulCommitCard.status, 'complete');
 
   console.log('PASS: GenUI action grants are scoped, single-use, persistent, and expiring');
 } finally {

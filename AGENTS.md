@@ -72,6 +72,9 @@ Teams 앱 변경 요청에는 별도 예외 승인이 없는 한 다음 순서�
 - 매니페스트의 `TAB_DOMAIN`과 Teams 관리 봇의 `messagingEndpoint`는 별도 상태다. 호스트가 바뀌면 현재 `portUri`의 `/api/messages`를 Teams 외부 앱 ID에 `teams app update <external-app-id> --endpoint https://<portUri>/api/messages --json`으로 반영하고, 응답의 `updated.endpoint`·`needsReinstall`를 확인한 뒤 새 ZIP을 다시 생성·업로드한다. 공개 `/api/health`가 살아 있어도 이전 엔드포인트가 남아 있으면 모바일 메시지는 무응답일 수 있다.
 - 결과는 반드시 `STATUS / EVIDENCE / COMPLETED / BLOCKER / NEXT ACTION` 형식으로 보고한다. 관찰하지 않은 로그인·브라우저 연결·모바일 GPS·업로드 완료를 주장하지 않는다.
 - Adaptive Card 응답은 카드 attachment만 전송한다. 카드와 같은 내용을 top-level `text`에 함께 넣어 Teams 모바일에서 회색 텍스트 버블과 카드가 중복 표시되지 않게 한다. 텍스트는 legacy 모드 또는 카드 전송 실패 시의 명시적 fallback에만 사용한다.
+- Codex CLI가 exit code 0으로 끝나도 실제 `agent_message` 최종 결과가 없으면 작업을 `completed` 또는 성공 알림으로 기록하지 않는다. 이 경우 `failed`/차단 원인으로 저장하고, 실제 최종 결과·thread ID·이벤트 수가 확인된 뒤에만 완료 카드를 보낸다.
+- `completed` 작업은 비어 있지 않은 `result`를 반드시 가져야 한다. `commit` 응답은 `committed=true`와 실제 `commitHash`가 모두 있을 때만 `kind=result/status=complete`로 렌더링하며, 읽기 전용·소유 경로 없음·변경 없음은 오류 카드로 보낸다.
+- JSON 저장소 mutation은 메모리 변경과 원자적 파일 저장을 하나의 직렬 경계로 묶고, 저장 실패 시 이전 메모리 스냅샷으로 롤백한다. 저장 실패 후 남은 메모리 값이나 완료 상태를 후속 Teams 응답의 근거로 사용하지 않는다.
 
 ## 명령어 우선 릴리스 게이트와 화면 잠금 대응
 

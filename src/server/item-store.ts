@@ -113,42 +113,51 @@ export class ItemStore {
   async add(title: string): Promise<Item> {
     const normalizedTitle = assertItemTitle(title);
     const scope = this.scopeContext.getStore() ?? LEGACY_OWNER_SCOPE;
-    const largestId = this.selectItems(scope).reduce((largest, item) => Math.max(largest, item.id), 0);
-    if (largestId >= Number.MAX_SAFE_INTEGER) {
-      throw new RangeError('no safe item id is available');
-    }
-    const nextId = largestId + 1;
-    const item: PersistedItem = { id: nextId, title: normalizedTitle, status: 'open', ...scope };
-    this.items.unshift(item);
-    await this.persist();
-    return stripOwner(item);
+    return this.enqueueMutation(() => {
+      const largestId = this.selectItems(scope).reduce((largest, item) => Math.max(largest, item.id), 0);
+      if (largestId >= Number.MAX_SAFE_INTEGER) {
+        throw new RangeError('no safe item id is available');
+      }
+      const nextId = largestId + 1;
+      const item: PersistedItem = { id: nextId, title: normalizedTitle, status: 'open', ...scope };
+      this.items = [item, ...this.items];
+      return stripOwner(item);
+    });
   }
 
   async update(id: number, title: string): Promise<Item | null> {
-    const item = this.findItem(id);
-    if (!item) return null;
-
-    item.title = assertItemTitle(title);
-    await this.persist();
-    return stripOwner(item);
+    const normalizedTitle = assertItemTitle(title);
+    const scope = this.scopeContext.getStore();
+    return this.enqueueMutation(() => {
+      const index = this.findItemIndex(id, scope);
+      if (index === -1) return null;
+      const updated = { ...this.items[index], title: normalizedTitle };
+      this.items = this.items.map((item, itemIndex) => itemIndex === index ? updated : item);
+      return stripOwner(updated);
+    });
   }
 
   async toggle(id: number): Promise<Item | null> {
-    const item = this.findItem(id);
-    if (!item) return null;
-
-    item.status = item.status === 'done' ? 'open' : 'done';
-    await this.persist();
-    return stripOwner(item);
+    const scope = this.scopeContext.getStore();
+    return this.enqueueMutation(() => {
+      const index = this.findItemIndex(id, scope);
+      if (index === -1) return null;
+      const item = this.items[index];
+      const toggled = { ...item, status: item.status === 'done' ? 'open' as const : 'done' as const };
+      this.items = this.items.map((candidate, itemIndex) => itemIndex === index ? toggled : candidate);
+      return stripOwner(toggled);
+    });
   }
 
   async remove(id: number): Promise<Item | null> {
-    const index = this.findItemIndex(id);
-    if (index === -1) return null;
-
-    const [removed] = this.items.splice(index, 1);
-    await this.persist();
-    return stripOwner(removed);
+    const scope = this.scopeContext.getStore();
+    return this.enqueueMutation(() => {
+      const index = this.findItemIndex(id, scope);
+      if (index === -1) return null;
+      const [removed] = this.items.slice(index, index + 1);
+      this.items = this.items.filter((_item, itemIndex) => itemIndex !== index);
+      return stripOwner(removed);
+    });
   }
 
   countOpen(scope = this.scopeContext.getStore()): number {
@@ -162,9 +171,26 @@ export class ItemStore {
   }
 
   private async persist(): Promise<void> {
-    const nextWrite = this.writeQueue.then(() => atomicWriteJson(this.dataFile, this.items));
+    const snapshot = this.items.map((item) => ({ ...item }));
+    const nextWrite = this.writeQueue.then(() => atomicWriteJson(this.dataFile, snapshot));
     this.writeQueue = nextWrite.catch(() => undefined);
     await nextWrite;
+  }
+
+  private enqueueMutation<T>(mutate: () => T): Promise<T> {
+    const operation = this.writeQueue.then(async () => {
+      const previousItems = this.items;
+      try {
+        const result = mutate();
+        await atomicWriteJson(this.dataFile, this.items);
+        return result;
+      } catch (error) {
+        this.items = previousItems;
+        throw error;
+      }
+    });
+    this.writeQueue = operation.then(() => undefined, () => undefined);
+    return operation;
   }
 
   private selectItems(scope?: ItemScope): PersistedItem[] {
@@ -176,15 +202,13 @@ export class ItemStore {
     return this.items.some((item) => matchesScope(item, scope));
   }
 
-  private findItem(id: number): PersistedItem | undefined {
-    const scope = this.scopeContext.getStore();
+  private findItem(id: number, scope = this.scopeContext.getStore()): PersistedItem | undefined {
     return scope
       ? this.items.find((candidate) => candidate.id === id && matchesScope(candidate, scope))
       : this.items.find((candidate) => candidate.id === id);
   }
 
-  private findItemIndex(id: number): number {
-    const scope = this.scopeContext.getStore();
+  private findItemIndex(id: number, scope = this.scopeContext.getStore()): number {
     return scope
       ? this.items.findIndex((candidate) => candidate.id === id && matchesScope(candidate, scope))
       : this.items.findIndex((candidate) => candidate.id === id);

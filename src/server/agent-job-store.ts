@@ -105,9 +105,10 @@ export class AgentJobStore {
       createdAt: new Date().toISOString(),
     };
 
-    this.jobs.unshift(job);
-    await this.persist();
-    return job;
+    return this.enqueueMutation(() => {
+      this.jobs = [job, ...this.jobs];
+      return job;
+    });
   }
 
   get(id: string, scope: AgentJobScope): AgentJob | undefined {
@@ -131,23 +132,31 @@ export class AgentJobStore {
     scope: AgentJobScope,
     patch: Partial<Omit<AgentJob, keyof AgentJobScope>>,
   ): Promise<AgentJob | undefined> {
-    const job = this.get(id, scope);
-    if (!job) return undefined;
+    return this.enqueueMutation(() => {
+      const index = this.jobs.findIndex((job) => job.id === id && matchesScope(job, scope));
+      if (index === -1) return undefined;
 
-    Object.assign(job, patch);
-    await this.persist();
-    return job;
+      const updated = { ...this.jobs[index], ...patch } as AgentJob;
+      if (updated.status === 'completed' && (!updated.result || !updated.result.trim())) {
+        throw new Error('completed jobs must contain a result');
+      }
+      this.jobs = this.jobs.map((job, jobIndex) => jobIndex === index ? updated : job);
+      return updated;
+    });
   }
 
   async appendProgress(id: string, scope: AgentJobScope, message: string): Promise<AgentJob | undefined> {
-    const job = this.get(id, scope);
-    if (!job) return undefined;
+    return this.enqueueMutation(() => {
+      const index = this.jobs.findIndex((job) => job.id === id && matchesScope(job, scope));
+      if (index === -1) return undefined;
 
-    if (job.progress.at(-1) === message) return job;
+      const job = this.jobs[index];
+      if (job.progress.at(-1) === message) return job;
 
-    job.progress = [...job.progress.slice(-7), message];
-    await this.persist();
-    return job;
+      const updated = { ...job, progress: [...job.progress.slice(-7), message] };
+      this.jobs = this.jobs.map((candidate, jobIndex) => jobIndex === index ? updated : candidate);
+      return updated;
+    });
   }
 
   countActive(scope: AgentJobScope): number {
@@ -175,24 +184,46 @@ export class AgentJobStore {
   }
 
   async recoverInterruptedJobs(): Promise<void> {
-    let changed = false;
-
-    for (const job of this.jobs) {
-      if (job.status === 'queued' || job.status === 'running') {
-        job.status = 'failed';
-        job.error = '서버가 재시작되어 작업이 중단되었습니다.';
-        job.finishedAt = new Date().toISOString();
-        changed = true;
-      }
-    }
-
-    if (changed) await this.persist();
+    await this.enqueueMutation(() => {
+      const finishedAt = new Date().toISOString();
+      this.jobs = this.jobs.map((job) =>
+        job.status === 'queued' || job.status === 'running'
+          ? {
+              ...job,
+              status: 'failed',
+              error: '서버가 재시작되어 작업이 중단되었습니다.',
+              finishedAt,
+            }
+          : job,
+      );
+    });
   }
 
   private async persist(): Promise<void> {
-    const nextWrite = this.writeChain.then(() => atomicWriteJson(this.filePath, this.jobs));
+    const snapshot = this.jobs.map((job) => ({
+      ...job,
+      progress: [...job.progress],
+      ...(job.changedPaths ? { changedPaths: [...job.changedPaths] } : {}),
+    }));
+    const nextWrite = this.writeChain.then(() => atomicWriteJson(this.filePath, snapshot));
     this.writeChain = nextWrite.catch(() => undefined);
     await nextWrite;
+  }
+
+  private enqueueMutation<T>(mutate: () => T): Promise<T> {
+    const operation = this.writeChain.then(async () => {
+      const previousJobs = this.jobs;
+      try {
+        const result = mutate();
+        await atomicWriteJson(this.filePath, this.jobs);
+        return result;
+      } catch (error) {
+        this.jobs = previousJobs;
+        throw error;
+      }
+    });
+    this.writeChain = operation.then(() => undefined, () => undefined);
+    return operation;
   }
 }
 
@@ -249,7 +280,7 @@ function loadJob(value: unknown, index: number, ids: Set<string>): { job: AgentJ
 
   const prompt = readRequiredText(value.prompt, 'prompt', MAX_AGENT_PROMPT_LENGTH, index, legacy);
   const mode = readEnum(value.mode, 'mode', AGENT_JOB_MODES, index);
-  const status = readEnum(value.status, 'status', AGENT_JOB_STATUSES, index);
+  let status = readEnum(value.status, 'status', AGENT_JOB_STATUSES, index);
   const conversationId = readRequiredText(
     value.conversationId,
     'conversationId',
@@ -286,11 +317,20 @@ function loadJob(value: unknown, index: number, ids: Set<string>): { job: AgentJ
     legacy,
   );
   const changedPaths = readChangedPaths(value, index, legacy);
-  const error = readOptionalText(value, 'error', MAX_AGENT_ERROR_LENGTH, index, legacy);
+  let error = readOptionalText(value, 'error', MAX_AGENT_ERROR_LENGTH, index, legacy);
   const progress = readProgress(value, index, legacy);
   const createdAt = readTimestamp(value.createdAt, 'createdAt', index, legacy);
   const startedAt = readOptionalTimestamp(value, 'startedAt', index, legacy);
   const finishedAt = readOptionalTimestamp(value, 'finishedAt', index, legacy);
+
+  if (status === 'completed' && !result.value) {
+    if (!legacy) throw invalidJob(index, 'completed jobs must contain a result');
+    status = 'failed';
+    error = {
+      value: error.value || '이전 완료 작업에 결과가 없어 실패 상태로 복구했습니다.',
+      migrated: true,
+    };
+  }
 
   migrated ||= [
     idLoaded.migrated,

@@ -196,7 +196,7 @@ function redactSharedSections(sections: Array<Record<string, unknown>>): Array<R
 function stateForJob(job: AgentJob): GenUiState {
   const status = safeJobStatus(job);
   if (status === 'awaiting_approval') return 'approval';
-  if (status === 'completed') return 'complete';
+  if (status === 'completed') return safeJobResult(job) ? 'complete' : 'error';
   if (status === 'failed') return 'error';
   if (status === 'queued' || status === 'running') return 'loading';
   return 'ready';
@@ -575,14 +575,16 @@ export class GenUiResponseFactory {
     if (!job) return this.error('커밋할 작업을 찾을 수 없습니다.');
     const jobId = safeJobId(job);
     const jobStatus = safeJobStatus(job);
+    const commitHash = typeof job.commitHash === 'string' ? job.commitHash.trim() : '';
+    const committed = !missing && commitHash.length > 0;
     const text = missing
       ? `작업 ${jobId}은 아직 커밋할 수 없습니다. 현재 상태: ${jobStatus}`
       : displayText(fieldOf(job, 'commitMessage'), 1_900, '커밋할 변경이 없습니다.');
     return this.create({
-      kind: missing ? 'error' : 'result',
+      kind: committed ? 'result' : 'error',
       id: jobId,
-      status: missing ? 'error' : 'complete',
-      title: missing ? '커밋 대기 중' : '커밋 결과',
+      status: committed ? 'complete' : 'error',
+      title: missing ? '커밋 대기 중' : committed ? '커밋 결과' : '커밋 실패',
       summary: text,
       prompt: safeJobPrompt(job),
       sections: [{ type: 'status', title: 'Git 결과', status: jobStatus, description: text }],

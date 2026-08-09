@@ -262,6 +262,9 @@ Entra SSO는 패키지 업로드 성공만으로 완료된 것으로 보지 않�
 - 사용자가 같은 배포 앱에서 받은 Bot 답장, Adaptive Card/GenUI, 승인·취소 결과, 필요한 proactive 진행·완료 메시지를 확인한다. API 호출·로컬 테스트·오케스트레이터가 만든 합성 Activity는 이 사용자 확인을 대체하지 않는다.
 - Adaptive Card Activity에는 카드와 동일한 요약을 top-level `text`로 중복 포함하지 않는다. 카드 렌더링 경로는 attachment-only이고, text-only Activity는 legacy 또는 카드 전송 실패 fallback으로만 허용한다.
 - 장시간 작업이면 진행 메시지, 승인·취소 경계, proactive 완료 메시지까지 확인한다.
+- Codex CLI가 정상 종료되어도 실제 최종 `agent_message`가 없으면 성공/완료 메시지를 보내지 않는다. `completed` 상태에는 비어 있지 않은 결과가 필요하며, 누락 시 실패·차단 상태로 남긴다.
+- 커밋 카드는 `committed=true`와 실제 Git hash를 동시에 확인할 때만 완료로 표시한다. 읽기 전용 작업, 기록된 소유 경로가 없는 작업, 변경 파일이 없는 작업은 오류 카드로 표시하고 완료로 포장하지 않는다.
+- AgentJobStore와 업무 저장소는 mutation 직렬화·원자적 저장·실패 롤백을 통과해야 한다. 파일 저장 실패 뒤 메모리 목록이 바뀐 상태로 남으면 런타임 검증을 중단한다.
 - 모바일 기능은 데스크톱 확인과 별도로 분리한다. 데스크톱에서는 모바일 스크린샷 없이도 Bot·탭·카드의 일반 동작을 확인할 수 있지만, iOS WebView 레이아웃, Teams 모바일 앱 권한, iPhone GPS는 데스크톱으로 증명할 수 없다. 이 항목은 `MOBILE_UNVERIFIED`로 보고하고 모바일 통과로 표현하지 않는다.
 
 ### 6.1 실사용 UI 전수 검증 매트릭스 — 필수

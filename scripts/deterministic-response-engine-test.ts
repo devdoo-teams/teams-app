@@ -110,7 +110,8 @@ async function main(): Promise<void> {
     const help = await engine.run(await createInput(itemStore, agentService, 'help'));
     assert.equal(help.envelope.kind, 'answer');
     assert.equal(help.envelope.aiGenerated, false);
-    assert.match(help.text, /CopilotKit 데모 명령/);
+    assert.match(help.text, /업무 허브 명령/);
+    assert.doesNotMatch(help.text, /CopilotKit/);
 
     const list = await engine.run(await createInput(itemStore, agentService, 'list'));
     assert.equal(list.envelope.kind, 'task-list');
@@ -220,6 +221,18 @@ async function main(): Promise<void> {
     assert.equal(agUiTrace.waitForTerminalCalls, 1, 'AG-UI requests with onText wait for terminal state');
     assert.equal(agUiResponse.envelope.status, 'complete');
     assert.ok(agUiText.length === 0, 'terminal-only fake runner does not invent streamed text');
+
+    const missingResultResponse = await engine.run(await createInput(
+      itemStore,
+      createAgentServiceFake(job('completed', 'missing result', ''), undefined, { submissions: [], continuations: [], waitForTerminalCalls: 0 }),
+      'missing result request',
+      [],
+      () => undefined,
+      undefined,
+      () => undefined,
+    ));
+    assert.equal(missingResultResponse.envelope.status, 'error', 'a completed Codex job without a result cannot render as complete');
+    assert.match(missingResultResponse.text, /결과가 없어|실패|추가 확인/, 'missing terminal result explains why completion is withheld');
 
     const failedResponse = await engine.run(await createInput(
       itemStore,

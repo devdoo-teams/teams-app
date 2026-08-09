@@ -124,7 +124,7 @@ function envelope(input: {
     citations: [],
     aiGenerated: false,
     fallbackText: bounded,
-    metadata: { source: 'copilotkit', deterministic: true },
+    metadata: { source: 'teams-core', deterministic: true },
   });
 }
 
@@ -134,10 +134,14 @@ function output(value: ResponseEngineOutput): ResponseEngineOutput {
 
 function envelopeStatusForJob(job: AgentJob): GenUiEnvelopeV1['status'] {
   if (job.status === 'awaiting_approval') return 'approval';
-  if (job.status === 'completed') return 'complete';
+  if (job.status === 'completed') return hasTerminalResult(job) ? 'complete' : 'error';
   if (job.status === 'failed') return 'error';
   if (job.status === 'queued' || job.status === 'running') return 'loading';
   return 'ready';
+}
+
+function hasTerminalResult(job: AgentJob): boolean {
+  return typeof job.result === 'string' && job.result.trim().length > 0;
 }
 
 function jobEnvelope(job: AgentJob, text: string, status = envelopeStatusForJob(job)): GenUiEnvelopeV1 {
@@ -175,7 +179,7 @@ export class DeterministicResponseEngine implements ResponseEngine {
 
     const normalized = prompt.toLowerCase();
     if (/^(help|도움|사용법|명령)/i.test(normalized)) {
-      const text = 'CopilotKit 데모 명령\n\n- 현재 업무 목록 보여줘\n- 현재 위치 날씨 보여줘\n- Codex 작업 상태 알려줘\n- 저장소를 분석해줘\n- write로 파일 변경 작업을 요청하면 승인 카드가 표시됩니다.';
+      const text = '업무 허브 명령\n\n- 현재 업무 목록 보여줘\n- 현재 위치 날씨 보여줘\n- Codex 작업 상태 알려줘\n- 저장소를 분석해줘\n- write로 파일 변경 작업을 요청하면 승인 카드가 표시됩니다.';
       return output({ text, envelope: envelope({ kind: 'answer', id: 'help', title: '업무 허브 명령 안내', text }), toolCalls });
     }
 
@@ -278,8 +282,10 @@ export class DeterministicResponseEngine implements ResponseEngine {
       : `작업 ${job.id}을 시작했습니다. 진행 상황과 완료 결과를 이 채팅으로 보내드립니다.`;
     if (streamToCaller) {
       const completed = await input.agentService.waitForTerminal(job.id, input.scope);
-      const resultText = completed.status === 'completed'
-        ? completed.result || `작업 ${completed.id}이 완료되었습니다.`
+      const resultText = completed.status === 'completed' && hasTerminalResult(completed)
+        ? completed.result!
+        : completed.status === 'completed'
+          ? `작업 ${completed.id}은 완료 상태지만 결과가 없어 성공으로 처리하지 않았습니다. 추가 확인이 필요합니다.`
         : `작업 ${completed.id}이 ${completed.status} 상태입니다.\n\n${completed.error || completed.progress.at(-1) || '추가 확인이 필요합니다.'}`;
       const streamedText = previous
         ? `이전 Codex 대화를 이어서 작업 ${completed.id}이 완료되었습니다.\n\n${resultText}`

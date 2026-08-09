@@ -88,6 +88,14 @@ try {
   await assert.rejects(() => strictStore.add('x'.repeat(MAX_ITEM_TITLE_LENGTH + 1)), /characters or fewer/);
   await assert.rejects(() => strictStore.add('bad\u0001title'), /unsupported control characters/);
 
+  const persistenceFailureStore = new ItemStore('/dev/null/teams-item-store.json');
+  await assert.rejects(() => persistenceFailureStore.add('must not remain in memory'), /ENOTDIR|not a directory/i);
+  assert.deepEqual(
+    persistenceFailureStore.list(),
+    [],
+    'a failed persistence mutation must not remain visible in memory',
+  );
+
   console.log('PASS: ItemStore rejects invalid records and migrates legacy titles with a non-empty fallback');
 } finally {
   await fs.rm(root, { recursive: true, force: true });

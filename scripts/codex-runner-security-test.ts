@@ -102,6 +102,9 @@ if (caseName === 'initial-option' || caseName === 'resume-option') {
 } else if (caseName === 'exit-failure') {
   console.error('expected fake child failure');
   process.exit(7);
+} else if (caseName === 'no-final-message') {
+  console.log(JSON.stringify({ type: 'thread.started', thread_id: 'security-thread' }));
+  process.exit(0);
 } else if (caseName === 'cancel-group' || caseName === 'timeout-group') {
   lingerThenExit();
 } else {
@@ -346,6 +349,12 @@ try {
     const runner = new CodexRunner();
     await assert.rejects(() => runCase(runner, 'exit-failure'), /expected fake child failure/);
     assert.equal(runner.cancel('job-exit-failure'), false);
+  });
+
+  await test('successful child exit without a final agent message is not a completed result', async () => {
+    const runner = new CodexRunner();
+    await assert.rejects(() => runCase(runner, 'no-final-message'), /final agent message|final result/i);
+    assert.equal(runner.cancel('job-no-final-message'), false);
   });
 
   if (process.platform !== 'win32') {

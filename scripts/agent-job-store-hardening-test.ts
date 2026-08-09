@@ -66,6 +66,7 @@ try {
   await assertRejectedUnchanged('oversized-current-id', [currentJob({ id: 'x'.repeat(MAX_AGENT_JOB_ID_LENGTH + 1) })]);
   await assertRejectedUnchanged('invalid-mode', [currentJob({ mode: 'admin' as AgentJob['mode'] })]);
   await assertRejectedUnchanged('invalid-status', [currentJob({ status: 'pending' as AgentJob['status'] })]);
+  await assertRejectedUnchanged('completed-without-result', [currentJob()]);
   await assertRejectedUnchanged('blank-tenant', [currentJob({ tenantId: '   ' })]);
   await assertRejectedUnchanged('non-string-tenant', [currentJob({ tenantId: null as unknown as string })]);
   await assertRejectedUnchanged('invalid-created-at', [currentJob({ createdAt: 'not-a-timestamp' })]);
@@ -141,6 +142,11 @@ try {
     undefined,
     'requester mismatch remains inaccessible',
   );
+  await assert.rejects(
+    () => currentStore.update('task-current-1', scope, { status: 'completed', result: undefined }),
+    /completed jobs must contain a result/i,
+    'an in-memory mutation cannot create a completed job without a result',
+  );
 
   const legacyPath = path.join(storeDirectory, 'legacy.json');
   const legacyRecord = {
@@ -176,6 +182,25 @@ try {
     legacyStore.list({ requesterId: 'legacy-user', conversationId: 'legacy-conversation', tenantId: 'any-tenant' }).length,
     0,
     'legacy job remains inaccessible through tenant-scoped ACL reads',
+  );
+
+  const persistenceFailureParent = path.join(storeDirectory, 'not-a-directory');
+  await fs.writeFile(persistenceFailureParent, 'blocker', 'utf8');
+  const persistenceFailurePath = path.join(persistenceFailureParent, 'jobs.json');
+  const persistenceFailureStore = new AgentJobStore(persistenceFailurePath);
+  await assert.rejects(
+    () => persistenceFailureStore.create({
+      prompt: '저장 실패 작업',
+      mode: 'read-only',
+      scope,
+    }),
+    /ENOENT|no such file or directory|not a directory/i,
+    'a failed agent-job persistence operation rejects',
+  );
+  assert.deepEqual(
+    persistenceFailureStore.listLocalOnly(),
+    [],
+    'a failed agent-job persistence operation must not leave the job in memory',
   );
 
   const migratedRaw = await fs.readFile(legacyPath, 'utf8');

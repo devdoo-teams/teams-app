@@ -22,6 +22,43 @@ Adaptive Cards는 봇과 탭의 UI를 대체하는 별도 기술이 아니라, �
 
 MCP는 Teams 모바일 화면 표준이 아니다. Microsoft Teams SDK의 MCP client/server는 서버 측 도구 연결 계층으로 사용할 수 있지만, Teams 모바일에 직접 렌더링되는 UI는 여전히 Teams 탭·봇·Adaptive Cards가 담당한다. 따라서 현재는 MCP Apps 위젯을 Core UI로 이식하지 않고, 나중에 구체적인 MCP 서버와 무키 실행 조건이 확인될 때만 별도 adapter로 추가한다.
 
+## 2026-08 재검토 결론: API-free Core를 제품 기준으로 고정
+
+공식 문서와 샘플을 다시 대조한 결과, 현재 사용 가능한 Codex CLI·GHCP CLI만으로도 Teams 호환 기능을 충분히 쌓을 수 있다. 따라서 다음 항목은 첫 제품의 전제에서 제외한다.
+
+- CopilotKit UI/runtime, OpenAI-compatible API, 로컬 모델, MCP Apps 위젯은 API·인증·서버가 준비될 때까지 구현·배포·완료 판정에 사용하지 않는다.
+- Teams 모바일 화면은 개인 웹 탭(TeamsJS + React WebView)으로 만들고, Bot 채팅은 Adaptive Cards 1.2 subset + 텍스트 fallback으로 만든다. Microsoft 공식 문서도 모바일 Adaptive Cards의 기준을 1.2로 안내한다.
+- 카드에는 작은 요약과 실제 서버 action만 넣고, 복잡한 입력·목록·위치·업무 CRUD는 탭으로 보낸다. 모든 카드에는 탭 열기 링크를 제공한다.
+- Codex/GHCP CLI는 모델 provider가 아니라 별도 작업 실행 adapter다. CLI가 없거나 로그인되지 않았으면 실패/사용 불가를 표시하며 성공을 추측하지 않는다.
+
+벤치마킹 기준은 Microsoft 공식 React 기본 탭 샘플, Teams SDK TypeScript quickstart, Teams Samples의 `tab-ui-templates`, `Device permissions`, `Adaptive Card Actions Bot`, `Sequential workflow adaptive cards`, `Deep Link consuming Subentity ID`로 제한한다. MCP Apps나 CopilotKit의 UI를 Teams 모바일 호환성의 근거로 사용하지 않는다.
+
+공식 기준 링크:
+
+- [Teams 플랫폼 개요](https://learn.microsoft.com/en-us/MicrosoftTeams/platform/overview)
+- [React 기본 탭 앱 만들기](https://learn.microsoft.com/en-us/microsoftteams/platform/get-started/build-basic-tab-app)
+- [Teams에서 탭 사용](https://learn.microsoft.com/en-us/microsoftteams/platform/tabs/what-are-tabs)
+- [데스크톱·웹·모바일 탭 디자인](https://learn.microsoft.com/en-us/microsoftteams/platform/tabs/design/tabs?tabs=mobile)
+- [Teams Adaptive Cards 참고](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/cards/cards-reference)
+- [TypeScript Adaptive Cards builder](https://learn.microsoft.com/en-us/microsoftteams/platform/teams-sdk/in-depth-guides/adaptive-cards/building-adaptive-cards?tabs=minimal)
+- [Microsoft Teams Samples](https://github.com/OfficeDev/Microsoft-Teams-Samples)
+- [Microsoft Teams SDK](https://github.com/microsoft/teams-sdk)
+
+### 단계별 최소 수직 slice
+
+각 단계는 `소스 테스트 → 새 Git 커밋 → 새 ZIP → 기존 브라우저 탭에서 업데이트 업로드 → 공개 HTTPS 전환 → 데스크톱/모바일 스크린샷 전수 확인`을 통과한 뒤에만 다음 단계로 이동한다.
+
+1. `Core shell`: health, TeamsJS 초기화, 인증 상태, 탭 링크, 로딩/오류/재시도.
+2. `한 건 업무`: 입력·추가·목록·완료/재개·삭제. 서버 JSON mutation 직렬화와 실패 롤백을 포함한다.
+3. `Bot 카드`: `help`, `status`, `list`와 카드의 탭 링크·버튼. 카드/텍스트 중복을 금지한다.
+4. `위치 날씨`: `내 위치 사용` 허용/거부/취소/timeout/retry와 좌표 날씨. 위치를 추측하지 않는다.
+5. `Codex 작업`: read-only 실행 → 진행 → 실제 최종 `agent_message` 결과 → 실패/취소. write는 승인 후에만 실행한다.
+6. `Git 경계`: 작업 소유 경로만 commit, 실제 hash 없는 결과는 오류 카드로 표시한다.
+7. `협업`: follow/unfollow, 채널 연결, 알림 저장을 각각 독립된 mutation으로 추가한다.
+8. `선택 provider`: Core와 모바일 전수 검증이 끝난 뒤에만 CopilotKit/OpenAI/MCP adapter를 별도 버전·feature flag로 실험한다.
+
+현재 구현은 1~6의 서버·탭·카드 계약과 명령어 테스트가 존재하지만, 실제 동일 릴리스의 포털·설치본·데스크톱·모바일 스크린샷 증거가 채워지기 전에는 기능 완성으로 판정하지 않는다. WorkItemPanel·CollaborationPanel·위치 권한·응답 모드의 각 성공/실패/권한 분기는 별도 매트릭스 행으로 추가한다.
+
 ## 가장 작은 단위의 구현 순서
 
 ### 0. Core 경계 고정

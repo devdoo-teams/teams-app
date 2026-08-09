@@ -258,9 +258,13 @@ export class CodexRunner {
         throw new Error(diagnostic ? `${reason}\n\n${diagnostic}` : reason);
       }
 
+      if (!finalMessage) {
+        throw new Error('Codex did not return a final agent message; task cannot be marked completed.');
+      }
+
       return {
         threadId,
-        finalMessage: finalMessage || 'Codex 작업이 완료되었지만 최종 메시지가 없습니다.',
+        finalMessage,
         eventCount,
       };
     } finally {
