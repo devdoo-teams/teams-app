@@ -12,7 +12,7 @@ Teams Bot에서 실행되는 Codex CLI 작업이 부모 Codex 앱의 브라우�
 | Teams CLI 인증 | `teams status` | 상태 확인 가능, 디바이스 인증은 사용자 승인 필요 |
 | Codex 앱 인앱 브라우저 | 부모 Codex 세션의 로그인된 기존 탭 | 가능(기존 탭 재사용) |
 | 사용자 iPhone Teams 권한 | 실제 iPhone Teams 앱 | 불가 |
-| 패키지 생성·검증 | `npm test`, `npm run package:app` | 가능 |
+| 패키지 생성·검증 | `npm run test:core`, `npm run build:core`, `npm run package:app` | 가능 |
 | Developer Portal 업로드 | 로그인된 부모 브라우저 또는 Teams Admin Center 기존 앱 상세 | 부모 세션에서만 가능 |
 | CLI sideload | `teams app ...` | Teams 사용자 정책에 따라 차단될 수 있음 |
 
@@ -30,7 +30,7 @@ curl -fsS https://<현재-portUri>/api/health
 curl -fsS https://<현재-portUri>/tabs/home/
 ```
 
-`build:client`는 `dist/client`를 선삭제하지 않고 `.client-build-*` 임시 디렉터리에 출력한 뒤 성공 시에만 교체한다. 따라서 esbuild·CopilotKit 그래프가 멈춰도 이미 서비스 중인 클라이언트가 사라지지 않아야 한다. 현재 확인된 재현은 Node 24 + esbuild API에서 CopilotKit v2 대형 번들의 `sourcemap: true`가 무기한 대기하는 경우이며, 운영 번들은 source map을 끈다. 같은 문제가 재현되면 제한시간이 있는 `release:preflight`가 `BLOCKED`를 반환하는지 확인하고, 공개 서버를 죽이거나 이전 주소를 추측해 우회하지 않는다.
+`build:client`는 `dist/client`를 선삭제하지 않고 `.client-build-*` 임시 디렉터리에 출력한 뒤 성공 시에만 교체한다. Core 릴리스는 `build:client --core`로 optional CopilotKit/MCP 패키지를 외부화하고 optional assistant를 렌더링하지 않으므로 API 키 없는 Teams 핵심 경로가 대형 optional 그래프에 묶이지 않는다. 전체 optional 빌드는 `build:optional`에서 별도로 실행한다. Node 24 + esbuild/TypeScript 그래프가 멈추면 제한시간이 있는 `release:preflight`가 `BLOCKED`를 반환하는지 확인하고, 공개 서버를 죽이거나 이전 주소를 추측해 우회하지 않는다.
 
 `test:release-gate`의 timeout 회귀 테스트는 실제 저장소의 `preflight --timeout-ms`를 실행하지 않는다. 프로젝트 빌드 중간에 강제 종료하면 JavaScript의 `finally`가 실행되기 전에 임시 산출물이 남을 수 있으므로, timeout 계약은 무해한 fixture와 `formatReleaseFailure`/`runWithTimeout` 계약으로 검증한다. 이 테스트에 실제 preflight 호출을 다시 넣지 않는다.
 

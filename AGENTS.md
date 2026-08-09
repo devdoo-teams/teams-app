@@ -36,7 +36,7 @@
 
 Teams 앱 변경 요청에는 별도 예외 승인이 없는 한 다음 순서를 반드시 지킨다. 상세 체크리스트와 보고 템플릿은 [`docs/teams-release-workflow.md`](docs/teams-release-workflow.md)에 있다.
 
-1. 요청사항을 구현하고 로컬 테스트 모드에서 `npm test`, 매니페스트 검증, 필요한 런타임 테스트를 실행한다.
+1. 요청사항을 구현하고 로컬 테스트 모드에서 `npm run test:core`, `npm run build:core`, 매니페스트 검증, 필요한 런타임 테스트를 실행한다. OpenAI/MCP/CopilotKit 선택 경로는 `test:optional`/`build:optional`로 별도 확인하며 core 완료 조건에 섞지 않는다.
 2. 앱 버전을 올리고 새 Teams ZIP 패키지를 생성한다. 이전 ZIP을 재사용하지 않으며, ZIP 내부 매니페스트와 SHA-256을 확인한다.
 3. Git 변경사항을 검토하고 커밋한다. 커밋되지 않은 구현 상태를 업로드하지 않는다.
 4. 새 패키지를 Developer Portal 또는 승인된 배포 대상에 업로드한다. 동일 앱 ID의 업데이트는 Teams Admin Center의 앱 관리 → 사용자 지정 앱 검색 → 기존 앱 상세 → `새 버전`의 `파일 업로드` 경로를 우선 사용한다. 상단 `새 앱 업로드`는 동일 앱 ID를 신규 앱으로 거부할 수 있으므로 업데이트 경로로 사용하지 않는다. 업로드 성공 화면·버전·검증 결과를 직접 확인한다. 업로드가 막히면 완료로 보고하지 않는다.
@@ -77,8 +77,8 @@ Teams 앱 변경 요청에는 별도 예외 승인이 없는 한 다음 순서�
 - 이 저장소에는 Git 원격이 구성되어 있지 않다. 원격 저장소·원격 브랜치·clone·pull·push를 전제로 설명하거나 시도하지 않으며, 사용자가 명시적으로 원격을 추가하기 전에는 로컬 커밋만 관리한다.
 - 빌드·테스트·소스 수정은 원본 작업공간에서 수행한다. `/tmp`는 일회성 로그, 격리 검증, 새 ZIP 산출물에만 사용할 수 있고 `/tmp`의 Git 이력이나 파일을 원본 상태로 보고하지 않는다. 검증된 최종 변경과 커밋은 반드시 원본 작업공간에 존재해야 한다.
 - 파일 업로드는 원본에서 생성해 검증한 최신 ZIP의 명시적 로컬 경로를 브라우저 파일 선택기에 직접 전달한다. Finder, 동기화 상태, 다운로드 대기 또는 별도 소스 복제를 업로드 선행 조건으로 만들지 않는다.
-- 릴리스 판정에는 다음 제한시간 게이트를 사용한다. `release:preflight`는 타입체크(60초), 전체 테스트(300초), 배포 환경(30초)을 순서대로 실행하고, `release:package`는 검증된 새 ZIP과 내부 매니페스트·SHA-256을 생성하며, `release:public`은 공개 health와 `/tabs/home/`을 확인한다. 전부 실행할 때는 `npm run release:gate`를 사용한다.
-- `release:public`은 명시적 `--url` 다음 `TEAMS_PUBLIC_URL`, `PUBLIC_BASE_URL`, `.env.runtime`의 `TAB_DOMAIN`에서 공개 origin을 해석한다. `typecheck`는 런타임 패키지를 바꾸지 않는 release 전용 선언 stub을 사용하고, vendor 선언 그래프 진단은 별도 `typecheck:vendor`로 분리한다.
+- 릴리스 판정에는 다음 제한시간 게이트를 사용한다. `release:preflight`는 API/MCP 선택 경로와 분리된 core source compile check(60초), `build:core`(300초), `test:core`(300초), 배포 환경(30초)을 순서대로 실행한다. `test:optional`/`build:optional`은 별도 실험 경로이며 core 통과를 막지 않는다. `release:package`는 검증된 새 ZIP과 내부 매니페스트·SHA-256을 생성하며, `release:public`은 공개 health와 `/tabs/home/`을 확인한다. 전부 실행할 때는 `npm run release:gate`를 사용한다.
+- `release:public`은 명시적 `--url` 다음 `TEAMS_PUBLIC_URL`, `PUBLIC_BASE_URL`, `.env.runtime`의 `TAB_DOMAIN`에서 공개 origin을 해석한다. core 게이트는 `typecheck:core`의 제한된 esbuild source compile check와 `build:core`의 React/Teams SDK/Codex 경로를 사용한다. 전체 `typecheck`는 현재 Node 24/TypeScript 선언 그래프에서 장시간 대기할 수 있으므로 별도 진단으로 실행하며, core source check를 semantic TypeScript 전체 통과로 과장하지 않는다. vendor 선언 그래프 진단은 `typecheck:vendor`로 분리한다.
 - 공개 서버는 반드시 `npm start`로 실행한다. 이 명령은 존재하는 `.env.runtime`을 자동 로드한다. `node dist/server/index.js`를 직접 실행해 인증 설정을 누락하지 않으며, 재시작 직후 `/api/health`의 `environment=production`, `auth=teams-authenticated`, `userAuth=entra-sso`, `bot=teams-sdk`, `outbound=teams-sdk`를 확인한다.
 - Teams 개인 탭 `contentUrl`은 `/tabs/home/`처럼 trailing slash를 포함해야 한다. `/tabs/home`의 301 리디렉션에 의존하면 Teams Web/Desktop iframe이 빈 화면에 머물 수 있으므로 매니페스트 검증에서 이를 차단한다.
 - 패키징은 결정적이어야 한다. 같은 커밋·버전·매니페스트·아이콘으로 `release:package`를 반복해도 ZIP SHA-256이 같아야 하며 `test:package-determinism` 실패 시 업로드하지 않는다. 릴리스 루프 package 단계가 기록한 동일 ZIP만 업로드하고, 업로드 뒤 ZIP을 다시 생성해 SHA를 바꾸지 않는다.

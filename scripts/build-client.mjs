@@ -7,6 +7,7 @@ import { buildClientAtomically } from './build-client-atomic.mjs';
 
 const root = process.cwd();
 const outputDir = path.join(root, 'dist/client');
+const coreBuild = process.argv.includes('--core');
 
 await buildClientAtomically({
   outputDir,
@@ -30,6 +31,8 @@ await buildClientAtomically({
       // debugging build when the toolchain is known to support it.
       sourcemap: false,
       loader: { '.css': 'css', '.woff': 'file', '.woff2': 'file', '.ttf': 'file' },
+      define: { __TEAMS_OPTIONAL_RUNTIME__: coreBuild ? 'false' : 'true' },
+      external: coreBuild ? ['@copilotkit/*', '@modelcontextprotocol/*'] : [],
       logLevel: 'info',
     });
 

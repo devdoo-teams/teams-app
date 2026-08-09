@@ -10,6 +10,7 @@ const packagePath = path.join(root, 'appPackage', 'build', 'teams-sdk-mvp.zip');
 const runtimeEnvPath = path.join(root, '.env.runtime');
 const defaultTimeouts = {
   typecheck: 60_000,
+  build: 300_000,
   test: 300_000,
   deployment: 30_000,
   package: 30_000,
@@ -347,13 +348,18 @@ async function sha256(filePath) {
   return crypto.createHash('sha256').update(data).digest('hex');
 }
 
-async function runPreflight({ timeoutOverride } = {}) {
-  const env = await readRuntimeEnv();
-  const commands = [
-    ['typecheck', 'typecheck', timeoutOverride ?? defaultTimeouts.typecheck],
-    ['test', 'test', timeoutOverride ?? defaultTimeouts.test],
+export function createPreflightCommands(timeoutOverride) {
+  return [
+    ['core-source-check', 'typecheck:core', timeoutOverride ?? defaultTimeouts.typecheck],
+    ['core-build', 'build:core', timeoutOverride ?? defaultTimeouts.build],
+    ['core-test', 'test:core', timeoutOverride ?? defaultTimeouts.test],
     ['deployment', 'check:deployment', timeoutOverride ?? defaultTimeouts.deployment],
   ];
+}
+
+async function runPreflight({ timeoutOverride } = {}) {
+  const env = await readRuntimeEnv();
+  const commands = createPreflightCommands(timeoutOverride);
   const evidence = [];
   for (const [label, script, timeoutMs] of commands) {
     const invocation = npmInvocation(['run', script]);

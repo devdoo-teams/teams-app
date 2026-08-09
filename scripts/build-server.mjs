@@ -3,6 +3,7 @@ import { build } from 'esbuild';
 
 const root = process.cwd();
 const outputDir = path.join(root, 'dist/server');
+const coreBuild = process.argv.includes('--core');
 
 await build({
   entryPoints: [path.join(root, 'src/server/index.ts')],
@@ -12,7 +13,8 @@ await build({
   // Bundle the Teams SDK and its transitive runtime dependencies so the
   // production process does not pay the very large cold module-load cost on
   // every start. Node built-ins remain external for the node platform.
-  packages: 'bundle',
+  packages: coreBuild ? 'external' : 'bundle',
+  external: coreBuild ? ['@copilotkit/*', '@modelcontextprotocol/*'] : [],
   outdir: outputDir,
   entryNames: 'index',
   sourcemap: true,

@@ -49,7 +49,7 @@
 화면 잠금·Computer Use·인앱 브라우저의 가용 여부와 무관하게 반복 검사를 먼저 실행한다.
 
 ```bash
-npm run release:preflight   # typecheck 60s, test 300s, deployment 30s
+npm run release:preflight   # core source-check 60s, core build 300s, core test 300s, deployment 30s
 npm run release:package     # 새 ZIP, 내부 manifest, SHA-256
 npm run release:public      # 공개 /api/health와 /tabs/home/
 # 또는 위 세 단계를 순서대로 한 번에 실행

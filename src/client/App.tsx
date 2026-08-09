@@ -24,6 +24,7 @@ import {
 } from './ResponseModeSelector.js';
 import { WorkItemPanel } from './WorkItemPanel.js';
 import { CollaborationPanel } from './CollaborationPanel.js';
+import { optionalRuntimeEnabled } from './build-flags.js';
 
 export type LatestRequest = {
   generation: number;
@@ -444,7 +445,7 @@ export function App() {
 
     await loadItems(request);
     request.commit(() => {
-      if (mountedRef.current && request.isCurrent()) setCopilotReady(true);
+      if (mountedRef.current && request.isCurrent()) setCopilotReady(optionalRuntimeEnabled);
     });
   }
 
