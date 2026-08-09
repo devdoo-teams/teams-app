@@ -14,5 +14,5 @@
       "@microsoft/teams.apps": ["types/release-stubs/microsoft-teams-apps.d.ts"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts", "types/release-stubs/**/*.d.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "types/release-stubs/**/*.d.ts"]
 }

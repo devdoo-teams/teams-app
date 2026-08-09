@@ -199,7 +199,6 @@ function loadItem(value: unknown, index: number, ids: Set<string>): { item: Pers
   ) {
     throw invalidItem(index, 'id must be a unique positive safe integer');
   }
-  if (ids.has(item.id)) throw invalidItem(index, 'id must be unique');
   if (typeof item.title !== 'string') throw invalidItem(index, 'title must be a string');
   if (item.status !== 'open' && item.status !== 'done') {
     throw invalidItem(index, 'status must be open or done');
