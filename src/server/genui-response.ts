@@ -6,6 +6,7 @@ import type { GenUiActionStore } from './genui-action-store.js';
 import type { Item } from './item-store.js';
 import type { WeatherResponse } from './weather-service.js';
 import { redactSensitiveText } from './sensitive-text.js';
+import { normalizeCliCapability, type CliCapability } from './codex-capability.js';
 import {
   GENUI_SCHEMA_VERSION,
   GENUI_COMMANDS,
@@ -22,6 +23,16 @@ export type GenUiJobAction = 'approve' | 'cancel';
 
 export type GenUiResponseFactoryOptions = {
   openTabUrl?: string;
+};
+
+export type GenUiStatusFacts = {
+  teamsSdk: boolean;
+  environment: 'production' | 'local';
+  authMode: string;
+  storage: string;
+  deterministic: boolean;
+  codex: CliCapability;
+  ghcp: CliCapability;
 };
 
 const JOB_STATUSES = ['queued', 'awaiting_approval', 'running', 'completed', 'failed', 'cancelled'] as const;
@@ -189,6 +200,18 @@ function stateForJob(job: AgentJob): GenUiState {
   if (status === 'failed') return 'error';
   if (status === 'queued' || status === 'running') return 'loading';
   return 'ready';
+}
+
+function capabilityDescription(capability: CliCapability): string {
+  if (capability.state === 'available') return '실행 파일과 로그인 상태가 확인되었습니다.';
+  if (capability.state === 'unavailable' && capability.executable === 'absent') {
+    return '실행 파일을 찾지 못했습니다. 실행하지 않습니다.';
+  }
+  if (capability.state === 'unavailable' && capability.login === 'not-authenticated') {
+    return '실행 파일은 있지만 로그인이 확인되지 않았습니다. 실행하지 않습니다.';
+  }
+  if (capability.state === 'unavailable') return '현재 사용할 수 없습니다. 실행하지 않습니다.';
+  return '실행 파일 또는 로그인 상태를 확인하지 못했습니다. 실행하지 않습니다.';
 }
 
 export class GenUiResponseFactory {
@@ -372,17 +395,25 @@ export class GenUiResponseFactory {
     });
   }
 
-  status(openCount: number, activeCount: number): GenUiEnvelopeV1 {
-    const text = `현재 진행 중인 업무는 ${openCount}개이며, 에이전트 활성 작업은 ${activeCount}개입니다.`;
+  status(input: GenUiStatusFacts): GenUiEnvelopeV1 {
+    const codex = normalizeCliCapability(input.codex);
+    const ghcp = normalizeCliCapability(input.ghcp);
+    const facts = [
+      { label: 'Teams SDK', value: input.teamsSdk ? 'enabled' : 'disabled' },
+      { label: '환경', value: input.environment },
+      { label: '인증 모드', value: displayText(input.authMode, 120, 'unknown') },
+      { label: '저장소', value: displayText(input.storage, 120, 'unknown') },
+      { label: '응답 모드', value: input.deterministic ? 'deterministic' : 'unknown' },
+      { label: 'Codex CLI', value: codex.state, description: capabilityDescription(codex) },
+      { label: 'GHCP CLI', value: ghcp.state, description: capabilityDescription(ghcp) },
+    ];
+    const text = facts.map((fact) => `${fact.label}: ${fact.value}`).join('\n');
     return this.create({
       kind: 'job-status',
       id: 'workspace-status',
       title: '업무 허브 상태',
-      summary: text,
-      sections: [{ type: 'stats', title: '현재 상태', stats: [
-        { label: '진행 중 업무', value: openCount },
-        { label: '활성 Codex 작업', value: activeCount },
-      ] }],
+      summary: '결정형 Teams 런타임 상태',
+      sections: [{ type: 'facts', title: '런타임 사실', facts }],
       fallbackText: text,
       includeTabAction: true,
       metadata: { source: 'teams-bot', deterministic: true },

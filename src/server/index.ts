@@ -23,6 +23,7 @@ import {
   type AgentNotification,
 } from './agent-service.js';
 import { CodexRunner } from './codex-runner.js';
+import { probeCliCapabilities } from './codex-capability.js';
 import { GitService } from './git-service.js';
 import { TeamsCodexAgent } from './copilot-agent.js';
 import { DeterministicResponseEngine } from './response-engine-deterministic.js';
@@ -506,6 +507,19 @@ function mutationAuthorizationMessage(): string {
 
 function envelopeText(envelope: GenUiEnvelopeV1): string {
   return envelope.fallbackText ?? envelope.summary ?? envelope.title ?? '요청 결과를 카드로 확인하세요.';
+}
+
+async function buildStatusEnvelope(): Promise<GenUiEnvelopeV1> {
+  const capabilities = await probeCliCapabilities();
+  return genUi.status({
+    teamsSdk: Boolean(teamsApp),
+    environment: isProduction ? 'production' : 'local',
+    authMode: safeLocal ? 'local-bypass' : teamsApp ? 'teams-authenticated' : 'not-configured',
+    storage: 'file-json-single-process',
+    deterministic: true,
+    codex: capabilities.codex,
+    ghcp: capabilities.ghcp,
+  });
 }
 
 function adaptiveCardFromActivity(activity: unknown): Record<string, unknown> | undefined {
@@ -1672,7 +1686,7 @@ async function resolveGenUiCommand(activity: any, command: GenUiCommand): Promis
   return itemStore.runWithScope(itemScopeFromAgentScope(scope), async () => {
     await itemStore.ensureScope();
     if (command === 'status') {
-      return genUi.status(itemStore.countOpen(), agentService.countActive(scope));
+      return buildStatusEnvelope();
     }
     if (command === 'work') {
       const items = workItemService.recent({
@@ -1977,10 +1991,8 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
         return;
       }
 
-      const openCount = itemStore.countOpen();
-      const responseText = `현재 진행 중인 업무는 ${openCount}개이며, 에이전트 활성 작업은 ${agentService.countActive(scope)}개입니다.`;
-      const envelope = genUi.status(openCount, agentService.countActive(scope));
-      await send(responseText, envelope);
+      const envelope = await buildStatusEnvelope();
+      await send(envelopeText(envelope), envelope);
       return;
     }
 
