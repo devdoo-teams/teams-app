@@ -4,8 +4,6 @@ import { isIP } from 'node:net';
 import crypto from 'node:crypto';
 
 import express from 'express';
-import { CopilotRuntime } from '@copilotkit/runtime/v2';
-import { createCopilotExpressHandler } from '@copilotkit/runtime/v2/express';
 
 import { createUserAuthMiddleware, parseAcceptedAudiences } from './user-auth.js';
 import { ItemStore, MAX_ITEM_TITLE_LENGTH, type ItemScope } from './item-store.js';
@@ -25,7 +23,6 @@ import {
 import { CodexRunner } from './codex-runner.js';
 import { probeCliCapabilities } from './codex-capability.js';
 import { GitService } from './git-service.js';
-import { TeamsCodexAgent } from './copilot-agent.js';
 import { DeterministicResponseEngine } from './response-engine-deterministic.js';
 import { LocalCompatibleResponseEngine } from './response-engine-local.js';
 import { OpenAIResponseEngine } from './response-engine-openai.js';
@@ -46,9 +43,8 @@ import {
   renderGenUiCard,
   renderGenUiCardDiagnostic,
 } from './genui-teams.js';
-import { createMcpGenUiRouter, type McpGenUiRouter } from './mcp-genui.js';
+import type { McpGenUiRouter } from './mcp-genui.js';
 import { ChannelsShadowMonitor } from './channels-shadow-monitor.js';
-import { renderChannelsShadow } from './copilot-channels-shadow.js';
 import { acquireStoreProcessLease, type StoreProcessLease } from './process-lease.js';
 import { buildTeamsPersonalTabDeepLink } from './teams-tab-link.js';
 import { isLocalModelBaseUrlConfigured } from './local-model-url.js';
@@ -149,9 +145,20 @@ const appVersion = (() => {
   }
 })();
 const mcpEnabled = safeLocal;
+// Optional CopilotKit runtime is deliberately opt-in in production. The
+// deterministic Teams Bot and tab must start without an OpenAI/API key or
+// loading the optional provider graph. Local development keeps the existing
+// optional demo available unless it is explicitly disabled.
+const optionalRuntimeEnabled = process.env.TEAMS_OPTIONAL_RUNTIME === 'true'
+  || (!isProduction && process.env.TEAMS_OPTIONAL_RUNTIME !== 'false');
 const genUiMode = process.env.TEAMS_GENUI_MODE === 'legacy' || process.env.TEAMS_GENUI_MODE === 'channels-shadow'
   ? process.env.TEAMS_GENUI_MODE
   : 'hybrid';
+type ChannelsShadowRenderer = typeof import('./copilot-channels-shadow.js')['renderChannelsShadow'];
+let renderChannelsShadow: ChannelsShadowRenderer | undefined;
+if (optionalRuntimeEnabled && genUiMode === 'channels-shadow') {
+  ({ renderChannelsShadow } = await import('./copilot-channels-shadow.js'));
+}
 const genUiActionStore = new GenUiActionStore(
   genUiActionStorePath,
 );
@@ -597,7 +604,10 @@ function isLoopbackAddress(value: unknown): boolean {
 
 /** Render Channels only for comparison; the native card remains the delivered activity. */
 function recordChannelsShadowComparison(envelope: GenUiEnvelopeV1, nativeActivity: unknown): void {
-  if (genUiMode !== 'channels-shadow') return;
+  // Channels shadow is an optional comparison renderer. It is intentionally
+  // absent from the deterministic production bundle unless the optional
+  // runtime is enabled, so a Teams-only deployment never imports CopilotKit.
+  if (genUiMode !== 'channels-shadow' || !renderChannelsShadow) return;
 
   try {
     const nativeCard = adaptiveCardFromActivity(nativeActivity);
@@ -676,7 +686,12 @@ function createBotSender(
 }
 
 if (useTeamsSdk) {
-  const teams = await import('@microsoft/teams.apps');
+  // The Teams SDK package is CommonJS today. The core server bundle exposes
+  // that module through a default namespace, while a direct Node import can
+  // expose named properties. Normalize both shapes before constructing the
+  // adapter so the packaged runtime is deterministic.
+  const loadedTeams = await import('@microsoft/teams.apps');
+  const teams = (loadedTeams as any).default ?? loadedTeams;
   http = new teams.ExpressAdapter();
   teamsApp = new teams.App({
     httpServerAdapter: http,
@@ -757,8 +772,8 @@ http.get('/api/health', (_request: any, response: any) => {
     bot: teamsApp ? 'teams-sdk' : safeLocal ? 'local-handler' : 'not-configured',
     outbound: teamsApp ? (skipOutbound ? 'disabled' : 'teams-sdk') : safeLocal ? 'local-outbox' : 'not-configured',
     storage: 'file-json-single-process',
-    copilotKit: 'enabled',
-    copilotKitRuntime: '/api/copilotkit',
+    copilotKit: optionalRuntimeEnabled ? 'enabled' : 'disabled',
+    copilotKitRuntime: optionalRuntimeEnabled ? '/api/copilotkit' : 'disabled',
     genAI: process.env.COPILOTKIT_DETERMINISTIC_MODE === 'true'
       ? 'deterministic-test'
       : openAiConfigured
@@ -1433,6 +1448,7 @@ await agentService.initialize();
 
 let mcpRouter: McpGenUiRouter | undefined;
 if (mcpEnabled) {
+  const { createMcpGenUiRouter } = await import('./mcp-genui.js');
   mcpRouter = createMcpGenUiRouter({
     itemStore,
     agentService,
@@ -1467,52 +1483,62 @@ const handleSigterm = (): void => handleSignal('SIGTERM');
 process.once('SIGINT', handleSigint);
 process.once('SIGTERM', handleSigterm);
 
-const copilotRuntime = new CopilotRuntime({
-  agents: ({ request }) => {
-    const requesterId = request.headers.get('x-validated-user-id');
-    const tenantId = request.headers.get('x-validated-tenant-id');
-    if (!requesterId || !tenantId) throw new Error('validated Copilot identity is required');
-    return {
-      default: new TeamsCodexAgent(
-        itemStore,
-        agentService,
-        { requesterId, tenantId },
-        (job) => genUi.approval(job),
-      ),
-    };
-  },
-});
-
-http.use(
-  '/api/copilotkit',
-  createUserAuthMiddleware({
-    allowUnauthenticated: skipAuth,
-    validator: userAuthValidator,
-    configuredTenantId: configuredTenantId || undefined,
-    acceptedAudiences: acceptedUserAudiences,
-  }),
-);
-http.use('/api/copilotkit', async (request: any, response: any, next: any) => {
-  const identity = copilotIdentity(request, response);
-  if (!identity) {
-    response.status(401).json({ error: 'validated user identity is required' });
-    return;
-  }
-  // These headers are written only after the auth middleware and are consumed
-  // by the request-scoped Copilot agent factory; client forwardedProps are not
-  // an identity source.
-  request.headers['x-validated-user-id'] = identity.requesterId;
-  request.headers['x-validated-tenant-id'] = identity.tenantId;
-  await itemStore.runWithScope(itemScopeFromAgentScope(identity), async () => {
-    await itemStore.ensureScope();
-    next();
+if (optionalRuntimeEnabled) {
+  // Keep the optional provider graph out of the production deterministic path.
+  // In particular, this prevents an OpenAI/CopilotKit import or constructor
+  // from delaying the Teams SDK listener when no provider is configured.
+  const [{ CopilotRuntime }, { createCopilotExpressHandler }, { TeamsCodexAgent }] = await Promise.all([
+    import('@copilotkit/runtime/v2'),
+    import('@copilotkit/runtime/v2/express'),
+    import('./copilot-agent.js'),
+  ]);
+  const copilotRuntime = new CopilotRuntime({
+    agents: ({ request }) => {
+      const requesterId = request.headers.get('x-validated-user-id');
+      const tenantId = request.headers.get('x-validated-tenant-id');
+      if (!requesterId || !tenantId) throw new Error('validated Copilot identity is required');
+      return {
+        default: new TeamsCodexAgent(
+          itemStore,
+          agentService,
+          { requesterId, tenantId },
+          (job) => genUi.approval(job),
+        ),
+      };
+    },
   });
-});
-http.use(createCopilotExpressHandler({
-  runtime: copilotRuntime,
-  basePath: '/api/copilotkit',
-  cors: false,
-}));
+
+  http.use(
+    '/api/copilotkit',
+    createUserAuthMiddleware({
+      allowUnauthenticated: skipAuth,
+      validator: userAuthValidator,
+      configuredTenantId: configuredTenantId || undefined,
+      acceptedAudiences: acceptedUserAudiences,
+    }),
+  );
+  http.use('/api/copilotkit', async (request: any, response: any, next: any) => {
+    const identity = copilotIdentity(request, response);
+    if (!identity) {
+      response.status(401).json({ error: 'validated user identity is required' });
+      return;
+    }
+    // These headers are written only after the auth middleware and are consumed
+    // by the request-scoped Copilot agent factory; client forwardedProps are not
+    // an identity source.
+    request.headers['x-validated-user-id'] = identity.requesterId;
+    request.headers['x-validated-tenant-id'] = identity.tenantId;
+    await itemStore.runWithScope(itemScopeFromAgentScope(identity), async () => {
+      await itemStore.ensureScope();
+      next();
+    });
+  });
+  http.use(createCopilotExpressHandler({
+    runtime: copilotRuntime,
+    basePath: '/api/copilotkit',
+    cors: false,
+  }));
+}
 
 http.use(
   '/api/agent-jobs',

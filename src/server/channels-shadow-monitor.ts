@@ -1,5 +1,7 @@
-import { TEAMS_CARD_BUDGET_BYTES } from './copilot-channels-shadow.js';
 import type { GenUiSemanticSignature } from './genui-teams.js';
+
+// Keep the core Teams server independent from the optional Channels renderer.
+export const TEAMS_CARD_BUDGET_BYTES = 28 * 1024;
 
 export interface ChannelsShadowComparison {
   nativeActionCount: number;

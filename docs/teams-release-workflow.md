@@ -62,6 +62,8 @@ npm run release:gate
 
 클라이언트는 `dist/client`를 선삭제하지 않고 임시 디렉터리에서 성공적으로 만든 뒤 교체한다. CopilotKit v2 대형 번들에서 현재 Node 24 + esbuild API의 source map 생성이 무기한 대기하는 회귀가 있으므로 운영 빌드 source map은 끈다. 이 문제를 다시 만나도 제한시간 게이트가 공개 산출물을 비우지 않은 채 중단되어야 한다.
 
+Core 서버 번들은 Teams SDK·Express 등 필수 런타임을 포함하고 CopilotKit/MCP는 선택 청크로 분리한다. `npm run test:core`는 `scripts/core-runtime-smoke.mjs`로 API 키 없이 production Teams SDK 프로세스를 실제 기동해 `listen()`, `/api/health`, `/tabs/home/`을 확인한다. 이 스모크가 통과하지 않은 상태에서 기존 공개 서버나 포털 업로드를 최신 버전으로 교체하지 않는다.
+
 ### 로컬 원본 소스 기준
 
 - `/Users/doosansmacbookpro/Documents/TeamsApp`이 로컬 원본 소스이며 유일한 Git 이력 기준이다. 다른 폴더나 임시 경로를 원본·원격·복구 기준으로 추정하지 않는다.

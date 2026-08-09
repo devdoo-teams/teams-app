@@ -30,7 +30,7 @@ curl -fsS https://<현재-portUri>/api/health
 curl -fsS https://<현재-portUri>/tabs/home/
 ```
 
-`build:client`는 `dist/client`를 선삭제하지 않고 `.client-build-*` 임시 디렉터리에 출력한 뒤 성공 시에만 교체한다. Core 릴리스는 `build:client --core`로 optional CopilotKit/MCP 패키지를 외부화하고 optional assistant를 렌더링하지 않으므로 API 키 없는 Teams 핵심 경로가 대형 optional 그래프에 묶이지 않는다. 전체 optional 빌드는 `build:optional`에서 별도로 실행한다. Node 24 + esbuild/TypeScript 그래프가 멈추면 제한시간이 있는 `release:preflight`가 `BLOCKED`를 반환하는지 확인하고, 공개 서버를 죽이거나 이전 주소를 추측해 우회하지 않는다.
+`build:client`는 `dist/client`를 선삭제하지 않고 `.client-build-*` 임시 디렉터리에 출력한 뒤 성공 시에만 교체한다. Core 릴리스는 `build:client --core`에서 optional CopilotKit/MCP 패키지를 외부화하고 optional assistant를 렌더링하지 않는다. 서버는 `build-server.mjs --core`에서 Teams SDK와 필수 런타임을 번들하고 optional provider 그래프만 별도 청크로 둔다. `test:core`의 `core-runtime-smoke.mjs`가 실제 패키지 서버를 production 환경으로 기동해 `listen()`, `/api/health`, `/tabs/home/`을 확인한다. 이 경로에는 OpenAI API 키가 필요하지 않다. 전체 optional 빌드는 `build:optional`에서 별도로 실행한다. Node 24 + esbuild/TypeScript 그래프가 멈추면 제한시간이 있는 `release:preflight`가 `BLOCKED`를 반환하는지 확인하고, 공개 서버를 죽이거나 이전 주소를 추측해 우회하지 않는다.
 
 `test:release-gate`의 timeout 회귀 테스트는 실제 저장소의 `preflight --timeout-ms`를 실행하지 않는다. 프로젝트 빌드 중간에 강제 종료하면 JavaScript의 `finally`가 실행되기 전에 임시 산출물이 남을 수 있으므로, timeout 계약은 무해한 fixture와 `formatReleaseFailure`/`runWithTimeout` 계약으로 검증한다. 이 테스트에 실제 preflight 호출을 다시 넣지 않는다.
 

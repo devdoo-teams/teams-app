@@ -7,6 +7,7 @@ const plainTests = [
   'scripts/deployment-env-test.mjs',
   'scripts/validate-manifest-test.mjs',
   'scripts/package-app-determinism-test.mjs',
+  'scripts/core-runtime-smoke.mjs',
 ];
 const tsTests = [
   'scripts/status-card-test.ts',

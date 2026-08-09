@@ -6,6 +6,7 @@ import { transform } from 'esbuild';
 const root = process.cwd();
 const files = [
   'src/server/codex-capability.ts',
+  'src/server/index.ts',
   'src/server/genui-response.ts',
   'src/server/genui-teams.ts',
   'src/server/teams-tab-link.ts',
