@@ -211,12 +211,9 @@ async function testHungInitializationMountsRetryableRecoveryAndGuardsLateResult(
 
   root.retryButton.click();
   root.retryButton.click();
-  assert.equal(initializeCalls, 1, 'retry does not overlap the still-pending Teams initialization attempt');
-
-  firstInitialization.resolve(undefined);
   await flushBootstrapTasks();
 
-  assert.equal(initializeCalls, 2, 'retry starts one fresh Teams attempt only after the prior attempt settles');
+  assert.equal(initializeCalls, 2, 'retry starts a fresh Teams attempt without waiting for the timed-out initialization');
   assert.equal(hostReadyCalls, 0, 'the timed-out initialization result cannot mark the host ready before retry');
   assert.equal(renderCalls, 0, 'the timed-out initialization result cannot mount the app before retry');
 
@@ -225,6 +222,12 @@ async function testHungInitializationMountsRetryableRecoveryAndGuardsLateResult(
 
   assert.equal(hostReadyCalls, 1, 'successful retry marks the Teams host ready once');
   assert.equal(renderCalls, 1, 'successful retry mounts the app once');
+
+  firstInitialization.resolve(undefined);
+  await flushBootstrapTasks();
+
+  assert.equal(hostReadyCalls, 1, 'a late result from the timed-out initialization cannot mark the host ready again');
+  assert.equal(renderCalls, 1, 'a late result from the timed-out initialization cannot remount the app');
 }
 
 await testHungInitializationMountsRetryableRecoveryAndGuardsLateResult();

@@ -71,20 +71,11 @@ export function createTeamsBootstrapController(options: BootstrapOptions): { sta
   const timeoutMs = options.timeoutMs ?? DEFAULT_TEAMS_BOOTSTRAP_TIMEOUT_MS;
   let generation = 0;
   let activeAttempt: Promise<BootstrapResult> | null = null;
-  let activeInitialization: Promise<void> | null = null;
   let ready = false;
 
   const start = (): Promise<BootstrapResult> => {
     if (activeAttempt) return activeAttempt;
     if (ready) return Promise.resolve('ready');
-    if (activeInitialization) {
-      // TeamsJS does not expose cancellation for app.initialize(). Wait for
-      // the native attempt to settle before allowing a fresh one.
-      return activeInitialization.then(
-        () => start(),
-        () => start(),
-      );
-    }
 
     const attemptGeneration = generation + 1;
     generation = attemptGeneration;
@@ -93,15 +84,6 @@ export function createTeamsBootstrapController(options: BootstrapOptions): { sta
       mountBootstrapLoading(options.root);
     }
     const initialization = Promise.resolve().then(options.initialize);
-    activeInitialization = initialization;
-    void initialization.then(
-      () => {
-        if (activeInitialization === initialization) activeInitialization = null;
-      },
-      () => {
-        if (activeInitialization === initialization) activeInitialization = null;
-      },
-    );
     const attempt = (async (): Promise<BootstrapResult> => {
       try {
         await withBootstrapTimeout(initialization, timeoutMs);

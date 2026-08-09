@@ -2,7 +2,7 @@
 
 ## STATUS
 
-IMPLEMENTED / FOCUSED TESTS PASS. This task only covers the client bootstrap, public client document, source manifest contract, and focused client tests. It does not claim Teams release, desktop, mobile, or Entra end-to-end completion.
+IMPLEMENTED / FOCUSED TESTS PASS, INCLUDING THE P2 RETRY FOLLOW-UP. This task only covers the client bootstrap, public client document, source manifest contract, and focused client tests. It does not claim Teams release, desktop, mobile, or Entra end-to-end completion.
 
 ## EVIDENCE
 
@@ -18,10 +18,13 @@ The new red regressions reproduced those gaps:
 After the change:
 
 - bootstrap allows a 10,000 ms host-startup window, keeps the loading state during retry, and guards duplicate/late attempts;
+- a timed-out TeamsJS initialization no longer blocks retry behind its still-pending native promise; a retry starts a new bounded generation immediately, while the old generation remains stale if it resolves later;
 - the production bootstrap skips an already initialized TeamsJS instance and calls TeamsJS `_uninitialize()` before retrying a failed initialization when it is safe to reset;
 - the public client document declares a self-bound CSP and keeps the built module and stylesheet relative to the `/tabs/home/` prefix;
 - the personal tab manifest uses `https://${{TAB_DOMAIN}}/` for both website URLs and requires exactly `https://${{TAB_DOMAIN}}/tabs/home/` for the home content URL;
 - existing auth coverage confirms failed SSO token refresh removes stale authorization headers; no credential or environment value was changed.
+
+The focused retry regression reproduces the P2 finding: after the first initialization times out and its promise remains unresolved, duplicate retry clicks start exactly one fresh attempt without waiting for the original. The fresh attempt reaches `ready`; resolving the original later does not mark the host ready or mount the app again. Before the fix, this test failed with `AssertionError: retry starts a fresh Teams attempt without waiting for the timed-out initialization (1 !== 2)`.
 
 ## COMPLETED
 
