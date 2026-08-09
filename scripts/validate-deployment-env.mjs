@@ -30,13 +30,11 @@ if (invalidGuids.length > 0) {
 // example, when a managed identity or dedicated auth registration is used),
 // but the resource must use the Teams bot client ID.
 
+const hostnamePattern = /^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
 if (
-  values.TAB_DOMAIN.includes('://') ||
-  values.TAB_DOMAIN.includes('/') ||
-  values.TAB_DOMAIN.includes('*') ||
+  !hostnamePattern.test(process.env.TAB_DOMAIN ?? '') ||
   values.TAB_DOMAIN === 'localhost' ||
-  values.TAB_DOMAIN.startsWith('127.') ||
-  !values.TAB_DOMAIN.includes('.')
+  values.TAB_DOMAIN.startsWith('127.')
 ) {
   console.error('TAB_DOMAIN must be a public HTTPS hostname without a scheme, path, wildcard, or localhost.');
   process.exit(1);

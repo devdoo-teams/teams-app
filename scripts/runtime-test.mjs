@@ -296,7 +296,7 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
       // public .env.runtime values. Individual cases can opt back in through
       // extraEnv when they explicitly test a deployment hint.
       PUBLIC_BASE_URL: '',
-      TAB_DOMAIN: '',
+      TAB_DOMAIN: production ? 'runtime.test' : '',
       BOT_DOMAIN: '',
       DEV_TUNNEL_ID: '',
       MCP_PUBLIC_ENABLED: '',
@@ -306,7 +306,7 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
             CLIENT_ID: '00000000-0000-4000-8000-000000000002',
             CLIENT_SECRET: 'runtime-test-secret',
             TENANT_ID: '00000000-0000-4000-8000-000000000003',
-            APPLICATION_ID_URI: 'api://runtime.test/00000000-0000-4000-8000-000000000002',
+            APPLICATION_ID_URI: 'api://runtime.test/botid-00000000-0000-4000-8000-000000000001',
           }
         : {}),
       ...(production ? { TEAMS_SKIP_AUTH: '' } : { TEAMS_SKIP_AUTH: 'true' }),
@@ -501,16 +501,36 @@ async function runStartupGateFlow() {
     'Production requires BOT_CLIENT_ID',
   );
   await expectStartupFailure(
+    'production with a mismatched combined SSO resource',
+    {
+      NODE_ENV: 'production',
+      TAB_DOMAIN: 'runtime.test',
+      WEATHER_MODE: 'live',
+      TEAMS_USE_SDK: 'true',
+      BOT_CLIENT_ID: '00000000-0000-4000-8000-000000000001',
+      CLIENT_ID: '00000000-0000-4000-8000-000000000002',
+      CLIENT_SECRET: 'runtime-test-secret',
+      TENANT_ID: '00000000-0000-4000-8000-000000000003',
+      APPLICATION_ID_URI: 'api://runtime.test/botid-00000000-0000-4000-8000-000000000002',
+      ITEM_STORE_PATH: path.join(tempDir, 'mismatched-sso-items.json'),
+      AGENT_JOB_STORE_PATH: path.join(tempDir, 'mismatched-sso-agent-jobs.json'),
+      GENUI_ACTION_STORE_PATH: path.join(tempDir, 'mismatched-sso-genui-actions.json'),
+      RESPONSE_MODE_STORE_PATH: path.join(tempDir, 'mismatched-sso-response-modes.json'),
+    },
+    'APPLICATION_ID_URI must match api://runtime.test/botid-00000000-0000-4000-8000-000000000001',
+  );
+  await expectStartupFailure(
     'production with demo weather mode',
     {
       NODE_ENV: 'production',
+      TAB_DOMAIN: 'runtime.test',
       WEATHER_MODE: 'demo',
       TEAMS_USE_SDK: 'true',
       BOT_CLIENT_ID: '00000000-0000-4000-8000-000000000001',
       CLIENT_ID: '00000000-0000-4000-8000-000000000002',
       CLIENT_SECRET: 'runtime-test-secret',
       TENANT_ID: '00000000-0000-4000-8000-000000000003',
-      APPLICATION_ID_URI: 'api://runtime.test/00000000-0000-4000-8000-000000000002',
+      APPLICATION_ID_URI: 'api://runtime.test/botid-00000000-0000-4000-8000-000000000001',
       ITEM_STORE_PATH: path.join(tempDir, 'demo-weather-items.json'),
       AGENT_JOB_STORE_PATH: path.join(tempDir, 'demo-weather-agent-jobs.json'),
       GENUI_ACTION_STORE_PATH: path.join(tempDir, 'demo-weather-genui-actions.json'),

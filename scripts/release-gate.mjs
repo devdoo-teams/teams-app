@@ -52,6 +52,16 @@ export function assertPackagedManifest(manifest, expected) {
     'packaged tab content URL must use the current public tab origin',
   );
   assert.equal(
+    manifest.validDomains?.includes(expected.tabDomain),
+    true,
+    'packaged manifest validDomains must include the current public tab domain',
+  );
+  assert.equal(
+    manifest.validDomains?.includes('token.botframework.com'),
+    true,
+    'packaged manifest validDomains must include token.botframework.com for Teams SSO redirect handling',
+  );
+  assert.equal(
     manifest.devicePermissions?.includes('geolocation'),
     true,
     'packaged manifest must declare geolocation',
@@ -65,6 +75,11 @@ export function assertPackagedManifest(manifest, expected) {
     manifest.webApplicationInfo?.resource,
     expected.applicationIdUri,
     'packaged SSO resource must match the Entra Application ID URI',
+  );
+  assert.equal(
+    manifest.webApplicationInfo?.resource,
+    `api://${expected.tabDomain}/botid-${expected.botClientId}`,
+    'packaged SSO resource must contain the expected Bot client ID in the combined URI',
   );
   assert.equal(
     JSON.stringify(manifest).includes('${{'),
@@ -191,6 +206,7 @@ async function expectedDeployment(env) {
     appId: env.TEAMS_APP_ID,
     tabDomain: env.TAB_DOMAIN,
     clientId: env.CLIENT_ID,
+    botClientId: env.BOT_CLIENT_ID,
     applicationIdUri: env.APPLICATION_ID_URI,
   };
   const missing = Object.entries(expected)

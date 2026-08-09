@@ -35,4 +35,31 @@ assert.match(
   /api:\/\/runtime\.example\.com\/botid-00000000-0000-4000-8000-000000000004/,
 );
 
+const devTunnel = run({
+  TAB_DOMAIN: 'dxshc7dx-3978.jpe1.devtunnels.ms',
+  APPLICATION_ID_URI: 'api://dxshc7dx-3978.jpe1.devtunnels.ms/botid-00000000-0000-4000-8000-000000000004',
+});
+assert.equal(devTunnel.status, 0, devTunnel.stderr || devTunnel.stdout);
+
+for (const [label, TAB_DOMAIN] of [
+  ['port', 'runtime.example.com:3978'],
+  ['query', 'runtime.example.com?unexpected'],
+  ['fragment', 'runtime.example.com#unexpected'],
+  ['whitespace', 'runtime.example.com with-space'],
+  ['empty label', 'runtime..example.com'],
+  ['leading dot', '.runtime.example.com'],
+  ['trailing dot', 'runtime.example.com.'],
+  ['leading hyphen', '-runtime.example.com'],
+  ['trailing hyphen', 'runtime.example.com-'],
+  ['underscore', 'runtime_example.com'],
+]) {
+  const invalid = run({ TAB_DOMAIN });
+  assert.notEqual(invalid.status, 0, `${label} TAB_DOMAIN must fail preflight`);
+  assert.match(
+    `${invalid.stdout}\n${invalid.stderr}`,
+    /TAB_DOMAIN must be a public HTTPS hostname/,
+    `${label} TAB_DOMAIN must fail at hostname validation`,
+  );
+}
+
 console.log('Deployment environment tests passed: combined Teams SDK bot+tab resource URI is mandatory.');

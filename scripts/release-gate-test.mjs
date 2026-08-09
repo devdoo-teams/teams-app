@@ -15,13 +15,15 @@ const expected = {
   appId: 'e915b402-eed4-4ee2-ba1f-c31d75c870a5',
   tabDomain: 'runtime.example.com',
   clientId: '5b48ad62-f024-4a63-b3e8-66b589e3cd43',
-  applicationIdUri: 'api://runtime.example.com/5b48ad62-f024-4a63-b3e8-66b589e3cd43',
+  botClientId: '32127cdd-f19d-4fce-95c9-431e27cca739',
+  applicationIdUri: 'api://runtime.example.com/botid-32127cdd-f19d-4fce-95c9-431e27cca739',
 };
 
 const validManifest = {
   version: expected.version,
   id: expected.appId,
   staticTabs: [{ contentUrl: `https://${expected.tabDomain}/tabs/home` }],
+  validDomains: [expected.tabDomain, 'token.botframework.com'],
   devicePermissions: ['geolocation'],
   webApplicationInfo: {
     id: expected.clientId,
@@ -48,6 +50,25 @@ assert.equal(resolvePublicUrl({ PUBLIC_BASE_URL: 'https://base.test/' }), 'https
 assert.equal(resolvePublicUrl({ TAB_DOMAIN: 'tab.test' }), 'https://tab.test');
 assert.equal(resolvePublicUrl({}), undefined);
 assert.doesNotThrow(() => assertPackagedManifest(validManifest, expected));
+assert.throws(
+  () => assertPackagedManifest({ ...validManifest, validDomains: ['token.botframework.com'] }, expected),
+  /tab domain|validDomains/i,
+);
+assert.throws(
+  () => assertPackagedManifest({ ...validManifest, validDomains: [expected.tabDomain] }, expected),
+  /token\.botframework\.com|validDomains/i,
+);
+const mismatchedBotContract = {
+  ...expected,
+  applicationIdUri: `api://${expected.tabDomain}/botid-${expected.clientId}`,
+};
+assert.throws(
+  () => assertPackagedManifest({
+    ...validManifest,
+    webApplicationInfo: { ...validManifest.webApplicationInfo, resource: mismatchedBotContract.applicationIdUri },
+  }, mismatchedBotContract),
+  /Bot client ID|resource/i,
+);
 assert.throws(
   () => assertPackagedManifest({ ...validManifest, devicePermissions: [] }, expected),
   /geolocation/,

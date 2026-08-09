@@ -162,6 +162,13 @@ if (isProduction && !userAuthConfigured) {
   throw new Error('Production requires CLIENT_ID, TENANT_ID, and APPLICATION_ID_URI for user SSO.');
 }
 
+if (isProduction) {
+  const expectedApplicationIdUri = `api://${process.env.TAB_DOMAIN?.trim() ?? ''}/botid-${process.env.BOT_CLIENT_ID?.trim() ?? ''}`;
+  if (process.env.APPLICATION_ID_URI?.trim() !== expectedApplicationIdUri) {
+    throw new Error(`Production APPLICATION_ID_URI must match ${expectedApplicationIdUri}.`);
+  }
+}
+
 if (isProduction && skipAuth) {
   throw new Error('TEAMS_SKIP_AUTH must not be enabled in production.');
 }
