@@ -249,8 +249,13 @@ async function main(): Promise<void> {
     const card = modeCard.body.activities?.[0]?.attachments?.find(
       (attachment: any) => attachment.contentType === 'application/vnd.microsoft.card.adaptive',
     )?.content;
-    assertPass(card?.type === 'AdaptiveCard' && card.actions?.length === 3, 'Teams mode command returns a three-option Adaptive Card');
-    assertPass(card.actions.every((action: any) => action.type === 'Action.Submit' && typeof action.data?.mode === 'string'), 'mode card actions carry only validated mode choices');
+    const modeActivity = modeCard.body.activities?.[0];
+    assertPass(!('text' in (modeActivity ?? {})) && modeActivity?.attachmentLayout === 'list', 'mode card activity is attachment-only with list layout');
+    assertPass(card?.type === 'AdaptiveCard' && card.version === '1.2', 'Teams mode command returns an Adaptive Card 1.2 card');
+    assertPass(card.actions?.length === 1, 'mode card exposes actions only for configured modes');
+    assertPass(card.actions.every((action: any) => action.type === 'Action.Submit' && typeof action.data?.mode === 'string' && !('isEnabled' in action)), 'mode card actions carry only configured validated choices');
+    const facts = card.body?.find((element: any) => element.type === 'FactSet')?.facts ?? [];
+    assertPass(facts.some((fact: any) => fact.title === 'OpenAI') && facts.some((fact: any) => fact.title === '로컬/사내 모델'), 'unconfigured modes remain visible as facts');
 
     const cardSubmit = await request(baseUrl, '/api/messages', token, {
       method: 'POST',

@@ -162,7 +162,7 @@ function assertAdaptiveCardActivity(activityValue, label) {
   assert(!('text' in (activityValue ?? {})), `${label} does not duplicate card content in a top-level text bubble`);
   const card = adaptiveCardFromActivity(activityValue);
   assert(card?.type === 'AdaptiveCard', `${label} returns an Adaptive Card activity`);
-  assert(card?.version === '1.5', `${label} uses Adaptive Card 1.5`);
+  assert(card?.version === '1.2', `${label} uses Adaptive Card 1.2`);
   assert(!JSON.stringify(card).includes('AI 생성 콘텐츠'), `${label} does not show an AI-generated label`);
   assert(!('aiGenerated' in (card ?? {})), `${label} does not expose aiGenerated metadata`);
   return card;

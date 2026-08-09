@@ -39,17 +39,16 @@ export function createResponseModeCard(
   availability: readonly PublicResponseModeAvailability[],
   notice?: string,
 ): TeamsAdaptiveCard {
-  const actions: AdaptiveCardAction[] = availability.map((entry) => ({
+  const actions: AdaptiveCardAction[] = availability.filter((entry) => entry.configured).map((entry) => ({
     type: 'Action.Submit',
     title: `${entry.label}${entry.mode === current ? ' · 현재' : ''}`,
     data: { action: RESPONSE_MODE_ACTION, mode: entry.mode },
-    isEnabled: entry.configured,
   }));
 
   return {
     type: 'AdaptiveCard',
     $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.5',
+    version: '1.2',
     msteams: { width: 'Full' },
     speak: `응답 모드: ${responseModeLabel(current)}`,
     body: [

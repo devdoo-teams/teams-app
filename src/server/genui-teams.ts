@@ -19,7 +19,7 @@ export type AdaptiveCardAction = Record<string, unknown>;
 export interface TeamsAdaptiveCard {
   type: 'AdaptiveCard';
   $schema: 'http://adaptivecards.io/schemas/adaptive-card.json';
-  version: '1.5';
+  version: '1.2';
   body: AdaptiveCardElement[];
   actions?: AdaptiveCardAction[];
   speak?: string;
@@ -315,7 +315,7 @@ function renderGenUiCardFromEnvelope(
   return {
     type: 'AdaptiveCard',
     $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.5',
+    version: '1.2',
     msteams: { width: 'Full' },
     speak: `상태: ${STATUS_PRESENTATION[envelope.status].label}`,
     body,

@@ -105,7 +105,7 @@ const nonAiEnvelope = GenUiEnvelopeV1Schema.parse({
 });
 const card = renderGenUiCard(nonAiEnvelope);
 assert.equal(card.type, 'AdaptiveCard');
-assert.equal(card.version, '1.5');
+assert.equal(card.version, '1.2');
 assert.equal(card.msteams.width, 'Full');
 assert.ok(card.body.every((element) => element.type !== 'TextBlock' || element.wrap === true));
 
@@ -171,7 +171,7 @@ assert.equal(aiCard.actions?.length, GENUI_ACTIONS.length);
 
 const attachment = createAdaptiveCardAttachment(nonAiEnvelope);
 assert.equal(attachment.contentType, 'application/vnd.microsoft.card.adaptive');
-assert.equal(attachment.content.version, '1.5');
+assert.equal(attachment.content.version, '1.2');
 const activity = createAdaptiveCardActivity(nonAiEnvelope);
 assert.equal(activity.type, 'message');
 assert.equal('text' in activity, false);
@@ -185,6 +185,13 @@ assert.equal(responseModeActivity.type, 'message');
 assert.equal('text' in responseModeActivity, false);
 assert.equal(responseModeActivity.attachments?.length, 1);
 assert.equal(responseModeActivity.attachmentLayout, 'list');
+const responseModeCard = responseModeActivity.attachments?.[0]?.content;
+assert.equal(responseModeCard?.version, '1.2');
+assert.equal(responseModeCard?.actions?.length, 1);
+assert.ok(responseModeCard?.actions?.every((action) => !('isEnabled' in action)));
+const responseModeFacts = responseModeCard?.body.find((element) => element.type === 'FactSet') as Record<string, unknown> | undefined;
+const responseModeFactEntries = responseModeFacts?.facts as Array<Record<string, unknown>> | undefined;
+assert.ok(responseModeFactEntries?.some((fact) => fact.title === 'OpenAI'));
 const textFallback = createTextFallbackActivity(nonAiEnvelope);
 assert.equal(textFallback.text, '업무 허브 응답입니다.');
 assert.equal(textFallback.attachments, undefined);
