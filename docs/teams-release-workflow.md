@@ -83,7 +83,7 @@ npm run release:loop -- complete
   "surface": "desktop",
   "observedAt": "2026-08-09T12:00:00.000Z",
   "commit": "<현재 커밋>",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "packageSha256": "<release:package 결과>",
   "summary": "실제 배포 Teams 데스크톱에서 status 답장과 카드/탭을 확인함",
   "artifactPaths": ["/absolute/path/teams-desktop.png"]
@@ -99,10 +99,10 @@ npm run release:loop -- complete
   "surface": "installed",
   "observedAt": "2026-08-09T12:00:00.000Z",
   "commit": "<현재 커밋>",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "packageSha256": "<release:package 결과>",
-  "installedVersion": "1.0.14",
-  "summary": "Teams 앱 정보 화면에서 설치 버전 1.0.14을 확인하고 status 왕복을 확인함",
+  "installedVersion": "1.0.15",
+  "summary": "Teams 앱 정보 화면에서 설치 버전 1.0.15을 확인하고 status 왕복을 확인함",
   "artifactPaths": ["/absolute/path/teams-installed-info.png"]
 }
 ```
@@ -175,7 +175,7 @@ npm run start
 
 공개 Dev Tunnel 인증이 필요한 경우 디바이스 코드가 보안 기본값으로 차단될 수 있다. 이때 브라우저 인증을 사용하고 사용자가 Auth 앱 승인을 완료한 뒤 `devtunnel user show`가 로그인 상태인지 확인한다. 터널 호스트가 출력한 `Connect via browser` URL과 `devtunnel show --json`의 `portUri`가 패키지의 `TAB_DOMAIN`과 일치해야 한다.
 
-Entra SSO는 패키지 업로드 성공만으로 완료된 것으로 보지 않는다. 봇과 탭을 함께 사용하는 Teams SDK 앱에서는 Bot Entra 앱의 Application ID URI가 `api://botid-<BOT_CLIENT_ID>`인지, `access_as_user` 범위와 Teams Web/Desktop 사전 승인 및 Bot Framework redirect URI가 구성됐는지 확인한다. 실제 Teams 탭 iframe에서 `authentication.getAuthToken()`을 호출해 `App resource defined in manifest and iframe origin do not match`가 없는지도 검증한다. 불일치가 재현되고 관리자 접근이 작업 범위에 있으면 Bot Entra 리소스, `webApplicationInfo.resource`, `APPLICATION_ID_URI`를 동일 값으로 맞추고 반드시 새 버전 패키지를 다시 생성·업로드한다. `TAB_DOMAIN`은 탭 origin/valid domain에만 사용한다.
+Entra SSO는 패키지 업로드 성공만으로 완료된 것으로 보지 않는다. 봇과 탭을 함께 사용하는 Teams SDK 앱에서는 Bot Entra 앱의 실제 Application ID URI가 결합 계약인 `api://<TAB_DOMAIN>/botid-<BOT_CLIENT_ID>`인지, `access_as_user` 범위와 Teams Web/Desktop 사전 승인 및 Bot Framework redirect URI가 구성됐는지 확인한다. manifest `validDomains`에는 탭 호스트와 `token.botframework.com`이 모두 있어야 한다. 실제 Teams 탭 iframe에서 `authentication.getAuthToken()`을 호출해 `App resource defined in manifest and iframe origin do not match`가 없는지도 검증한다. 불일치가 재현되고 관리자 접근이 작업 범위에 있으면 Bot Entra 리소스, `webApplicationInfo.resource`, `APPLICATION_ID_URI`를 동일 값으로 맞추고 반드시 새 버전 패키지를 다시 생성·업로드한다.
 
 ### 6. 엔드투엔드 런타임 검증
 

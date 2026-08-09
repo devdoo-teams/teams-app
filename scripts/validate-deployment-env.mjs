@@ -47,10 +47,10 @@ if (!values.APPLICATION_ID_URI.startsWith('api://') || /[<>$]|\$\{\{/.test(value
   process.exit(1);
 }
 
-const expectedApplicationIdUri = `api://botid-${values.BOT_CLIENT_ID}`;
+const expectedApplicationIdUri = `api://${values.TAB_DOMAIN}/botid-${values.BOT_CLIENT_ID}`;
 if (values.APPLICATION_ID_URI !== expectedApplicationIdUri) {
   console.error(
-    `APPLICATION_ID_URI must match the Teams SDK bot resource: expected ${expectedApplicationIdUri}. ` +
+    `APPLICATION_ID_URI must match the Teams SDK combined bot+tab resource: expected ${expectedApplicationIdUri}. ` +
       'Verify the Bot Entra app Expose an API URI before creating or uploading a Teams package.',
   );
   process.exit(1);

@@ -68,7 +68,7 @@ v1.0.7부터 사용자·테넌트별로 다음 응답 엔진을 선택할 수 �
 
 모바일 Teams에서 선택하려면 다음 순서를 따릅니다.
 
-1. Teams Admin Center의 기존 앱 상세에 업로드된 v1.0.14 앱을 Teams 모바일에서 새로 고침하거나 앱을 다시 추가하고 `업무 허브` 개인 탭을 엽니다.
+1. Teams Admin Center의 기존 앱 상세에 업로드된 v1.0.15 앱을 Teams 모바일에서 새로 고침하거나 앱을 다시 추가하고 `업무 허브` 개인 탭을 엽니다.
 2. 탭의 `응답 엔진` 선택 영역에서 `결정형`, `OpenAI`, `로컬/사내 모델` 중 하나를 누릅니다.
 3. 설정되지 않은 provider는 비활성화되어 있으며 모바일 사용자는 키·endpoint URL을 입력하지 않습니다. OpenAI/로컬 항목이 비활성화되어 있으면 `결정형`을 선택하거나 관리자에게 서버 설정을 요청합니다.
 4. Bot 대화에서는 `mode` 또는 `응답 모드`를 보내 같은 세 가지 선택 Adaptive Card를 열 수 있습니다. 선택 후 `help`, `list`, `status`, `날씨` 또는 자연어 요청을 보내 응답을 확인합니다.
@@ -120,7 +120,7 @@ npm test
 
 `npm run test:runtime`만 실행하면 이미 빌드된 서버를 기준으로 런타임 테스트를 반복할 수 있습니다. 테스트는 로컬 인증 우회 흐름, 업무 CRUD, Bot 명령, 설치 welcome message, Teams SDK Activity 라우팅, Codex thread 재개·취소·승인·Git commit·outbox 전달과 production bearer token 거부 흐름을 모두 확인합니다.
 
-`npm test`에는 Task 0–7의 저장소 hardening, 결정형/OpenAI/local provider, response-mode 저장소·API, Teams 탭 selector, MCP GenUI, 기존 CopilotKit·Teams·ACL 런타임 검증이 모두 포함됩니다. 릴리스 assertions는 무키 provider 상태, 결정형 기본값, 응답 모드 인증 경계, MCP/Teams/CopilotKit의 공통 GenUI 계약, v1.0.14 런타임 버전을 확인합니다.
+`npm test`에는 Task 0–7의 저장소 hardening, 결정형/OpenAI/local provider, response-mode 저장소·API, Teams 탭 selector, MCP GenUI, 기존 CopilotKit·Teams·ACL 런타임 검증이 모두 포함됩니다. 릴리스 assertions는 무키 provider 상태, 결정형 기본값, 응답 모드 인증 경계, MCP/Teams/CopilotKit의 공통 GenUI 계약, v1.0.15 런타임 버전을 확인합니다.
 
 CopilotKit 런타임 검증은 `/api/copilotkit/info` 검색, 업무 현황·날씨 tool event, Codex 진행 스트림, workspace-write 승인 경계와 승인 카드 취소까지 포함합니다. Teams 탭의 CopilotKit 클라이언트는 REST/SSE 전송을 명시해 `/info`와 `/agent/default/run` 엔드포인트를 사용합니다.
 
@@ -138,9 +138,9 @@ Teams 탭이 초기화되면 TeamsJS `authentication.getAuthToken()`으로 받�
 
 실제 Teams 등록 후 발급받은 값으로 패키지를 생성합니다.
 
-이 릴리스 후보의 소스 package와 Teams manifest 버전은 `1.0.14`으로 고정되어 있으며 `npm run validate:manifest`가 두 값을 함께 검사합니다. 실제 배포 환경값이 없는 상태에서는 패키지를 업로드하거나 placeholder를 운영 자격 증명으로 간주하지 않습니다.
+이 릴리스 후보의 소스 package와 Teams manifest 버전은 `1.0.15`으로 고정되어 있으며 `npm run validate:manifest`가 두 값을 함께 검사합니다. 실제 배포 환경값이 없는 상태에서는 패키지를 업로드하거나 placeholder를 운영 자격 증명으로 간주하지 않습니다.
 
-운영 패키지를 만들기 전에 배포 환경 사전검사를 실행합니다. 이 검사는 검증용 placeholder, 로컬 호스트, 잘못된 GUID를 차단합니다. `BOT_ID`는 메시징용 Teams/Bot 등록 ID이며, 봇과 탭을 함께 사용하는 Teams SDK 앱에서는 `APPLICATION_ID_URI`가 봇 클라이언트 ID를 가리키는 `api://botid-<BOT_CLIENT_ID>`여야 합니다. `webApplicationInfo.id`는 별도 인증 앱일 수 있지만 resource URI 계약은 봇 리소스와 일치해야 합니다.
+운영 패키지를 만들기 전에 배포 환경 사전검사를 실행합니다. 이 검사는 검증용 placeholder, 로컬 호스트, 잘못된 GUID를 차단합니다. `BOT_ID`는 메시징용 Teams/Bot 등록 ID이며, 봇과 탭을 함께 사용하는 Teams SDK 앱에서는 `APPLICATION_ID_URI`가 Microsoft의 결합 봇+탭 계약인 `api://<TAB_DOMAIN>/botid-<BOT_CLIENT_ID>`여야 합니다. `webApplicationInfo.id`는 별도 인증 앱일 수 있지만 resource URI 계약은 관찰된 봇 리소스와 일치해야 합니다.
 
 ```bash
 npm run check:deployment
@@ -159,11 +159,11 @@ npm run package:app
 
 생성된 `appPackage/build/teams-sdk-mvp.zip`을 Teams Developer Portal 또는 Teams Admin Center에 업로드합니다.
 
-ZIP을 새로 만든 뒤에는 내부 `manifest.json`의 버전 `1.0.14`, `devicePermissions: ["geolocation"]`, 실제 valid domain, 해석된 ID/URI를 확인하고 SHA-256을 기록합니다. 이전 ZIP을 재사용하지 않습니다.
+ZIP을 새로 만든 뒤에는 내부 `manifest.json`의 버전 `1.0.15`, `devicePermissions: ["geolocation"]`, 탭 호스트와 `token.botframework.com`을 포함한 valid domain, 해석된 ID/URI를 확인하고 SHA-256을 기록합니다. 이전 ZIP을 재사용하지 않습니다.
 
 `APPLICATION_ID_URI`는 Microsoft Entra 앱 등록의 `Expose an API`에 표시되는 실제 Application ID URI를 사용해야 합니다. 이 값은 manifest의 `webApplicationInfo.resource`로 들어갑니다.
 
-Teams SDK에서 봇과 탭을 함께 사용하는 SSO는 `TAB_DOMAIN`의 공개 HTTPS 조건과 별개로, 봇 Entra 앱의 Application ID URI·`access_as_user` 범위·Teams Web/Desktop 사전 승인을 사용합니다. 따라서 `APPLICATION_ID_URI`와 manifest의 `webApplicationInfo.resource`는 반드시 `api://botid-<BOT_CLIENT_ID>`와 같아야 하고, `webApplicationInfo.id`는 실제 토큰을 발급하는 인증 앱 ID와 일치해야 합니다. Dev Tunnel의 임시 호스트는 탭 `contentUrl`/valid domain에만 사용하며 resource URI에 넣지 않습니다. SSO 오류가 나면 Bot Entra 앱 설정과 Teams 앱 매니페스트를 함께 확인한 뒤 버전 증가·새 패키지 생성·재업로드를 수행합니다.
+Teams SDK에서 봇과 탭을 함께 사용하는 SSO는 봇 Entra 앱의 관찰된 Application ID URI·`access_as_user` 범위·Teams Web/Desktop 사전 승인·Bot Framework redirect URI를 사용합니다. 따라서 `APPLICATION_ID_URI`와 manifest의 `webApplicationInfo.resource`는 결합 계약인 `api://<TAB_DOMAIN>/botid-<BOT_CLIENT_ID>`와 같아야 하고, `webApplicationInfo.id`는 실제 토큰을 발급하는 인증 앱 ID와 일치해야 합니다. manifest `validDomains`에는 탭 호스트와 `token.botframework.com`을 함께 넣습니다. SSO 오류가 나면 Bot Entra 앱 설정과 Teams 앱 매니페스트를 함께 확인한 뒤 버전 증가·새 ZIP 생성·재업로드를 수행합니다.
 
 ## Teams에서 실행
 

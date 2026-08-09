@@ -11,7 +11,7 @@ import {
 } from './release-gate.mjs';
 
 const expected = {
-  version: '1.0.14',
+  version: '1.0.15',
   appId: 'e915b402-eed4-4ee2-ba1f-c31d75c870a5',
   tabDomain: 'runtime.example.com',
   clientId: '5b48ad62-f024-4a63-b3e8-66b589e3cd43',

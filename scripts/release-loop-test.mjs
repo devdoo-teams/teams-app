@@ -26,7 +26,7 @@ const identity = {
   runId: 'run-test-001',
   commit: '0123456789abcdef0123456789abcdef01234567',
   shortCommit: '0123456',
-  version: '1.0.14',
+  version: '1.0.15',
   startedAt: '2026-08-09T00:00:00.000Z',
 };
 
@@ -189,7 +189,7 @@ for (const surface of ['portal', 'installed', 'desktop', 'mobile']) {
 assert.equal(completeState.status, 'MOBILE_READY');
 assert.deepEqual(missingGates(completeState), []);
 const report = completionMessage(completeState);
-assert.match(report, /1\.0\.14/);
+assert.match(report, /1\.0\.15/);
 assert.match(report, /0123456/);
 assert.match(report, /a{64}/);
 assert.doesNotMatch(report, /desktop-proof\.png/);

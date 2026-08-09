@@ -78,7 +78,7 @@ Teams Bot에서 실행된 하위 Codex 프로세스가 부모 Codex 앱의 인�
 
 ### `APPLICATION_ID_URI` 불일치
 
-먼저 봇 Entra 앱의 실제 Application ID URI, `access_as_user` 범위, Teams Web/Desktop 사전 승인, Bot Framework redirect URI, 매니페스트 `webApplicationInfo.resource`, 탭 iframe의 공개 origin을 분리해 비교한다. Teams 탭에서 `App resource defined in manifest and iframe origin do not match`가 재현되면 봇과 탭을 함께 쓰는 Teams SDK 계약인 `api://botid-<BOT_CLIENT_ID>`를 기준으로 Bot Entra 앱의 URI와 매니페스트 resource를 맞춘다. `TAB_DOMAIN`은 iframe `contentUrl`/valid domain에만 사용하며 resource URI에 넣지 않는다. 그 뒤 `.env.runtime`의 `APPLICATION_ID_URI`를 `api://botid-<BOT_CLIENT_ID>`로 갱신하고 버전 증가·매니페스트 검증·새 ZIP 생성·기존 앱 업데이트 업로드·실제 탭 SSO 재검증을 모두 수행한다. 관리자 권한이 없으면 URI를 추측하거나 기존 등록값을 덮어쓰지 말고 BLOCKER로 보고한다.
+먼저 봇 Entra 앱의 실제 Application ID URI, `access_as_user` 범위, Teams Web/Desktop 사전 승인, Bot Framework redirect URI, 매니페스트 `webApplicationInfo.resource`, 탭 iframe의 공개 origin을 분리해 비교한다. Teams 탭에서 `App resource defined in manifest and iframe origin do not match`가 재현되면 봇과 탭을 함께 쓰는 Microsoft 결합 계약인 `api://<TAB_DOMAIN>/botid-<BOT_CLIENT_ID>`를 기준으로 Bot Entra 앱의 URI, 매니페스트 resource, `.env.runtime`의 `APPLICATION_ID_URI`를 관찰된 동일 값으로 맞춘다. `TAB_DOMAIN`은 iframe `contentUrl`/valid domain에도 사용하며, manifest `validDomains`에는 `token.botframework.com`도 포함한다. 그 뒤 버전 증가·매니페스트 검증·새 ZIP 생성·기존 앱 업데이트 업로드·실제 탭 SSO 재검증을 모두 수행한다. 관리자 권한이 없으면 URI를 추측하거나 기존 등록값을 덮어쓰지 말고 BLOCKER로 보고한다.
 
 ### 인앱 브라우저와 Dev Tunnel 재사용
 

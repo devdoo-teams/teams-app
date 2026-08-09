@@ -8,7 +8,7 @@ const base = {
   CLIENT_ID: '00000000-0000-4000-8000-000000000003',
   BOT_CLIENT_ID: '00000000-0000-4000-8000-000000000004',
   TENANT_ID: '00000000-0000-4000-8000-000000000005',
-  APPLICATION_ID_URI: 'api://botid-00000000-0000-4000-8000-000000000004',
+  APPLICATION_ID_URI: 'api://runtime.example.com/botid-00000000-0000-4000-8000-000000000004',
 };
 
 function run(overrides = {}) {
@@ -25,7 +25,14 @@ const mismatched = run({ APPLICATION_ID_URI: 'api://runtime.example.com/00000000
 assert.notEqual(mismatched.status, 0, 'a non-botid Application ID URI must fail preflight for a Teams SDK bot app');
 assert.match(
   `${mismatched.stdout}\n${mismatched.stderr}`,
-  /APPLICATION_ID_URI must match the Teams SDK bot resource/,
+  /APPLICATION_ID_URI must match the Teams SDK combined bot\+tab resource/,
 );
 
-console.log('Deployment environment tests passed: Teams SDK bot resource URI is mandatory.');
+const standalone = run({ APPLICATION_ID_URI: 'api://botid-00000000-0000-4000-8000-000000000004' });
+assert.notEqual(standalone.status, 0, 'the standalone bot URI must fail for the combined bot and tab contract');
+assert.match(
+  `${standalone.stdout}\n${standalone.stderr}`,
+  /api:\/\/runtime\.example\.com\/botid-00000000-0000-4000-8000-000000000004/,
+);
+
+console.log('Deployment environment tests passed: combined Teams SDK bot+tab resource URI is mandatory.');

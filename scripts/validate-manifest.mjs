@@ -5,7 +5,7 @@ const manifestPath = path.resolve('appPackage/manifest.json');
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 const packagePath = path.resolve('package.json');
 const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
-const releaseVersion = '1.0.14';
+const releaseVersion = '1.0.15';
 const required = [
   'manifestVersion',
   'version',
@@ -30,11 +30,6 @@ if (manifest.manifestVersion !== '1.25') {
   process.exit(1);
 }
 
-if (packageJson.version !== releaseVersion || manifest.version !== releaseVersion) {
-  console.error(`Expected package and manifest version ${releaseVersion}, received package=${packageJson.version}, manifest=${manifest.version}`);
-  process.exit(1);
-}
-
 if (!manifest.staticTabs.some((tab) => tab.entityId === 'home' && tab.scopes.includes('personal'))) {
   console.error('Manifest must declare a personal home static tab.');
   process.exit(1);
@@ -42,6 +37,16 @@ if (!manifest.staticTabs.some((tab) => tab.entityId === 'home' && tab.scopes.inc
 
 if (!manifest.devicePermissions?.includes('geolocation')) {
   console.error('Manifest must declare geolocation device permission.');
+  process.exit(1);
+}
+
+if (!manifest.validDomains?.includes('token.botframework.com')) {
+  console.error('Manifest validDomains must include token.botframework.com for Teams SSO redirect handling.');
+  process.exit(1);
+}
+
+if (packageJson.version !== releaseVersion || manifest.version !== releaseVersion) {
+  console.error(`Expected package and manifest version ${releaseVersion}, received package=${packageJson.version}, manifest=${manifest.version}`);
   process.exit(1);
 }
 
