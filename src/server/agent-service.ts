@@ -52,6 +52,15 @@ export class AgentJobConflictError extends Error {
   }
 }
 
+export class AgentMutationAuthorizationError extends Error {
+  readonly code = 'AGENT_MUTATION_FORBIDDEN' as const;
+
+  constructor(message = '이 작업은 허용된 운영자만 실행할 수 있습니다.') {
+    super(message);
+    this.name = 'AgentMutationAuthorizationError';
+  }
+}
+
 export function normalizeAgentPrompt(prompt: unknown): string {
   if (typeof prompt !== 'string') {
     throw new AgentPromptValidationError('작업 요청 내용을 입력하세요.');
@@ -82,6 +91,9 @@ export class AgentService {
     private readonly workspace: string,
     private readonly notify: Notify,
     private readonly gitService: GitService,
+    private readonly options: {
+      canMutateScope?: (scope: AgentJobScope) => boolean;
+    } = {},
   ) {}
 
   private readonly progressStates = new Map<string, ProgressState>();
@@ -102,6 +114,9 @@ export class AgentService {
     onProgress?: ProgressListener;
   }): Promise<AgentJob> {
     const prompt = normalizeAgentPrompt(input.prompt);
+    if (input.mode === 'workspace-write') {
+      this.assertMutationAllowed(input.scope);
+    }
     const job = await this.store.create({ ...input, prompt });
     if (job.mode === 'read-only') {
       void this.execute(job, input.notify !== false, input.onProgress);
@@ -119,6 +134,7 @@ export class AgentService {
     const previous = this.store.get(id, scope);
     if (!previous) return undefined;
     if (!previous.threadId) return undefined;
+    if (previous.mode === 'workspace-write') this.assertMutationAllowed(scope);
 
     return this.submit({
       prompt: normalizedPrompt,
@@ -173,6 +189,8 @@ export class AgentService {
   }
 
   async approve(id: string, scope: AgentJobScope): Promise<AgentJob | undefined> {
+    const existing = this.store.get(id, scope);
+    if (existing?.mode === 'workspace-write') this.assertMutationAllowed(scope);
     const queued = await this.withJobMutationLock(id, scope, async () => {
       const job = this.store.get(id, scope);
       if (!job) return undefined;
@@ -198,6 +216,8 @@ export class AgentService {
     scope: AgentJobScope,
     options: { notify?: boolean; strict?: boolean } = {},
   ): Promise<AgentJob | undefined> {
+    const existing = this.store.get(id, scope);
+    if (existing?.mode === 'workspace-write') this.assertMutationAllowed(scope);
     const cancelled = await this.withJobMutationLock(id, scope, async () => {
       const job = this.store.get(id, scope);
       if (!job) return undefined;
@@ -259,9 +279,24 @@ export class AgentService {
   async commit(id: string, message: string, scope: AgentJobScope): Promise<AgentJob | undefined> {
     const job = this.store.get(id, scope);
     if (!job) return undefined;
+    this.assertMutationAllowed(scope);
     if (job.status !== 'completed') return job;
+    if (job.mode !== 'workspace-write') {
+      await this.store.update(id, scope, {
+        commitMessage: '읽기 전용 작업은 커밋할 수 없습니다. completed workspace-write 작업만 커밋할 수 있습니다.',
+      });
+      return this.store.get(id, scope);
+    }
 
-    const commit = await this.gitService.commit(message);
+    const ownedPaths = recordedChangedPaths(job);
+    if (!ownedPaths) {
+      await this.store.update(id, scope, {
+        commitMessage: '작업의 기록된 변경 경로 소유권을 증명할 수 없어 커밋을 중단했습니다.',
+      });
+      return this.store.get(id, scope);
+    }
+
+    const commit = await this.gitService.commit(message, { ownedPaths });
     if (!commit.committed) {
       await this.store.update(id, scope, { commitMessage: commit.message });
       return this.store.get(id, scope);
@@ -294,6 +329,14 @@ export class AgentService {
   /** Local-only MCP/debug reader. Authenticated callers must use scoped methods. */
   countActiveLocalOnly(): number {
     return this.store.countActiveLocalOnly();
+  }
+
+  private assertMutationAllowed(scope: AgentJobScope): void {
+    if (this.options.canMutateScope?.(scope) !== true) {
+      throw new AgentMutationAuthorizationError(
+        '운영자 권한이 필요합니다. 관리자에게 TEAMS_OPERATOR_REQUESTER_ALLOWLIST 설정을 요청하세요.',
+      );
+    }
   }
 
   private async execute(job: AgentJob, shouldNotify: boolean, onProgress?: ProgressListener): Promise<void> {
@@ -516,6 +559,16 @@ export class AgentService {
     const compact = result.length > maxLength ? `${result.slice(0, maxLength)}\n\n(결과가 길어 일부만 표시되었습니다.)` : result;
     return `작업 ${id}이 완료되었습니다.\n\n${compact}`;
   }
+}
+
+function recordedChangedPaths(job: AgentJob): string[] | undefined {
+  const value = (job as unknown as Record<string, unknown>).changedPaths;
+  if (!Array.isArray(value)) return undefined;
+  const paths = value
+    .filter((entry): entry is string => typeof entry === 'string')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  return paths.length > 0 ? paths : undefined;
 }
 
 function scopeForJob(job: AgentJob): AgentJobScope | undefined {

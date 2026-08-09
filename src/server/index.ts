@@ -7,10 +7,11 @@ import express from 'express';
 import { CopilotRuntime } from '@copilotkit/runtime/v2';
 import { createCopilotExpressHandler } from '@copilotkit/runtime/v2/express';
 
-import { createUserAuthMiddleware } from './user-auth.js';
-import { ItemStore, MAX_ITEM_TITLE_LENGTH } from './item-store.js';
+import { createUserAuthMiddleware, parseAcceptedAudiences } from './user-auth.js';
+import { ItemStore, MAX_ITEM_TITLE_LENGTH, type ItemScope } from './item-store.js';
 import { AgentJobStore, type AgentJob, type AgentJobScope } from './agent-job-store.js';
 import {
+  AgentMutationAuthorizationError,
   AgentJobConflictError,
   AgentService,
   normalizeAgentPrompt,
@@ -95,6 +96,13 @@ const useTeamsSdk = process.env.TEAMS_USE_SDK !== 'false' && botConfigured;
 const userAuthConfigured = Boolean(
   process.env.CLIENT_ID && process.env.TENANT_ID && process.env.APPLICATION_ID_URI,
 );
+const acceptedUserAudiences = parseAcceptedAudiences(process.env.TEAMS_USER_AUTH_ACCEPTED_AUDIENCES);
+const operatorRequesterAllowlist = new Set(
+  (process.env.TEAMS_OPERATOR_REQUESTER_ALLOWLIST ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean),
+);
 const appVersion = (() => {
   const configured = process.env.APP_VERSION?.trim();
   if (configured) return configured;
@@ -167,6 +175,10 @@ if (isProduction && (!botConfigured || !useTeamsSdk)) {
 
 if (isProduction && !userAuthConfigured) {
   throw new Error('Production requires CLIENT_ID, TENANT_ID, and APPLICATION_ID_URI for user SSO.');
+}
+
+if (isProduction && acceptedUserAudiences.length === 0) {
+  throw new Error('Production requires TEAMS_USER_AUTH_ACCEPTED_AUDIENCES for delegated user-token audience validation.');
 }
 
 if (isProduction && !tabDomain) {
@@ -294,8 +306,16 @@ function activityScope(activity: any): AgentJobScope | undefined {
   return { requesterId, conversationId, tenantId };
 }
 
+function itemScopeFromAgentScope(scope: Pick<AgentJobScope, 'requesterId' | 'tenantId'>): ItemScope {
+  return { requesterId: scope.requesterId, tenantId: scope.tenantId };
+}
+
 function localRestScope(): AgentJobScope {
   return { requesterId: 'local-user', conversationId: '', tenantId: 'local-tenant' };
+}
+
+function localItemScope(): ItemScope {
+  return itemScopeFromAgentScope(localRestScope());
 }
 
 function restConversationId(request: any): { conversationId?: string; error?: string } {
@@ -313,7 +333,7 @@ function restConversationId(request: any): { conversationId?: string; error?: st
 
 function restScope(request: any, response: any): { scope?: AgentJobScope; status?: number; error?: string } {
   const claims = asRecord(response.locals?.user) as UserClaims | undefined;
-  const requesterId = nonEmptyString(claims?.oid) ?? nonEmptyString(claims?.sub);
+  const requesterId = nonEmptyString(claims?.requesterId) ?? nonEmptyString(claims?.oid) ?? nonEmptyString(claims?.sub);
   const tenantId = nonEmptyString(claims?.tid);
   const conversation = restConversationId(request);
   if (conversation.error) return { status: 400, error: conversation.error };
@@ -329,11 +349,28 @@ function restScope(request: any, response: any): { scope?: AgentJobScope; status
 
 function copilotIdentity(request: any, response: any): { requesterId: string; tenantId: string } | undefined {
   const claims = asRecord(response.locals?.user) as UserClaims | undefined;
-  const requesterId = nonEmptyString(claims?.oid) ?? nonEmptyString(claims?.sub);
+  const requesterId = nonEmptyString(claims?.requesterId) ?? nonEmptyString(claims?.oid) ?? nonEmptyString(claims?.sub);
   const tenantId = nonEmptyString(claims?.tid);
   if (requesterId && tenantId) return { requesterId, tenantId };
   if (skipAuth && !claims) return { requesterId: 'local-user', tenantId: 'local-tenant' };
   return undefined;
+}
+
+function requestItemScope(_request: any, response: any): ItemScope | undefined {
+  const identity = copilotIdentity(undefined, response);
+  if (identity) return itemScopeFromAgentScope(identity);
+  if (skipAuth && !response.locals?.user) return localItemScope();
+  return undefined;
+}
+
+function isOperator(scope: Pick<AgentJobScope, 'requesterId'>): boolean {
+  return operatorRequesterAllowlist.has(scope.requesterId);
+}
+
+function mutationAuthorizationMessage(): string {
+  return operatorRequesterAllowlist.size === 0
+    ? '운영자 권한이 필요합니다. 관리자에게 TEAMS_OPERATOR_REQUESTER_ALLOWLIST 설정을 요청하세요.'
+    : '운영자 권한이 필요합니다. 허용된 요청자 ID만 쓰기·승인·취소·커밋을 실행할 수 있습니다.';
 }
 
 function envelopeText(envelope: GenUiEnvelopeV1): string {
@@ -644,6 +681,8 @@ http.use(
   createUserAuthMiddleware({
     allowUnauthenticated: skipAuth,
     validator: userAuthValidator,
+    configuredTenantId: process.env.TENANT_ID,
+    acceptedAudiences: acceptedUserAudiences,
   }),
 );
 
@@ -710,8 +749,22 @@ http.use(
   createUserAuthMiddleware({
     allowUnauthenticated: skipAuth,
     validator: userAuthValidator,
+    configuredTenantId: process.env.TENANT_ID,
+    acceptedAudiences: acceptedUserAudiences,
   }),
 );
+
+http.use('/api/items', async (request: any, response: any, next: any) => {
+  const scope = requestItemScope(request, response);
+  if (!scope) {
+    response.status(401).json({ error: 'validated user identity is required' });
+    return;
+  }
+  await itemStore.runWithScope(scope, async () => {
+    await itemStore.ensureScope();
+    next();
+  });
+});
 
 http.get('/api/items', (_request: any, response: any) => {
   response.json({ items: itemStore.list(), summary: itemStore.summary() });
@@ -734,6 +787,8 @@ http.use(
   createUserAuthMiddleware({
     allowUnauthenticated: skipAuth,
     validator: userAuthValidator,
+    configuredTenantId: process.env.TENANT_ID,
+    acceptedAudiences: acceptedUserAudiences,
   }),
 );
 
@@ -851,6 +906,9 @@ agentService = new AgentService(
   agentWorkspace,
   notifyConversation,
   gitService,
+  {
+    canMutateScope: (scope) => isOperator(scope),
+  },
 );
 await agentService.initialize();
 
@@ -911,6 +969,8 @@ http.use(
   createUserAuthMiddleware({
     allowUnauthenticated: skipAuth,
     validator: userAuthValidator,
+    configuredTenantId: process.env.TENANT_ID,
+    acceptedAudiences: acceptedUserAudiences,
   }),
 );
 http.use('/api/copilotkit', (request: any, response: any, next: any) => {
@@ -924,7 +984,10 @@ http.use('/api/copilotkit', (request: any, response: any, next: any) => {
   // an identity source.
   request.headers['x-validated-user-id'] = identity.requesterId;
   request.headers['x-validated-tenant-id'] = identity.tenantId;
-  next();
+  void itemStore.runWithScope(itemScopeFromAgentScope(identity), async () => {
+    await itemStore.ensureScope();
+    next();
+  });
 });
 http.use(createCopilotExpressHandler({
   runtime: copilotRuntime,
@@ -937,6 +1000,8 @@ http.use(
   createUserAuthMiddleware({
     allowUnauthenticated: skipAuth,
     validator: userAuthValidator,
+    configuredTenantId: process.env.TENANT_ID,
+    acceptedAudiences: acceptedUserAudiences,
   }),
 );
 http.post('/api/agent-jobs/:id/approve', async (request: any, response: any) => {
@@ -954,6 +1019,10 @@ http.post('/api/agent-jobs/:id/approve', async (request: any, response: any) => 
 
     response.json({ job });
   } catch (error) {
+    if (error instanceof AgentMutationAuthorizationError) {
+      response.status(403).json({ error: error.message });
+      return;
+    }
     if (error instanceof AgentJobConflictError) {
       response.status(409).json({ error: error.message, job: error.job });
       return;
@@ -977,6 +1046,10 @@ http.post('/api/agent-jobs/:id/cancel', async (request: any, response: any) => {
 
     response.json({ job });
   } catch (error) {
+    if (error instanceof AgentMutationAuthorizationError) {
+      response.status(403).json({ error: error.message });
+      return;
+    }
     if (error instanceof AgentJobConflictError) {
       response.status(409).json({ error: error.message, job: error.job });
       return;
@@ -1176,6 +1249,9 @@ async function resolveGenUiAction(activity: any): Promise<GenUiEnvelopeV1> {
 
     return envelope;
   } catch (error) {
+    if (error instanceof AgentMutationAuthorizationError) {
+      return genUi.error(error.message, `action-${payload.entityId}-forbidden`);
+    }
     if (error instanceof AgentJobConflictError) {
       return mutationConflictEnvelope(error);
     }
@@ -1254,6 +1330,7 @@ function botResponseRequest(activity: any, prompt: string, scope: AgentJobScope)
 
 async function handleBotNaturalLanguage(activity: any, send: BotSend, scope: AgentJobScope, prompt: string): Promise<void> {
   try {
+    await itemStore.ensureScope();
     const output = await botResponseEngineRouter.run({
       // The server-owned resolver replaces this fallback with the persisted
       // tenant/requester selection. The deterministic fallback is also the
@@ -1270,6 +1347,10 @@ async function handleBotNaturalLanguage(activity: any, send: BotSend, scope: Age
     });
     await send(output.text, output.envelope);
   } catch (error) {
+    if (error instanceof AgentMutationAuthorizationError) {
+      await send(error.message, genUi.error(error.message, 'response-engine-forbidden'));
+      return;
+    }
     console.error('Teams Bot response engine failed', error);
     const text = '응답 엔진을 실행하지 못했습니다. mode에서 사용 가능한 모드를 선택한 뒤 다시 시도하세요.';
     await send(text, genUi.error(text, 'response-engine-error'));
@@ -1282,118 +1363,123 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
     : '';
   const normalizedText = userText.toLowerCase();
   const scope = activityScope(activity);
+  const execute = async (): Promise<void> => {
+    if (normalizedText === 'mode' || normalizedText === 'response-mode' || normalizedText === '응답 모드') {
+      await handleResponseModeCommand(activity, send);
+      return;
+    }
 
-  if (normalizedText === 'mode' || normalizedText === 'response-mode' || normalizedText === '응답 모드') {
-    await handleResponseModeCommand(activity, send);
-    return;
-  }
-
-  if (normalizedText === 'help') {
-    const responseText = '사용 가능한 명령: help, mode, weather [위도 경도], status, list, run <작업>, continue <작업 ID> <추가 요청>, write <작업>, approve <작업 ID>, commit <작업 ID> [메시지], cancel <작업 ID>';
-    const envelope = genUi.help();
-    await send(responseText, envelope);
-    return;
-  }
-
-  const weatherMatch = userText.match(/^(?:weather|날씨)(?:\s+([-+]?\d+(?:\.\d+)?)\s+([-+]?\d+(?:\.\d+)?))?$/i);
-  if (weatherMatch) {
-    const isExplicitLocation = Boolean(weatherMatch[1] && weatherMatch[2]);
-
-    if (!isExplicitLocation) {
-      const responseText = 'Bot 대화에는 현재 기기 위치가 자동으로 전달되지 않습니다. Teams 탭에서 “내 위치 사용”을 누르거나, weather 37.5665 126.978처럼 좌표를 함께 입력하세요.';
-      const envelope = genUi.weatherUnavailable();
+    if (normalizedText === 'help') {
+      const responseText = '사용 가능한 명령: help, mode, weather [위도 경도], status, list, run <작업>, continue <작업 ID> <추가 요청>, write <작업>, approve <작업 ID>, commit <작업 ID> [메시지], cancel <작업 ID>';
+      const envelope = genUi.help();
       await send(responseText, envelope);
       return;
     }
 
-    const latitude = Number(weatherMatch[1]);
-    const longitude = Number(weatherMatch[2]);
+    const weatherMatch = userText.match(/^(?:weather|날씨)(?:\s+([-+]?\d+(?:\.\d+)?)\s+([-+]?\d+(?:\.\d+)?))?$/i);
+    if (weatherMatch) {
+      const isExplicitLocation = Boolean(weatherMatch[1] && weatherMatch[2]);
 
-    if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
-      const responseText = '위도는 -90~90, 경도는 -180~180 범위로 입력하세요. 예: weather 37.5665 126.978';
-      const envelope = genUi.invalidCoordinates();
+      if (!isExplicitLocation) {
+        const responseText = 'Bot 대화에는 현재 기기 위치가 자동으로 전달되지 않습니다. Teams 탭에서 “내 위치 사용”을 누르거나, weather 37.5665 126.978처럼 좌표를 함께 입력하세요.';
+        const envelope = genUi.weatherUnavailable();
+        await send(responseText, envelope);
+        return;
+      }
+
+      const latitude = Number(weatherMatch[1]);
+      const longitude = Number(weatherMatch[2]);
+
+      if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+        const responseText = '위도는 -90~90, 경도는 -180~180 범위로 입력하세요. 예: weather 37.5665 126.978';
+        const envelope = genUi.invalidCoordinates();
+        await send(responseText, envelope);
+        return;
+      }
+
+      try {
+        const weather = await getWeather(latitude, longitude);
+        const responseText = formatWeatherMessage(weather);
+        await send(responseText, genUi.weather(weather));
+      } catch {
+        const responseText = '날씨 정보를 가져오지 못했습니다. 잠시 후 다시 시도하세요.';
+        await send(responseText, genUi.error(responseText, 'weather-error'));
+      }
+      return;
+    }
+
+    if (normalizedText === 'status' || normalizedText.startsWith('status ')) {
+      if (!scope) {
+        await send('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', genUi.error('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', 'scope-missing'));
+        return;
+      }
+      const jobId = userText.split(/\s+/)[1];
+      if (jobId) {
+        const job = agentService.get(jobId, scope);
+        const responseText = job ? formatAgentJob(job) : `작업 ${jobId}을 찾을 수 없습니다.`;
+        await send(responseText, job ? genUi.jobStatus(job) : genUi.error(responseText, `status-${jobId}`));
+        return;
+      }
+
+      const openCount = itemStore.countOpen();
+      const responseText = `현재 진행 중인 업무는 ${openCount}개이며, 에이전트 활성 작업은 ${agentService.countActive(scope)}개입니다.`;
+      const envelope = genUi.status(openCount, agentService.countActive(scope));
       await send(responseText, envelope);
       return;
     }
 
-    try {
-      const weather = await getWeather(latitude, longitude);
-      const responseText = formatWeatherMessage(weather);
-      await send(responseText, genUi.weather(weather));
-    } catch {
-      const responseText = '날씨 정보를 가져오지 못했습니다. 잠시 후 다시 시도하세요.';
-      await send(responseText, genUi.error(responseText, 'weather-error'));
-    }
-    return;
-  }
-
-  if (normalizedText === 'status' || normalizedText.startsWith('status ')) {
-    if (!scope) {
-      await send('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', genUi.error('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', 'scope-missing'));
-      return;
-    }
-    const jobId = userText.split(/\s+/)[1];
-    if (jobId) {
-      const job = agentService.get(jobId, scope);
-      const responseText = job ? formatAgentJob(job) : `작업 ${jobId}을 찾을 수 없습니다.`;
-      await send(responseText, job ? genUi.jobStatus(job) : genUi.error(responseText, `status-${jobId}`));
+    if (normalizedText === 'list') {
+      if (!scope) {
+        await send('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', genUi.error('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', 'scope-missing'));
+        return;
+      }
+      const openItems = itemStore.list().filter((item) => item.status === 'open').slice(0, 8);
+      const jobs = agentService.list(scope, 5);
+      const itemText = openItems.length === 0
+        ? '진행 중인 업무가 없습니다.'
+        : `진행 중인 업무:\n${openItems.map((item) => `- ${item.title}`).join('\n')}`;
+      const jobText = jobs.length === 0
+        ? '에이전트 작업이 없습니다.'
+        : `최근 에이전트 작업:\n${jobs.map((job) => `- ${job.id}: ${job.status}`).join('\n')}`;
+      const responseText = `${itemText}\n\n${jobText}`;
+      await send(responseText, genUi.list(itemStore.list(), jobs));
       return;
     }
 
-    const openCount = itemStore.countOpen();
-    const responseText = `현재 진행 중인 업무는 ${openCount}개이며, 에이전트 활성 작업은 ${agentService.countActive(scope)}개입니다.`;
-    const envelope = genUi.status(openCount, agentService.countActive(scope));
-    await send(responseText, envelope);
-    return;
-  }
+    const commandMatch = userText.match(/^(run|write)\s+([\s\S]+)$/i);
+    if (commandMatch) {
+      if (!scope) {
+        await send('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', genUi.error('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', 'scope-missing'));
+        return;
+      }
+      const mode = commandMatch[1].toLowerCase() === 'write' ? 'workspace-write' : 'read-only';
+      const promptResult = validatePrompt(commandMatch[2]);
+      if (promptResult.error) {
+        await send(promptResult.error, genUi.error(promptResult.error, `${mode}-prompt-invalid`));
+        return;
+      }
+      try {
+        const job = await agentService.submit({
+          prompt: promptResult.value!,
+          mode,
+          scope,
+        });
 
-  if (normalizedText === 'list') {
-    if (!scope) {
-      await send('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', genUi.error('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', 'scope-missing'));
+        if (mode === 'workspace-write') {
+          const responseText = `쓰기 작업 ${job.id}이 승인 대기 중입니다.\napprove ${job.id} 또는 cancel ${job.id}`;
+          const envelope = await genUi.approval(job);
+          await send(responseText, envelope);
+        } else {
+          const responseText = `읽기 전용 Codex 작업 ${job.id}을 시작했습니다.\nstatus ${job.id}로 진행 상태를 확인할 수 있습니다.`;
+          const envelope = genUi.started(job);
+          await send(responseText, envelope);
+        }
+      } catch (error) {
+        if (!(error instanceof AgentMutationAuthorizationError)) throw error;
+        await send(error.message, genUi.error(error.message, `${mode}-forbidden`));
+      }
       return;
     }
-    const openItems = itemStore.list().filter((item) => item.status === 'open').slice(0, 8);
-    const jobs = agentService.list(scope, 5);
-    const itemText = openItems.length === 0
-      ? '진행 중인 업무가 없습니다.'
-      : `진행 중인 업무:\n${openItems.map((item) => `- ${item.title}`).join('\n')}`;
-    const jobText = jobs.length === 0
-      ? '에이전트 작업이 없습니다.'
-      : `최근 에이전트 작업:\n${jobs.map((job) => `- ${job.id}: ${job.status}`).join('\n')}`;
-    const responseText = `${itemText}\n\n${jobText}`;
-    await send(responseText, genUi.list(itemStore.list(), jobs));
-    return;
-  }
-
-  const commandMatch = userText.match(/^(run|write)\s+([\s\S]+)$/i);
-  if (commandMatch) {
-    if (!scope) {
-      await send('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', genUi.error('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', 'scope-missing'));
-      return;
-    }
-    const mode = commandMatch[1].toLowerCase() === 'write' ? 'workspace-write' : 'read-only';
-    const promptResult = validatePrompt(commandMatch[2]);
-    if (promptResult.error) {
-      await send(promptResult.error, genUi.error(promptResult.error, `${mode}-prompt-invalid`));
-      return;
-    }
-    const job = await agentService.submit({
-      prompt: promptResult.value!,
-      mode,
-      scope,
-    });
-
-    if (mode === 'workspace-write') {
-      const responseText = `쓰기 작업 ${job.id}이 승인 대기 중입니다.\napprove ${job.id} 또는 cancel ${job.id}`;
-      const envelope = await genUi.approval(job);
-      await send(responseText, envelope);
-    } else {
-      const responseText = `읽기 전용 Codex 작업 ${job.id}을 시작했습니다.\nstatus ${job.id}로 진행 상태를 확인할 수 있습니다.`;
-      const envelope = genUi.started(job);
-      await send(responseText, envelope);
-    }
-    return;
-  }
 
   const approveMatch = userText.match(/^approve\s+(task-[\w-]+)$/i);
   if (approveMatch) {
@@ -1412,6 +1498,10 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
         await send(responseText, genUi.error(responseText, 'approve-missing'));
       }
     } catch (error) {
+      if (error instanceof AgentMutationAuthorizationError) {
+        await send(error.message, genUi.error(error.message, `approve-${approveMatch[1]}-forbidden`));
+        return;
+      }
       if (!(error instanceof AgentJobConflictError)) throw error;
       await send(error.message, mutationConflictEnvelope(error, `approve-${approveMatch[1]}-conflict`));
     }
@@ -1429,14 +1519,19 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
       await send(promptResult.error, genUi.error(promptResult.error, 'continue-prompt-invalid'));
       return;
     }
-    const job = await agentService.continue(continueMatch[1], promptResult.value!, scope);
-    if (job) {
-      const responseText = `작업 ${job.id}이 이전 Codex thread에서 이어집니다.\nstatus ${job.id}`;
-      const envelope = genUi.continued(job);
-      await send(responseText, envelope);
-    } else {
-      const responseText = '재개할 Codex thread가 있는 작업을 찾을 수 없습니다.';
-      await send(responseText, genUi.error(responseText, 'continue-missing'));
+    try {
+      const job = await agentService.continue(continueMatch[1], promptResult.value!, scope);
+      if (job) {
+        const responseText = `작업 ${job.id}이 이전 Codex thread에서 이어집니다.\nstatus ${job.id}`;
+        const envelope = genUi.continued(job);
+        await send(responseText, envelope);
+      } else {
+        const responseText = '재개할 Codex thread가 있는 작업을 찾을 수 없습니다.';
+        await send(responseText, genUi.error(responseText, 'continue-missing'));
+      }
+    } catch (error) {
+      if (!(error instanceof AgentMutationAuthorizationError)) throw error;
+      await send(error.message, genUi.error(error.message, `continue-${continueMatch[1]}-forbidden`));
     }
     return;
   }
@@ -1448,17 +1543,22 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
       return;
     }
     const commitMessage = commitMatch[2]?.trim() || `feat: apply Teams task ${commitMatch[1]}`;
-    const job = await agentService.commit(commitMatch[1], commitMessage, scope);
-    if (!job) {
-      const responseText = '커밋할 작업을 찾을 수 없습니다.';
-      await send(responseText, genUi.error(responseText, 'commit-missing'));
-    } else if (job.status !== 'completed') {
-      const responseText = `작업 ${job.id}은 아직 커밋할 수 없습니다. 현재 상태: ${job.status}`;
-      await send(responseText, genUi.commitResult(job, true));
-    } else {
-      const responseText = job.commitMessage || '커밋할 변경이 없습니다.';
-      const envelope = genUi.commitResult(job);
-      await send(responseText, envelope);
+    try {
+      const job = await agentService.commit(commitMatch[1], commitMessage, scope);
+      if (!job) {
+        const responseText = '커밋할 작업을 찾을 수 없습니다.';
+        await send(responseText, genUi.error(responseText, 'commit-missing'));
+      } else if (job.status !== 'completed') {
+        const responseText = `작업 ${job.id}은 아직 커밋할 수 없습니다. 현재 상태: ${job.status}`;
+        await send(responseText, genUi.commitResult(job, true));
+      } else {
+        const responseText = job.commitMessage || '커밋할 변경이 없습니다.';
+        const envelope = genUi.commitResult(job);
+        await send(responseText, envelope);
+      }
+    } catch (error) {
+      if (!(error instanceof AgentMutationAuthorizationError)) throw error;
+      await send(error.message, genUi.error(error.message, `commit-${commitMatch[1]}-forbidden`));
     }
     return;
   }
@@ -1480,6 +1580,10 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
         await send(responseText, genUi.error(responseText, 'cancel-missing'));
       }
     } catch (error) {
+      if (error instanceof AgentMutationAuthorizationError) {
+        await send(error.message, genUi.error(error.message, `cancel-${cancelMatch[1]}-forbidden`));
+        return;
+      }
       if (!(error instanceof AgentJobConflictError)) throw error;
       await send(error.message, mutationConflictEnvelope(error, `cancel-${cancelMatch[1]}-conflict`));
     }
@@ -1502,6 +1606,17 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
 
   const responseText = '내용이 없습니다. help를 입력해 사용 가능한 명령을 확인하세요.';
   await send(responseText, genUi.error(responseText, 'empty-message'));
+  };
+
+  if (!scope) {
+    await execute();
+    return;
+  }
+
+  await itemStore.runWithScope(itemScopeFromAgentScope(scope), async () => {
+    await itemStore.ensureScope();
+    await execute();
+  });
 }
 
 async function handleInstall(activity: any, send: BotSend): Promise<void> {
