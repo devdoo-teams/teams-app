@@ -29,10 +29,13 @@
     "test:troubleshooting": "tsx scripts/remote-troubleshooting-test.ts",
     "test:atomic-stores": "tsx scripts/atomic-json-store-test.ts",
     "test:agent-job-hardening": "tsx scripts/agent-job-store-hardening-test.ts",
+    "test:agent-authorization": "tsx scripts/agent-service-authorization-test.ts",
+    "test:codex-runner-security": "tsx scripts/codex-runner-security-test.ts",
     "test:genui-action-hardening": "tsx scripts/genui-action-store-hardening-test.ts",
     "test:genui-redaction": "tsx scripts/genui-redaction-test.ts",
     "test:genui-actions": "tsx scripts/genui-action-store-test.ts",
     "test:item-store-hardening": "tsx scripts/item-store-hardening-test.ts",
+    "test:item-store-ownership": "tsx scripts/item-store-ownership-test.ts",
     "test:process-lease-hardening": "tsx scripts/process-lease-hardening-test.ts",
     "test:agent-transitions": "tsx scripts/agent-service-transition-test.ts",
     "test:genui-contract": "tsx scripts/genui-contract-test.ts",
@@ -44,6 +47,9 @@
     "test:response-mode-store": "tsx scripts/response-mode-store-test.ts",
     "test:response-mode-api": "tsx scripts/response-mode-api-test.ts",
     "test:client-auth": "tsx scripts/client-auth-test.ts",
+    "test:user-auth-hardening": "tsx scripts/user-auth-hardening-test.ts",
+    "test:auth-startup-gate": "node scripts/auth-startup-gate-test.mjs",
+    "test:operator-allowlist": "node scripts/operator-allowlist-runtime-test.mjs",
     "test:client-location": "tsx scripts/client-location-test.ts",
     "test:client-genui-adapter": "tsx scripts/client-genui-adapter-test.ts",
     "test:client-response-mode": "tsx scripts/client-response-mode-test.ts",
@@ -53,7 +59,7 @@
     "test:mcp-direct-factory": "tsx scripts/mcp-direct-factory-test.ts",
     "check": "npm run build:client && npm run validate:manifest",
     "test:runtime": "node scripts/runtime-test.mjs",
-    "test": "npm run check && npm run test:deployment-env && npm run test:manifest && npm run test:build-client-atomic && npm run test:release-gate && npm run test:release-loop && npm run build && npm run test:troubleshooting && npm run test:atomic-stores && npm run test:agent-job-hardening && npm run test:genui-action-hardening && npm run test:genui-redaction && npm run test:genui-actions && npm run test:item-store-hardening && npm run test:process-lease-hardening && npm run test:agent-transitions && npm run test:genui-contract && npm run test:teams-tab-link && npm run test:channels-shadow && npm run test:response-mode-store && npm run test:deterministic-engine && npm run test:openai-engine && npm run test:local-engine && npm run test:response-mode-api && npm run test:client-auth && npm run test:client-location && npm run test:client-genui-adapter && npm run test:client-response-mode && npm run test:local-auth && npm run test:weather-service && npm run test:mcp-response-mode && npm run test:mcp-direct-factory && npm run test:runtime"
+    "test": "npm run check && npm run test:deployment-env && npm run test:manifest && npm run test:build-client-atomic && npm run test:release-gate && npm run test:release-loop && npm run build && npm run test:troubleshooting && npm run test:atomic-stores && npm run test:agent-job-hardening && npm run test:agent-authorization && npm run test:codex-runner-security && npm run test:genui-action-hardening && npm run test:genui-redaction && npm run test:genui-actions && npm run test:item-store-hardening && npm run test:item-store-ownership && npm run test:process-lease-hardening && npm run test:agent-transitions && npm run test:genui-contract && npm run test:teams-tab-link && npm run test:channels-shadow && npm run test:response-mode-store && npm run test:deterministic-engine && npm run test:openai-engine && npm run test:local-engine && npm run test:response-mode-api && npm run test:client-auth && npm run test:user-auth-hardening && npm run test:auth-startup-gate && npm run test:operator-allowlist && npm run test:client-location && npm run test:client-genui-adapter && npm run test:client-response-mode && npm run test:local-auth && npm run test:weather-service && npm run test:mcp-response-mode && npm run test:mcp-direct-factory && npm run test:runtime"
   },
   "dependencies": {
     "@copilotkit/channels-teams": "0.7.3",
