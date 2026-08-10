@@ -7,6 +7,7 @@ import { build } from 'esbuild';
 
 import { buildClientAtomically } from './build-client-atomic.mjs';
 import { ensureFileProviderRuntimeDependencies } from './fileprovider-runtime-deps.mjs';
+import { filterClientSourceFiles } from './fileprovider-client-source.mjs';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 
 const root = process.cwd();
@@ -22,11 +23,11 @@ async function materializeGitClientSource() {
   // On macOS that would create another dataless placeholder and esbuild can
   // wait indefinitely while reading it. The system temp directory is local.
   const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-sdk-mvp-client-'));
-  const relativeFiles = execFileSync('git', ['ls-files', 'src/client', 'src/shared'], {
+  const relativeFiles = filterClientSourceFiles(execFileSync('git', ['ls-files', 'src/client', 'src/shared'], {
     cwd: root,
     encoding: 'utf8',
     timeout: 10_000,
-  }).split('\n').filter(Boolean);
+  }).split('\n').filter(Boolean), { coreBuild });
   for (const relativeFile of relativeFiles) {
     const target = path.join(temporaryRoot, relativeFile.slice('src/'.length));
     await fs.mkdir(path.dirname(target), { recursive: true });

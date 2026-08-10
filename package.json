@@ -1,6 +1,6 @@
 {
   "name": "teams-sdk-mvp",
-  "version": "1.0.37",
+  "version": "1.0.38",
   "private": true,
   "type": "module",
   "scripts": {
@@ -35,6 +35,7 @@
     "release:gate": "node scripts/release-gate.mjs all",
     "release:loop": "node scripts/release-loop.mjs",
     "test:build-client-atomic": "node scripts/build-client-atomic-test.mjs",
+    "test:fileprovider-client-source": "node scripts/fileprovider-client-source-test.mjs",
     "test:runtime-dist": "node scripts/runtime-dist-test.mjs",
     "test:release-gate": "node scripts/release-gate-test.mjs",
     "test:release-loop": "node scripts/release-loop-test.mjs",
