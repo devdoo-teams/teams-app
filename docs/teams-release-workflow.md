@@ -113,6 +113,8 @@ npm run release:loop -- start
 npm run release:loop -- machine
 npm run release:loop -- package
 npm run release:loop -- public
+# 공개 origin을 명시해야 할 때만 기존 공개 URL을 인자로 전달한다
+# npm run release:loop -- public --url https://<current-portUri>
 # 포털/설치본/데스크톱/모바일을 실제로 확인한 뒤 각각 evidence JSON 등록
 npm run release:loop -- evidence --file <evidence.json>
 npm run release:loop -- status
