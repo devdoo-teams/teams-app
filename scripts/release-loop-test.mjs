@@ -177,6 +177,15 @@ const surfaceRuntimePaths = Object.fromEntries(
 const surfaceCoveragePaths = Object.fromEntries(
   Object.keys(surfaceArtifactPaths).map((surface) => [surface, path.join(tempDir, `${surface}-coverage.md`)]),
 );
+const rowEvidencePaths = Object.fromEntries(
+  Object.keys(surfaceArtifactPaths).map((surface) => [surface, Array.from({ length: 4 }, (_, index) => ({
+    screenshotBefore: path.join(tempDir, `${surface}-row-${index}-before.png`),
+    screenshotAfter: path.join(tempDir, `${surface}-row-${index}-after.png`),
+    accessibilityBefore: path.join(tempDir, `${surface}-row-${index}-accessibility-before.txt`),
+    accessibilityAfter: path.join(tempDir, `${surface}-row-${index}-accessibility-after.txt`),
+    runtime: path.join(tempDir, `${surface}-row-${index}-runtime.log`),
+  }))]),
+);
 const fakeArtifactPath = path.join(tempDir, 'fake-proof.png');
 const packagePath = path.join(tempDir, 'teams-sdk-mvp.zip');
 const artifactBytes = Buffer.from([
@@ -306,7 +315,7 @@ const identity = {
   startedAt: '2026-08-09T00:00:00.000Z',
 };
 
-function coverageMatrixBytes(surface, { mutateRow, evidenceScope } = {}) {
+function coverageMatrixBytes(surface, { mutateRow, evidenceScope, sourceCommit = identity.commit } = {}) {
   const matrixEvidence = (evidencePath, reason) => ({
     fresh: true,
     state: 'captured',
@@ -315,12 +324,13 @@ function coverageMatrixBytes(surface, { mutateRow, evidenceScope } = {}) {
     reason,
     releaseIdentity: {
       appVersion: identity.version,
-      sourceCommit: identity.commit,
+      sourceCommit,
       packageSha256,
       installedVersion: null,
     },
   });
   const rows = Array.from({ length: 4 }, (_, index) => {
+    const rowPaths = rowEvidencePaths[surface]?.[index] ?? rowEvidencePaths.portal[index];
     const row = {
       id: `${surface}-row-${index}`,
       feature: `fixture feature ${index}`,
@@ -354,14 +364,14 @@ function coverageMatrixBytes(surface, { mutateRow, evidenceScope } = {}) {
         server: `fixture server state ${index}`,
         failure: `fixture failure state ${index}`,
       },
-      screenshotBefore: matrixEvidence(surfaceBeforePaths[surface], 'fixture before screenshot captured'),
-      screenshotAfter: matrixEvidence(surfaceAfterPaths[surface], 'fixture after screenshot captured'),
+      screenshotBefore: matrixEvidence(rowPaths.screenshotBefore, 'fixture before screenshot captured'),
+      screenshotAfter: matrixEvidence(rowPaths.screenshotAfter, 'fixture after screenshot captured'),
       accessibilityEvidence: {
         schema: 'paired-before-after-v1',
-        before: matrixEvidence(surfaceBeforePaths[surface], 'fixture accessibility before evidence captured'),
-        after: matrixEvidence(surfaceAfterPaths[surface], 'fixture accessibility after evidence captured'),
+        before: matrixEvidence(rowPaths.accessibilityBefore, 'fixture accessibility before evidence captured'),
+        after: matrixEvidence(rowPaths.accessibilityAfter, 'fixture accessibility after evidence captured'),
       },
-      runtimeEvidence: matrixEvidence(surfaceRuntimePaths[surface], 'fixture runtime evidence captured'),
+      runtimeEvidence: matrixEvidence(rowPaths.runtime, 'fixture runtime evidence captured'),
       result: {
         status: 'PASS',
         reason: 'fixture row passed with fresh evidence',
@@ -379,18 +389,28 @@ function coverageMatrixBytes(surface, { mutateRow, evidenceScope } = {}) {
     ...(evidenceScope ? { evidenceScope } : {}),
     releaseIdentity: {
       appVersion: identity.version,
-      sourceCommit: identity.commit,
+      sourceCommit,
       packageSha256,
       installedVersion: null,
     },
     evidencePolicy: { fixture: 'fresh evidence is required for every PASS row' },
-    coverage: { count: rows.length },
+    coverage: {
+      count: rows.length,
+      requiredKeys: [...REQUIRED_COVERAGE_KEYS],
+    },
     rows,
   }) + '\n');
 }
 
 for (const surface of Object.keys(surfaceCoveragePaths)) {
   await fs.writeFile(surfaceCoveragePaths[surface], coverageMatrixBytes(surface));
+  for (const [index, rowPaths] of rowEvidencePaths[surface].entries()) {
+    await fs.writeFile(rowPaths.screenshotBefore, pngFixture(`${surface}-row-${index}-before`));
+    await fs.writeFile(rowPaths.screenshotAfter, pngFixture(`${surface}-row-${index}-after`));
+    await fs.writeFile(rowPaths.accessibilityBefore, `AX before evidence for ${surface} row ${index}\nrole=button\n`);
+    await fs.writeFile(rowPaths.accessibilityAfter, `AX after evidence for ${surface} row ${index}\nrole=button\n`);
+    await fs.writeFile(rowPaths.runtime, `Runtime evidence for ${surface} row ${index}\nstatus=pass\n`);
+  }
 }
 
 function machineReadyState() {
@@ -494,6 +514,62 @@ assert.throws(
   'a row-level UI matrix defect must fail even when aggregate row counts remain unchanged',
 );
 
+const mismatchedSourceCommitPath = path.join(tempDir, 'portal-source-commit-mismatch.md');
+const mismatchedSourceCommitBytes = coverageMatrixBytes('portal', { sourceCommit: 'f'.repeat(40) });
+await fs.writeFile(mismatchedSourceCommitPath, mismatchedSourceCommitBytes);
+assert.throws(
+  () => validateEvidence({
+    ...validPortalEvidence,
+    coverage: {
+      ...validPortalEvidence.coverage,
+      matrixPath: mismatchedSourceCommitPath,
+      matrixSha256: crypto.createHash('sha256').update(mismatchedSourceCommitBytes).digest('hex'),
+    },
+  }, machineReadyState(), {
+    fileExists: () => true,
+    now: new Date('2026-08-09T00:05:00.000Z'),
+  }),
+  /sourceCommit|release identity|release run.*commit/i,
+  'coverage matrix sourceCommit must equal the release identity commit',
+);
+
+for (const [artifactLabel, mutateRow] of [
+  ['screenshot', (row, index) => index === 1
+    ? { ...row, screenshotBefore: { ...row.screenshotBefore, path: rowEvidencePaths.portal[0].screenshotBefore } }
+    : row],
+  ['accessibility', (row, index) => index === 1
+    ? {
+      ...row,
+      accessibilityEvidence: {
+        ...row.accessibilityEvidence,
+        before: { ...row.accessibilityEvidence.before, path: rowEvidencePaths.portal[0].accessibilityBefore },
+      },
+    }
+    : row],
+  ['runtime', (row, index) => index === 1
+    ? { ...row, runtimeEvidence: { ...row.runtimeEvidence, path: rowEvidencePaths.portal[0].runtime } }
+    : row],
+]) {
+  const duplicateRowCoveragePath = path.join(tempDir, `portal-duplicate-${artifactLabel}.md`);
+  const duplicateRowCoverageBytes = coverageMatrixBytes('portal', { mutateRow });
+  await fs.writeFile(duplicateRowCoveragePath, duplicateRowCoverageBytes);
+  assert.throws(
+    () => validateEvidence({
+      ...validPortalEvidence,
+      coverage: {
+        ...validPortalEvidence.coverage,
+        matrixPath: duplicateRowCoveragePath,
+        matrixSha256: crypto.createHash('sha256').update(duplicateRowCoverageBytes).digest('hex'),
+      },
+    }, machineReadyState(), {
+      fileExists: () => true,
+      now: new Date('2026-08-09T00:05:00.000Z'),
+    }),
+    /duplicate|reus|same.*(?:path|artifact)|artifact.*(?:path|row)/i,
+    `a ${artifactLabel} artifact cannot be reused across matrix rows`,
+  );
+}
+
 const initial = createInitialState(identity);
 assert.equal(initial.status, 'INIT');
 assert.deepEqual(missingGates(initial), [
@@ -589,19 +665,27 @@ const portalReady = applyEvidence(machineReady, portalEvidence);
 const scopedPortalCoveragePath = path.join(tempDir, 'portal-scoped-coverage.md');
 const scopedPortalCoverageBytes = coverageMatrixBytes('portal', { evidenceScope: 'portal' });
 await fs.writeFile(scopedPortalCoveragePath, scopedPortalCoverageBytes);
-const scopedPortalEvidence = validateEvidence(evidence('portal', {
-  coverage: {
-    ...evidence('portal').coverage,
-    scope: 'portal',
-    matrixPath: scopedPortalCoveragePath,
-    matrixSha256: crypto.createHash('sha256').update(scopedPortalCoverageBytes).digest('hex'),
-  },
-}), machineReady, {
-  fileExists: () => true,
-  now: new Date('2026-08-09T00:05:00.000Z'),
+assert.throws(
+  () => validateEvidence(evidence('portal', {
+    coverage: {
+      ...evidence('portal').coverage,
+      scope: 'portal',
+      matrixPath: scopedPortalCoveragePath,
+      matrixSha256: crypto.createHash('sha256').update(scopedPortalCoverageBytes).digest('hex'),
+    },
+  }), machineReady, {
+    fileExists: () => true,
+    now: new Date('2026-08-09T00:05:00.000Z'),
+  }),
+  /full.*coverage|coverage.*full|scope/i,
+  'surface-scoped evidence cannot bypass the full UI matrix contract',
+);
+const scopedPortalState = applyEvidence(machineReady, {
+  ...portalEvidence,
+  coverage: { ...portalEvidence.coverage, scope: 'portal' },
 });
-assert.equal(scopedPortalEvidence.coverage.scope, 'portal');
-assert.equal(applyEvidence(machineReady, scopedPortalEvidence).status, 'PORTAL_READY');
+assert.equal(scopedPortalState.status, 'PUBLIC_READY');
+assert.ok(missingGates(scopedPortalState).includes('PORTAL_READY'));
 assert.throws(
   () => validateEvidence(evidence('installed'), portalReady, {
     fileExists: () => true,
@@ -987,6 +1071,14 @@ await fs.writeFile(cliStatePath, JSON.stringify(currentState, null, 2));
 const statusResult = runCli(['status']);
 assert.equal(statusResult.status, 0);
 assert.match(statusResult.stdout, /PUBLIC_READY/);
+const statusPayload = JSON.parse(statusResult.stdout);
+assert.equal(statusPayload.status, 'IN_PROGRESS');
+assert.deepEqual(statusPayload.missingGates, [
+  'PORTAL_READY',
+  'INSTALLED_READY',
+  'DESKTOP_READY',
+  'MOBILE_READY',
+]);
 const blockedComplete = runCli(['complete']);
 assert.notEqual(blockedComplete.status, 0);
 assert.match(`${blockedComplete.stdout}\n${blockedComplete.stderr}`, /BLOCKED/);

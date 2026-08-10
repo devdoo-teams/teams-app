@@ -443,8 +443,14 @@ function inspectCoverageMatrix(bytes, coverage, identity) {
   ) {
     throw new Error('coverage matrix release identity does not match the release package evidence');
   }
+  if (releaseIdentity.sourceCommit !== identity.commit) {
+    throw new Error('coverage matrix release identity sourceCommit does not match the release run commit');
+  }
   const scope = coverage.scope ?? matrix.evidenceScope ?? 'full';
   if (!evidenceScopes.has(scope)) throw new Error(`coverage matrix evidence scope is invalid: ${scope}`);
+  if (scope !== 'full') {
+    throw new Error(`coverage matrix evidence scope ${scope} cannot establish surface readiness; full coverage is required`);
+  }
   if (matrix.evidenceScope && matrix.evidenceScope !== scope) {
     throw new Error('coverage matrix evidence scope does not match the supplied coverage');
   }
@@ -455,6 +461,7 @@ function inspectCoverageMatrix(bytes, coverage, identity) {
   if (!validation.ok) {
     throw new Error(`coverage matrix row validation failed: ${validation.errors.join('; ')}`);
   }
+  assertUniqueMatrixEvidencePaths(matrix, coverage);
   const expected = {
     totalRows: matrix.rows.length,
     passedRows: counts.PASS,
@@ -466,6 +473,36 @@ function inspectCoverageMatrix(bytes, coverage, identity) {
     if (coverage[key] !== value) throw new Error(`coverage matrix ${key} does not match row results`);
   }
   return { sha256: hashBytes(source), bytes: source.length, ...expected };
+}
+
+function assertUniqueMatrixEvidencePaths(matrix, coverage) {
+  const evidenceBaseDir = path.dirname(path.resolve(coverage.matrixPath));
+  const seen = new Map();
+  const add = (row, role, evidence) => {
+    if (typeof evidence?.path !== 'string' || evidence.path.trim() === '') return;
+    const evidencePath = path.normalize(
+      path.isAbsolute(evidence.path) ? evidence.path : path.resolve(evidenceBaseDir, evidence.path),
+    );
+    const previous = seen.get(evidencePath);
+    if (previous) {
+      throw new Error(
+        `coverage matrix evidence artifact path is reused by ${previous.rowId} (${previous.role}) and ${row.id} (${role}): ${evidencePath}`,
+      );
+    }
+    seen.set(evidencePath, { rowId: row.id, role });
+  };
+
+  for (const row of matrix.rows) {
+    add(row, 'screenshotBefore', row.screenshotBefore);
+    add(row, 'screenshotAfter', row.screenshotAfter);
+    add(row, 'runtimeEvidence', row.runtimeEvidence);
+    if (row.accessibilityEvidence?.before || row.accessibilityEvidence?.after) {
+      add(row, 'accessibilityEvidence.before', row.accessibilityEvidence.before);
+      add(row, 'accessibilityEvidence.after', row.accessibilityEvidence.after);
+    } else {
+      add(row, 'accessibilityEvidence', row.accessibilityEvidence);
+    }
+  }
 }
 
 function hasFullEvidenceCoverage(evidence) {
@@ -492,7 +529,7 @@ function hasSurfaceEvidenceCoverage(evidence, surface) {
   const scope = coverage?.scope ?? 'full';
   return Boolean(
     coverage
-    && (scope === surface || scope === 'full')
+    && scope === 'full'
     && Number.isInteger(coverage.totalRows)
     && coverage.totalRows > 0
     && Number.isInteger(coverage.passedRows)
@@ -747,8 +784,8 @@ export function validateEvidence(
   if (coverageScope !== 'full' && coverageScope !== surface) {
     throw new Error(`evidence coverage scope ${coverageScope} does not match surface ${surface}`);
   }
-  if (surface === 'mobile' && coverageScope !== 'full') {
-    throw new Error('mobile evidence requires a full coverage matrix');
+  if (coverageScope !== 'full') {
+    throw new Error(`${surface} evidence requires a full coverage matrix; surface-scoped readiness is not allowed`);
   }
   if (
     coverage.commit !== commit
@@ -1433,13 +1470,14 @@ function nextAction(state) {
 
 function publicResult(state) {
   const currentStatus = deriveStatus(state);
+  const missing = missingGates(state);
   return {
-    status: state.lastFailure ? 'BLOCKED' : 'READY',
+    status: state.lastFailure ? 'BLOCKED' : state.status === 'COMPLETE' ? 'READY' : 'IN_PROGRESS',
     phase: 'status',
     runId: state.runId,
     state: currentStatus,
     nextAction: nextAction(state),
-    missingGates: missingGates(state),
+    missingGates: missing,
     commit: state.shortCommit,
     version: state.version,
     lastFailure: state.lastFailure,
@@ -1601,7 +1639,7 @@ async function runCli(argv) {
     const state = await requireState(statePath);
     if (state.status === 'SUPERSEDED') {
       return jsonLog({
-        status: 'READY',
+        status: 'SUPERSEDED',
         phase: 'status',
         runId: state.runId,
         state: state.status,
