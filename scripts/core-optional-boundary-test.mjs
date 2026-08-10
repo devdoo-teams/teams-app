@@ -24,7 +24,11 @@ const combinedBuild = npmRunNames(scripts.build);
 const allBuild = npmRunNames(scripts['build:all']);
 
 assert.equal(scripts['test:core'], 'node scripts/core-test-runner.mjs');
-assert.equal(scripts['test'], 'npm run test:api-free');
+assertIncludesAll(
+  npmRunNames(scripts.test),
+  ['test:api-free-runner', 'test:api-free'],
+  'test workflow',
+);
 assert.equal(scripts['test:api-free'], 'node scripts/api-free-test-runner.mjs');
 assert.equal(apiFreeTests.includes('test:optional'), false, 'test:api-free must not call the optional provider suite');
 assertIncludesAll(optionalTests, ['test:openai-engine', 'test:local-engine', 'test:mcp-response-mode', 'test:mcp-direct-factory'], 'test:optional');

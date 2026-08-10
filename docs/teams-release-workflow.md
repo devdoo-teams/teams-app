@@ -76,6 +76,8 @@ npm run release:gate
 
 Core 서버 번들은 Teams SDK·Express 등 필수 런타임을 포함하고 CopilotKit/MCP는 선택 청크로 분리한다. 기본 `npm run build`는 `build:core`만 실행하고, 선택 provider는 `npm run build:all` 또는 명시적 optional 명령에서만 만든다. `npm run test:core`는 `scripts/core-runtime-smoke.mjs`로 API 키 없이 production Teams SDK 프로세스를 실제 기동해 `listen()`, `/api/health`, `/tabs/home/`을 확인한다. 이 스모크가 통과하지 않은 상태에서 기존 공개 서버나 포털 업로드를 최신 버전으로 교체하지 않는다.
 
+기본 `npm test`/`npm run test:api-free`는 API 키 없이 완료되어야 하며, 장시간 대기하는 전체 `npm run typecheck`를 포함하지 않는다. 기본 runner는 제한된 `typecheck:core`와 core/API-free 기능 테스트를 사용한다. 전체 선언 그래프 진단이 필요할 때만 `npm run typecheck`를 별도 bounded 진단으로 실행하고, 그 프로세스가 정체되면 기본 릴리스 게이트를 막지 않은 채 `TYPECHECK_DIAGNOSTIC_BLOCKED`로 기록한다.
+
 ### 로컬 원본 소스 기준
 
 - `/Users/doosansmacbookpro/Documents/TeamsApp`이 로컬 원본 소스이며 유일한 Git 이력 기준이다. 다른 폴더나 임시 경로를 원본·원격·복구 기준으로 추정하지 않는다.

@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 const tests = [
   'test:typecheck-boundary',
   'test:core-boundary',
-  'typecheck',
+  'typecheck:core',
   'check',
   'test:core-bundle-boundary',
   'test:deployment-env',

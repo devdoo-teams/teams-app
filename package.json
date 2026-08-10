@@ -84,7 +84,8 @@
     "check": "npm run build:core && npm run validate:manifest",
     "test:runtime": "node scripts/runtime-test.mjs",
     "test:api-free": "node scripts/api-free-test-runner.mjs",
-    "test": "npm run test:api-free"
+    "test:api-free-runner": "node scripts/api-free-runner-contract-test.mjs",
+    "test": "npm run test:api-free-runner && npm run test:api-free"
   },
   "dependencies": {
     "@copilotkit/channels-teams": "0.7.3",
