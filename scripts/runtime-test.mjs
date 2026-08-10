@@ -7,8 +7,11 @@ import fs from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 
 const root = process.cwd();
+const runtimeDistRoot = resolveRuntimeDistRoot(root);
+const runtimeEntry = path.join(runtimeDistRoot, 'server/index.js');
 const execFileAsync = promisify(execFile);
 const LOCAL_ACCESS_TOKEN_HEADER = 'x-teams-local-access-token';
 const localAccessTokens = new Map();
@@ -287,14 +290,15 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
   const localAccessToken = production ? '' : crypto.randomBytes(32).toString('base64url');
   if (!production) localAccessTokens.set(baseUrl, localAccessToken);
   const command = process.execPath;
-  const entry = path.join(root, 'dist/server/index.js');
-  const child = spawn(command, [entry], {
+  const child = spawn(command, [runtimeEntry], {
     cwd: root,
     env: {
       ...process.env,
       NODE_ENV: production ? 'production' : 'development',
       PORT: String(port),
       ITEM_STORE_PATH: dataFile,
+      WORK_ITEM_STORE_PATH: `${dataFile}.work-items.json`,
+      COLLABORATION_STORE_PATH: `${dataFile}.collaboration.json`,
       AGENT_JOB_STORE_PATH: jobDataFile,
       GENUI_ACTION_STORE_PATH: `${jobDataFile}.genui-actions.json`,
       RESPONSE_MODE_STORE_PATH: `${jobDataFile}.response-modes.json`,
@@ -304,6 +308,7 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
       WEATHER_MODE: 'demo',
       COPILOTKIT_DETERMINISTIC_MODE: production ? '' : 'true',
       TEAMS_USE_SDK: teamsSdk ? 'true' : 'false',
+      TEAMS_RUNTIME_DIST_DIR: runtimeDistRoot,
       TEAMS_SKIP_OUTBOUND: teamsSdk ? 'true' : 'false',
       TEAMS_LOCAL_DEV: production ? 'false' : 'true',
       TEAMS_BIND_HOST: '127.0.0.1',
@@ -361,7 +366,7 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
 
 async function expectStartupFailure(label, extraEnv, expectedMessage) {
   const port = await getFreePort();
-  const child = spawn(process.execPath, [path.join(root, 'dist/server/index.js')], {
+  const child = spawn(process.execPath, [runtimeEntry], {
     cwd: root,
     env: {
       ...process.env,
@@ -371,6 +376,7 @@ async function expectStartupFailure(label, extraEnv, expectedMessage) {
       TEAMS_SKIP_AUTH: '',
       TEAMS_LOCAL_DEV: 'false',
       TEAMS_BIND_HOST: '127.0.0.1',
+      TEAMS_RUNTIME_DIST_DIR: runtimeDistRoot,
       // The release gate intentionally loads .env.runtime. Startup-failure
       // cases must start from a clean local environment so a real deployment
       // hint or local token cannot mask the failure being asserted.
@@ -407,13 +413,15 @@ async function expectStartupFailure(label, extraEnv, expectedMessage) {
 async function expectStoreLeaseConflict(dataFile, jobDataFile) {
   const port = await getFreePort();
   const localAccessToken = crypto.randomBytes(32).toString('base64url');
-  const child = spawn(process.execPath, [path.join(root, 'dist/server/index.js')], {
+  const child = spawn(process.execPath, [runtimeEntry], {
     cwd: root,
     env: {
       ...process.env,
       NODE_ENV: 'development',
       PORT: String(port),
       ITEM_STORE_PATH: dataFile,
+      WORK_ITEM_STORE_PATH: `${dataFile}.work-items.json`,
+      COLLABORATION_STORE_PATH: `${dataFile}.collaboration.json`,
       AGENT_JOB_STORE_PATH: jobDataFile,
       GENUI_ACTION_STORE_PATH: `${jobDataFile}.genui-actions.json`,
       AGENT_WORKSPACE: root,
@@ -426,6 +434,7 @@ async function expectStoreLeaseConflict(dataFile, jobDataFile) {
       TEAMS_SKIP_AUTH: 'true',
       TEAMS_LOCAL_DEV: 'true',
       TEAMS_BIND_HOST: '127.0.0.1',
+      TEAMS_RUNTIME_DIST_DIR: runtimeDistRoot,
       TEAMS_LOCAL_ACCESS_TOKEN: localAccessToken,
       // The release gate loads the real deployment environment before this
       // child is spawned. Keep the lease-conflict assertion focused on the
@@ -1016,6 +1025,18 @@ async function runLocalFlow(dataFile, jobDataFile) {
       assert(commandInvoke.body.value?.type === 'AdaptiveCard', `${command} command button returns an Adaptive Card invoke response`);
       assert(!JSON.stringify(commandInvoke.body.value).includes('AI 생성 콘텐츠'), `${command} command response stays deterministic and unlabeled`);
     }
+
+    const carousel = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity('carousel', server.baseUrl, 'carousel')),
+    });
+    assert(carousel.response.status === 200, 'Bot carousel command completes locally');
+    assert(carousel.body.messages.length === 1, 'Bot carousel command sends one explanatory text record');
+    const carouselActivity = carousel.body.activities?.[0];
+    assert(carouselActivity?.attachmentLayout === 'carousel', 'Bot carousel command uses the Teams carousel attachment layout');
+    assert(carouselActivity?.attachments?.length === 3, 'Bot carousel command returns three Adaptive Card attachments');
+    assert(carouselActivity.attachments.every((attachment) => attachment.content?.version === '1.2'), 'carousel attachments use Adaptive Card 1.2');
+    assert(carouselActivity.attachments.every((attachment) => attachment.content?.body?.some((element) => element.type === 'ImageSet')), 'carousel cards include inline ImageSet content');
 
     const status = await request(server.baseUrl, '/api/messages', {
       method: 'POST',

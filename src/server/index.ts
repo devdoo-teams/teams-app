@@ -39,6 +39,7 @@ import { GenUiActionStore, type GenUiActionName } from './genui-action-store.js'
 import { GenUiResponseFactory } from './genui-response.js';
 import {
   createAdaptiveCardActivity,
+  createAdaptiveCardCarouselActivity,
   createTextFallbackActivity,
   renderGenUiCard,
   renderGenUiCardDiagnostic,
@@ -1973,9 +1974,15 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
     }
 
     if (normalizedText === 'help') {
-      const responseText = '사용 가능한 명령: help, mode, weather [위도 경도], status, list, work, collaboration, run <작업>, continue <작업 ID> <추가 요청>, write <작업>, approve <작업 ID>, commit <작업 ID> [메시지], cancel <작업 ID>';
+      const responseText = '사용 가능한 명령: help, mode, carousel, weather [위도 경도], status, list, work, collaboration, run <작업>, continue <작업 ID> <추가 요청>, write <작업>, approve <작업 ID>, commit <작업 ID> [메시지], cancel <작업 ID>';
       const envelope = genUi.help();
       await send(responseText, envelope);
+      return;
+    }
+
+    if (normalizedText === 'carousel' || normalizedText === 'gallery') {
+      const responseText = '카드 갤러리를 보냅니다. Teams 메시지에서 카드를 좌우로 넘기고 카드 내부 이미지를 확인하세요.';
+      await send(responseText, undefined, createAdaptiveCardCarouselActivity(genUi.carousel()));
       return;
     }
 

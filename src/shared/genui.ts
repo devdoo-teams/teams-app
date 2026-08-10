@@ -111,6 +111,17 @@ export const GenUiFactSchema = z.object({
   description: z.string().max(500).optional(),
 }).strict();
 
+export const GenUiImageSchema = z.object({
+  url: z.string().url().max(2_048).refine((value) => {
+    try {
+      return new URL(value).protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }, 'image URL must use https'),
+  altText: z.string().min(1).max(400).optional(),
+}).strict();
+
 const GenUiTextSectionSchema = SectionBaseSchema.extend({
   type: z.literal('text'),
   text: z.string().max(4_000).optional(),
@@ -213,6 +224,7 @@ export const GenUiEnvelopeV1BaseSchema = z.object({
   sections: z.array(GenUiSectionSchema).max(32).default([]),
   actions: z.array(GenUiActionSchema).max(8).default([]),
   citations: z.array(GenUiCitationSchema).max(8).default([]),
+  images: z.array(GenUiImageSchema).max(6).default([]),
   aiGenerated: z.boolean().default(false),
   fallbackText: z.string().min(1).max(4_000).optional(),
   metadata: GenUiMetadataSchema.default({}),
@@ -250,6 +262,7 @@ export type GenUiResponseMode = z.infer<typeof GenUiResponseModeSchema>;
 export type GenUiScalar = z.infer<typeof GenUiScalarSchema>;
 export type GenUiItem = z.infer<typeof GenUiItemSchema>;
 export type GenUiFact = z.infer<typeof GenUiFactSchema>;
+export type GenUiImage = z.infer<typeof GenUiImageSchema>;
 export type GenUiSection = z.infer<typeof GenUiSectionSchema>;
 export type GenUiCitation = z.infer<typeof GenUiCitationSchema>;
 export type GenUiAction = z.infer<typeof GenUiActionSchema>;

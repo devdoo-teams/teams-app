@@ -7,6 +7,7 @@ import {
   type GenUiAction,
   type GenUiEnvelopeV1,
   type GenUiFact,
+  type GenUiImage,
   type GenUiItem,
   type GenUiScalar,
   type GenUiSection,
@@ -36,8 +37,10 @@ export interface TeamsMessageActivity {
   type: 'message';
   text?: string;
   attachments?: TeamsAdaptiveCardAttachment[];
-  attachmentLayout?: 'list';
+  attachmentLayout?: 'list' | 'carousel';
 }
+
+export const MAX_ADAPTIVE_CARD_CAROUSEL_CARDS = 10;
 
 /**
  * The bounded, payload-free semantic identity used by host shadow diagnostics.
@@ -88,6 +91,21 @@ function factSet(facts: GenUiFact[]): AdaptiveCardElement {
       value: `${scalarText(fact.value)}${fact.unit ? ` ${fact.unit}` : ''}`,
     })),
     spacing: 'Small',
+  };
+}
+
+function imageSet(images: GenUiImage[]): AdaptiveCardElement | undefined {
+  if (images.length === 0) return undefined;
+  return {
+    type: 'ImageSet',
+    imageSize: 'Medium',
+    images: images.map((image) => ({
+      type: 'Image',
+      url: image.url,
+      ...(image.altText ? { altText: image.altText } : {}),
+      size: 'Medium',
+    })),
+    spacing: 'Medium',
   };
 }
 
@@ -323,6 +341,8 @@ function renderGenUiCardFromEnvelope(
   // The envelope status is the canonical host-level state. Render it directly
   // so mobile Teams users can understand the card without expanding a section.
   body.push(renderStatusBadge(envelope.status));
+  const renderedImages = imageSet(envelope.images);
+  if (renderedImages) body.push(renderedImages);
   body.push(...envelope.sections.map((section) => {
     const renderedSection = renderSection(section, envelope.status);
     renderedSectionTypes.push(section.type);
@@ -447,6 +467,37 @@ export function createAdaptiveCardActivity(input: GenUiEnvelopeV1): TeamsMessage
     attachmentLayout: 'list',
     attachments: [createAdaptiveCardAttachment(input)],
   };
+}
+
+function carouselFallback(reason: string): TeamsMessageActivity {
+  return {
+    type: 'message',
+    text: `캐러셀을 표시할 수 없습니다. ${reason}`,
+  };
+}
+
+/**
+ * Build a Teams message-level carousel. Teams mobile renders these as a
+ * swipeable collection of cards; ImageSet is used for multiple images inside
+ * one card because Adaptive Cards do not provide a reliable mobile-wide
+ * horizontal scroller inside the card body.
+ */
+export function createAdaptiveCardCarouselActivity(inputs: readonly unknown[]): TeamsMessageActivity {
+  if (inputs.length < 2) return carouselFallback('카드는 2개 이상 필요합니다.');
+  if (inputs.length > MAX_ADAPTIVE_CARD_CAROUSEL_CARDS) {
+    return carouselFallback(`카드는 최대 ${MAX_ADAPTIVE_CARD_CAROUSEL_CARDS}개까지 지원합니다.`);
+  }
+
+  try {
+    const envelopes = inputs.map((input) => GenUiEnvelopeV1Schema.parse(input));
+    return {
+      type: 'message',
+      attachmentLayout: 'carousel',
+      attachments: envelopes.map(createAdaptiveCardAttachment),
+    };
+  } catch {
+    return carouselFallback('카드 또는 이미지 URL을 확인하세요.');
+  }
 }
 
 export function createTextFallbackActivity(input: GenUiEnvelopeV1): TeamsMessageActivity {

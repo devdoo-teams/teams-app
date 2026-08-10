@@ -12,11 +12,14 @@ import {
 import {
   createAdaptiveCardActivity,
   createAdaptiveCardAttachment,
+  createAdaptiveCardCarouselActivity,
   createTextFallbackActivity,
   genUiTextFallback,
+  MAX_ADAPTIVE_CARD_CAROUSEL_CARDS,
   renderGenUiCard,
 } from '../src/server/genui-teams.js';
 import { createResponseModeCardActivity } from '../src/server/response-mode-card.js';
+import { GenUiResponseFactory } from '../src/server/genui-response.js';
 
 const baseAction = (action: (typeof GENUI_ACTIONS)[number], index: number) => ({
   id: `action-${index}`,
@@ -56,6 +59,10 @@ const envelope = GenUiEnvelopeV1Schema.parse({
   title: '업무 허브',
   summary: '모바일 Teams에서 확인할 수 있는 응답입니다.',
   sections: allSections,
+  images: [{
+    url: 'https://adaptivecards.io/content/cats/1.png',
+    altText: '샘플 이미지',
+  }],
   actions: GENUI_ACTIONS.map(baseAction),
   aiGenerated: true,
   citations: [{ title: 'Microsoft', url: 'https://learn.microsoft.com', snippet: 'Adaptive Cards' }],
@@ -85,6 +92,30 @@ assert.deepEqual(
     aiGenerated: false,
     citations: [],
     actions: [baseAction('feedback', 0)],
+  }).success,
+  false,
+);
+assert.deepEqual(
+  GenUiEnvelopeV1Schema.safeParse({
+    ...envelope,
+    images: [{ url: 'javascript:alert(1)', altText: 'unsafe' }],
+  }).success,
+  false,
+);
+assert.deepEqual(
+  GenUiEnvelopeV1Schema.safeParse({
+    ...envelope,
+    images: [{ url: 'http://example.com/image.png', altText: 'insecure' }],
+  }).success,
+  false,
+);
+assert.deepEqual(
+  GenUiEnvelopeV1Schema.safeParse({
+    ...envelope,
+    images: Array.from({ length: 7 }, (_, index) => ({
+      url: `https://example.com/${index}.png`,
+      altText: `image-${index}`,
+    })),
   }).success,
   false,
 );
@@ -214,6 +245,11 @@ const aiCard = renderGenUiCard(envelope);
 assert.ok(JSON.stringify(aiCard).includes('AI 생성 콘텐츠'));
 assert.ok(JSON.stringify(aiCard).includes('https://learn.microsoft.com'));
 assert.equal(aiCard.actions?.length, GENUI_ACTIONS.length);
+const imageSet = aiCard.body.find((element) => element.type === 'ImageSet') as Record<string, unknown> | undefined;
+assert.equal(imageSet?.type, 'ImageSet');
+assert.equal((imageSet?.images as Array<Record<string, unknown>>)?.[0]?.type, 'Image');
+assert.equal((imageSet?.images as Array<Record<string, unknown>>)?.[0]?.url, 'https://adaptivecards.io/content/cats/1.png');
+assert.equal((imageSet?.images as Array<Record<string, unknown>>)?.[0]?.altText, '샘플 이미지');
 
 const attachment = createAdaptiveCardAttachment(nonAiEnvelope);
 assert.equal(attachment.contentType, 'application/vnd.microsoft.card.adaptive');
@@ -223,6 +259,42 @@ assert.equal(activity.type, 'message');
 assert.equal('text' in activity, false);
 assert.equal(activity.attachments?.length, 1);
 assert.equal(activity.attachmentLayout, 'list');
+const carouselInputs = [1, 2, 3].map((index) => GenUiEnvelopeV1Schema.parse({
+  ...nonAiEnvelope,
+  id: `carousel-${index}`,
+  title: `캐러셀 카드 ${index}`,
+  images: [{
+    url: `https://adaptivecards.io/content/cats/${index}.png`,
+    altText: `캐러셀 이미지 ${index}`,
+  }],
+}));
+const carouselActivity = createAdaptiveCardCarouselActivity(carouselInputs);
+assert.equal(carouselActivity.type, 'message');
+assert.equal(carouselActivity.attachmentLayout, 'carousel');
+assert.equal(carouselActivity.attachments?.length, 3);
+assert.equal(carouselActivity.attachments?.[1]?.content.body.some((element) => element.type === 'ImageSet'), true);
+assert.equal(MAX_ADAPTIVE_CARD_CAROUSEL_CARDS, 10);
+const tooManyCarouselCards = createAdaptiveCardCarouselActivity(
+  Array.from({ length: MAX_ADAPTIVE_CARD_CAROUSEL_CARDS + 1 }, (_, index) => ({
+    ...nonAiEnvelope,
+    id: `too-many-${index}`,
+  })),
+);
+assert.equal(tooManyCarouselCards.attachments, undefined);
+assert.match(tooManyCarouselCards.text ?? '', /최대 10개/);
+const invalidCarousel = createAdaptiveCardCarouselActivity([
+  { ...nonAiEnvelope, id: 'invalid-carousel', images: [{ url: 'data:image/png;base64,AAAA' }] },
+] as never);
+assert.equal(invalidCarousel.attachments, undefined);
+assert.match(invalidCarousel.text ?? '', /캐러셀/);
+const carouselFactory = new GenUiResponseFactory({} as never, { openTabUrl: personalTabUrl });
+const generatedCarousel = carouselFactory.carousel();
+assert.equal(generatedCarousel.length, 3);
+const generatedCarouselActivity = createAdaptiveCardCarouselActivity(generatedCarousel);
+assert.equal(generatedCarouselActivity.attachmentLayout, 'carousel');
+assert.equal(generatedCarouselActivity.attachments?.every((attachment) => (
+  attachment.content.actions?.some((action) => action.type === 'Action.OpenUrl' && action.url === personalTabUrl)
+)), true);
 const responseModeActivity = createResponseModeCardActivity('deterministic', [
   { mode: 'deterministic', label: '결정형', configured: true },
   { mode: 'openai', label: 'OpenAI', configured: false },

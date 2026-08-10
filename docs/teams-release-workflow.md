@@ -13,6 +13,13 @@
 
 따라서 선택 provider가 설정되지 않은 상태는 Core의 실패가 아니라 `OPTIONAL_PROVIDER_NOT_CONFIGURED`로 분리한다. Core 응답이 저장된 값을 단순히 되돌리는지 여부는 실제 작업 mutation, 상태 변화, 오류, 재시작 보존을 통해 검증한다.
 
+### 카드 갤러리와 인라인 이미지 기준
+
+- 모바일에서 확인 가능한 갤러리는 Bot Framework 메시지의 `attachmentLayout: "carousel"`과 카드별 Adaptive Card attachment를 사용한다. 한 메시지에는 최대 10개의 카드만 넣고, 카드 내부 여러 이미지는 Adaptive Card `ImageSet`으로 표현한다.
+- 이미지 URL은 Teams 클라이언트가 접근할 수 있는 공개 HTTPS URL만 허용하며, 스키마에서 HTTP·데이터 URI·6개 초과 이미지를 거부한다. 각 이미지에는 접근성용 `altText`를 넣는다.
+- Teams의 기본 명령 버튼은 공식 권장 한도인 6개를 넘기지 않는다. `carousel`은 버튼으로 억지로 추가하지 않고 텍스트 명령과 카드의 탭 링크로 제공한다. 카드 렌더링만 통과하고 실제 명령 왕복·이미지 로드·탭 이동을 확인하지 않은 상태는 완료로 기록하지 않는다.
+- Adaptive Card 기반 Loop 컴포넌트는 현재 Teams 모바일 및 macOS 클라이언트에서 사용할 수 없으므로 모바일 MVP의 필수 경로가 아니다. Loop가 필요한 별도 기능은 메시지 확장·링크 언퍼링·Universal Actions와 클라이언트 지원 여부를 별도 검증한 후에만 제안한다.
+
 ## 인앱 브라우저 세션과 업로드 대상 보존 원칙
 
 배포 작업은 Codex 인앱 브라우저에 이미 열려 있는 로그인 세션과 탭을 기반으로 이어간다.

@@ -13,6 +13,7 @@ import {
   GenUiEnvelopeV1Schema,
   type GenUiAction,
   type GenUiEnvelopeV1,
+  type GenUiImage,
   type GenUiState,
   isSafeGenUiUrl,
 } from '../shared/genui.js';
@@ -267,6 +268,7 @@ export class GenUiResponseFactory {
     summary?: string;
     prompt?: string;
     sections: Array<Record<string, unknown>>;
+    images?: GenUiImage[];
     fallbackText: string;
     actions?: GenUiAction[];
     includeTabAction?: boolean;
@@ -311,7 +313,7 @@ export class GenUiResponseFactory {
   }
 
   help(): GenUiEnvelopeV1 {
-    const text = '사용 가능한 명령: help, weather [위도 경도], status, list, work, collaboration, run <작업>, continue <작업 ID> <추가 요청>, write <작업>, approve <작업 ID>, commit <작업 ID> [메시지], cancel <작업 ID>';
+    const text = '사용 가능한 명령: help, carousel, weather [위도 경도], status, list, work, collaboration, run <작업>, continue <작업 ID> <추가 요청>, write <작업>, approve <작업 ID>, commit <작업 ID> [메시지], cancel <작업 ID>';
     return this.create({
       kind: 'answer',
       id: 'help',
@@ -323,6 +325,49 @@ export class GenUiResponseFactory {
       includeTabAction: true,
       metadata: { source: 'teams-bot', deterministic: true },
     });
+  }
+
+  carousel(): GenUiEnvelopeV1[] {
+    const cards = [
+      {
+        id: 'carousel-overview',
+        title: '카드 갤러리 · 요약',
+        summary: 'Teams 메시지에서 여러 카드를 좌우로 넘겨 봅니다.',
+        images: [{ url: 'https://adaptivecards.io/content/cats/1.png', altText: '카드 갤러리 첫 번째 샘플 이미지' }],
+        sections: [{ type: 'text', title: '메시지 캐러셀', text: '각 카드는 독립적인 Adaptive Card이며 Teams 모바일에서 좌우로 이동할 수 있습니다.' }],
+        fallbackText: '카드 갤러리 요약',
+      },
+      {
+        id: 'carousel-image-set',
+        title: '카드 내부 · ImageSet',
+        summary: '한 카드 안에 여러 이미지를 묶어 표시합니다.',
+        images: [
+          { url: 'https://adaptivecards.io/content/cats/2.png', altText: '카드 내부 두 번째 샘플 이미지' },
+          { url: 'https://adaptivecards.io/content/cats/3.png', altText: '카드 내부 세 번째 샘플 이미지' },
+        ],
+        sections: [{ type: 'text', title: '인라인 이미지', text: 'ImageSet은 카드 내부의 이미지 모음이며, 메시지 캐러셀과 별개입니다.' }],
+        fallbackText: '카드 내부 이미지 모음',
+      },
+      {
+        id: 'carousel-actions',
+        title: '카드 갤러리 · 다음 단계',
+        summary: '모든 응답 카드에는 업무 허브 탭 링크가 기본 제공됩니다.',
+        images: [{ url: 'https://adaptivecards.io/content/cats/4.png', altText: '카드 갤러리 네 번째 샘플 이미지' }],
+        sections: [{ type: 'list', title: '검증 포인트', items: [
+          { label: '카드 좌우 이동', value: 'Teams 메시지 carousel' },
+          { label: '카드 내부 이미지', value: 'Adaptive Card ImageSet' },
+          { label: '탭 연결', value: '업무 허브 탭 열기' },
+        ] }],
+        fallbackText: '카드 갤러리 검증 포인트',
+      },
+    ];
+
+    return cards.map((card) => this.create({
+      kind: 'answer',
+      ...card,
+      includeTabAction: true,
+      metadata: { source: 'teams-bot', deterministic: true, carousel: true },
+    }));
   }
 
   install(scopeHint: string): GenUiEnvelopeV1 {
