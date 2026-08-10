@@ -811,6 +811,10 @@ export function App() {
           <strong>{health?.ok ? '정상' : '확인 필요'}</strong>
         </div>
         <div>
+          <span>앱 버전</span>
+          <strong>{health?.version ?? '-'}</strong>
+        </div>
+        <div>
           <span>인증 모드</span>
           <strong>{health?.userAuth === 'entra-sso' ? 'Entra SSO' : '로컬 우회'}</strong>
         </div>
