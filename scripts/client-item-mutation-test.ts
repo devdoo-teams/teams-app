@@ -34,7 +34,21 @@ registerHooks({
   },
 });
 
-const { createItemMutationController } = await import('../src/client/App.js');
+const { createDeleteConfirmationController, createItemMutationController } = await import('../src/client/App.js');
+
+{
+  const confirmation = createDeleteConfirmationController();
+
+  assert.equal(confirmation.request(42), null, 'the first delete gesture does not delete immediately');
+  assert.equal(confirmation.pendingId(), 42, 'the requested item is rendered as pending confirmation');
+  assert.equal(confirmation.request(42), 42, 'the second gesture confirms the same item without a browser dialog');
+  assert.equal(confirmation.pendingId(), null, 'confirmed deletion clears the pending item');
+  assert.equal(confirmation.cancel(), null, 'cancelling an already settled deletion is harmless');
+
+  confirmation.request(7);
+  assert.equal(confirmation.cancel(), 7, 'the inline cancel action clears the pending item');
+  assert.equal(confirmation.pendingId(), null, 'cancelled deletion does not remain pending');
+}
 
 {
   const controller = createItemMutationController();

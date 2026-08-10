@@ -56,6 +56,32 @@ type ItemMutationController = {
   isBusy: (key: string) => boolean;
 };
 
+export type DeleteConfirmationController = {
+  request: (itemId: number) => number | null;
+  cancel: () => number | null;
+  pendingId: () => number | null;
+};
+
+export function createDeleteConfirmationController(): DeleteConfirmationController {
+  let pendingItemId: number | null = null;
+
+  return {
+    request(itemId) {
+      const previousItemId = pendingItemId;
+      pendingItemId = pendingItemId === itemId ? null : itemId;
+      return previousItemId;
+    },
+    cancel() {
+      const previousItemId = pendingItemId;
+      pendingItemId = null;
+      return previousItemId;
+    },
+    pendingId() {
+      return pendingItemId;
+    },
+  };
+}
+
 export function createItemMutationController(): ItemMutationController {
   let generation = 0;
   const activeGenerations = new Map<string, number>();
@@ -265,6 +291,7 @@ export function App() {
   const [healthLoading, setHealthLoading] = useState(true);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
   const [weather, setWeather] = useState<WeatherResponse | null>(null);
   const [weatherLoading, setWeatherLoading] = useState(false);
   const [weatherError, setWeatherError] = useState('');
@@ -286,6 +313,7 @@ export function App() {
   const runtimeRefreshControllerRef = useRef<LatestRequestController | null>(null);
   const itemsRequestControllerRef = useRef<LatestRequestController | null>(null);
   const itemMutationControllerRef = useRef<ItemMutationController | null>(null);
+  const deleteConfirmationRef = useRef<DeleteConfirmationController | null>(null);
   const copilotRuntimeRef = useRef<ReturnType<typeof createLazyCopilotRuntime> | null>(null);
   const mountedRef = useRef(false);
   const titleRef = useRef(title);
@@ -302,6 +330,9 @@ export function App() {
   }
   if (!itemMutationControllerRef.current) {
     itemMutationControllerRef.current = createItemMutationController();
+  }
+  if (!deleteConfirmationRef.current) {
+    deleteConfirmationRef.current = createDeleteConfirmationController();
   }
   if (optionalRuntimeEnabled && !copilotRuntimeRef.current) {
     copilotRuntimeRef.current = createLazyCopilotRuntime();
@@ -662,7 +693,6 @@ export function App() {
   async function removeItem(item: Item) {
     const mutationKey = legacyItemMutationKey(item.id);
     if (itemMutationBusyKeys.has(mutationKey)) return;
-    if (!window.confirm(`“${item.title}” 업무를 삭제할까요?`)) return;
 
     const lease = beginItemMutation(mutationKey);
     if (!lease) return;
@@ -672,13 +702,32 @@ export function App() {
       if (!response.ok) throw new Error('remove failed');
 
       await response.json();
-      if (!commitItemMutation(lease, () => setError(''))) return;
+      if (!commitItemMutation(lease, () => {
+        setPendingDeleteId(null);
+        setError('');
+      })) return;
       await loadItems();
     } catch {
       commitItemMutation(lease, () => setError('업무를 삭제하지 못했습니다.'));
     } finally {
       finishItemMutation(lease);
     }
+  }
+
+  function requestItemDeletion(item: Item): void {
+    const confirmation = deleteConfirmationRef.current;
+    if (!confirmation) return;
+
+    const previousItemId = confirmation.request(item.id);
+    setPendingDeleteId(confirmation.pendingId());
+    if (previousItemId === item.id) void removeItem(item);
+  }
+
+  function cancelItemDeletion(): void {
+    const confirmation = deleteConfirmationRef.current;
+    if (!confirmation) return;
+    confirmation.cancel();
+    setPendingDeleteId(null);
   }
 
   function retryCopilotRuntime(): void {
@@ -952,14 +1001,38 @@ export function App() {
                       >
                         수정
                       </button>
-                      <button
-                        className="toggle danger"
-                        disabled={itemMutationBusyKeys.has(legacyItemMutationKey(item.id))}
-                        onClick={() => void removeItem(item)}
-                        type="button"
-                      >
-                        삭제
-                      </button>
+                      {pendingDeleteId === item.id ? (
+                        <div aria-label={`업무 삭제 확인: ${item.title}`} className="delete-confirmation">
+                          <span>삭제할까요?</span>
+                          <button
+                            aria-label={`업무 삭제 확인: ${item.title}`}
+                            className="toggle danger"
+                            disabled={itemMutationBusyKeys.has(legacyItemMutationKey(item.id))}
+                            onClick={() => requestItemDeletion(item)}
+                            type="button"
+                          >
+                            삭제 확인
+                          </button>
+                          <button
+                            aria-label="업무 삭제 취소"
+                            className="toggle"
+                            disabled={itemMutationBusyKeys.has(legacyItemMutationKey(item.id))}
+                            onClick={cancelItemDeletion}
+                            type="button"
+                          >
+                            취소
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          className="toggle danger"
+                          disabled={itemMutationBusyKeys.has(legacyItemMutationKey(item.id))}
+                          onClick={() => requestItemDeletion(item)}
+                          type="button"
+                        >
+                          삭제
+                        </button>
+                      )}
                       <button
                         aria-label={`업무 ${item.status === 'done' ? '다시 열기' : '완료 처리'}: ${item.title}`}
                         className="toggle"

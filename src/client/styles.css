@@ -115,6 +115,8 @@ button { border: 0; border-radius: 10px; cursor: pointer; font-weight: 750; min-
 .item { align-items: center; background: #fafbfe; border: 1px solid #edf0f6; border-radius: 12px; display: flex; gap: 12px; padding: 15px 16px; }
 .item small { color: #8a93a6; margin-left: auto; }
 .item-actions { align-items: center; display: flex; gap: 12px; margin-left: auto; }
+.delete-confirmation { align-items: center; display: flex; gap: 8px; }
+.delete-confirmation span { color: #667085; font-size: 0.82rem; }
 .edit-row { align-items: center; display: flex; flex: 1; gap: 8px; }
 .edit-row input { padding: 8px 10px; }
 .toggle { background: transparent; color: #6264a7; font-size: 0.82rem; margin-left: auto; padding: 4px 0; }

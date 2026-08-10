@@ -22,6 +22,7 @@ const tsTests = [
   'scripts/genui-action-store-test.ts',
   'scripts/item-store-hardening-test.ts',
   'scripts/item-store-ownership-test.ts',
+  'scripts/client-item-mutation-test.ts',
 ];
 const perTestTimeoutMs = 60_000;
 
