@@ -34,7 +34,7 @@ assert.doesNotMatch(
 );
 assert.doesNotMatch(
   serverEntry,
-  /OPENAI_API_KEY|LOCAL_MODEL_BASE_URL/,
+  /OPENAI_API_KEY|OPENAI_MODEL|LOCAL_MODEL_BASE_URL|LOCAL_MODEL_NAME/,
   'core server artifact must not expose optional provider configuration paths',
 );
 const serverBuildConfig = await fs.readFile(path.join(root, 'scripts', 'build-server.mjs'), 'utf8');

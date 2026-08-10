@@ -225,9 +225,6 @@ if (process.env.TEAMS_CORE_BUILD !== 'true' && optionalRuntimeEnabled && genUiMo
 const genUiActionStore = new GenUiActionStore(
   genUiActionStorePath,
 );
-const responseModeStore = new ResponseModeStore(responseModeStorePath, {
-  optionalProvidersEnabled: optionalRuntimeEnabled,
-});
 const personalTabDeepLink = buildTeamsPersonalTabDeepLink({
   appId: process.env.TEAMS_APP_ID ?? '',
   tabDomain: process.env.TAB_DOMAIN ?? '',
@@ -237,14 +234,27 @@ const genUi = new GenUiResponseFactory(genUiActionStore, {
   openTabUrl: personalTabDeepLink,
 });
 const channelsShadowMonitor = new ChannelsShadowMonitor();
-const openAiConfigured = optionalRuntimeEnabled && Boolean(process.env.OPENAI_API_KEY?.trim());
-const openAiModel = optionalRuntimeEnabled ? process.env.OPENAI_MODEL?.trim() || 'gpt-4o-mini' : 'deterministic';
+const openAiConfigured = process.env.TEAMS_CORE_BUILD !== 'true'
+  && optionalRuntimeEnabled
+  && Boolean(process.env.OPENAI_API_KEY?.trim());
+const openAiModel = process.env.TEAMS_CORE_BUILD === 'true'
+  ? 'deterministic'
+  : process.env.OPENAI_MODEL?.trim() || 'gpt-4o-mini';
+const localModelName = process.env.TEAMS_CORE_BUILD === 'true'
+  ? 'local-model'
+  : process.env.LOCAL_MODEL_NAME?.trim() || 'local-model';
 const weatherMode = process.env.WEATHER_MODE === 'demo' ? 'demo' : 'live';
 const responseProviders = {
   deterministic: true,
   openai: optionalRuntimeEnabled && openAiConfigured,
   local: optionalRuntimeEnabled && localModelConfigured,
 } as const;
+const responseModeStore = new ResponseModeStore(responseModeStorePath, {
+  providers: {
+    openai: openAiConfigured,
+    local: localModelConfigured,
+  },
+});
 
 if (legacyPublicMcp) {
   throw new Error('MCP_PUBLIC_ENABLED=true is no longer supported; MCP is local-only and requires the safe local gate.');
@@ -868,9 +878,9 @@ function publicResponseModeAvailability(): PublicResponseModeAvailability[] {
   return responseModeStore.availability().map((entry) => ({
     ...entry,
     ...(entry.mode === 'openai'
-      ? { model: publicModelLabel(process.env.OPENAI_MODEL, openAiModel) }
+      ? { model: publicModelLabel(openAiModel, openAiModel) }
       : entry.mode === 'local'
-        ? { model: publicModelLabel(process.env.LOCAL_MODEL_NAME, 'local-model') }
+        ? { model: publicModelLabel(localModelName, 'local-model') }
         : {}),
   }));
 }

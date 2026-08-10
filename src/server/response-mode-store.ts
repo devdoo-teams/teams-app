@@ -8,7 +8,6 @@ import {
   type ResponseModeAvailability,
   type ResponseModeScope,
 } from '../shared/response-mode.js';
-import { isLocalModelBaseUrlConfigured } from './local-model-url.js';
 
 const MAX_RESPONSE_MODE_ENTRIES = 1_000;
 const RESPONSE_MODE_RECORD_KEYS = new Set(['tenantId', 'requesterId', 'mode', 'updatedAt']);
@@ -25,7 +24,9 @@ export class ResponseModeStore {
 
   constructor(
     private readonly dataFile: string,
-    private readonly options: { optionalProvidersEnabled?: boolean } = {},
+    private readonly options: {
+      providers?: { openai: boolean; local: boolean };
+    } = {},
   ) {}
 
   /** Load the store and create an empty file when no store exists yet. */
@@ -79,15 +80,13 @@ export class ResponseModeStore {
       {
         mode: 'openai',
         label: responseModeLabel('openai'),
-        configured: this.options.optionalProvidersEnabled !== false
-          && hasNonEmptyEnvironmentValue('OPENAI_API_KEY'),
+        configured: this.options.providers?.openai === true,
         requiresServerConfiguration: true,
       },
       {
         mode: 'local',
         label: responseModeLabel('local'),
-        configured: this.options.optionalProvidersEnabled !== false
-          && isLocalModelBaseUrlConfigured(process.env.LOCAL_MODEL_BASE_URL),
+        configured: this.options.providers?.local === true,
         requiresServerConfiguration: true,
       },
     ];
@@ -190,10 +189,6 @@ function parseTimestamp(value: unknown): string | undefined {
 
 function matchesScope(left: ResponseModeScope, right: ResponseModeScope): boolean {
   return left.tenantId === right.tenantId && left.requesterId === right.requesterId;
-}
-
-function hasNonEmptyEnvironmentValue(name: string): boolean {
-  return Boolean(process.env[name]?.trim());
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
