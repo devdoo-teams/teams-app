@@ -385,6 +385,74 @@ function allEvidenceArtifacts(evidence) {
   ];
 }
 
+function parseCoverageMatrix(bytes, label = 'coverage matrix') {
+  const source = bytes instanceof Uint8Array ? Buffer.from(bytes) : null;
+  if (!source) throw new Error(`${label} must be binary data`);
+  const text = source.toString('utf8');
+  if (Buffer.from(text, 'utf8').compare(source) !== 0) {
+    throw new Error(`${label} must be valid UTF-8 text`);
+  }
+  const fenced = text.match(/<!--\s*TEAMS_UI_MATRIX_JSON_START\s*-->\s*```json\s*([\s\S]*?)\s*```/i);
+  const jsonText = (fenced?.[1] ?? text).trim();
+  let matrix;
+  try {
+    matrix = JSON.parse(jsonText);
+  } catch {
+    throw new Error(`${label} must contain a valid JSON matrix`);
+  }
+  if (!matrix || typeof matrix !== 'object' || Array.isArray(matrix)) {
+    throw new Error(`${label} must be a JSON object`);
+  }
+  if (!Array.isArray(matrix.rows) || matrix.rows.length === 0) {
+    throw new Error(`${label} must contain a non-empty rows array`);
+  }
+  if (!matrix.coverage || matrix.coverage.count !== matrix.rows.length) {
+    throw new Error(`${label} coverage count does not match rows`);
+  }
+  const rowIds = new Set();
+  const counts = { PASS: 0, FAIL: 0, BLOCKED: 0, 'N/A': 0, UNVERIFIED: 0 };
+  for (const row of matrix.rows) {
+    if (!row || typeof row !== 'object' || typeof row.id !== 'string' || row.id.trim() === '') {
+      throw new Error(`${label} contains a row without a stable id`);
+    }
+    if (rowIds.has(row.id)) throw new Error(`${label} contains duplicate row id ${row.id}`);
+    rowIds.add(row.id);
+    const status = row.result?.status;
+    if (!Object.hasOwn(counts, status)) throw new Error(`${label} contains an unsupported row status`);
+    counts[status] += 1;
+  }
+  return { source, matrix, counts };
+}
+
+function inspectCoverageMatrix(bytes, coverage, identity) {
+  const parsed = parseCoverageMatrix(bytes);
+  const { matrix, counts, source } = parsed;
+  if (hashBytes(source) !== coverage.matrixSha256) {
+    throw new Error('coverage matrix SHA-256 does not match the supplied evidence');
+  }
+  const releaseIdentity = matrix.releaseIdentity;
+  if (
+    !releaseIdentity
+    || releaseIdentity.appVersion !== identity.version
+    || typeof releaseIdentity.sourceCommit !== 'string'
+    || !/^[a-f0-9]{7,40}$/.test(releaseIdentity.sourceCommit)
+    || releaseIdentity.packageSha256 !== identity.packageSha256
+  ) {
+    throw new Error('coverage matrix release identity does not match the release package evidence');
+  }
+  const expected = {
+    totalRows: matrix.rows.length,
+    passedRows: counts.PASS,
+    blockedRows: counts.BLOCKED,
+    unverifiedRows: counts.UNVERIFIED,
+    notApplicableRows: counts['N/A'],
+  };
+  for (const [key, value] of Object.entries(expected)) {
+    if (coverage[key] !== value) throw new Error(`coverage matrix ${key} does not match row results`);
+  }
+  return { sha256: hashBytes(source), bytes: source.length, ...expected };
+}
+
 function hasFullEvidenceCoverage(evidence) {
   const coverage = evidence?.coverage;
   return Boolean(
@@ -395,7 +463,9 @@ function hasFullEvidenceCoverage(evidence) {
     && /^[a-f0-9]{64}$/.test(coverage.matrixSha256 ?? '')
     && Number.isInteger(coverage.totalRows)
     && coverage.totalRows > 0
-    && coverage.passedRows === coverage.totalRows
+    && Number.isInteger(coverage.passedRows)
+    && Number.isInteger(coverage.notApplicableRows)
+    && coverage.passedRows + coverage.notApplicableRows === coverage.totalRows
     && coverage.blockedRows === 0
     && coverage.unverifiedRows === 0,
   );
@@ -642,7 +712,9 @@ export function validateEvidence(
     || !/^[a-f0-9]{64}$/.test(coverage.matrixSha256 ?? '')
     || !Number.isInteger(coverage.totalRows)
     || coverage.totalRows <= 0
-    || coverage.passedRows !== coverage.totalRows
+    || !Number.isInteger(coverage.passedRows)
+    || !Number.isInteger(coverage.notApplicableRows)
+    || coverage.passedRows + coverage.notApplicableRows !== coverage.totalRows
     || coverage.blockedRows !== 0
     || coverage.unverifiedRows !== 0
   ) {
@@ -660,6 +732,11 @@ export function validateEvidence(
     absoluteEvidencePath(runtimeLogPath, 'runtime log'),
     absoluteEvidencePath(coverage.matrixPath, 'coverage matrix'),
   ];
+  inspectCoverageMatrix(
+    readArtifact(supportingPaths[2]),
+    coverage,
+    { commit, version, packageSha256 },
+  );
   if (new Set(supportingPaths).size !== supportingPaths.length) {
     throw new Error('accessibility, runtime, and coverage artifacts must use distinct paths');
   }
@@ -762,6 +839,13 @@ export function reverifyEvidenceArtifacts(
       let actual;
       try {
         actual = inspectSupportingArtifact(readArtifact(artifactPath), artifact.role ?? 'supporting');
+        if (artifact.role === 'coverage-matrix') {
+          inspectCoverageMatrix(readArtifact(artifactPath), evidence.coverage, {
+            commit: evidence.commit,
+            version: evidence.version,
+            packageSha256: evidence.packageSha256,
+          });
+        }
       } catch (error) {
         if (error?.code === 'ELOOPINTEGRITY') throw error;
         throw integrityError(`${surface} supporting evidence artifact is invalid: ${error?.message ?? artifactPath}`, surface);

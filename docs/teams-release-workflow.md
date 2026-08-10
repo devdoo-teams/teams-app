@@ -151,6 +151,7 @@ npm run release:loop -- start
     "version": "X.Y.Z",
     "totalRows": 0,
     "passedRows": 0,
+    "notApplicableRows": 0,
     "blockedRows": 0,
     "unverifiedRows": 0
   },
@@ -158,7 +159,7 @@ npm run release:loop -- start
 }
 ```
 
-`totalRows`는 0이 될 수 없고 `passedRows === totalRows`, `blockedRows === 0`, `unverifiedRows === 0`이어야 한다. 각 매트릭스 행에는 기능·surface·location·branch·precondition·action·expected·전/후 스크린샷·접근성·런타임 증거가 있어야 한다. 이 조건을 충족하지 못하면 해당 surface는 완료가 아니다.
+`totalRows`는 0이 될 수 없고 `passedRows + notApplicableRows === totalRows`, `blockedRows === 0`, `unverifiedRows === 0`이어야 한다. `notApplicableRows`는 매트릭스 행의 명시적 `N/A` 수와 정확히 일치해야 한다. 매트릭스 파일 자체의 SHA-256, 행 ID·상태·릴리스 identity도 evidence 등록 시 다시 읽어 검증한다. 각 매트릭스 행에는 기능·surface·location·branch·precondition·action·expected·전/후 스크린샷·접근성·런타임 증거가 있어야 한다. 이 조건을 충족하지 못하면 해당 surface는 완료가 아니다.
 
 이 JSON은 화면 확인 사실을 입력하는 계약이며, loop가 화면을 합성하거나 모바일 확인을 추정하는 기능이 아니다. 포털 업로드·설치 버전·데스크톱·모바일 순서가 어긋나거나 증거 identity가 다르면 등록을 거부한다.
 
@@ -184,6 +185,7 @@ npm run release:loop -- start
     "version": "X.Y.Z",
     "totalRows": 0,
     "passedRows": 0,
+    "notApplicableRows": 0,
     "blockedRows": 0,
     "unverifiedRows": 0
   },

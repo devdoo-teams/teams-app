@@ -13,7 +13,7 @@ A control being visible is never the action result. Reviewers must capture fresh
   "generatedOn": "2026-08-10",
   "releaseIdentity": {
     "appVersion": "1.0.26",
-    "sourceCommit": "e4e1265e539968bccb7121545928de0492e0f42f",
+    "sourceCommit": "905eb4f3a964d57b082698cceef923dea0cec050",
     "packageSha256": "f5655b15aa85669de4ce9bc3b806d2a2d480947b60b1f4dfd7d3a82cd213d078",
     "installedVersion": null,
     "environment": "public-command-only-ui-unverified",

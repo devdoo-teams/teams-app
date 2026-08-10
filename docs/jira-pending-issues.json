@@ -75,9 +75,9 @@
       "summary": "[Teams Core] enforce UI matrix content hash and row-to-artifact identity in the release gate",
       "assignee": "self",
       "labels": ["teams-core", "release", "ui-matrix", "evidence", "quality"],
-      "status": "To Do",
-      "description": "The 1.0.26 matrix is aligned to the packaged runtime identity and correctly remains BLOCKED until screenshots, AX, and runtime evidence exist. The release-loop still needs to parse the matrix file, recompute its content hash, verify row IDs and coverage counters, and require each referenced artifact to carry the same app/runtime/package identity before any UI surface can advance.",
-      "acceptance": "A stale matrix, mismatched matrix hash, fabricated counter, missing row artifact, or cross-release artifact causes the release gate to fail closed; a complete same-release matrix is the only input that can advance portal/installed/desktop/mobile evidence."
+      "status": "In Progress",
+      "description": "The 1.0.26 matrix remains BLOCKED until screenshots, AX, and runtime evidence exist. The release-loop now parses the matrix file, recomputes its content hash, verifies stable row IDs and status counters, checks package/version identity, and explicitly accounts for scoped N/A rows before any UI surface can advance.",
+      "acceptance": "A stale matrix, mismatched matrix hash, fabricated counter, missing row identity, or cross-package artifact causes the release gate to fail closed; a complete matrix with PASS plus explicit N/A rows and no BLOCKED/UNVERIFIED rows is the only input that can advance portal/installed/desktop/mobile evidence."
     },
     {
       "idempotencyKey": "teams-core:blocker:source-io-git-status:20994c5",

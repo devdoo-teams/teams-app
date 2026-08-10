@@ -185,6 +185,27 @@ const identity = {
   startedAt: '2026-08-09T00:00:00.000Z',
 };
 
+function coverageMatrixBytes(surface) {
+  return Buffer.from(JSON.stringify({
+    schemaVersion: 1,
+    matrixId: `fixture-${surface}`,
+    releaseIdentity: {
+      appVersion: identity.version,
+      sourceCommit: identity.commit,
+      packageSha256,
+    },
+    coverage: { count: 4 },
+    rows: Array.from({ length: 4 }, (_, index) => ({
+      id: `${surface}-row-${index}`,
+      result: { status: 'PASS' },
+    })),
+  }) + '\n');
+}
+
+for (const surface of Object.keys(surfaceCoveragePaths)) {
+  await fs.writeFile(surfaceCoveragePaths[surface], coverageMatrixBytes(surface));
+}
+
 function machineReadyState() {
   const state = createInitialState(identity);
   state.machine = { status: 'READY', completedAt: '2026-08-09T00:01:00.000Z' };
@@ -222,7 +243,7 @@ function machineReadyState() {
 }
 
 function evidence(surface, overrides = {}) {
-  const coverageBytes = Buffer.from(`coverage-${surface}-fixture\n`);
+  const coverageBytes = coverageMatrixBytes(surface);
   return {
     surface,
     observedAt: '2026-08-09T00:04:00.000Z',
@@ -241,6 +262,7 @@ function evidence(surface, overrides = {}) {
       version: identity.version,
       totalRows: 4,
       passedRows: 4,
+      notApplicableRows: 0,
       blockedRows: 0,
       unverifiedRows: 0,
     },
