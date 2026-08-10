@@ -36,9 +36,11 @@
 
 ## 검증 증거
 
-- 현재 커밋: `77b65b8c8ef70f5a8ad7f58c4a152514d8d1b461`
+- 코드 수정 검증 커밋: `77b65b8c8ef70f5a8ad7f58c4a152514d8d1b461`
+- 감사 문서 포함 HEAD: `64fbe168b9ee54ea8253403585da6bdc31495221`
 - Core 서버 표식: `schemaVersion=2`, 동일 커밋, `mode=core`, `worktree=clean`
 - system temp clean worktree에서 Core server build 성공
+- 마지막 재빌드에서 esbuild service-stop이 실제 발생했으나 bounded 1회 재시도로 성공
 - `core-runtime-smoke`: health와 `/tabs/home/` 모두 통과
 - `core-bundle-boundary`: 선택적 CopilotKit/MCP 파일이 Core 산출물에 없음
 - `server-build-mode`: Core/optional 표식 계약 통과
