@@ -244,19 +244,55 @@ type ItemsResponse = {
   summary: { total: number; open: number; done: number };
 };
 
-type HealthResponse = {
+export type HealthResponse = {
   ok: boolean;
   service: string;
   version: string;
   environment: string;
-  auth: 'local-bypass' | 'teams-authenticated';
-  userAuth: string;
-  bot: 'teams-sdk' | 'local-handler';
-  storage: string;
+  auth: 'local-bypass' | 'teams-authenticated' | 'not-configured';
+  userAuth: 'local-bypass' | 'entra-sso' | 'not-configured';
+  bot: 'teams-sdk' | 'local-handler' | 'not-configured';
+  storage: 'file-json-single-process';
   timestamp: string;
   copilotKit: 'enabled' | 'disabled';
   genAI: 'openai-configured' | 'not-configured' | 'deterministic-test';
 };
+
+export function healthAuthLabel(value: HealthResponse['auth'] | undefined): string {
+  if (value === 'teams-authenticated') return 'Teams 인증';
+  if (value === 'local-bypass') return '로컬 런타임';
+  if (value === 'not-configured') return '인증 설정 필요';
+  return '연결 확인 필요';
+}
+
+export function healthUserAuthLabel(value: HealthResponse['userAuth'] | undefined): string {
+  if (value === 'entra-sso') return 'Entra SSO';
+  if (value === 'local-bypass') return '로컬 우회';
+  if (value === 'not-configured') return '인증 설정 필요';
+  return '-';
+}
+
+export function healthBotLabel(value: HealthResponse['bot'] | undefined): string {
+  if (value === 'teams-sdk') return 'Teams SDK';
+  if (value === 'local-handler') return '로컬 핸들러';
+  if (value === 'not-configured') return 'Bot 설정 필요';
+  return '-';
+}
+
+export function healthStorageLabel(value: HealthResponse['storage'] | undefined): string {
+  if (value === 'file-json-single-process') return '파일 JSON (단일 프로세스)';
+  return '-';
+}
+
+export function runtimeBadgeLabel(input: {
+  healthLoading: boolean;
+  teamsHost: boolean;
+  auth: HealthResponse['auth'] | undefined;
+}): string {
+  if (input.healthLoading) return '상태 확인 중';
+  if (input.teamsHost) return 'Teams 탭 · 네이티브 위치';
+  return healthAuthLabel(input.auth);
+}
 
 type WeatherResponse = {
   source: 'open-meteo' | 'demo';
@@ -768,15 +804,11 @@ export function App() {
     setHubView(next.view);
   }
 
-  const runtimeBadge = healthLoading
-    ? '상태 확인 중'
-    : teamsHost
-      ? 'Teams 탭 · 네이티브 위치'
-      : health?.auth === 'local-bypass'
-      ? '로컬 런타임'
-      : health
-        ? 'Teams 인증'
-        : '연결 확인 필요';
+  const runtimeBadge = runtimeBadgeLabel({
+    healthLoading,
+    teamsHost,
+    auth: health?.auth,
+  });
 
   const dashboard = (
     <main className="shell">
@@ -816,11 +848,11 @@ export function App() {
         </div>
         <div>
           <span>인증 모드</span>
-          <strong>{health?.userAuth === 'entra-sso' ? 'Entra SSO' : '로컬 우회'}</strong>
+          <strong>{healthUserAuthLabel(health?.userAuth)}</strong>
         </div>
         <div>
           <span>Bot 경로</span>
-          <strong>{health?.bot === 'teams-sdk' ? 'Teams SDK' : '로컬 핸들러'}</strong>
+          <strong>{healthBotLabel(health?.bot)}</strong>
         </div>
         <div>
           <span>GenAI</span>
@@ -836,7 +868,7 @@ export function App() {
         </div>
         <div>
           <span>저장소</span>
-          <strong>{health?.storage === 'file-json' ? '파일 JSON' : health?.storage || '-'}</strong>
+          <strong>{healthStorageLabel(health?.storage)}</strong>
         </div>
         <div>
           <span>마지막 확인</span>
