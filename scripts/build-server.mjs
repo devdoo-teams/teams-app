@@ -118,6 +118,10 @@ if (!reusedBundle || materializedSource) {
       entryNames: 'index',
       splitting: coreBuild,
       sourcemap: coreBuild ? false : true,
+      // The Core build receives a compile-time true flag. Simplify the
+      // derived optional-runtime guards so esbuild can remove their dynamic
+      // imports and never emit optional provider chunks into the API-free ZIP.
+      minifySyntax: coreBuild,
       banner: {
         js: "import { createRequire as __teamsCreateRequire } from 'node:module'; const require = __teamsCreateRequire(import.meta.url);",
       },
