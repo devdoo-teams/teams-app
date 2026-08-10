@@ -579,7 +579,7 @@ export function applyPhaseSuccess(state, phase, summary, now = new Date()) {
   return next;
 }
 
-export function createInitialState({ runId, commit, shortCommit, version, startedAt, untrackedAtStart = [] }) {
+export function createInitialState({ runId, commit, shortCommit, version, startedAt, untrackedAtStart = [], sourceIoMode = 'normal' }) {
   for (const [name, value] of Object.entries({ runId, commit, shortCommit, version, startedAt })) {
     if (typeof value !== 'string' || value.trim() === '') {
       throw new Error(`release loop requires ${name}`);
@@ -594,6 +594,7 @@ export function createInitialState({ runId, commit, shortCommit, version, starte
     shortCommit,
     version,
     untrackedAtStart: [...untrackedAtStart],
+    sourceIoMode,
     status: 'INIT',
     machine: null,
     package: null,
@@ -1228,7 +1229,20 @@ function gitSnapshot() {
       throw error;
     }
   };
-  const porcelain = run(['status', '--porcelain']);
+  let porcelain;
+  let sourceIoMode = 'normal';
+  try {
+    porcelain = run(['status', '--porcelain']);
+  } catch (error) {
+    if (error?.code !== 'ESOURCEIOBLOCKED') throw error;
+    const headTree = run(['rev-parse', 'HEAD^{tree}']);
+    const indexTree = run(['write-tree']);
+    if (headTree !== indexTree) throw error;
+    const untrackedBytes = run(['ls-files', '--others', '--exclude-standard', '-z']);
+    const untracked = untrackedBytes.split('\0').filter(Boolean);
+    porcelain = untracked.map((fileName) => `?? ${fileName}`).join('\n');
+    sourceIoMode = 'index-tree-fileprovider-fallback';
+  }
   const status = classifyGitStatus(porcelain);
   return {
     commit: run(['rev-parse', 'HEAD']),
@@ -1236,6 +1250,7 @@ function gitSnapshot() {
     dirty: status.trackedDirty,
     untracked: status.untracked,
     porcelain,
+    sourceIoMode,
   };
 }
 
@@ -1453,6 +1468,7 @@ async function startRun(statePath) {
     version: sourceVersion(),
     startedAt,
     untrackedAtStart: git.untracked,
+    sourceIoMode: git.sourceIoMode,
   });
   await writeState(state, statePath);
   jsonLog({ status: 'READY', phase: 'start', runId: state.runId, state: state.status, nextAction: nextAction(state) });
