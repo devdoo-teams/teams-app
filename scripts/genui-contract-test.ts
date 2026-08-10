@@ -172,6 +172,7 @@ const duplicateSummaryEnvelope = GenUiEnvelopeV1Schema.parse({
   title: '업무 허브',
   summary: '같은 내용은 한 번만 표시합니다.',
   sections: [{ type: 'text', text: '같은 내용은 한 번만 표시합니다.' }],
+  fallbackText: '같은 내용은 한 번만 표시합니다.',
   actions: [],
 });
 const duplicateSummaryCard = renderGenUiCard(duplicateSummaryEnvelope);
