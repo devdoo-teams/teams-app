@@ -356,7 +356,7 @@ export class GenUiResponseFactory {
         id: 'carousel-actions',
         title: '카드 갤러리 · 다음 단계',
         summary: '모든 응답 카드에는 업무 허브 탭 링크가 기본 제공됩니다.',
-        images: [{ url: 'https://adaptivecards.io/content/cats/4.png', altText: '카드 갤러리 네 번째 샘플 이미지' }],
+        images: [{ url: 'https://adaptivecards.io/content/airplane.png', altText: '카드 갤러리 다음 단계 샘플 이미지' }],
         sections: [{ type: 'list', title: '검증 포인트', items: [
           { label: '카드 좌우 이동', value: 'Teams 메시지 carousel' },
           { label: '카드 내부 이미지', value: 'Adaptive Card ImageSet' },

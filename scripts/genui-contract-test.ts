@@ -291,7 +291,7 @@ const tenCardActivity = createAdaptiveCardCarouselActivity(
   Array.from({ length: MAX_ADAPTIVE_CARD_CAROUSEL_CARDS }, (_, index) => ({
     ...nonAiEnvelope,
     id: `ten-card-${index}`,
-    images: [{ url: `https://adaptivecards.io/content/cats/${(index % 4) + 1}.png`, altText: `열 번째 경계 이미지 ${index + 1}` }],
+    images: [{ url: `https://adaptivecards.io/content/cats/${(index % 3) + 1}.png`, altText: `열 번째 경계 이미지 ${index + 1}` }],
   })),
 );
 assert.equal(tenCardActivity.attachmentLayout, 'carousel');
