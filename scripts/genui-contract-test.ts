@@ -98,6 +98,13 @@ assert.deepEqual(
 assert.deepEqual(
   GenUiEnvelopeV1Schema.safeParse({
     ...envelope,
+    images: [{ url: 'https://example.com/image.png' }],
+  }).success,
+  false,
+);
+assert.deepEqual(
+  GenUiEnvelopeV1Schema.safeParse({
+    ...envelope,
     images: [{ url: 'javascript:alert(1)', altText: 'unsafe' }],
   }).success,
   false,
@@ -250,6 +257,8 @@ assert.equal(imageSet?.type, 'ImageSet');
 assert.equal((imageSet?.images as Array<Record<string, unknown>>)?.[0]?.type, 'Image');
 assert.equal((imageSet?.images as Array<Record<string, unknown>>)?.[0]?.url, 'https://adaptivecards.io/content/cats/1.png');
 assert.equal((imageSet?.images as Array<Record<string, unknown>>)?.[0]?.altText, '샘플 이미지');
+assert.equal(imageSet?.imageSize, 'Medium');
+assert.equal((imageSet?.images as Array<Record<string, unknown>>)?.[0]?.size, 'Medium');
 
 const attachment = createAdaptiveCardAttachment(nonAiEnvelope);
 assert.equal(attachment.contentType, 'application/vnd.microsoft.card.adaptive');
@@ -274,6 +283,19 @@ assert.equal(carouselActivity.attachmentLayout, 'carousel');
 assert.equal(carouselActivity.attachments?.length, 3);
 assert.equal(carouselActivity.attachments?.[1]?.content.body.some((element) => element.type === 'ImageSet'), true);
 assert.equal(MAX_ADAPTIVE_CARD_CAROUSEL_CARDS, 10);
+assert.equal(createAdaptiveCardCarouselActivity(carouselInputs.slice(0, 1)).attachments, undefined);
+const twoCardActivity = createAdaptiveCardCarouselActivity(carouselInputs.slice(0, 2));
+assert.equal(twoCardActivity.attachmentLayout, 'carousel');
+assert.equal(twoCardActivity.attachments?.length, 2);
+const tenCardActivity = createAdaptiveCardCarouselActivity(
+  Array.from({ length: MAX_ADAPTIVE_CARD_CAROUSEL_CARDS }, (_, index) => ({
+    ...nonAiEnvelope,
+    id: `ten-card-${index}`,
+    images: [{ url: `https://adaptivecards.io/content/cats/${(index % 4) + 1}.png`, altText: `열 번째 경계 이미지 ${index + 1}` }],
+  })),
+);
+assert.equal(tenCardActivity.attachmentLayout, 'carousel');
+assert.equal(tenCardActivity.attachments?.length, MAX_ADAPTIVE_CARD_CAROUSEL_CARDS);
 const tooManyCarouselCards = createAdaptiveCardCarouselActivity(
   Array.from({ length: MAX_ADAPTIVE_CARD_CAROUSEL_CARDS + 1 }, (_, index) => ({
     ...nonAiEnvelope,
@@ -283,7 +305,7 @@ const tooManyCarouselCards = createAdaptiveCardCarouselActivity(
 assert.equal(tooManyCarouselCards.attachments, undefined);
 assert.match(tooManyCarouselCards.text ?? '', /최대 10개/);
 const invalidCarousel = createAdaptiveCardCarouselActivity([
-  { ...nonAiEnvelope, id: 'invalid-carousel', images: [{ url: 'data:image/png;base64,AAAA' }] },
+  { ...nonAiEnvelope, id: 'invalid-carousel', images: [{ url: 'data:image/png;base64,AAAA', altText: '잘못된 이미지' }] },
 ] as never);
 assert.equal(invalidCarousel.attachments, undefined);
 assert.match(invalidCarousel.text ?? '', /캐러셀/);

@@ -19,6 +19,6 @@ Add a small, deterministic Teams-first GenUI slice that demonstrates a message-l
 
 1. Add failing schema and renderer tests for image validation, `ImageSet`, carousel attachment layout, max-card enforcement, and fallback behavior.
 2. Implement `GenUiImage` in the shared envelope, Teams image rendering, and `createAdaptiveCardCarouselActivity`.
-3. Add a deterministic `carousel` bot command and help-card button so the feature is reachable from Teams chat.
+3. Add a deterministic `carousel` bot text command so the feature is reachable from Teams chat without exceeding the six-action card budget; keep the default tab link on cards.
 4. Run focused tests, core build/tests, package/release loop, and local runtime checks.
 5. Upload the new package through the existing Teams Admin Center tab, verify the installed desktop app and every carousel/image branch with fresh AX and screenshots, then request mobile confirmation.

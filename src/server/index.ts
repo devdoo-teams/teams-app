@@ -668,7 +668,8 @@ function createBotSender(
 ): BotSend {
   return async (text, envelope, activityOverride) => {
     const normalized = envelope ? GenUiEnvelopeV1Schema.parse(envelope) : undefined;
-    const activity = activityOverride ?? (normalized && genUiMode !== 'legacy'
+    const effectiveOverride = activityOverride && genUiMode !== 'legacy' ? activityOverride : undefined;
+    const activity = effectiveOverride ?? (normalized && genUiMode !== 'legacy'
       ? createAdaptiveCardActivity(normalized)
       : { type: 'message', text });
 
@@ -679,10 +680,10 @@ function createBotSender(
       return;
     }
 
-    if (activityOverride) {
+    if (effectiveOverride) {
       if (!deliver) return;
       try {
-        await deliver(activityOverride);
+        await deliver(effectiveOverride);
       } catch {
         await deliver({ type: 'message', text });
       }
@@ -1982,7 +1983,8 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
 
     if (normalizedText === 'carousel' || normalizedText === 'gallery') {
       const responseText = '카드 갤러리를 보냅니다. Teams 메시지에서 카드를 좌우로 넘기고 카드 내부 이미지를 확인하세요.';
-      await send(responseText, undefined, createAdaptiveCardCarouselActivity(genUi.carousel()));
+      const carouselActivity = genUiMode === 'legacy' ? undefined : createAdaptiveCardCarouselActivity(genUi.carousel());
+      await send(responseText, undefined, carouselActivity);
       return;
     }
 

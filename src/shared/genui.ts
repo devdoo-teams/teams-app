@@ -119,7 +119,7 @@ export const GenUiImageSchema = z.object({
       return false;
     }
   }, 'image URL must use https'),
-  altText: z.string().min(1).max(400).optional(),
+  altText: z.string().min(1).max(400),
 }).strict();
 
 const GenUiTextSectionSchema = SectionBaseSchema.extend({

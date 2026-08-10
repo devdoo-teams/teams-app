@@ -240,6 +240,10 @@ export class GenUiResponseFactory {
   }
 
   private commandActions(): GenUiAction[] {
+    // Teams recommends no more than six primary card actions. Every card
+    // also receives the default tab link, so keep five command buttons here;
+    // collaboration remains available as a text command.
+    const cardCommands = GENUI_COMMANDS.filter((command) => command !== 'collaboration');
     const labels: Record<(typeof GENUI_COMMANDS)[number], string> = {
       help: '도움말',
       weather: '날씨',
@@ -248,7 +252,7 @@ export class GenUiResponseFactory {
       work: '탭 업무',
       collaboration: '알림 digest',
     };
-    return GENUI_COMMANDS.map((command) => ({
+    return cardCommands.map((command) => ({
       id: `command-${command}`,
       action: 'command' as const,
       label: labels[command],

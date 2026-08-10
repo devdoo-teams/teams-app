@@ -995,9 +995,9 @@ async function runLocalFlow(dataFile, jobDataFile) {
     assert(help.response.status === 200, 'Bot help activity completes locally');
     const helpCard = assertAdaptiveCardActivity(help.body.activities[0], 'help');
     const commandActions = helpCard.actions?.filter((action) => genUiActionFromCard(action) === 'command') ?? [];
-    assert(commandActions.length === 6, 'help card exposes all six default command buttons');
+    assert(commandActions.length === 5, 'help card exposes five command buttons within the Teams action budget');
     assert(
-      JSON.stringify(commandActions.map((action) => action.type)) === JSON.stringify(Array.from({ length: 6 }, () => 'Action.Execute')),
+      JSON.stringify(commandActions.map((action) => action.type)) === JSON.stringify(Array.from({ length: 5 }, () => 'Action.Execute')),
       'default command buttons use direct Adaptive Card Execute actions',
     );
     assert(commandActions.every((action) => action.verb === 'genui.command'), 'default command buttons route through the GenUI command verb');
@@ -1005,11 +1005,11 @@ async function runLocalFlow(dataFile, jobDataFile) {
     assert(commandActions.every((action) => {
       const payload = actionPayloadFromCard(action);
       return payload?.action === 'command'
-        && ['help', 'weather', 'status', 'list', 'work', 'collaboration'].includes(payload?.entityId)
+        && ['help', 'weather', 'status', 'list', 'work'].includes(payload?.entityId)
         && typeof payload?.actionToken === 'string';
     }), 'default command buttons carry bounded command payloads');
 
-    for (const command of ['help', 'weather', 'status', 'list', 'work', 'collaboration']) {
+    for (const command of ['help', 'weather', 'status', 'list', 'work']) {
       const commandAction = commandActions.find((action) => actionPayloadFromCard(action)?.entityId === command);
       const commandPayload = actionPayloadFromCard(commandAction);
       const commandInvoke = await request(server.baseUrl, '/api/messages', {
@@ -1407,10 +1407,10 @@ async function runChannelsShadowFlow(dataFile, jobDataFile) {
     const helpSerialized = JSON.stringify(help.body.activities[0]);
     assert(!helpSerialized.includes('copilotkit-channels-shadow'), 'delivered help activity omits the shadow renderer marker');
     assert(!helpSerialized.includes('"shadow":true'), 'delivered help activity omits shadow-only action data');
-    assert((helpCard.actions?.length ?? 0) === 6, 'help keeps the native command action set in shadow mode');
+    assert((helpCard.actions?.length ?? 0) === 5, 'help keeps the native command action set in shadow mode');
     assert(
-      helpCard.actions?.filter((action) => genUiActionFromCard(action) === 'command').length === 6,
-      'shadow mode keeps all six native command buttons without shadow metadata',
+      helpCard.actions?.filter((action) => genUiActionFromCard(action) === 'command').length === 5,
+      'shadow mode keeps five native command buttons without shadow metadata',
     );
 
     const approval = await request(server.baseUrl, '/api/messages', {
@@ -1466,6 +1466,32 @@ async function runChannelsShadowFlow(dataFile, jobDataFile) {
     assert(diagnostics.lastDeliveredCardMatch === true, 'health reports the last delivered-card comparison');
     const healthSerialized = JSON.stringify(diagnostics);
     assert(!healthSerialized.includes('task-') && !healthSerialized.includes('token') && !healthSerialized.includes('conversation'), 'shadow health metrics expose no IDs, tokens, or conversation data');
+  } finally {
+    await stopServer(server.child);
+  }
+}
+
+async function runLegacyCarouselFlow(dataFile, jobDataFile) {
+  const server = await startServer({
+    production: false,
+    dataFile,
+    jobDataFile,
+    extraEnv: { TEAMS_GENUI_MODE: 'legacy' },
+  });
+
+  try {
+    const health = await request(server.baseUrl, '/api/health');
+    assert(health.response.status === 200, 'legacy mode health endpoint returns 200');
+    assert(health.body.genUiMode === 'legacy', 'runtime selects the legacy text mode');
+    const carousel = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity('carousel', server.baseUrl, 'legacy-carousel')),
+    });
+    assert(carousel.response.status === 200, 'legacy carousel command completes locally');
+    const delivered = carousel.body.activities?.[0];
+    assert(delivered?.type === 'message', 'legacy carousel fallback remains a message');
+    assert(typeof delivered?.text === 'string' && delivered.text.includes('카드 갤러리를 보냅니다'), 'legacy carousel fallback explains the text-only response');
+    assert(delivered?.attachments === undefined, 'legacy carousel fallback does not bypass text mode with Adaptive Cards');
   } finally {
     await stopServer(server.child);
   }
@@ -1706,6 +1732,8 @@ const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-sdk-runtime-'));
 const localDataFile = path.join(tempDir, 'local-items.json');
 const productionDataFile = path.join(tempDir, 'production-items.json');
 const localJobDataFile = path.join(tempDir, 'local-agent-jobs.json');
+const legacyDataFile = path.join(tempDir, 'legacy-items.json');
+const legacyJobDataFile = path.join(tempDir, 'legacy-agent-jobs.json');
 const productionJobDataFile = path.join(tempDir, 'production-agent-jobs.json');
 const sdkDataFile = path.join(tempDir, 'sdk-items.json');
 const sdkJobDataFile = path.join(tempDir, 'sdk-agent-jobs.json');
@@ -1726,6 +1754,8 @@ try {
   await runStartupGateFlow();
   console.log('Runtime verification: local authenticated-bypass flow');
   await runLocalFlow(localDataFile, localJobDataFile);
+  console.log('Runtime verification: legacy text fallback flow');
+  await runLegacyCarouselFlow(legacyDataFile, legacyJobDataFile);
   console.log('Runtime verification: file store process lease flow');
   await runStoreLeaseFlow(leaseDataFile, leaseJobDataFile);
   console.log('Runtime verification: Channels shadow comparison flow');
