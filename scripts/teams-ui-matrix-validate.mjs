@@ -490,7 +490,14 @@ export function extractMatrixData(markdown) {
   }
 }
 
-export function validateMatrix(matrix, { requirePass = false, evidenceBaseDir = process.cwd() } = {}) {
+export function validateMatrix(
+  matrix,
+  {
+    requirePass = false,
+    evidenceBaseDir = process.cwd(),
+    requiredCoverageKeys = REQUIRED_COVERAGE_KEYS,
+  } = {},
+) {
   const errors = [];
   const seenIds = new Set();
   const foundCoverage = new Set();
@@ -514,7 +521,7 @@ export function validateMatrix(matrix, { requirePass = false, evidenceBaseDir = 
     validateRow(row, index, matrix.releaseIdentity, errors, seenIds, foundCoverage, { evidenceBaseDir });
   }
 
-  const missingCoverage = REQUIRED_COVERAGE_KEYS.filter((key) => !foundCoverage.has(key));
+  const missingCoverage = requiredCoverageKeys.filter((key) => !foundCoverage.has(key));
   if (missingCoverage.length > 0) push(errors, '', `missing coverage: ${missingCoverage.join(', ')}`);
 
   const counts = { PASS: 0, FAIL: 0, BLOCKED: 0, 'N/A': 0 };

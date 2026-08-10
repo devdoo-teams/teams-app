@@ -51,6 +51,7 @@
 
 - 30초 초과 가능 작업은 실행 제한시간을 지정하고, 제한시간 절반과 종료 시점에 최근 로그·PID·경과 시간·상태를 확인한다. 무제한 `wait`나 무제한 브라우저 대기를 사용하지 않는다.
 - 공개 서버·Dev Tunnel·테스트 게이트·관리자 업로드·Teams UI 검증을 각각 독립 상태로 기록한다. 한 단계가 `BLOCKED`여도 명령어 게이트, 공개 health, 기존 탭 DOM 확인 등 비중복 작업은 계속한다.
+- 단계별 UI 증거는 `coverage.scope`를 사용한다. `portal`, `installed`, `desktop`은 해당 단계의 스코프 행만 PASS/N/A이면 다음 단계로 진행할 수 있다. 마지막 `mobile` 증거만 `scope=full`인 전체 matrix에서 BLOCKED/UNVERIFIED 없이 모든 행이 PASS/N/A여야 한다. 이 순서가 없으면 첫 포털 증거 등록 전에 이후 화면 증거를 요구하는 교착이 발생한다.
 - 하위 에이전트는 작업 ID별 상태를 `pending_init`/`running`/`needs_attention`/`completed`/`errored`/`interrupted`로 확인한다. 즉시 결과가 필요한 경우를 제외하고 반복 폴링하지 않으며, 진행률이 없는 동일 상태는 다시 보고하지 않는다.
 - 두 번 연속 상태·로그 변화가 없으면 `STALE_PROCESS_SUSPECTED`로 분리 보고한다. PID, 부모 PID, 경과 시간, CPU/메모리, 마지막 로그, 대체 경로를 남기고, 공개 서버·Dev Tunnel·사용자 브라우저를 임의 종료하지 않는다.
 - 각 단계 보고에 다음 모니터링 표를 남긴다.
@@ -141,7 +142,7 @@ npm run release:loop -- start
 
 상태는 `.release/current.json`에 저장되며 토큰·비밀번호·API key·원문 Teams 메시지는 저장하지 않는다. `start`, `package`, `complete`는 현재 Git 커밋과 clean worktree를 확인한다. clean 판정에서 추적 파일 수정은 차단하지만, 기존 사용자 소유 미추적 파일은 삭제하거나 원본으로 취급하지 않고 `untrackedAtStart`에 기록한 뒤 계속한다. 미추적 파일을 포함한 패키지·업로드 경로는 사용하지 않는다. `machine`, `package`, `public` 실패는 마지막 성공 상태를 보존하고 다시 실행할 수 있다. `complete`는 네 개 UI 증거가 모두 현재 커밋·버전·ZIP SHA와 일치할 때만 `READY`와 Teams 전송용 보고서를 출력한다.
 
-외부 증거 파일은 임의의 이미지 한 장으로 통과할 수 없다. `release-loop`는 전·후 스크린샷, 접근성 증거, 런타임 로그, 현재 커밋/버전에 결합된 전수 매트릭스 결과를 모두 요구한다. 아래는 `desktop`의 예시이며 실제 경로와 해시는 실행 결과로 채운다.
+외부 증거 파일은 임의의 이미지 한 장으로 통과할 수 없다. `release-loop`는 전·후 스크린샷, 접근성 증거, 런타임 로그, 현재 커밋/버전에 결합된 스코프 매트릭스 결과를 모두 요구한다. 아래는 `desktop`의 예시이며 실제 경로와 해시는 실행 결과로 채운다. 최종 `mobile` 증거만 전체 매트릭스를 사용한다.
 
 ```json
 {
@@ -156,6 +157,7 @@ npm run release:loop -- start
   "accessibilityPath": "/absolute/path/teams-desktop-ax.json",
   "runtimeLogPath": "/absolute/path/teams-desktop-runtime.log",
   "coverage": {
+    "scope": "desktop",
     "matrixPath": "/absolute/path/teams-ui-matrix.json",
     "matrixSha256": "<sha256>",
     "commit": "<현재 커밋>",
@@ -170,7 +172,7 @@ npm run release:loop -- start
 }
 ```
 
-`totalRows`는 0이 될 수 없고 `passedRows + notApplicableRows === totalRows`, `blockedRows === 0`, `unverifiedRows === 0`이어야 한다. `notApplicableRows`는 매트릭스 행의 명시적 `N/A` 수와 정확히 일치해야 한다. 매트릭스 파일 자체의 SHA-256, 행 ID·상태·릴리스 identity도 evidence 등록 시 다시 읽어 검증한다. 각 매트릭스 행에는 기능·surface·location·branch·precondition·action·expected·전/후 스크린샷·접근성·런타임 증거가 있어야 한다. 이 조건을 충족하지 못하면 해당 surface는 완료가 아니다.
+`totalRows`는 0이 될 수 없고 `passedRows + notApplicableRows === totalRows`, `blockedRows === 0`, `unverifiedRows === 0`이어야 한다. `notApplicableRows`는 매트릭스 행의 명시적 `N/A` 수와 정확히 일치해야 한다. 매트릭스 파일 자체의 SHA-256, 행 ID·상태·릴리스 identity도 evidence 등록 시 다시 읽어 검증한다. 스코프 매트릭스는 해당 단계에 실제로 캡처한 행만 포함할 수 있지만 모든 포함 행에 기능·surface·location·branch·precondition·action·expected·전/후 스크린샷·접근성·런타임 증거가 있어야 한다. 마지막 `mobile`의 `scope=full`은 권위 매트릭스의 모든 coverage key를 포함해야 한다. 이 조건을 충족하지 못하면 해당 surface는 완료가 아니다.
 
 이 JSON은 화면 확인 사실을 입력하는 계약이며, loop가 화면을 합성하거나 모바일 확인을 추정하는 기능이 아니다. 포털 업로드·설치 버전·데스크톱·모바일 순서가 어긋나거나 증거 identity가 다르면 등록을 거부한다.
 
@@ -190,6 +192,7 @@ npm run release:loop -- start
   "accessibilityPath": "/absolute/path/teams-installed-ax.json",
   "runtimeLogPath": "/absolute/path/teams-installed-runtime.log",
   "coverage": {
+    "scope": "installed",
     "matrixPath": "/absolute/path/teams-installed-matrix.json",
     "matrixSha256": "<sha256>",
     "commit": "<현재 커밋>",

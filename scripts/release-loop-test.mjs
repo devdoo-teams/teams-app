@@ -306,7 +306,7 @@ const identity = {
   startedAt: '2026-08-09T00:00:00.000Z',
 };
 
-function coverageMatrixBytes(surface, { mutateRow } = {}) {
+function coverageMatrixBytes(surface, { mutateRow, evidenceScope } = {}) {
   const matrixEvidence = (evidencePath, reason) => ({
     fresh: true,
     state: 'captured',
@@ -376,6 +376,7 @@ function coverageMatrixBytes(surface, { mutateRow } = {}) {
   return Buffer.from(JSON.stringify({
     schemaVersion: 1,
     matrixId: `fixture-${surface}`,
+    ...(evidenceScope ? { evidenceScope } : {}),
     releaseIdentity: {
       appVersion: identity.version,
       sourceCommit: identity.commit,
@@ -585,6 +586,22 @@ assert.deepEqual(portalEvidence.artifacts.map(({ path: artifactPathValue, role, 
 ]);
 assert.equal(applyEvidence(machineReady, portalEvidence).status, 'PORTAL_READY');
 const portalReady = applyEvidence(machineReady, portalEvidence);
+const scopedPortalCoveragePath = path.join(tempDir, 'portal-scoped-coverage.md');
+const scopedPortalCoverageBytes = coverageMatrixBytes('portal', { evidenceScope: 'portal' });
+await fs.writeFile(scopedPortalCoveragePath, scopedPortalCoverageBytes);
+const scopedPortalEvidence = validateEvidence(evidence('portal', {
+  coverage: {
+    ...evidence('portal').coverage,
+    scope: 'portal',
+    matrixPath: scopedPortalCoveragePath,
+    matrixSha256: crypto.createHash('sha256').update(scopedPortalCoverageBytes).digest('hex'),
+  },
+}), machineReady, {
+  fileExists: () => true,
+  now: new Date('2026-08-09T00:05:00.000Z'),
+});
+assert.equal(scopedPortalEvidence.coverage.scope, 'portal');
+assert.equal(applyEvidence(machineReady, scopedPortalEvidence).status, 'PORTAL_READY');
 assert.throws(
   () => validateEvidence(evidence('installed'), portalReady, {
     fileExists: () => true,
@@ -692,6 +709,17 @@ for (const surface of ['portal', 'installed', 'desktop', 'mobile']) {
 }
 assert.equal(completeState.status, 'MOBILE_READY');
 assert.deepEqual(missingGates(completeState), []);
+assert.throws(
+  () => validateEvidence(evidence('mobile', {
+    userConfirmed: true,
+    coverage: { ...evidence('mobile').coverage, scope: 'mobile' },
+  }), completeState, {
+    fileExists: () => true,
+    now: new Date('2026-08-09T00:05:00.000Z'),
+  }),
+  /mobile.*full|full.*coverage/i,
+  'mobile evidence cannot finish the release with a surface-only matrix',
+);
 const terminalCompleteState = { ...completeState, status: 'COMPLETE' };
 assert.equal(deriveStatus(terminalCompleteState), 'COMPLETE', 'a completed release remains complete in status views');
 assert.equal(deriveStatus({ ...completeState, status: 'SUPERSEDED' }), 'SUPERSEDED', 'a superseded release remains terminal');

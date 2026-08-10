@@ -11,6 +11,7 @@ import { validateMatrix } from './teams-ui-matrix-validate.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const surfaces = ['portal', 'installed', 'desktop', 'mobile'];
+const evidenceScopes = new Set(['full', ...surfaces]);
 const phaseOrder = ['machine', 'package', 'public', ...surfaces];
 const terminalReleaseStates = new Set(['COMPLETE', 'SUPERSEDED']);
 const MAX_RASTER_BYTES = 20 * 1024 * 1024;
@@ -442,7 +443,15 @@ function inspectCoverageMatrix(bytes, coverage, identity) {
   ) {
     throw new Error('coverage matrix release identity does not match the release package evidence');
   }
-  const validation = validateMatrix(matrix, { requirePass: true });
+  const scope = coverage.scope ?? matrix.evidenceScope ?? 'full';
+  if (!evidenceScopes.has(scope)) throw new Error(`coverage matrix evidence scope is invalid: ${scope}`);
+  if (matrix.evidenceScope && matrix.evidenceScope !== scope) {
+    throw new Error('coverage matrix evidence scope does not match the supplied coverage');
+  }
+  const validation = validateMatrix(matrix, {
+    requirePass: true,
+    requiredCoverageKeys: scope === 'full' ? undefined : [],
+  });
   if (!validation.ok) {
     throw new Error(`coverage matrix row validation failed: ${validation.errors.join('; ')}`);
   }
@@ -463,10 +472,27 @@ function hasFullEvidenceCoverage(evidence) {
   const coverage = evidence?.coverage;
   return Boolean(
     coverage
+    && (coverage.scope ?? 'full') === 'full'
     && coverage.commit === evidence.commit
     && coverage.version === evidence.version
     && typeof coverage.matrixPath === 'string'
     && /^[a-f0-9]{64}$/.test(coverage.matrixSha256 ?? '')
+    && Number.isInteger(coverage.totalRows)
+    && coverage.totalRows > 0
+    && Number.isInteger(coverage.passedRows)
+    && Number.isInteger(coverage.notApplicableRows)
+    && coverage.passedRows + coverage.notApplicableRows === coverage.totalRows
+    && coverage.blockedRows === 0
+    && coverage.unverifiedRows === 0,
+  );
+}
+
+function hasSurfaceEvidenceCoverage(evidence, surface) {
+  const coverage = evidence?.coverage;
+  const scope = coverage?.scope ?? 'full';
+  return Boolean(
+    coverage
+    && (scope === surface || scope === 'full')
     && Number.isInteger(coverage.totalRows)
     && coverage.totalRows > 0
     && Number.isInteger(coverage.passedRows)
@@ -484,13 +510,14 @@ function hasSurfaceEvidence(state, surface) {
   if (!Array.isArray(evidence.artifacts) || evidence.artifacts.length < 2) return false;
   if (!Array.isArray(evidence.supportingArtifacts) || evidence.supportingArtifacts.length < 2) return false;
   if (!evidence.screenshotBeforePath || !evidence.screenshotAfterPath) return false;
-  if (!hasFullEvidenceCoverage(evidence)) return false;
+  if (!hasSurfaceEvidenceCoverage(evidence, surface)) return false;
   if (state.package?.sha256 && evidence.packageSha256 !== state.package.sha256) return false;
   // The portal's published version and the installed conversation's response
   // are different facts. Do not let a chat round-trip stand in for the
   // installed app-info version check.
   if (surface === 'installed' && evidence.installedVersion !== state.version) return false;
   if (surface === 'mobile' && evidence.userConfirmed !== true) return false;
+  if (surface === 'mobile' && !hasFullEvidenceCoverage(evidence)) return false;
   return true;
 }
 
@@ -712,6 +739,16 @@ export function validateEvidence(
   if (typeof coverage !== 'object' || coverage === null) {
     throw new Error('evidence requires a coverage matrix result');
   }
+  const coverageScope = coverage.scope ?? 'full';
+  if (!evidenceScopes.has(coverageScope)) {
+    throw new Error(`evidence coverage scope must be one of: ${[...evidenceScopes].join(', ')}`);
+  }
+  if (coverageScope !== 'full' && coverageScope !== surface) {
+    throw new Error(`evidence coverage scope ${coverageScope} does not match surface ${surface}`);
+  }
+  if (surface === 'mobile' && coverageScope !== 'full') {
+    throw new Error('mobile evidence requires a full coverage matrix');
+  }
   if (
     coverage.commit !== commit
     || coverage.version !== version
@@ -796,6 +833,7 @@ export function validateEvidence(
     runtimeLogPath: path.normalize(runtimeLogPath),
     coverage: {
       ...coverage,
+      scope: coverageScope,
       matrixPath: path.normalize(coverage.matrixPath),
     },
     artifactPaths: artifacts.map(({ path: artifactPath }) => artifactPath),
