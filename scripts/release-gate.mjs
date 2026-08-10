@@ -449,6 +449,14 @@ async function runPublic({ url, timeoutOverride } = {}) {
   const health = JSON.parse(healthResult.text);
   assertPublicHealth(health, packageManifest.version);
 
+  const websiteRootResult = await fetchWithTimeout(`${baseUrl}/`, timeoutMs);
+  assert.equal(websiteRootResult.response.status, 200, 'public website root must resolve after following its canonical tab redirect');
+  assert.equal(
+    originAndPath(websiteRootResult.response.url, 'public website root final URL'),
+    originAndPath(packageManifest.staticTabs[0].contentUrl, 'packaged tab content URL'),
+    'public website root must resolve to the packaged canonical tab surface',
+  );
+
   const tabDeployment = await validatePublicTabDeployment({
     tabUrl: `${baseUrl}/tabs/home/`,
     manifest: packageManifest,
@@ -469,6 +477,12 @@ async function runPublic({ url, timeoutOverride } = {}) {
           bot: health.bot,
           outbound: health.outbound,
           environment: health.environment,
+        },
+      },
+      {
+        websiteRoot: {
+          status: websiteRootResult.response.status,
+          finalUrl: websiteRootResult.response.url,
         },
       },
       {

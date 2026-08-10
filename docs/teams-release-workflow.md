@@ -110,7 +110,11 @@ Core 서버 번들은 Teams SDK·Express 등 필수 런타임을 포함하고 Co
 macOS FileProvider가 원본 작업공간의 파일을 placeholder 상태로 만들면 코드 오류가 아니라 로컬 바이트 접근 문제일 수 있다. 빌드 전 `package.json`, `package-lock.json`, `appPackage/manifest.json`, `src/`, `scripts/`, `types/`와 실제 ZIP의 `stat` `blocks`·플래그를 확인한다. 파일 크기는 존재하지만 `blocks=0`이고 dataless/FileProvider 플래그가 있으면 `SOURCE_IO_BLOCKED`로 기록한다.
 
 이 상태에서 `cp`, Git 객체 읽기, 빌드, 서버 시작을 파일별로 무기한 반복하지 않는다. 각 PID·경과 시간·마지막 로그를 30초 간격으로 확인하고, 두 번 연속 변화가 없으면 stale 작업으로 분리한다. 의존성 캐시 재구성·이미 로컬인 산출물 검증·공개 health 확인 같은 독립 명령어 검증은 계속할 수 있지만, `/Users/doosansmacbookpro/Documents/TeamsApp` 외의 `/tmp`·iCloud·동기화 경로·Git 객체 복구 결과를 원본으로 취급하지 않는다. 복구 임시 파일은 worktree 밖의 recoverable 경로로 이동하고 clean worktree를 다시 확인한다.
-`dist` 자체가 `blocks=0`인 경우에는 `build:core`가 OS 안정 런타임 경로를 선택하고, `npm start`가 `scripts/start-server.mjs`로 그 동일 경로의 서버를 기동하게 한다. 런타임 산출물은 재생성 가능한 파생 파일이며 원본 소스·Git 이력·Teams 업로드 ZIP의 기준이 아니다.
+`dist` 자체가 `blocks=0`인 경우에는 `build:core`가 OS 안정 런타임 경로를 선택하고, `npm start`가 `scripts/start-server.mjs`로 그 동일 경로의 서버를 기동하게 한다. 클라이언트 source materialize는 작업공간 바깥 OS 임시 경로에서 수행하고 의존성은 원본 `node_modules`를 명시적으로 탐색하게 한다. 테스트가 서버를 기동할 때도 `resolveRuntimeDistRoot()`의 동일한 검증 산출물을 사용하며 workspace `dist/server/index.js`를 직접 실행하지 않는다. 런타임 산출물은 재생성 가능한 파생 파일이며 원본 소스·Git 이력·Teams 업로드 ZIP의 기준이 아니다.
+
+`typecheck:core`에서 esbuild 서비스가 중단되면 서비스 정리 후 한 번만 재시작·재시도한다. 두 번째 실패는 실제 게이트 실패로 기록한다. 기본 API-free 테스트에는 CopilotKit Channels shadow 같은 optional provider를 섞지 않고, 별도 명령에서만 실행한다.
+
+매니페스트의 `developer.websiteUrl`·static-tab `websiteUrl`이 origin root를 가리키므로 공개 검증은 `/api/health`와 `/tabs/home/`뿐 아니라 `/`도 따라간다. `/`의 최종 URL은 canonical `/tabs/home/`와 같아야 하며, root 404는 `TAB_RUNTIME_UNAVAILABLE`이다.
 
 FileProvider 다운로드를 기다리기 위해 Finder·새 브라우저 탭·새 로그인 세션을 만들지 않는다. 업로드는 원본에서 생성하고 SHA-256 및 내부 manifest를 확인한 최신 ZIP의 절대 경로를 직접 선택한다. 화면이 잠겨 파일 선택기가 열리지 않으면 `PORTAL_UPLOAD_UNVERIFIED`로 보류하고 잠금 해제 우회나 자격 증명 추측을 하지 않는다.
 

@@ -7,14 +7,20 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const source = fs.readFileSync(path.join(root, 'src/server/index.ts'), 'utf8');
 
 const explicitRoute = source.indexOf("http.get('/tabs/home'");
+const rootRoute = source.indexOf("http.get('/',");
 const sdkTabRegistration = source.indexOf("teamsApp.tab('home'");
 const staticRoute = source.indexOf("http.use('/tabs/home', express.static(clientDist))");
 
+assert.notEqual(rootRoute, -1, 'the manifest website root must redirect to the canonical personal tab');
 assert.notEqual(explicitRoute, -1, 'the server must register an explicit personal-tab route');
 assert.notEqual(sdkTabRegistration, -1, 'the Teams SDK tab registration must remain present');
 assert.ok(
   explicitRoute < sdkTabRegistration,
   'the explicit /tabs/home route must be registered before ExpressAdapter.tab() so it owns the 308 redirect',
+);
+assert.ok(
+  rootRoute < sdkTabRegistration,
+  'the website root route must be registered before ExpressAdapter.tab() so the manifest website URL is functional',
 );
 assert.notEqual(staticRoute, -1, 'the canonical trailing-slash static tab route must remain present');
 assert.ok(

@@ -5,9 +5,11 @@ import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 
 const execFileAsync = promisify(execFile);
 const root = process.cwd();
+const runtimeDistRoot = resolveRuntimeDistRoot(root);
 const botClientId = '00000000-0000-4000-8000-000000000001';
 const clientId = '00000000-0000-4000-8000-000000000002';
 const tenantId = '00000000-0000-4000-8000-000000000003';
@@ -27,7 +29,7 @@ async function freePort() {
 
 async function expectStartupFailure(label, overrides, expectedOutput) {
   const tempRoot = await mkdtemp(path.join(tmpdir(), `teams-auth-startup-${label}-`));
-  const child = spawn(process.execPath, [path.join(root, 'dist/server/index.js')], {
+  const child = spawn(process.execPath, [path.join(runtimeDistRoot, 'server', 'index.js')], {
     cwd: root,
     env: {
       ...process.env,

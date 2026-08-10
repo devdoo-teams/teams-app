@@ -1022,6 +1022,13 @@ http.get('/api/weather', async (request: any, response: any) => {
   }
 });
 
+// The manifest uses the origin root as its developer/static-tab website URL.
+// Keep that URL functional while preserving one canonical tab surface.
+http.get('/', (request: any, response: any) => {
+  const requestUrl = new URL(String(request.url ?? '/'), 'http://localhost');
+  response.redirect(308, `/tabs/home/${requestUrl.search}`);
+});
+
 http.get('/privacy', (_request: any, response: any) => {
   response.type('html').send('<h1>Privacy</h1><p>Internal MVP privacy information.</p>');
 });

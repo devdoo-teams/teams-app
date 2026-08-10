@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { build } from 'esbuild';
 
@@ -13,7 +14,10 @@ const coreBuild = process.argv.includes('--core');
 const reuseFileProviderSources = process.env.TEAMS_FILEPROVIDER_SERVER_REUSE === '1';
 
 async function materializeGitClientSource() {
-  const temporaryRoot = await fs.mkdtemp(path.join(root, '.teams-fileprovider-client-'));
+  // Do not put the materialized tree back under the FileProvider workspace.
+  // On macOS that would create another dataless placeholder and esbuild can
+  // wait indefinitely while reading it. The system temp directory is local.
+  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-sdk-mvp-client-'));
   const relativeFiles = execFileSync('git', ['ls-files', 'src/client', 'src/shared'], {
     cwd: root,
     encoding: 'utf8',
@@ -49,6 +53,7 @@ await buildClientAtomically({
       bundle: true,
       format: 'esm',
       splitting: true,
+      nodePaths: [path.join(root, 'node_modules')],
       minify: true,
       outdir: assetsDir,
       entryNames: 'main',

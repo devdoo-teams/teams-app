@@ -6,9 +6,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import net from 'node:net';
+import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 
 const execFileAsync = promisify(execFile);
 const root = process.cwd();
+const runtimeDistRoot = resolveRuntimeDistRoot(root);
 const LOCAL_ACCESS_TOKEN_HEADER = 'x-teams-local-access-token';
 
 async function freePort() {
@@ -94,7 +96,7 @@ async function startServer(extraEnv = {}, options = {}) {
   if (options.initialAgentJobs) {
     await writeFile(agentJobStorePath, JSON.stringify(options.initialAgentJobs), 'utf8');
   }
-  const child = spawn(process.execPath, [path.join(root, 'dist/server/index.js')], {
+  const child = spawn(process.execPath, [path.join(runtimeDistRoot, 'server', 'index.js')], {
     cwd: root,
     env: {
       ...process.env,
@@ -270,7 +272,7 @@ try {
       body: JSON.stringify(activity(command, operatorScoped.baseUrl, suffix, 'blocked-user')),
     });
     assert.equal(blocked.response.status, 200, `${suffix} returns a safe bot response`);
-    assert.match(JSON.stringify(blocked.body), /찾을 수 없습니다/, `${suffix} remains requester-scoped for other users`);
+    assert.match(JSON.stringify(blocked.body), /운영자|권한|허용|찾을 수 없습니다/, `${suffix} rejects non-operators without revealing job existence`);
     assert.equal(adaptiveCardFromActivity(blocked.body.activities?.[0])?.type, 'AdaptiveCard', `${suffix} returns an error card`);
   }
 

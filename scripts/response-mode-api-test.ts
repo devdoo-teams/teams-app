@@ -9,9 +9,11 @@ import { spawn, type ChildProcess } from 'node:child_process';
 
 import { createUserAuthMiddleware } from '../src/server/user-auth.js';
 import { ResponseModeStore } from '../src/server/response-mode-store.js';
+import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 
 const execFileAsync = promisify(execFile);
 const root = process.cwd();
+const runtimeDistRoot = resolveRuntimeDistRoot(root);
 const ACCESS_TOKEN_HEADER = 'x-teams-local-access-token';
 
 function assertPass(condition: unknown, message: string): asserts condition {
@@ -168,7 +170,7 @@ async function main(): Promise<void> {
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const token = 'response-mode-local-test-token-0123456789';
-  const child = spawn(process.execPath, ['dist/server/index.js'], {
+  const child = spawn(process.execPath, [join(runtimeDistRoot, 'server', 'index.js')], {
     cwd: root,
     env: {
       ...process.env,
