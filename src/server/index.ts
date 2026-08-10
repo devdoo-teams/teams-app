@@ -2293,6 +2293,20 @@ async function handleInstall(activity: any, send: BotSend): Promise<void> {
 
 // The Bot Framework normally receives this outbound activity from Teams.
 // In local mode, return the generated response directly so the full message loop is testable.
+// Register the explicit no-slash redirect before Teams SDK's `tab()` helper.
+// ExpressAdapter's static tab route normalizes `/tabs/home` with a 301 when
+// it is registered first. Teams manifests point directly at `/tabs/home/`,
+// but preserving a 308 here keeps preview/deep-link clients from changing
+// the request method or silently dropping query parameters.
+http.get('/tabs/home', (request: any, response: any) => {
+  const requestUrl = new URL(String(request.url ?? '/tabs/home'), 'http://localhost');
+  if (requestUrl.pathname === '/tabs/home') {
+    response.redirect(308, `/tabs/home/${requestUrl.search}`);
+    return;
+  }
+  response.sendFile(path.join(clientDist, 'index.html'));
+});
+
 if (teamsApp) {
   teamsApp.tab('home', clientDist);
   teamsApp.on('install.add', async ({ activity, send }: any) => {
@@ -2378,18 +2392,8 @@ if (teamsApp) {
 }
 
 // The Teams SDK owns bot/event registration, but it does not replace the
-// HTTP origin that hosts a personal tab. Serve the tab in every runtime mode,
-// including production when `teamsApp` is configured. Keeping this outside
-// the bot fallback branch prevents an installed Teams tab from receiving 404
-// while the bot health endpoint still reports healthy.
-http.get('/tabs/home', (request: any, response: any) => {
-  const requestUrl = new URL(String(request.url ?? '/tabs/home'), 'http://localhost');
-  if (requestUrl.pathname === '/tabs/home') {
-    response.redirect(308, `/tabs/home/${requestUrl.search}`);
-    return;
-  }
-  response.sendFile(path.join(clientDist, 'index.html'));
-});
+// HTTP origin that hosts a personal tab. Serve the canonical tab in every
+// runtime mode, including production when `teamsApp` is configured.
 http.use('/tabs/home', express.static(clientDist));
 
 if (skipAuth) {

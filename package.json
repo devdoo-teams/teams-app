@@ -1,6 +1,6 @@
 {
   "name": "teams-sdk-mvp",
-  "version": "1.0.30",
+  "version": "1.0.31",
   "private": true,
   "type": "module",
   "scripts": {
@@ -24,6 +24,7 @@
     "test:package-determinism": "node scripts/package-app-determinism-test.mjs",
     "test:core-boundary": "node scripts/core-optional-boundary-test.mjs",
     "test:core-bundle-boundary": "node scripts/core-bundle-boundary-test.mjs",
+    "test:tab-route-order": "node scripts/teams-tab-route-order-test.mjs",
     "test:core": "node scripts/core-test-runner.mjs",
     "test:optional": "npm run test:openai-engine && npm run test:local-engine && npm run test:mcp-response-mode && npm run test:mcp-direct-factory",
     "validate:manifest": "node scripts/validate-manifest.mjs",
