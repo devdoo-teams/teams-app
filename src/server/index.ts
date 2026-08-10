@@ -2365,13 +2365,17 @@ async function handleInstall(activity: any, send: BotSend): Promise<void> {
 // it is registered first. Teams manifests point directly at `/tabs/home/`,
 // but preserving a 308 here keeps preview/deep-link clients from changing
 // the request method or silently dropping query parameters.
-http.get('/tabs/home', (request: any, response: any) => {
+http.get('/tabs/home', (request: any, response: any, next: any) => {
   const requestUrl = new URL(String(request.url ?? '/tabs/home'), 'http://localhost');
   if (requestUrl.pathname === '/tabs/home') {
     response.redirect(308, `/tabs/home/${requestUrl.search}`);
     return;
   }
-  response.sendFile(path.join(clientDist, 'index.html'));
+  // Express route matching is not strict by default, so this handler also
+  // matches `/tabs/home/`. Let the SDK/static-tab middleware serve the
+  // canonical trailing-slash URL; calling sendFile here bypassed that route
+  // and produced a false 404 in the packaged Teams runtime.
+  next();
 });
 
 if (teamsApp) {
