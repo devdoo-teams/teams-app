@@ -82,8 +82,6 @@ import { CollaborationStore } from './collaboration-store.js';
 import type { CollaborationScope } from '../shared/collaboration.js';
 import type { RunAgentInput } from '@ag-ui/core';
 
-declare const __TEAMS_CORE_BUILD__: boolean | undefined;
-
 const port = Number(process.env.PORT ?? 3978);
 const isProduction = process.env.NODE_ENV === 'production';
 const skipAuth = process.env.TEAMS_SKIP_AUTH === 'true';
@@ -195,7 +193,7 @@ const appVersion = (() => {
 // The core artifact must not carry optional MCP/CopilotKit runtime graphs. A
 // normal source/optional build keeps the environment-gated local MCP route;
 // the `--core` bundle replaces this constant at build time with `true`.
-const coreBuild = typeof __TEAMS_CORE_BUILD__ === 'undefined' ? false : __TEAMS_CORE_BUILD__;
+const coreBuild = process.env.TEAMS_CORE_BUILD === 'true';
 const mcpEnabled = coreBuild ? false : safeLocal;
 // Optional CopilotKit/LLM runtime is explicitly opt-in in every environment.
 // The deterministic Teams Bot and tab must start without an OpenAI/API key and

@@ -125,7 +125,7 @@ if (!reusedBundle || materializedSource) {
       banner: {
         js: "import { createRequire as __teamsCreateRequire } from 'node:module'; const require = __teamsCreateRequire(import.meta.url);",
       },
-      define: coreBuild ? { __TEAMS_CORE_BUILD__: 'true' } : {},
+      define: coreBuild ? { 'process.env.TEAMS_CORE_BUILD': '"true"' } : {},
       logLevel: 'info',
     }),
   });
