@@ -205,7 +205,7 @@ const genUiMode = process.env.TEAMS_GENUI_MODE === 'legacy' || process.env.TEAMS
   : 'hybrid';
 let optionalResponseEngines: Array<import('./response-engine.js').ResponseEngine> = [];
 let localModelConfigured = false;
-if (optionalRuntimeEnabled) {
+if (process.env.TEAMS_CORE_BUILD !== 'true' && optionalRuntimeEnabled) {
   const [{ LocalCompatibleResponseEngine }, { OpenAIResponseEngine }, { isLocalModelBaseUrlConfigured }] = await Promise.all([
     import('./response-engine-local.js'),
     import('./response-engine-openai.js'),
@@ -219,7 +219,7 @@ if (optionalRuntimeEnabled) {
 }
 type ChannelsShadowRenderer = typeof import('./copilot-channels-shadow.js')['renderChannelsShadow'];
 let renderChannelsShadow: ChannelsShadowRenderer | undefined;
-if (optionalRuntimeEnabled && genUiMode === 'channels-shadow') {
+if (process.env.TEAMS_CORE_BUILD !== 'true' && optionalRuntimeEnabled && genUiMode === 'channels-shadow') {
   ({ renderChannelsShadow } = await import('./copilot-channels-shadow.js'));
 }
 const genUiActionStore = new GenUiActionStore(
@@ -1582,7 +1582,7 @@ const handleSigterm = (): void => handleSignal('SIGTERM');
 process.once('SIGINT', handleSigint);
 process.once('SIGTERM', handleSigterm);
 
-if (optionalRuntimeEnabled) {
+if (process.env.TEAMS_CORE_BUILD !== 'true' && optionalRuntimeEnabled) {
   // Keep the optional provider graph out of the production deterministic path.
   // In particular, this prevents an OpenAI/CopilotKit import or constructor
   // from delaying the Teams SDK listener when no provider is configured.
