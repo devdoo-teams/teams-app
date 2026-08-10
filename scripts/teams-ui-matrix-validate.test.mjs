@@ -27,32 +27,40 @@ function freshEvidence(pathValue, releaseIdentity, reason) {
 
 function promoteRowToPass(candidate) {
   const row = candidate.rows[0];
+  candidate.releaseIdentity.packageSha256 ??= '0'.repeat(64);
+  const evidenceIdentity = {
+    ...candidate.releaseIdentity,
+    // The authoritative matrix may intentionally be pre-package with a null
+    // SHA. This synthetic value belongs only to the validator fixture; it is
+    // never written to the production evidence matrix.
+    packageSha256: candidate.releaseIdentity.packageSha256,
+  };
   row.screenshotBefore = freshEvidence(
     validatorPath,
-    candidate.releaseIdentity,
+    evidenceIdentity,
     'Fresh before screenshot captured for the validator contract test.',
   );
   row.screenshotAfter = freshEvidence(
     testFilePath,
-    candidate.releaseIdentity,
+    evidenceIdentity,
     'Fresh after screenshot captured for the validator contract test.',
   );
   row.accessibilityEvidence = {
     schema: 'paired-before-after-v1',
     before: freshEvidence(
       matrixPath,
-      candidate.releaseIdentity,
+      evidenceIdentity,
       'Fresh AX-before evidence captured for the validator contract test.',
     ),
     after: freshEvidence(
       validatorPath,
-      candidate.releaseIdentity,
+      evidenceIdentity,
       'Fresh AX-after evidence captured for the validator contract test.',
     ),
   };
   row.runtimeEvidence = freshEvidence(
     testFilePath,
-    candidate.releaseIdentity,
+    evidenceIdentity,
     'Fresh runtime evidence captured for the validator contract test.',
   );
   row.result = {
@@ -98,6 +106,31 @@ test('validator enforces exhaustive coverage and records blocked evidence withou
     [],
     `missing coverage: ${result.summary.missingCoverage.join(', ')}`,
   );
+});
+
+test('validator accepts matrix-declared extension coverage while retaining the baseline contract', async () => {
+  const { validator, matrix } = await loadValidatorAndMatrix();
+  const candidate = structuredClone(matrix);
+  const extensionKey = 'test.declared.extension';
+  const extensionRow = structuredClone(candidate.rows[0]);
+  extensionRow.id = 'teams-ui-test-declared-extension';
+  extensionRow.branch = 'Declared extension coverage';
+  extensionRow.coverage = [extensionKey];
+  candidate.coverage.requiredKeys.push(extensionKey);
+  candidate.rows.push(extensionRow);
+
+  const accepted = validator.validateMatrix(candidate);
+  assert.equal(accepted.ok, true, accepted.errors.join('\n'));
+
+  const undeclared = structuredClone(matrix);
+  const undeclaredRow = structuredClone(undeclared.rows[0]);
+  undeclaredRow.id = 'teams-ui-test-undeclared-extension';
+  undeclaredRow.branch = 'Undeclared extension coverage';
+  undeclaredRow.coverage = ['test.undeclared.extension'];
+  undeclared.rows.push(undeclaredRow);
+  const rejected = validator.validateMatrix(undeclared);
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.errors.join('\n'), /unknown coverage key test\.undeclared\.extension/);
 });
 
 test('validator rejects a row that omits the fresh before screenshot gate', async () => {

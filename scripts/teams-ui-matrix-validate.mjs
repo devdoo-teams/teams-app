@@ -422,7 +422,7 @@ function validateResult(result, rowId, errors) {
   return result.status;
 }
 
-function validateRow(row, index, matrixIdentity, errors, seenIds, foundCoverage, options) {
+function validateRow(row, index, matrixIdentity, errors, seenIds, foundCoverage, options, allowedCoverageKeys) {
   const rowId = isObject(row) && isNonBlank(row.id) ? row.id : `row[${index}]`;
   if (!isObject(row)) {
     push(errors, rowId, 'row must be an object');
@@ -473,7 +473,7 @@ function validateRow(row, index, matrixIdentity, errors, seenIds, foundCoverage,
   } else {
     for (const key of row.coverage) {
       if (!isNonBlank(key)) push(errors, rowId, 'coverage keys must be non-empty strings');
-      if (!REQUIRED_COVERAGE_KEYS.includes(key)) push(errors, rowId, `unknown coverage key ${key}`);
+      if (!allowedCoverageKeys.includes(key)) push(errors, rowId, `unknown coverage key ${key}`);
       foundCoverage.add(key);
     }
   }
@@ -495,7 +495,7 @@ export function validateMatrix(
   {
     requirePass = false,
     evidenceBaseDir = process.cwd(),
-    requiredCoverageKeys = REQUIRED_COVERAGE_KEYS,
+    requiredCoverageKeys,
   } = {},
 ) {
   const errors = [];
@@ -516,12 +516,21 @@ export function validateMatrix(
   if (!isObject(matrix.evidencePolicy)) push(errors, '', 'evidencePolicy is required');
   if (!Array.isArray(matrix.rows)) push(errors, '', 'rows must be an array');
 
-  const rows = Array.isArray(matrix.rows) ? matrix.rows : [];
-  for (const [index, row] of rows.entries()) {
-    validateRow(row, index, matrix.releaseIdentity, errors, seenIds, foundCoverage, { evidenceBaseDir });
+  const declaredCoverageKeys = Array.isArray(matrix.coverage?.requiredKeys)
+    ? matrix.coverage.requiredKeys
+    : [];
+  const allowedCoverageKeys = [...new Set([...REQUIRED_COVERAGE_KEYS, ...declaredCoverageKeys])];
+  const requiredKeys = requiredCoverageKeys ?? allowedCoverageKeys;
+  if (!Array.isArray(matrix.coverage?.requiredKeys)) {
+    push(errors, '', 'coverage.requiredKeys must be an array');
   }
 
-  const missingCoverage = requiredCoverageKeys.filter((key) => !foundCoverage.has(key));
+  const rows = Array.isArray(matrix.rows) ? matrix.rows : [];
+  for (const [index, row] of rows.entries()) {
+    validateRow(row, index, matrix.releaseIdentity, errors, seenIds, foundCoverage, { evidenceBaseDir }, allowedCoverageKeys);
+  }
+
+  const missingCoverage = requiredKeys.filter((key) => !foundCoverage.has(key));
   if (missingCoverage.length > 0) push(errors, '', `missing coverage: ${missingCoverage.join(', ')}`);
 
   const counts = { PASS: 0, FAIL: 0, BLOCKED: 0, 'N/A': 0 };
