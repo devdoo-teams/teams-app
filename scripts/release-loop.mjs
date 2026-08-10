@@ -1128,9 +1128,11 @@ export function parseGatePayload(stdout, stderr) {
   return JSON.parse(source);
 }
 
-async function runGatePhase(phase) {
+async function runGatePhase(phase, { url } = {}) {
   const gatePath = path.join(root, 'scripts', 'release-gate.mjs');
-  const result = await runWithTimeout(process.execPath, [gatePath, gatePhaseForLoop(phase)], {
+  const args = [gatePath, gatePhaseForLoop(phase)];
+  if (url) args.push('--url', url);
+  const result = await runWithTimeout(process.execPath, args, {
     cwd: root,
     timeoutMs: phaseTimeouts[phase],
     maxOutputChars: 20_000,
@@ -1276,14 +1278,14 @@ async function supersedeRun(statePath, reason) {
   });
 }
 
-async function executePhase(phase, statePath) {
+async function executePhase(phase, statePath, { url } = {}) {
   const state = await requireState(statePath);
   try {
     assertCurrentGit(state);
     if (phase === 'package' && !hasReady(state.machine)) throw new Error('machine phase must be READY before package');
     if (phase === 'public' && !hasReady(state.package)) throw new Error('package phase must be READY before public');
     if (phase === 'public') assertPackageIntegrity(state);
-    const payload = await runGatePhase(phase);
+    const payload = await runGatePhase(phase, { url });
     const summarized = summarizePhase(phase, payload);
     if (phase === 'package' && summarized.version !== state.version) throw new Error('package version does not match the release run');
     if (phase === 'public') {
@@ -1338,23 +1340,24 @@ export async function completeRun(
   }
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const [command = 'status', ...rest] = argv;
-  const options = { command, file: undefined, reason: undefined };
+  const options = { command, file: undefined, reason: undefined, url: undefined };
   for (let index = 0; index < rest.length; index += 1) {
     if (rest[index] === '--file') options.file = rest[++index];
     else if (rest[index] === '--reason') options.reason = rest[++index];
+    else if (rest[index] === '--url') options.url = rest[++index];
     else throw new Error(`unknown release loop argument: ${rest[index]}`);
   }
   return options;
 }
 
 async function runCli(argv) {
-  const { command, file, reason } = parseArgs(argv);
+  const { command, file, reason, url } = parseArgs(argv);
   const statePath = statePathFromEnv();
   if (command === 'start') return startRun(statePath);
   if (command === 'supersede') return supersedeRun(statePath, reason);
-  if (command === 'machine' || command === 'package' || command === 'public') return executePhase(command, statePath);
+  if (command === 'machine' || command === 'package' || command === 'public') return executePhase(command, statePath, { url });
   if (command === 'status') {
     const state = await requireState(statePath);
     if (state.status === 'SUPERSEDED') {

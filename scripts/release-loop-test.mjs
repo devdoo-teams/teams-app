@@ -21,12 +21,19 @@ import {
   gatePhaseForLoop,
   missingGates,
   parseGatePayload,
+  parseArgs,
   rasterDimensions,
   resetAfterPhaseFailure,
   reverifyEvidenceArtifacts,
   summarizePhase,
   validateEvidence,
 } from './release-loop.mjs';
+
+assert.deepEqual(
+  parseArgs(['public', '--url', 'https://runtime.example.com']),
+  { command: 'public', file: undefined, reason: undefined, url: 'https://runtime.example.com' },
+  'release loop public phase accepts an explicit URL for reproducible probes',
+);
 
 assert.deepEqual(
   classifyGitStatus('?? "user-owned artifact 2"\n'),
