@@ -46,7 +46,6 @@ import type { McpGenUiRouter } from './mcp-genui.js';
 import { ChannelsShadowMonitor } from './channels-shadow-monitor.js';
 import { acquireStoreProcessLease, type StoreProcessLease } from './process-lease.js';
 import { buildTeamsPersonalTabDeepLink } from './teams-tab-link.js';
-import { isLocalModelBaseUrlConfigured } from './local-model-url.js';
 import {
   GENUI_ACTION_PAYLOAD_KEYS,
   GENUI_COMMANDS,
@@ -206,11 +205,14 @@ const genUiMode = process.env.TEAMS_GENUI_MODE === 'legacy' || process.env.TEAMS
   ? process.env.TEAMS_GENUI_MODE
   : 'hybrid';
 let optionalResponseEngines: Array<import('./response-engine.js').ResponseEngine> = [];
+let localModelConfigured = false;
 if (optionalRuntimeEnabled) {
-  const [{ LocalCompatibleResponseEngine }, { OpenAIResponseEngine }] = await Promise.all([
+  const [{ LocalCompatibleResponseEngine }, { OpenAIResponseEngine }, { isLocalModelBaseUrlConfigured }] = await Promise.all([
     import('./response-engine-local.js'),
     import('./response-engine-openai.js'),
+    import('./local-model-url.js'),
   ]);
+  localModelConfigured = isLocalModelBaseUrlConfigured(process.env.LOCAL_MODEL_BASE_URL);
   optionalResponseEngines = [
     new LocalCompatibleResponseEngine(),
     new OpenAIResponseEngine(),
@@ -224,7 +226,9 @@ if (optionalRuntimeEnabled && genUiMode === 'channels-shadow') {
 const genUiActionStore = new GenUiActionStore(
   genUiActionStorePath,
 );
-const responseModeStore = new ResponseModeStore(responseModeStorePath);
+const responseModeStore = new ResponseModeStore(responseModeStorePath, {
+  optionalProvidersEnabled: optionalRuntimeEnabled,
+});
 const personalTabDeepLink = buildTeamsPersonalTabDeepLink({
   appId: process.env.TEAMS_APP_ID ?? '',
   tabDomain: process.env.TAB_DOMAIN ?? '',
@@ -234,13 +238,13 @@ const genUi = new GenUiResponseFactory(genUiActionStore, {
   openTabUrl: personalTabDeepLink,
 });
 const channelsShadowMonitor = new ChannelsShadowMonitor();
-const openAiConfigured = Boolean(process.env.OPENAI_API_KEY?.trim());
-const openAiModel = process.env.OPENAI_MODEL?.trim() || 'gpt-4o-mini';
+const openAiConfigured = optionalRuntimeEnabled && Boolean(process.env.OPENAI_API_KEY?.trim());
+const openAiModel = optionalRuntimeEnabled ? process.env.OPENAI_MODEL?.trim() || 'gpt-4o-mini' : 'deterministic';
 const weatherMode = process.env.WEATHER_MODE === 'demo' ? 'demo' : 'live';
 const responseProviders = {
   deterministic: true,
   openai: optionalRuntimeEnabled && openAiConfigured,
-  local: optionalRuntimeEnabled && isLocalModelBaseUrlConfigured(process.env.LOCAL_MODEL_BASE_URL),
+  local: optionalRuntimeEnabled && localModelConfigured,
 } as const;
 
 if (legacyPublicMcp) {

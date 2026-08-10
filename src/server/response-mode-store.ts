@@ -23,7 +23,10 @@ export class ResponseModeStore {
   private loaded = false;
   private operationQueue: Promise<void> = Promise.resolve();
 
-  constructor(private readonly dataFile: string) {}
+  constructor(
+    private readonly dataFile: string,
+    private readonly options: { optionalProvidersEnabled?: boolean } = {},
+  ) {}
 
   /** Load the store and create an empty file when no store exists yet. */
   async initialize(): Promise<void> {
@@ -76,13 +79,15 @@ export class ResponseModeStore {
       {
         mode: 'openai',
         label: responseModeLabel('openai'),
-        configured: hasNonEmptyEnvironmentValue('OPENAI_API_KEY'),
+        configured: this.options.optionalProvidersEnabled !== false
+          && hasNonEmptyEnvironmentValue('OPENAI_API_KEY'),
         requiresServerConfiguration: true,
       },
       {
         mode: 'local',
         label: responseModeLabel('local'),
-        configured: isLocalModelBaseUrlConfigured(process.env.LOCAL_MODEL_BASE_URL),
+        configured: this.options.optionalProvidersEnabled !== false
+          && isLocalModelBaseUrlConfigured(process.env.LOCAL_MODEL_BASE_URL),
         requiresServerConfiguration: true,
       },
     ];

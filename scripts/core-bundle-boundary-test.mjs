@@ -32,6 +32,11 @@ assert.doesNotMatch(
   /\b(?:LocalCompatibleResponseEngine|OpenAIResponseEngine)\b/,
   'core server artifact must not embed optional response engine implementations',
 );
+assert.doesNotMatch(
+  serverEntry,
+  /OPENAI_API_KEY|LOCAL_MODEL_BASE_URL/,
+  'core server artifact must not expose optional provider configuration paths',
+);
 const serverBuildConfig = await fs.readFile(path.join(root, 'scripts', 'build-server.mjs'), 'utf8');
 assert.match(
   serverBuildConfig,
