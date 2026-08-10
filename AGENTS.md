@@ -63,6 +63,15 @@ Teams 앱 변경 요청에는 별도 예외 승인이 없는 한 다음 순서�
 
 ## Teams Bot Codex 트러블슈팅 지침
 
+## 빌드 출처·FileProvider 재발 방지 게이트
+
+- FileProvider/iCloud dataless placeholder가 하나라도 관찰되면 원본 소스를 정상 로컬 파일로 간주하지 않는다. `blocks=0`, 읽기 지연, esbuild `The service was stopped`, 무출력 장기 대기는 모두 `SOURCE_IO_UNSTABLE` 증거로 기록한다.
+- FileProvider fallback 빌드는 Git `HEAD` 소스를 임시 로컬 디렉터리에 materialize하므로, 추적 파일을 수정한 채 실행하면 현재 작업이 아니라 이전 커밋을 빌드할 수 있다. 따라서 fallback build/package 전에 추적 worktree를 clean으로 확인하고, clean 확인이 timeout되면 빌드하지 말고 `SOURCE_IO_UNSTABLE` blocker로 중단한다.
+- 서버 bundle 재사용은 커밋 SHA만 비교하지 않는다. `.teams-server-build-commit`의 schema, full commit, `mode=core|optional`, `worktree=clean`을 모두 현재 명령과 대조한다. 이전 형식 marker나 dirty/불명확 marker는 재사용하지 않는다.
+- 구현을 수정한 뒤 같은 커밋에서 산출물을 재사용하지 않는다. 새 변경은 먼저 커밋하고, 새 marker·bundle·ZIP·release run을 만들며, 현재 HEAD·manifest·ZIP·public health·UI 증거를 같은 identity로 묶는다.
+- esbuild/tsx/tsc/npm 장기 작업은 한 프로세스씩 순차 실행하고 `TEAMS_TEST_TIMEOUT_MS` 또는 단계별 timeout을 적용한다. timeout의 절반과 종료 시점에 PID·최근 로그·health를 확인한다. `The service was stopped`가 나오면 같은 묶음을 무작정 반복하지 말고 FileProvider fallback 환경에서 단독 재현한 뒤 원인과 재현 명령을 남긴다.
+- 공개 서버·Dev Tunnel·이전 로컬 서버가 살아 있어도 새 빌드의 증거로 사용하지 않는다. PID, 포트, `/api/health`의 release identity를 개별 확인하고, 어떤 프로세스가 현재 release를 제공하는지 식별되지 않으면 `STALE_PROCESS_SUSPECTED`로 분리한다.
+
 - 이 작업은 Teams Bot이 별도 프로세스로 실행하는 Codex CLI 작업이다. 부모 Codex 앱의 인앱 브라우저, Safari, 사용자의 iPhone을 제어할 수 없으므로 `Browser is not available`, `iab unavailable`을 브라우저 재연결 루프로 처리하지 않는다.
 - 하위 에이전트가 브라우저를 사용할 수 없다는 이유로 새 인앱 브라우저·새 로그인 세션을 만들지 않는다. 브라우저 제어는 부모 오케스트레이터의 기존 탭 세션에서만 수행하며, 연결이 끊겼으면 기존 탭 재접속 또는 사용자 포커스 요청을 BLOCKER로 분리한다.
 - 인증을 반드시 분리한다. `codex login status`는 Codex CLI, `teams status`는 Teams CLI이며 한쪽 결과를 다른 쪽 인증 증거로 사용하지 않는다.

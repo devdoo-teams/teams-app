@@ -220,6 +220,10 @@ npm run release:loop -- start
 - 사용자의 요청사항을 코드·매니페스트·문서에 반영한다.
 - 로컬 테스트 모드에서 `npm test`와 변경 범위에 맞는 런타임 검증을 실행한다.
 - 로컬 테스트 모드의 결과는 개발 증거일 뿐 공개 운영 증거로 보고하지 않는다.
+- macOS FileProvider/iCloud에서 `blocks=0`, 읽기 지연, esbuild `The service was stopped`, 무출력 장기 대기가 관찰되면 `SOURCE_IO_UNSTABLE`로 기록한다. 테스트를 병렬로 재시도하지 말고 `TEAMS_FILEPROVIDER_SERVER_REUSE=1` fallback을 사용해 한 프로세스씩 순차 검증한다.
+- FileProvider fallback은 Git `HEAD`를 임시 로컬 디렉터리에 materialize할 수 있으므로, 추적 worktree 변경이 있는 상태에서는 빌드·패키지를 실행하지 않는다. 변경을 먼저 커밋하고 현재 HEAD를 기준으로 다시 빌드한다. clean 확인 자체가 timeout이면 소스 I/O blocker로 중단한다.
+- 서버 bundle marker는 단순 커밋 문자열이 아니다. schema, full commit, `mode=core|optional`, `worktree=clean`이 현재 빌드와 일치할 때만 재사용하며, 이전 형식·dirty·불명확 marker는 무효로 처리한다.
+- 모든 `npm`/`tsx`/`tsc`/esbuild 장기 단계에는 timeout을 둔다. 기본 API-free runner는 `TEAMS_TEST_TIMEOUT_MS`(기본 120초)를 사용하고, timeout 시 PID·마지막 로그·health를 남긴다. `The service was stopped`가 반복되면 원인 분리 없이 재시도하지 않는다.
 
 ### 2. 새 버전과 패키지
 

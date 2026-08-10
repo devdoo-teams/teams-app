@@ -111,6 +111,17 @@ try {
     'non-operators cannot submit workspace-write jobs',
   );
 
+  const blockedReadOnlyCancel = await store.create({
+    prompt: 'read-only cancellation authorization',
+    mode: 'read-only',
+    scope: blockedScope,
+  });
+  await assert.rejects(
+    () => service.cancelStrict(blockedReadOnlyCancel.id, blockedScope),
+    AgentMutationAuthorizationError,
+    'user-facing strict cancellation is operator-only even for read-only jobs',
+  );
+
   const headBeforeReadOnlyCommit = await currentHead(workspace);
   const readOnlyJob = await store.create({ prompt: 'inspect only', mode: 'read-only', scope: allowedScope });
   await store.update(readOnlyJob.id, allowedScope, {

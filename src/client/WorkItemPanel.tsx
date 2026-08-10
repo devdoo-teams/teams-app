@@ -132,6 +132,10 @@ export function getWorkItemAssigneeButtonState(assignedToRequester: boolean): {
     : { label: '나에게 할당', disabled: false };
 }
 
+export function validateEditableWorkItemTitle(value: string): string | undefined {
+  return value.trim() ? undefined : '업무 제목을 입력하세요.';
+}
+
 async function workFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set('x-conversation-id', WORK_CONVERSATION_ID);
@@ -278,10 +282,15 @@ export function WorkItemPanel() {
   async function saveSelected(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (!selected) return;
+    const titleError = validateEditableWorkItemTitle(editTitle);
+    if (titleError) {
+      setError(titleError);
+      return;
+    }
     await mutate('/api/work-items/' + encodeURIComponent(selected.id), {
       method: 'PUT',
-        body: JSON.stringify({
-          patch: { title: editTitle.trim(), description: editDescription },
+      body: JSON.stringify({
+        patch: { title: editTitle.trim(), description: editDescription },
       }),
     }, 'edit:' + selected.id);
   }

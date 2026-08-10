@@ -6,11 +6,29 @@ import { build } from 'esbuild';
 import { buildServerAtomically } from './build-server-atomic.mjs';
 import { ensureFileProviderRuntimeDependencies } from './fileprovider-runtime-deps.mjs';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
+import { createServerBuildMarker, isReusableServerBuild, parseServerBuildMarker } from './server-build-marker.mjs';
 
 const root = process.cwd();
 const outputDir = path.join(resolveRuntimeDistRoot(root), 'server');
 const coreBuild = process.argv.includes('--core');
 const reuseFileProviderBundle = process.env.TEAMS_FILEPROVIDER_SERVER_REUSE === '1';
+
+function hasTrackedWorktreeChanges() {
+  try {
+    return execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], {
+      cwd: root,
+      encoding: 'utf8',
+      timeout: 10_000,
+    }).trim().length > 0;
+  } catch (error) {
+    if (error?.code === 'ETIMEDOUT') {
+      throw new Error(
+        'Git worktree inspection timed out under FileProvider. Materialize the local source or commit from a normal local checkout before building.',
+      );
+    }
+    throw error;
+  }
+}
 
 async function ensureRuntimeNodeModulesLink(targetPath, dependencyPath) {
   try {
@@ -27,21 +45,22 @@ async function ensureRuntimeNodeModulesLink(targetPath, dependencyPath) {
   await fs.symlink(dependencyPath, targetPath, 'junction');
 }
 
-async function assertReusableServerBundle() {
+async function findReusableServerBundle() {
   const entryPath = path.join(outputDir, 'index.js');
   const markerPath = path.join(outputDir, '.teams-server-build-commit');
-  const [entryStat, marker] = await Promise.all([
-    fs.stat(entryPath),
-    fs.readFile(markerPath, 'utf8'),
-  ]);
-  if (entryStat.size <= 0 || (Number.isInteger(entryStat.blocks) && entryStat.blocks === 0)) {
-    throw new Error(`FileProvider server fallback requires a materialized bundle: ${entryPath}`);
+  try {
+    const [entryStat, markerRaw] = await Promise.all([
+      fs.stat(entryPath),
+      fs.readFile(markerPath, 'utf8'),
+    ]);
+    if (entryStat.size <= 0 || (Number.isInteger(entryStat.blocks) && entryStat.blocks === 0)) return null;
+    const marker = parseServerBuildMarker(markerRaw);
+    if (!marker) return null;
+    return { entryPath, marker };
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
   }
-  const markerCommit = marker.trim();
-  if (!/^[a-f0-9]{40}$/.test(markerCommit)) {
-    throw new Error('FileProvider server fallback marker is missing a full Git commit');
-  }
-  return { entryPath, markerCommit };
 }
 
 async function materializeGitServerSource() {
@@ -71,14 +90,22 @@ let reusedBundle = null;
 let materializedSource = null;
 let fileProviderRuntimeNodeModules = null;
 if (reuseFileProviderBundle) {
-  reusedBundle = await assertReusableServerBundle();
+  if (hasTrackedWorktreeChanges()) {
+    throw new Error(
+      'FileProvider fallback requires a clean tracked Git worktree. Commit tracked source changes before building or packaging.',
+    );
+  }
+  reusedBundle = await findReusableServerBundle();
   fileProviderRuntimeNodeModules = await ensureFileProviderRuntimeDependencies(root);
   const currentCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
-  if (reusedBundle.markerCommit === currentCommit) {
-    console.log(`Server bundle reused from ${reusedBundle.markerCommit} under FileProvider fallback: ${path.relative(root, reusedBundle.entryPath)}`);
+  if (reusedBundle && isReusableServerBuild(
+    JSON.stringify(reusedBundle.marker),
+    { commit: currentCommit, coreBuild },
+  )) {
+    console.log(`Server ${coreBuild ? 'Core' : 'optional'} bundle reused from ${reusedBundle.marker.commit} under FileProvider fallback: ${path.relative(root, reusedBundle.entryPath)}`);
   } else {
     materializedSource = await materializeGitServerSource();
-    console.log(`Server source materialized from ${currentCommit} under FileProvider fallback: ${path.relative(root, materializedSource.entryPoint)}`);
+    console.log(`Server source materialized from ${currentCommit} for ${coreBuild ? 'Core' : 'optional'} build under FileProvider fallback: ${path.relative(root, materializedSource.entryPoint)}`);
   }
   await ensureRuntimeNodeModulesLink(path.join(outputDir, 'node_modules'), fileProviderRuntimeNodeModules);
 }
@@ -133,7 +160,11 @@ if (!reusedBundle || materializedSource) {
     const runtimeNodeModulesLink = path.join(outputDir, 'node_modules');
     await ensureRuntimeNodeModulesLink(runtimeNodeModulesLink, fileProviderRuntimeNodeModules);
   }
-  await fs.writeFile(path.join(outputDir, '.teams-server-build-commit'), `${execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim()}\n`);
+  const builtCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+  await fs.writeFile(
+    path.join(outputDir, '.teams-server-build-commit'),
+    createServerBuildMarker({ commit: builtCommit, coreBuild }),
+  );
 }
 
 await materializedSource?.cleanup();

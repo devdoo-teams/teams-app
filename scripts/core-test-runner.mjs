@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 const moduleRunner = 'scripts/run-module-test.mjs';
 const plainTests = [
   'scripts/core-optional-boundary-test.mjs',
+  'scripts/server-build-mode-test.mjs',
   'scripts/typecheck-boundary-test.mjs',
   'scripts/deployment-env-test.mjs',
   'scripts/validate-manifest-test.mjs',
@@ -32,11 +33,15 @@ function run(command, args) {
     env: process.env,
     encoding: 'utf8',
     timeout: perTestTimeoutMs,
+    killSignal: 'SIGTERM',
     maxBuffer: 2 * 1024 * 1024,
   });
   const output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim();
   if (output) process.stdout.write(`${output}\n`);
   if (result.error || result.status !== 0) {
+    if (result.error?.code === 'ETIMEDOUT') {
+      throw new Error(`core test timed out after ${perTestTimeoutMs}ms: ${command} ${args.join(' ')}`);
+    }
     throw result.error ?? new Error(`core test failed: ${command} ${args.join(' ')} (exit ${result.status})`);
   }
 }

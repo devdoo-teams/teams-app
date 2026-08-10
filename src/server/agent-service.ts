@@ -37,7 +37,7 @@ export class AgentPromptValidationError extends Error {
   }
 }
 
-export type AgentJobMutation = 'approve' | 'cancel';
+export type AgentJobMutation = 'approve' | 'cancel' | 'retry';
 
 export class AgentJobConflictError extends Error {
   readonly code = 'AGENT_JOB_CONFLICT' as const;
@@ -46,7 +46,7 @@ export class AgentJobConflictError extends Error {
     readonly action: AgentJobMutation,
     readonly job: AgentJob,
   ) {
-    const label = action === 'approve' ? '승인' : '취소';
+    const label = action === 'approve' ? '승인' : action === 'cancel' ? '취소' : '재시도';
     super(`작업 ${job.id}은 현재 상태(${job.status})에서 ${label}할 수 없습니다. 최신 상태를 확인하세요.`);
     this.name = 'AgentJobConflictError';
   }
@@ -264,7 +264,34 @@ export class AgentService {
     scope: AgentJobScope,
     options: { notify?: boolean } = {},
   ): Promise<AgentJob | undefined> {
+    // `cancel()` is also used by internal timeout/teardown cleanup and keeps
+    // its idempotent behavior. The user-facing strict routes and card action
+    // must always enforce the same operator boundary as approve/commit.
+    this.assertMutationAllowed(scope);
     return this.cancel(id, scope, { ...options, strict: true });
+  }
+
+  async retry(
+    id: string,
+    scope: AgentJobScope,
+    options: { notify?: boolean; onProgress?: ProgressListener } = {},
+  ): Promise<AgentJob | undefined> {
+    const previous = this.store.get(id, scope);
+    if (!previous) return undefined;
+    if (previous.status !== 'failed') {
+      throw new AgentJobConflictError('retry', snapshotAgentJob(previous));
+    }
+    if (previous.mode === 'workspace-write') this.assertMutationAllowed(scope);
+
+    return this.submit({
+      prompt: previous.prompt,
+      mode: previous.mode,
+      scope,
+      parentJobId: previous.id,
+      threadId: previous.threadId,
+      notify: options.notify,
+      onProgress: options.onProgress,
+    });
   }
 
   get(id: string, scope: AgentJobScope): AgentJob | undefined {

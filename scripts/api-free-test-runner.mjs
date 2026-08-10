@@ -1,7 +1,9 @@
 import { spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
+import { parseServerBuildMarker } from './server-build-marker.mjs';
 
 function hasDatalessSource() {
   const candidates = [
@@ -27,9 +29,15 @@ function hasReusableServerBundle() {
   const serverRoot = path.join(resolveRuntimeDistRoot(process.cwd()), 'server');
   try {
     const entry = fs.statSync(path.join(serverRoot, 'index.js'));
-    const marker = fs.readFileSync(path.join(serverRoot, '.teams-server-build-commit'), 'utf8').trim();
-    if (!/^[a-f0-9]{40}$/.test(marker)) return false;
-    return entry.size > 0 && (!Number.isInteger(entry.blocks) || entry.blocks > 0);
+    const marker = parseServerBuildMarker(fs.readFileSync(path.join(serverRoot, '.teams-server-build-commit'), 'utf8'));
+    const currentCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: process.cwd(), encoding: 'utf8' }).trim();
+    return Boolean(
+      marker?.commit === currentCommit
+      && marker.mode === 'core'
+      && marker.worktree === 'clean'
+      && entry.size > 0
+      && (!Number.isInteger(entry.blocks) || entry.blocks > 0),
+    );
   } catch {
     return false;
   }
@@ -103,9 +111,14 @@ for (const script of tests) {
     cwd: process.cwd(),
     env: childEnv,
     stdio: 'inherit',
+    timeout: Number(process.env.TEAMS_TEST_TIMEOUT_MS ?? 120_000),
+    killSignal: 'SIGTERM',
   });
 
   if (result.error || result.status !== 0) {
+    if (result.error?.code === 'ETIMEDOUT') {
+      throw new Error(`API-free test timed out after ${process.env.TEAMS_TEST_TIMEOUT_MS ?? 120000}ms: npm run ${script}`);
+    }
     throw result.error ?? new Error(`API-free test failed: npm run ${script} (exit ${result.status})`);
   }
 }

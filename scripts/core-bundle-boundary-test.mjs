@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
+import { parseServerBuildMarker } from './server-build-marker.mjs';
 
 const root = process.cwd();
 const runtimeRoot = resolveRuntimeDistRoot(root);
@@ -10,6 +12,13 @@ const clientAssets = path.join(runtimeRoot, 'client', 'assets');
 const serverDir = path.join(runtimeRoot, 'server');
 const clientFiles = await fs.readdir(clientAssets, { recursive: true });
 const serverFiles = await fs.readdir(serverDir);
+const marker = parseServerBuildMarker(await fs.readFile(path.join(serverDir, '.teams-server-build-commit'), 'utf8'));
+const currentCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+assert.deepEqual(
+  marker,
+  { schemaVersion: 2, commit: currentCommit, mode: 'core', worktree: 'clean' },
+  'core server artifact must be freshly built for the current commit in core mode',
+);
 
 const optionalFilePattern = /copilot|mcp-genui|mcp-widget/i;
 assert.equal(

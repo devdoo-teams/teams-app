@@ -219,6 +219,14 @@ try {
   assert.equal(failedNotification?.kind, 'error', 'runner failure emits an error notification');
   assert.equal(failedNotification?.conversationId, scope.conversationId, 'runner failure notification stays in the originating conversation');
 
+  const retriedFailedJob = await service.retry(failedJob.id, scope, { notify: true });
+  assert.ok(retriedFailedJob, 'a failed read-only job can be retried as a new job');
+  assert.equal(retriedFailedJob?.parentJobId, failedJob.id, 'retry keeps the failed job as its parent');
+  await runner.waitForStart(6);
+  runner.release(0);
+  await waitForStatus(store, retriedFailedJob!.id, scope, 'completed');
+  assert.equal(store.get(failedJob.id, scope)?.status, 'failed', 'retry does not mutate the original failed job');
+
   console.log('AgentService transition tests passed: prompt bound, delayed progress, retry, approval/cancel races, terminal success/failure, and runner cancellation');
 } finally {
   await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });

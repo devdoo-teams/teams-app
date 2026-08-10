@@ -920,7 +920,7 @@ export function App() {
             onClick={() => void loadWeather(true)}
             type="button"
           >
-            {weatherLoading ? '위치 확인 중…' : '내 위치 사용'}
+            {weatherLoading ? '위치 확인 중…' : weatherError ? '다시 시도' : '내 위치 사용'}
           </button>
         </div>
 

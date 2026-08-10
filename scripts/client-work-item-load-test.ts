@@ -23,7 +23,7 @@ registerHooks({
   },
 });
 
-const { createLatestWorkItemLoadController, shouldClearWorkItemComment } = await import('../src/client/WorkItemPanel.js');
+const { createLatestWorkItemLoadController, shouldClearWorkItemComment, validateEditableWorkItemTitle } = await import('../src/client/WorkItemPanel.js');
 
 const controller = createLatestWorkItemLoadController();
 const first = controller.begin();
@@ -38,5 +38,7 @@ assert.equal(second.commit(() => undefined), false, 'a disposed panel cannot com
 
 assert.equal(shouldClearWorkItemComment(true), true, 'confirmed comment mutation clears the input');
 assert.equal(shouldClearWorkItemComment(false), false, 'failed comment mutation preserves the input for retry');
+assert.equal(validateEditableWorkItemTitle('  '), '업무 제목을 입력하세요.', 'empty edit titles are rejected before HTTP mutation');
+assert.equal(validateEditableWorkItemTitle('유효한 제목'), undefined, 'non-empty edit titles can be submitted');
 
 console.log('Client work-item load tests passed');

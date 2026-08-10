@@ -386,7 +386,7 @@ const localOutbox = new Map<string, string[]>();
 const localOutboxActivities = new Map<string, unknown[]>();
 
 type BotSend = (text: string, envelope?: GenUiEnvelopeV1, activityOverride?: unknown) => Promise<void>;
-type GenUiCardAction = Extract<GenUiActionName, 'approve' | 'cancel' | 'refresh' | 'feedback'> | 'command';
+type GenUiCardAction = Extract<GenUiActionName, 'approve' | 'cancel' | 'refresh' | 'retry' | 'feedback'> | 'command';
 type GenUiActionPayload = {
   schemaVersion: typeof GENUI_SCHEMA_VERSION;
   action: GenUiCardAction;
@@ -397,7 +397,7 @@ type GenUiActionPayload = {
 
 type UserClaims = Record<string, unknown>;
 
-const GENUI_CARD_ACTIONS = ['approve', 'cancel', 'refresh', 'feedback', 'command'] as const satisfies readonly GenUiCardAction[];
+const GENUI_CARD_ACTIONS = ['approve', 'cancel', 'refresh', 'retry', 'feedback', 'command'] as const satisfies readonly GenUiCardAction[];
 const inFlightGenUiActions = new Set<string>();
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -1026,6 +1026,11 @@ http.get('/api/weather', async (request: any, response: any) => {
   const longitude = Number(request.query?.longitude);
   const demo = request.query?.mode === 'demo';
 
+  if (demo && isProduction) {
+    response.status(400).json({ error: 'demo weather is disabled in production' });
+    return;
+  }
+
   if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
     response.status(400).json({ error: 'latitude must be between -90 and 90' });
     return;
@@ -1310,10 +1315,15 @@ http.delete('/api/work-items/:id/watch', async (request: any, response: any) => 
     response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid work item scope' });
     return;
   }
+  const mutationKey = nonEmptyString(request.query?.mutationKey, 200);
+  if (!mutationKey) {
+    response.status(400).json({ error: 'mutationKey is required for retry-safe mutations' });
+    return;
+  }
   try {
     const item = await workItemService.unwatch(resolved.scope, {
       itemId: request.params.id,
-      mutationKey: nonEmptyString(request.query?.mutationKey, 200) ?? `unwatch-${Date.now()}`,
+      mutationKey,
     });
     response.json({ item: presentWorkItem(item, resolved.scope) });
   } catch (error) {
@@ -1327,12 +1337,16 @@ http.delete('/api/work-items/:id', async (request: any, response: any) => {
     response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid work item scope' });
     return;
   }
+  const mutationKey = nonEmptyString(request.body?.mutationKey, 200)
+    ?? nonEmptyString(request.query?.mutationKey, 200);
+  if (!mutationKey) {
+    response.status(400).json({ error: 'mutationKey is required for retry-safe mutations' });
+    return;
+  }
   try {
     const item = await workItemService.delete(resolved.scope, {
       itemId: request.params.id,
-      mutationKey: nonEmptyString(request.body?.mutationKey, 200)
-        ?? nonEmptyString(request.query?.mutationKey, 200)
-        ?? `delete-${Date.now()}`,
+      mutationKey,
     });
     response.json({ item: presentWorkItem(item, resolved.scope) });
   } catch (error) {
@@ -1857,9 +1871,9 @@ function mutationConflictEnvelope(error: unknown, fallbackId = 'agent-mutation-e
   return genUi.error('작업 상태가 변경되어 요청을 처리하지 못했습니다. 최신 상태를 확인하세요.', fallbackId);
 }
 
-function replayedGenUiAction(action: GenUiCardAction, job: AgentJob | undefined): GenUiEnvelopeV1 {
+async function replayedGenUiAction(action: GenUiCardAction, job: AgentJob | undefined): Promise<GenUiEnvelopeV1> {
   if (!job) return genUi.error('작업을 찾을 수 없습니다.');
-  if (action === 'refresh') return genUi.jobStatus(job);
+  if (action === 'refresh' || action === 'retry') return genUi.jobStatus(job);
   if (action === 'feedback') return genUi.answer('피드백을 이미 확인했습니다.', `feedback-${job.id}`);
   if (action === 'approve' && ['queued', 'running', 'completed', 'failed'].includes(job.status)) {
     return genUi.jobStatus(job);
@@ -1868,7 +1882,7 @@ function replayedGenUiAction(action: GenUiCardAction, job: AgentJob | undefined)
     return genUi.cancelled(job);
   }
   return mutationConflictEnvelope(
-    new AgentJobConflictError(action === 'approve' ? 'approve' : 'cancel', job),
+    new AgentJobConflictError(action === 'approve' ? 'approve' : action === 'cancel' ? 'cancel' : 'retry', job),
     `genui-${action}-replay-conflict`,
   );
 }
@@ -1892,7 +1906,7 @@ async function resolveGenUiAction(activity: any): Promise<GenUiEnvelopeV1> {
     payload.actionToken,
   ].join('|');
 
-  if (payload.action === 'approve' || payload.action === 'cancel' || payload.action === 'refresh') {
+  if (payload.action === 'approve' || payload.action === 'cancel' || payload.action === 'refresh' || payload.action === 'retry') {
     // Fail closed before consuming the idempotency grant. A mismatched user,
     // conversation, or tenant therefore cannot even mutate the action store.
     const scopedJob = agentService.get(payload.entityId, scope);
@@ -1945,8 +1959,13 @@ async function resolveGenUiAction(activity: any): Promise<GenUiEnvelopeV1> {
       if (job?.status === 'awaiting_approval') {
         envelope = await genUi.approval(job);
       } else {
-        envelope = genUi.jobStatus(job);
+        envelope = await genUi.jobStatus(job);
       }
+    } else if (payload.action === 'retry') {
+      const job = await agentService.retry(payload.entityId, scope, { notify: true });
+      envelope = job
+        ? genUi.started(job)
+        : genUi.error(`작업 ${payload.entityId}을 찾을 수 없습니다.`, `action-${payload.entityId}`);
     } else {
       envelope = genUi.answer('피드백을 확인했습니다. 결정형 처리 결과를 기록했습니다.', `feedback-${payload.entityId}`);
     }
@@ -2129,7 +2148,7 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
       if (jobId) {
         const job = agentService.get(jobId, scope);
         const responseText = job ? formatAgentJob(job) : `작업 ${jobId}을 찾을 수 없습니다.`;
-        await send(responseText, job ? genUi.jobStatus(job) : genUi.error(responseText, `status-${jobId}`));
+        await send(responseText, job ? await genUi.jobStatus(job) : genUi.error(responseText, `status-${jobId}`));
         return;
       }
 

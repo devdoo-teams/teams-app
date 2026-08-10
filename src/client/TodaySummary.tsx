@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { apiFetch } from './auth.js';
 
@@ -20,6 +20,20 @@ export type TodayWorkSummary = {
 };
 
 type TodaySummaryMetrics = Pick<TodayWorkSummary, 'assigned' | 'dueToday' | 'overdue'>;
+
+const todayStatusLabels: Record<TodayWorkItemStatus, string> = {
+  backlog: '백로그',
+  todo: '할 일',
+  open: '열림',
+  in_progress: '진행 중',
+  blocked: '차단됨',
+  done: '완료',
+  cancelled: '취소',
+};
+
+export function todayWorkItemStatusLabel(status: TodayWorkItemStatus): string {
+  return todayStatusLabels[status];
+}
 
 export function summarizeTodayWorkItems(items: TodayWorkItem[], metrics?: TodaySummaryMetrics): TodayWorkSummary {
   const visibleItems = items.filter(Boolean);
@@ -53,9 +67,12 @@ export function TodaySummary({ onOpenWork }: { onOpenWork: () => void }) {
   const [summary, setSummary] = useState<TodayWorkSummary>(() => summarizeTodayWorkItems([]));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const activeControllerRef = useRef<AbortController | null>(null);
 
   const load = useCallback(async (): Promise<void> => {
+    activeControllerRef.current?.abort();
     const controller = new AbortController();
+    activeControllerRef.current = controller;
     setLoading(true);
     setError('');
     try {
@@ -64,12 +81,16 @@ export function TodaySummary({ onOpenWork }: { onOpenWork: () => void }) {
       if (controller.signal.aborted) return;
       setError(caught instanceof Error ? caught.message : '오늘 업무를 불러오지 못했습니다.');
     } finally {
-      if (!controller.signal.aborted) setLoading(false);
+      if (activeControllerRef.current === controller && !controller.signal.aborted) {
+        setLoading(false);
+        activeControllerRef.current = null;
+      }
     }
   }, []);
 
   useEffect(() => {
     void load();
+    return () => activeControllerRef.current?.abort();
   }, [load]);
 
   return (
@@ -100,17 +121,17 @@ export function TodaySummary({ onOpenWork }: { onOpenWork: () => void }) {
 
       {!loading && !error && summary.items.length === 0 ? (
         <p className="empty">할당된 업무가 없습니다.</p>
-      ) : (
+      ) : !loading && !error ? (
         <ul className="today-summary-list">
           {summary.items.map((item) => (
             <li key={item.id}>
               <span className={`status ${item.status === 'done' || item.status === 'cancelled' ? 'done' : ''}`} />
               <span>{item.title}</span>
-              <small>{item.status}</small>
+              <small>{todayWorkItemStatusLabel(item.status)}</small>
             </li>
           ))}
         </ul>
-      )}
+      ) : null}
 
       <button className="primary today-summary-open" onClick={onOpenWork} type="button">내 업무 열기</button>
     </section>

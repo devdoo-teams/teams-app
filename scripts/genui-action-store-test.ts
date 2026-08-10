@@ -109,7 +109,7 @@ try {
   assert.equal(helpCard.actions.at(-1)?.entityId, 'home');
   assert.equal(helpCard.metadata.openTabUrl, personalTabUrl);
 
-  const jobStatusCard = configuredFactory.jobStatus({
+  const jobStatusCard = await configuredFactory.jobStatus({
     id: 'task-status-1',
     prompt: '실제 작업 상태',
     mode: 'read-only',
@@ -123,7 +123,7 @@ try {
   assert.equal(jobStatusCard.actions.at(-1)?.action, 'open-tab', 'job status cards include the default tab action');
   assert.equal(jobStatusCard.prompt, '실제 작업 상태', 'job status cards carry a bounded prompt for mobile prompt view');
 
-  const incompleteJobStatusCard = configuredFactory.jobStatus({
+  const incompleteJobStatusCard = await configuredFactory.jobStatus({
     id: 'task-missing-result',
     prompt: '결과 없는 완료 상태',
     mode: 'read-only',
@@ -135,6 +135,21 @@ try {
     createdAt: new Date().toISOString(),
   });
   assert.equal(incompleteJobStatusCard.status, 'error', 'a completed job without a result renders an error card');
+
+  const failedJobStatusCard = await configuredFactory.jobStatus({
+    id: 'task-failed-1',
+    prompt: '실패한 작업 재시도',
+    mode: 'read-only',
+    status: 'failed',
+    conversationId: 'conversation-1',
+    requesterId: 'user-1',
+    tenantId: 'tenant-1',
+    error: 'controlled failure',
+    progress: [],
+    createdAt: new Date().toISOString(),
+  });
+  assert.equal(failedJobStatusCard.actions.some((action) => action.action === 'retry'), true, 'failed job cards expose a persisted retry action');
+  assert.equal(failedJobStatusCard.actions.at(-1)?.action, 'open-tab', 'retry action preserves the default tab link');
 
   const errorCard = configuredFactory.error('실패한 작업');
   assert.equal(errorCard.actions.at(-1)?.action, 'open-tab', 'error cards include the default tab action');

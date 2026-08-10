@@ -489,7 +489,7 @@ export class GenUiResponseFactory {
     });
   }
 
-  jobStatus(job: AgentJob | undefined): GenUiEnvelopeV1 {
+  async jobStatus(job: AgentJob | undefined): Promise<GenUiEnvelopeV1> {
     if (!job) return this.error('작업을 찾을 수 없습니다.');
     const jobId = safeJobId(job);
     const jobStatus = safeJobStatus(job);
@@ -497,6 +497,27 @@ export class GenUiResponseFactory {
     const error = safeJobError(job);
     const result = safeJobResult(job);
     const text = `작업 ${jobId}: ${jobStatus}`;
+    const actions: GenUiAction[] = [];
+    if (jobStatus === 'failed') {
+      const scope = validApprovalScope(job);
+      if (scope) {
+        const correlationId = randomUUID();
+        const actionToken = await this.actionStore.issue({
+          action: 'retry',
+          entityId: jobId,
+          correlationId,
+          ...scope,
+        });
+        actions.push({
+          action: 'retry',
+          label: '다시 시도',
+          entityId: jobId,
+          correlationId,
+          actionToken,
+          style: 'default',
+        });
+      }
+    }
     return this.create({
       kind: 'job-status',
       id: jobId,
@@ -509,6 +530,7 @@ export class GenUiResponseFactory {
         { type: 'list', title: '최근 진행 기록', items: progress.map((message, index) => ({ id: `${jobId}-${index}`.slice(0, 120), label: message })) },
       ],
       fallbackText: jobFallback(job),
+      actions,
       metadata: { source: 'teams-bot', deterministic: true },
     });
   }

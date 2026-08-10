@@ -12,6 +12,11 @@ assert.equal(
   'function',
   'Today owns a deterministic request that separates five visible rows from full summary totals',
 );
+assert.equal(
+  (todayModule.todayWorkItemStatusLabel as (status: 'in_progress') => string)('in_progress'),
+  '진행 중',
+  'Today uses localized status labels',
+);
 
 const summary = summarizeTodayWorkItems([
   { id: '1', title: '진행 중', status: 'in_progress', priority: 'high' },

@@ -23,6 +23,7 @@
     "test:manifest": "node scripts/validate-manifest-test.mjs",
     "test:package-determinism": "node scripts/package-app-determinism-test.mjs",
     "test:core-boundary": "node scripts/core-optional-boundary-test.mjs",
+    "test:server-build-mode": "node scripts/server-build-mode-test.mjs",
     "test:core-bundle-boundary": "node scripts/core-bundle-boundary-test.mjs",
     "test:tab-route-order": "node scripts/teams-tab-route-order-test.mjs",
     "test:core": "node scripts/core-test-runner.mjs",
