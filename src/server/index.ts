@@ -198,7 +198,8 @@ const mcpEnabled = coreBuild ? false : safeLocal;
 // Optional CopilotKit/LLM runtime is explicitly opt-in in every environment.
 // The deterministic Teams Bot and tab must start without an OpenAI/API key and
 // must not load an optional provider graph merely because the process is local.
-const optionalRuntimeEnabled = !coreBuild && process.env.TEAMS_OPTIONAL_RUNTIME === 'true';
+const optionalRuntimeEnabled = process.env.TEAMS_CORE_BUILD !== 'true'
+  && process.env.TEAMS_OPTIONAL_RUNTIME === 'true';
 const genUiMode = process.env.TEAMS_GENUI_MODE === 'legacy' || process.env.TEAMS_GENUI_MODE === 'channels-shadow'
   ? process.env.TEAMS_GENUI_MODE
   : 'hybrid';
