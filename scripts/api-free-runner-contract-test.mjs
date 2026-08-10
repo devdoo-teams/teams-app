@@ -8,6 +8,7 @@ const responseModeApiTest = fs.readFileSync(new URL('./response-mode-api-test.ts
 const authStartupTest = fs.readFileSync(new URL('./auth-startup-gate-test.mjs', import.meta.url), 'utf8');
 const operatorAllowlistTest = fs.readFileSync(new URL('./operator-allowlist-runtime-test.mjs', import.meta.url), 'utf8');
 const coreSourceCheck = fs.readFileSync(new URL('./core-source-check.mjs', import.meta.url), 'utf8');
+const esbuildBounded = fs.readFileSync(new URL('./esbuild-bounded.mjs', import.meta.url), 'utf8');
 
 assert.match(
   runner,
@@ -93,6 +94,11 @@ assert.match(
   coreSourceCheck,
   /transformWithBoundedRetry|service was stopped/i,
   'core source checks must retry only the known transient esbuild service-stop failure within a bounded attempt count',
+);
+assert.match(
+  esbuildBounded,
+  /attempt <= 2|retrying once/,
+  'esbuild builds must retry the known service-stop failure once and then fail fast',
 );
 
 console.log('PASS: API-free runner avoids the unbounded full typecheck');

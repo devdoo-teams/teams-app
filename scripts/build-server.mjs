@@ -5,6 +5,7 @@ import path from 'node:path';
 import { build } from 'esbuild';
 import { buildServerAtomically } from './build-server-atomic.mjs';
 import { ensureFileProviderRuntimeDependencies } from './fileprovider-runtime-deps.mjs';
+import { buildWithBoundedRetry } from './esbuild-bounded.mjs';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 import { createServerBuildMarker, isReusableServerBuild, parseServerBuildMarker } from './server-build-marker.mjs';
 
@@ -116,7 +117,7 @@ if (!reusedBundle || materializedSource) {
   }
   await buildServerAtomically({
     outputDir,
-    buildImplementation: (temporaryDir) => build({
+    buildImplementation: (temporaryDir) => buildWithBoundedRetry(build, {
       entryPoints: [materializedSource?.entryPoint ?? path.join(root, 'src/server/index.ts')],
       bundle: true,
       format: 'esm',
@@ -154,7 +155,7 @@ if (!reusedBundle || materializedSource) {
       },
       define: coreBuild ? { 'process.env.TEAMS_CORE_BUILD': '"true"' } : {},
       logLevel: 'info',
-    }),
+      }, `${coreBuild ? 'Core' : 'optional'} server bundle`),
   });
   if (materializedSource) {
     const runtimeNodeModulesLink = path.join(outputDir, 'node_modules');

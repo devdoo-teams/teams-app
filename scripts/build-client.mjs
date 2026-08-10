@@ -6,6 +6,7 @@ import path from 'node:path';
 import { build } from 'esbuild';
 
 import { buildClientAtomically } from './build-client-atomic.mjs';
+import { buildWithBoundedRetry } from './esbuild-bounded.mjs';
 import { ensureFileProviderRuntimeDependencies } from './fileprovider-runtime-deps.mjs';
 import { filterClientSourceFiles } from './fileprovider-client-source.mjs';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
@@ -53,7 +54,7 @@ await buildClientAtomically({
     const assetsDir = path.join(temporaryDir, 'assets');
     await fs.mkdir(assetsDir, { recursive: true });
 
-    await build({
+    await buildWithBoundedRetry(build, {
       entryPoints: [path.join(sourceRoot, 'main.tsx')],
       bundle: true,
       format: 'esm',
@@ -79,7 +80,7 @@ await buildClientAtomically({
         ? ['@copilotkit/*', '@modelcontextprotocol/*', './CopilotWorkspaceAssistant.js']
         : [],
       logLevel: 'info',
-    });
+    }, `${coreBuild ? 'Core' : 'optional'} client bundle`);
 
     const sourceHtml = await fs.readFile(path.join(sourceRoot, 'index.html'), 'utf8');
     const clientBundle = await fs.readFile(path.join(assetsDir, 'main.js'));
