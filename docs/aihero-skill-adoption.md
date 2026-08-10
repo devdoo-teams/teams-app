@@ -12,7 +12,7 @@
 | `tdd` | Activity 알림, collaboration deep-link, Today 요약, GenUI 액션 제한 | 실패 회귀 테스트를 먼저 만들고 수정 후 같은 테스트가 통과한다. loading/empty/error/retry/permission/auth-expiry/duplicate 분기를 테스트 목록에 넣는다. |
 | `code-review` | 커밋 직전 및 패키지 생성 직전 | 요구사항·보안·Teams 카드 제한·소스/ZIP/매니페스트/증거 ID 불일치를 독립 검토로 차단한다. |
 | `research` | Teams SDK/Adaptive Card/모바일 호스트/Loop 등 외부 동작 | Microsoft 공식 문서와 실제 호스트 증거를 분리해 기록한다. 지원 여부를 코드 존재만으로 추정하지 않는다. |
-| `writing-for-agents` | `AGENTS 2.md`와 릴리스 체크리스트 유지 | 기존 탭 재사용, 로컬 원본 우선, 스크린샷 필수, 공개 전환 후 Teams 확인이라는 정책을 실행 가능한 체크 항목으로 유지한다. |
+| `writing-great-skills` | 이 문서와 릴리스 지침을 수정할 때 | 기존 탭 재사용, 로컬 원본 우선, 스크린샷 필수, 공개 전환 후 Teams 확인이라는 정책을 실행 가능한 체크 항목으로 유지한다. AIHero 공식 v1에서 skill 작성·수정용으로 안내하는 현재 slug를 사용한다. |
 
 ## 조건부 적용
 

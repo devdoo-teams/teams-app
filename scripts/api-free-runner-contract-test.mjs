@@ -41,8 +41,8 @@ assert.match(
 );
 assert.match(
   clientBuild,
-  /nodePaths:\s*\[path\.join\(root, 'node_modules'\)\]/,
-  'FileProvider-safe client builds must preserve project dependency resolution from the materialized tree',
+  /nodePaths:\s*\[runtimeNodeModules\]/,
+  'FileProvider-safe client builds must resolve dependencies from the materialized runtime cache',
 );
 assert.match(
   serverBuild,
@@ -51,8 +51,13 @@ assert.match(
 );
 assert.match(
   serverBuild,
-  /nodePaths:\s*\[path\.join\(root, 'node_modules'\)\]/,
-  'FileProvider-safe server builds must preserve project dependency resolution from the materialized tree',
+  /nodePaths:\s*\[fileProviderRuntimeNodeModules \?\? path\.join\(root, 'node_modules'\)\]/,
+  'normal server builds must preserve project dependency resolution from the workspace',
+);
+assert.match(
+  serverBuild,
+  /ensureFileProviderRuntimeDependencies/,
+  'FileProvider-safe server builds must materialize runtime dependencies outside the workspace',
 );
 assert.match(
   responseModeApiTest,

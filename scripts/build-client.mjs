@@ -6,12 +6,16 @@ import path from 'node:path';
 import { build } from 'esbuild';
 
 import { buildClientAtomically } from './build-client-atomic.mjs';
+import { ensureFileProviderRuntimeDependencies } from './fileprovider-runtime-deps.mjs';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 
 const root = process.cwd();
 const outputDir = path.join(resolveRuntimeDistRoot(root), 'client');
 const coreBuild = process.argv.includes('--core');
 const reuseFileProviderSources = process.env.TEAMS_FILEPROVIDER_SERVER_REUSE === '1';
+const runtimeNodeModules = reuseFileProviderSources
+  ? await ensureFileProviderRuntimeDependencies(root)
+  : path.join(root, 'node_modules');
 
 async function materializeGitClientSource() {
   // Do not put the materialized tree back under the FileProvider workspace.
@@ -53,7 +57,7 @@ await buildClientAtomically({
       bundle: true,
       format: 'esm',
       splitting: true,
-      nodePaths: [path.join(root, 'node_modules')],
+      nodePaths: [runtimeNodeModules],
       minify: true,
       outdir: assetsDir,
       entryNames: 'main',

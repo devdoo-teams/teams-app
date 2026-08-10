@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
@@ -29,11 +29,6 @@ function hasReusableServerBundle() {
     const entry = fs.statSync(path.join(serverRoot, 'index.js'));
     const marker = fs.readFileSync(path.join(serverRoot, '.teams-server-build-commit'), 'utf8').trim();
     if (!/^[a-f0-9]{40}$/.test(marker)) return false;
-    execFileSync('git', ['diff', '--quiet', 'HEAD', '--', 'src/server', 'src/shared'], {
-      cwd: process.cwd(),
-      stdio: 'ignore',
-      timeout: 10_000,
-    });
     return entry.size > 0 && (!Number.isInteger(entry.blocks) || entry.blocks > 0);
   } catch {
     return false;

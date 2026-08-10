@@ -368,12 +368,22 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
 
 async function expectStartupFailure(label, extraEnv, expectedMessage) {
   const port = await getFreePort();
+  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-sdk-mvp-startup-'));
+  const dataFile = path.join(temporaryRoot, 'items.json');
+  const jobDataFile = path.join(temporaryRoot, 'agent-jobs.json');
   const child = spawn(process.execPath, [runtimeEntry], {
     cwd: root,
     env: {
       ...process.env,
       NODE_ENV: 'development',
       PORT: String(port),
+      ITEM_STORE_PATH: dataFile,
+      WORK_ITEM_STORE_PATH: `${dataFile}.work-items.json`,
+      COLLABORATION_STORE_PATH: `${dataFile}.collaboration.json`,
+      AGENT_JOB_STORE_PATH: jobDataFile,
+      GENUI_ACTION_STORE_PATH: `${jobDataFile}.genui-actions.json`,
+      RESPONSE_MODE_STORE_PATH: `${jobDataFile}.response-modes.json`,
+      AGENT_WORKSPACE: root,
       TEAMS_USE_SDK: 'false',
       TEAMS_SKIP_AUTH: '',
       TEAMS_LOCAL_DEV: 'false',
@@ -406,11 +416,13 @@ async function expectStartupFailure(label, extraEnv, expectedMessage) {
   if (result.timeout) {
     child.kill('SIGTERM');
     assert(false, `${label} exits instead of starting`);
+    await fs.rm(temporaryRoot, { recursive: true, force: true });
     return;
   }
 
   assert(result.code !== 0, `${label} exits with a startup failure`);
   assert(output.includes(expectedMessage), `${label} reports ${expectedMessage}`);
+  await fs.rm(temporaryRoot, { recursive: true, force: true });
 }
 
 async function expectStoreLeaseConflict(dataFile, jobDataFile) {
