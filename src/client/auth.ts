@@ -12,6 +12,10 @@ let teamsHostReady = false;
 let lastAuthError = '';
 let authRequired = true;
 let cachedAuthToken = '';
+// Some embedded Teams previews disable Web Storage. Keep a short-lived
+// in-memory copy so the explicitly supplied local-preview token can still be
+// sent to the loopback API before the URL fragment is removed.
+let localAccessTokenCache = '';
 const defaultAuthTokenProvider: AuthTokenProvider = () => {
   if (!teamsAuthentication) return Promise.reject(new Error('Teams authentication API unavailable'));
   return teamsAuthentication.getAuthToken({ silent: false });
@@ -37,6 +41,7 @@ export function captureLocalAccessTokenFromFragment(): void {
 
   const token = new URLSearchParams(fragment).get(LOCAL_ACCESS_TOKEN_FRAGMENT_KEY)?.trim();
   if (!token) return;
+  localAccessTokenCache = token;
 
   try {
     getSessionStorage()?.setItem(LOCAL_ACCESS_TOKEN_STORAGE_KEY, token);
@@ -71,7 +76,7 @@ function localAccessTokenForSameOrigin(input: RequestInfo | URL = '/api/health')
   if (target.origin !== window.location.origin) return undefined;
 
   const token = getSessionStorage()?.getItem(LOCAL_ACCESS_TOKEN_STORAGE_KEY)?.trim();
-  return token || undefined;
+  return token || localAccessTokenCache || undefined;
 }
 
 export function markTeamsHostReady(): void {

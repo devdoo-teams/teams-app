@@ -35,6 +35,40 @@ registerHooks({
 });
 
 const { createDeleteConfirmationController, createItemMutationController } = await import('../src/client/App.js');
+const { applyStableMutationKey, getWorkItemAssigneeButtonState } = await import('../src/client/WorkItemPanel.js');
+
+assert.deepEqual(
+  getWorkItemAssigneeButtonState(false),
+  { label: '나에게 할당', disabled: false },
+  'an item not assigned to the requester keeps the assign action enabled',
+);
+assert.deepEqual(
+  getWorkItemAssigneeButtonState(true),
+  { label: '나에게 할당됨', disabled: true },
+  'an item assigned to the requester renders a truthful disabled Korean state',
+);
+
+{
+  const pending = new Map<string, { fingerprint: string; key: string }>();
+  const first = applyStableMutationKey(
+    '/api/work-items',
+    { method: 'POST', body: JSON.stringify({ title: 'retry me' }) },
+    'create',
+    pending,
+  );
+  const retry = applyStableMutationKey(
+    '/api/work-items',
+    { method: 'POST', body: JSON.stringify({ title: 'retry me' }) },
+    'create',
+    pending,
+  );
+  assert.equal(retry.key, first.key, 'a retry with the same payload reuses the mutation key');
+  assert.notEqual(
+    applyStableMutationKey('/api/work-items', { method: 'POST', body: JSON.stringify({ title: 'new payload' }) }, 'create', pending).key,
+    first.key,
+    'a changed payload starts a new logical mutation instead of replaying the old one',
+  );
+}
 
 {
   const confirmation = createDeleteConfirmationController();

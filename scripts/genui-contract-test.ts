@@ -126,6 +126,24 @@ assert.deepEqual(
   }).success,
   false,
 );
+assert.equal(
+  GenUiEnvelopeV1Schema.safeParse({
+    ...envelope,
+    prompt: '프롬프트 보기 액션도 Teams 카드 액션 한도에 포함됩니다.',
+    actions: GENUI_ACTIONS.map(baseAction),
+  }).success,
+  false,
+  'prompt plus six actions exceeds the Teams six-action card limit',
+);
+assert.equal(
+  GenUiEnvelopeV1Schema.safeParse({
+    ...envelope,
+    prompt: '프롬프트 보기 액션을 포함해 정확히 여섯 개입니다.',
+    actions: GENUI_ACTIONS.slice(0, 5).map(baseAction),
+  }).success,
+  true,
+  'prompt plus five actions remains within the Teams six-action card limit',
+);
 
 for (const kind of GENUI_KINDS) {
   const parsed = GenUiEnvelopeV1Schema.parse({ ...envelope, kind });
@@ -279,9 +297,24 @@ const carouselInputs = [1, 2, 3].map((index) => GenUiEnvelopeV1Schema.parse({
 }));
 const carouselActivity = createAdaptiveCardCarouselActivity(carouselInputs);
 assert.equal(carouselActivity.type, 'message');
+assert.equal('text' in carouselActivity, false);
 assert.equal(carouselActivity.attachmentLayout, 'carousel');
 assert.equal(carouselActivity.attachments?.length, 3);
 assert.equal(carouselActivity.attachments?.[1]?.content.body.some((element) => element.type === 'ImageSet'), true);
+const carouselImages = carouselActivity.attachments?.flatMap((carouselAttachment) => {
+  const carouselImageSet = carouselAttachment.content.body.find((element) => element.type === 'ImageSet');
+  return Array.isArray(carouselImageSet?.images)
+    ? carouselImageSet.images as Array<Record<string, unknown>>
+    : [];
+}) ?? [];
+assert.equal(carouselImages.length, 3);
+assert.equal(carouselImages.every((image) => (
+  typeof image.url === 'string'
+  && image.url.startsWith('https://')
+  && typeof image.altText === 'string'
+  && image.altText.length > 0
+  && image.size === 'Medium'
+)), true);
 assert.equal(MAX_ADAPTIVE_CARD_CAROUSEL_CARDS, 10);
 assert.equal(createAdaptiveCardCarouselActivity(carouselInputs.slice(0, 1)).attachments, undefined);
 const twoCardActivity = createAdaptiveCardCarouselActivity(carouselInputs.slice(0, 2));
@@ -316,6 +349,9 @@ const generatedCarouselActivity = createAdaptiveCardCarouselActivity(generatedCa
 assert.equal(generatedCarouselActivity.attachmentLayout, 'carousel');
 assert.equal(generatedCarouselActivity.attachments?.every((attachment) => (
   attachment.content.actions?.some((action) => action.type === 'Action.OpenUrl' && action.url === personalTabUrl)
+)), true);
+assert.equal(generatedCarouselActivity.attachments?.every((attachment) => (
+  attachment.content.actions?.length === 1
 )), true);
 const responseModeActivity = createResponseModeCardActivity('deterministic', [
   { mode: 'deterministic', label: '결정형', configured: true },

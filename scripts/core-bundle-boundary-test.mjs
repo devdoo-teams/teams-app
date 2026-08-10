@@ -27,5 +27,11 @@ const clientHtml = await fs.readFile(path.join(runtimeRoot, 'client', 'index.htm
 assert.match(clientHtml, /assets\/main\.js\?v=/, 'core tab points to the built main asset');
 const serverEntry = await fs.readFile(path.join(serverDir, 'index.js'), 'utf8');
 assert.match(serverEntry, /mcpEnabled/, 'core health still reports MCP disabled state');
+const serverBuildConfig = await fs.readFile(path.join(root, 'scripts', 'build-server.mjs'), 'utf8');
+assert.match(
+  serverBuildConfig,
+  /mainFields:\s*\[\s*['"]module['"]\s*,\s*['"]main['"]\s*\]/,
+  'core server build must prefer the Teams SDK ESM entry to avoid the esbuild CJS graph hang',
+);
 
 console.log('PASS: API-free core artifact excludes optional CopilotKit/MCP files while retaining runtime contracts');

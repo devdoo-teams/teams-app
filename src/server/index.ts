@@ -65,13 +65,14 @@ import { isValidPublicHostname } from '../shared/public-hostname.js';
 import {
   WorkItemForbiddenError,
   WorkItemNotFoundError,
+  presentWorkItem,
+  type WorkItemChange,
   WorkItemService,
   WorkItemValidationError,
 } from './work-item-service.js';
 import { WorkItemStore } from './work-item-store.js';
 import {
   WORK_ITEM_STATUSES,
-  type WorkItem,
   type WorkItemScope,
 } from '../shared/work-item.js';
 import {
@@ -113,8 +114,52 @@ const responseModeStorePath = process.env.RESPONSE_MODE_STORE_PATH ?? path.resol
 const itemStore = new ItemStore(
   itemStorePath,
 );
-const workItemService = new WorkItemService(new WorkItemStore(workItemStorePath));
 const collaborationService = new CollaborationService(new CollaborationStore(collaborationStorePath));
+const publishWorkItemChange = async (change: WorkItemChange): Promise<void> => {
+  const scope = change.scope satisfies CollaborationScope;
+  const target = { type: 'work-item' as const, id: change.item.id };
+  const followKey = `work-item-follow:${change.mutationKey}`;
+
+  try {
+    if (change.operation === 'create' || change.operation === 'watch') {
+      await collaborationService.follow(scope, {
+        mutationKey: followKey,
+        target,
+        delivery: 'personal',
+      });
+    } else if (change.operation === 'unwatch') {
+      try {
+        await collaborationService.unfollow(scope, {
+          mutationKey: followKey,
+          target,
+          delivery: 'personal',
+        });
+      } catch (error) {
+        if (!(error instanceof CollaborationNotFoundError)) throw error;
+      }
+    }
+
+    const details = [
+      `작업: ${change.operation}`,
+      `상태: ${change.item.status}`,
+      ...(change.item.assigneeId ? [`담당: ${change.item.assigneeId}`] : []),
+    ].join(' · ');
+    await collaborationService.recordUpdate(scope, {
+      mutationKey: `work-item-notification:${change.mutationKey}`,
+      target,
+      title: `업무 업데이트 · ${change.item.title}`,
+      body: details,
+      mentionUserIds: change.item.assigneeId ? [change.item.assigneeId] : [],
+      occurredAt: change.item.updatedAt,
+    });
+  } catch (error) {
+    // A notification failure must not roll back an already durable work-item mutation.
+    console.error('Work item notification publication failed', error);
+  }
+};
+const workItemService = new WorkItemService(new WorkItemStore(workItemStorePath), {
+  onChanged: publishWorkItemChange,
+});
 const agentJobStore = new AgentJobStore(
   agentJobStorePath,
 );
@@ -464,13 +509,6 @@ function sendWorkItemError(response: any, error: unknown): void {
   }
   console.error('Work item request failed', error);
   response.status(500).json({ error: '업무 항목 요청을 처리하지 못했습니다.' });
-}
-
-function presentWorkItem(item: WorkItem, scope: WorkItemScope): WorkItem & { watching: boolean } {
-  return {
-    ...item,
-    watching: item.watcherIds.includes(scope.requesterId),
-  };
 }
 
 function sendCollaborationError(response: any, error: unknown): void {
@@ -1093,7 +1131,21 @@ http.get('/api/work-items', async (request: any, response: any) => {
             dueDateTo: nonEmptyString(request.query?.to, 10),
             limit,
           });
-    response.json({ items: items.map((item) => presentWorkItem(item, resolved.scope!)), view });
+    const summaryMode = nonEmptyString(request.query?.summary, 20);
+    if (summaryMode && summaryMode !== 'today') {
+      response.status(400).json({ error: 'summary contains an unsupported work item summary mode' });
+      return;
+    }
+    if (summaryMode === 'today' && view !== 'assigned') {
+      response.status(400).json({ error: 'today summary requires the assigned work item view' });
+      return;
+    }
+    const today = nonEmptyString(request.query?.today, 10) ?? new Date().toISOString().slice(0, 10);
+    response.json({
+      items: items.map((item) => presentWorkItem(item, resolved.scope!)),
+      view,
+      ...(summaryMode === 'today' ? { summary: workItemService.assignedSummary(resolved.scope, today) } : {}),
+    });
   } catch (error) {
     sendWorkItemError(response, error);
   }
@@ -2330,7 +2382,12 @@ if (teamsApp) {
 // including production when `teamsApp` is configured. Keeping this outside
 // the bot fallback branch prevents an installed Teams tab from receiving 404
 // while the bot health endpoint still reports healthy.
-http.get('/tabs/home', (_request: any, response: any) => {
+http.get('/tabs/home', (request: any, response: any) => {
+  const requestUrl = new URL(String(request.url ?? '/tabs/home'), 'http://localhost');
+  if (requestUrl.pathname === '/tabs/home') {
+    response.redirect(308, `/tabs/home/${requestUrl.search}`);
+    return;
+  }
   response.sendFile(path.join(clientDist, 'index.html'));
 });
 http.use('/tabs/home', express.static(clientDist));

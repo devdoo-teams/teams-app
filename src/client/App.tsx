@@ -24,6 +24,13 @@ import {
 } from './ResponseModeSelector.js';
 import { WorkItemPanel } from './WorkItemPanel.js';
 import { CollaborationPanel } from './CollaborationPanel.js';
+import { TodaySummary } from './TodaySummary.js';
+import {
+  buildHubSearch,
+  hubViewLabels,
+  parseHubView,
+  type HubView,
+} from './hub-navigation.js';
 
 declare const __TEAMS_OPTIONAL_RUNTIME__: boolean | undefined;
 const optionalRuntimeEnabled = typeof __TEAMS_OPTIONAL_RUNTIME__ === 'undefined'
@@ -281,6 +288,9 @@ export function createLazyCopilotRuntime() {
 }
 
 export function App() {
+  const [hubView, setHubView] = useState<HubView>(() => (
+    typeof window === 'undefined' ? 'today' : parseHubView(window.location.search)
+  ));
   const [items, setItems] = useState<Item[]>([]);
   const [title, setTitle] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
@@ -568,6 +578,14 @@ export function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const handleHistoryNavigation = (): void => {
+      setHubView(parseHubView(window.location.search));
+    };
+    window.addEventListener('popstate', handleHistoryNavigation);
+    return () => window.removeEventListener('popstate', handleHistoryNavigation);
+  }, []);
+
   const visibleItems = items.filter((item) => filter === 'all' || item.status === filter);
 
   function legacyItemMutationKey(itemId: number): string {
@@ -740,6 +758,12 @@ export function App() {
     if (typeof window !== 'undefined') window.location.reload();
   }
 
+  function navigateHubView(view: HubView): void {
+    setHubView(view);
+    if (typeof window === 'undefined') return;
+    window.history.replaceState(null, '', buildHubSearch(window.location.search, view));
+  }
+
   const runtimeBadge = healthLoading
     ? '상태 확인 중'
     : teamsHost
@@ -761,6 +785,22 @@ export function App() {
         <span className={health ? 'badge' : 'badge warning'}>{runtimeBadge}</span>
       </header>
 
+      <nav className="hub-nav" aria-label="업무 허브 메뉴">
+        {(Object.keys(hubViewLabels) as HubView[]).map((view) => (
+          <button
+            aria-current={hubView === view ? 'page' : undefined}
+            aria-pressed={hubView === view}
+            className={hubView === view ? 'hub-nav-button active' : 'hub-nav-button'}
+            key={view}
+            onClick={() => navigateHubView(view)}
+            type="button"
+          >
+            {hubViewLabels[view]}
+          </button>
+        ))}
+      </nav>
+
+      {(hubView === 'today' || hubView === 'settings') && (
       <section className="runtime-panel" aria-label="런타임 상태">
         <div>
           <span>서비스</span>
@@ -795,12 +835,16 @@ export function App() {
           <strong>{health ? new Date(health.timestamp).toLocaleTimeString('ko-KR') : '-'}</strong>
         </div>
       </section>
+      )}
 
+      {hubView === 'settings' && (
       <ResponseModeSelector
         onSelectMode={responseMode.selectMode}
         state={responseMode.state}
       />
+      )}
 
+      {hubView === 'today' && (
       <section className="weather-widget" aria-label="현재 위치 날씨 위젯">
         <div className="weather-heading">
           <div>
@@ -880,7 +924,39 @@ export function App() {
 
         {weatherError && <p className="weather-note">{weatherError}</p>}
       </section>
+      )}
 
+      {hubView === 'today' && (
+        <TodaySummary onOpenWork={() => navigateHubView('work')} />
+      )}
+
+      {hubView === 'today' && (
+        <section className="panel today-quick-actions" aria-label="오늘 바로가기">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">QUICK ACTIONS</p>
+              <h2>바로가기</h2>
+              <p className="panel-description">실제 업무와 협업 기능으로 이동합니다.</p>
+            </div>
+          </div>
+          <div className="today-quick-grid">
+            <button className="today-quick-card" onClick={() => navigateHubView('activity')} type="button">
+              <span>활동</span>
+              <strong>열기</strong>
+              <small>구독·알림·다이제스트</small>
+            </button>
+            <button className="today-quick-card" onClick={() => navigateHubView('settings')} type="button">
+              <span>설정</span>
+              <strong>{selectedResponseMode.label}</strong>
+              <small>응답 모드 확인</small>
+            </button>
+          </div>
+        </section>
+      )}
+
+      {/* Legacy /api/items CRUD is retained for compatibility tests but is no longer
+          rendered beside the canonical /api/work-items view. */}
+      {false && hubView === 'work' && (
       <section className="panel">
         <div className="section-heading">
           <div>
@@ -1050,9 +1126,10 @@ export function App() {
           </ul>
         )}
       </section>
+      )}
 
-      <WorkItemPanel />
-      <CollaborationPanel />
+      {hubView === 'work' && <WorkItemPanel />}
+      {hubView === 'activity' && <CollaborationPanel />}
 
       <footer>Teams SDK · TypeScript · React · Express · Adaptive Cards</footer>
     </main>

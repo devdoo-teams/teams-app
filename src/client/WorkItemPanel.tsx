@@ -1,25 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 
 import { apiFetch } from './auth.js';
+import type { WorkItemPresentation } from '../shared/work-item.js';
 
 type WorkItemStatus = 'backlog' | 'todo' | 'open' | 'in_progress' | 'blocked' | 'done' | 'cancelled';
 type WorkView = 'search' | 'recent' | 'assigned' | 'calendar';
 
-export type WorkItem = {
-  id: string;
-  title: string;
-  description: string;
-  status: WorkItemStatus;
-  priority: 'low' | 'medium' | 'high' | 'urgent';
-  assigneeId?: string;
-  watcherIds: string[];
-  watching: boolean;
-  labels: string[];
-  dueDate?: string;
-  comments: Array<{ id: string; authorId: string; body: string; createdAt: string }>;
-  deepLink: { href: string };
-  updatedAt: string;
-};
+export type WorkItem = WorkItemPresentation;
 
 const WORK_CONVERSATION_ID = 'personal-tab';
 const statuses: Array<[WorkItemStatus, string]> = [
@@ -35,6 +22,52 @@ const statusLabel = new Map(statuses);
 
 function nextMutationKey(prefix: string): string {
   return prefix + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+}
+
+type PendingMutation = { fingerprint: string; key: string };
+
+function mutationFingerprint(path: string, init: RequestInit): string {
+  const body = typeof init.body === 'string' ? init.body : '';
+  try {
+    const parsed = JSON.parse(body) as Record<string, unknown>;
+    if (parsed && typeof parsed === 'object') {
+      const { mutationKey: _mutationKey, ...payload } = parsed;
+      return path + '|' + JSON.stringify(payload);
+    }
+  } catch {
+    // A non-JSON body is still safe to fingerprint as its literal value.
+  }
+  return path + '|' + body;
+}
+
+export function applyStableMutationKey(
+  path: string,
+  init: RequestInit,
+  busyKey: string,
+  pending: Map<string, PendingMutation>,
+): { path: string; init: RequestInit; key: string } {
+  const fingerprint = mutationFingerprint(path, init);
+  const existing = pending.get(busyKey);
+  const key = existing?.fingerprint === fingerprint ? existing.key : nextMutationKey(busyKey);
+  pending.set(busyKey, { fingerprint, key });
+  const nextInit = { ...init };
+  if (typeof init.body === 'string') {
+    try {
+      const parsed = JSON.parse(init.body) as Record<string, unknown>;
+      if (parsed && typeof parsed === 'object') {
+        nextInit.body = JSON.stringify({ ...parsed, mutationKey: key });
+        return { path, init: nextInit, key };
+      }
+    } catch {
+      // Fall through to the query-string form used by DELETE watch.
+    }
+  }
+  const url = new URL(path, typeof window === 'undefined' ? 'http://localhost' : window.location.origin);
+  url.searchParams.set('mutationKey', key);
+  const nextPath = url.origin === 'http://localhost' && !/^https?:\/\//.test(path)
+    ? url.pathname + url.search
+    : url.toString();
+  return { path: nextPath, init: nextInit, key };
 }
 
 export function parseWorkItemDeepLinkId(search: string | undefined): string | null {
@@ -90,6 +123,15 @@ export function shouldClearWorkItemComment(mutationSucceeded: boolean): boolean 
   return mutationSucceeded;
 }
 
+export function getWorkItemAssigneeButtonState(assignedToRequester: boolean): {
+  label: string;
+  disabled: boolean;
+} {
+  return assignedToRequester
+    ? { label: '나에게 할당됨', disabled: true }
+    : { label: '나에게 할당', disabled: false };
+}
+
 async function workFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set('x-conversation-id', WORK_CONVERSATION_ID);
@@ -113,6 +155,8 @@ export function WorkItemPanel() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
+  const [deepLinkNotice, setDeepLinkNotice] = useState('');
+  const pendingMutationsRef = useRef(new Map<string, PendingMutation>());
   const selectedIdRef = useRef(selectedId);
   const queryRef = useRef(query);
   const loadControllerRef = useRef(createLatestWorkItemLoadController());
@@ -128,6 +172,7 @@ export function WorkItemPanel() {
     const request = loadControllerRef.current.begin();
     setLoading(true);
     setError('');
+    setDeepLinkNotice('');
     const params = new URLSearchParams({ view });
     if (queryRef.current.trim()) params.set('q', queryRef.current.trim());
     if (status) params.set('status', status);
@@ -138,6 +183,7 @@ export function WorkItemPanel() {
       const currentSelectedId = selectedIdRef.current;
       const loadedItems = body.items ?? [];
       let linkedItem: WorkItem | null = null;
+      let linkedItemMissing = false;
       if (currentSelectedId && !loadedItems.some((item) => item.id === currentSelectedId)) {
         const detailResponse = await workFetch('/api/work-items/' + encodeURIComponent(currentSelectedId), { signal: request.signal });
         if (detailResponse.ok) {
@@ -146,11 +192,16 @@ export function WorkItemPanel() {
         } else if (detailResponse.status !== 404) {
           const detailBody = (await detailResponse.json()) as { error?: string };
           throw new Error(detailBody.error || '딥링크 업무를 불러오지 못했습니다.');
+        } else {
+          linkedItemMissing = true;
         }
       }
       request.commit(() => {
         const nextItems = mergeDeepLinkedWorkItem(loadedItems, currentSelectedId, linkedItem);
         setItems(nextItems);
+        setDeepLinkNotice(linkedItemMissing
+          ? '요청한 업무를 찾을 수 없거나 현재 계정에서 볼 수 없습니다. 목록을 새로고침해 다시 확인하세요.'
+          : '');
         if (currentSelectedId && !nextItems.some((item) => item.id === currentSelectedId)) setSelectedId(null);
       });
     } catch (caught) {
@@ -178,20 +229,22 @@ export function WorkItemPanel() {
       setError('업무 제목을 입력하세요.');
       return;
     }
+    const createInit: RequestInit = {
+      method: 'POST',
+      body: JSON.stringify({
+        title: title.trim(),
+        dueDate: dueDate || undefined,
+        labels: ['teams'],
+        priority: 'medium',
+      }),
+    };
+    const stable = applyStableMutationKey('/api/work-items', createInit, 'create', pendingMutationsRef.current);
     setBusy('create');
     try {
-      const response = await workFetch('/api/work-items', {
-        method: 'POST',
-        body: JSON.stringify({
-          mutationKey: nextMutationKey('create'),
-          title: title.trim(),
-          dueDate: dueDate || undefined,
-          labels: ['teams'],
-          priority: 'medium',
-        }),
-      });
+      const response = await workFetch(stable.path, stable.init);
       const body = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(body.error || '업무 항목을 만들지 못했습니다.');
+      pendingMutationsRef.current.delete('create');
       setTitle('');
       setDueDate('');
       await loadItems();
@@ -203,12 +256,14 @@ export function WorkItemPanel() {
   }
 
   async function mutate(path: string, init: RequestInit, busyKey: string): Promise<boolean> {
+    const stable = applyStableMutationKey(path, init, busyKey, pendingMutationsRef.current);
     setBusy(busyKey);
     setError('');
     try {
-      const response = await workFetch(path, init);
+      const response = await workFetch(stable.path, stable.init);
       const body = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(body.error || '업무 항목을 변경하지 못했습니다.');
+      pendingMutationsRef.current.delete(busyKey);
       await loadItems();
       return true;
     } catch (caught) {
@@ -224,9 +279,8 @@ export function WorkItemPanel() {
     if (!selected) return;
     await mutate('/api/work-items/' + encodeURIComponent(selected.id), {
       method: 'PUT',
-      body: JSON.stringify({
-        mutationKey: nextMutationKey('edit'),
-        patch: { title: editTitle.trim(), description: editDescription },
+        body: JSON.stringify({
+          patch: { title: editTitle.trim(), description: editDescription },
       }),
     }, 'edit:' + selected.id);
   }
@@ -236,7 +290,7 @@ export function WorkItemPanel() {
     if (!selected || !comment.trim()) return;
     const succeeded = await mutate('/api/work-items/' + encodeURIComponent(selected.id) + '/comments', {
       method: 'POST',
-      body: JSON.stringify({ mutationKey: nextMutationKey('comment'), body: comment.trim() }),
+      body: JSON.stringify({ body: comment.trim() }),
     }, 'comment:' + selected.id);
     if (shouldClearWorkItemComment(succeeded)) setComment('');
   }
@@ -287,11 +341,13 @@ export function WorkItemPanel() {
       </form>
 
       {error && <p className="error" role="alert">{error}</p>}
+      {deepLinkNotice && <p className="error" role="alert">{deepLinkNotice}</p>}
       {loading ? <p className="empty">업무 항목을 불러오는 중입니다…</p> : items.length === 0 ? <p className="empty">표시할 업무 항목이 없습니다. 첫 항목을 추가해 보세요.</p> : (
         <div className="work-item-list">
           {items.map((item) => {
             const selectedItem = item.id === selectedId;
             const itemPath = '/api/work-items/' + encodeURIComponent(item.id);
+            const assigneeButton = getWorkItemAssigneeButtonState(item.assignedToRequester);
             return (
               <article className={selectedItem ? 'work-item-card selected' : 'work-item-card'} key={item.id}>
                 <div className="work-item-card-heading">
@@ -305,11 +361,11 @@ export function WorkItemPanel() {
                   {item.labels.map((label) => <span key={label}>#{label}</span>)}
                 </div>
                 <div className="work-item-actions" aria-label={item.title + ' 작업'}>
-                  <select aria-label={item.title + ' 상태'} disabled={Boolean(busy)} onChange={(event) => void mutate(itemPath + '/status', { method: 'PATCH', body: JSON.stringify({ mutationKey: nextMutationKey('status'), status: event.target.value }) }, 'status:' + item.id)} value={item.status}>
+                  <select aria-label={item.title + ' 상태'} disabled={Boolean(busy)} onChange={(event) => void mutate(itemPath + '/status', { method: 'PATCH', body: JSON.stringify({ status: event.target.value }) }, 'status:' + item.id)} value={item.status}>
                     {statuses.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                   </select>
-                  <button className="toggle" disabled={Boolean(busy)} onClick={() => void mutate(itemPath + '/assignee', { method: 'PATCH', body: JSON.stringify({ mutationKey: nextMutationKey('assign'), assigneeId: 'self' }) }, 'assign:' + item.id)} type="button">나에게 할당</button>
-                  <button className="toggle" disabled={Boolean(busy)} onClick={() => void mutate(itemPath + '/watch' + (item.watching ? '?mutationKey=' + encodeURIComponent(nextMutationKey('unwatch')) : ''), { method: item.watching ? 'DELETE' : 'POST', body: item.watching ? undefined : JSON.stringify({ mutationKey: nextMutationKey('watch') }) }, 'watch:' + item.id)} type="button">{item.watching ? 'watch 해제' : 'watch'}</button>
+                  <button className="toggle" disabled={Boolean(busy) || assigneeButton.disabled} onClick={() => void mutate(itemPath + '/assignee', { method: 'PATCH', body: JSON.stringify({ assigneeId: 'self' }) }, 'assign:' + item.id)} type="button">{assigneeButton.label}</button>
+                  <button className="toggle" disabled={Boolean(busy)} onClick={() => void mutate(itemPath + '/watch', { method: item.watching ? 'DELETE' : 'POST', body: item.watching ? undefined : JSON.stringify({}) }, 'watch:' + item.id)} type="button">{item.watching ? 'watch 해제' : 'watch'}</button>
                   <a className="work-item-link" href={item.deepLink.href}>탭에서 열기</a>
                 </div>
                 {selectedItem && (

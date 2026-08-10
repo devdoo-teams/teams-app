@@ -22,17 +22,119 @@ import {
   missingGates,
   parseGatePayload,
   parseArgs,
+  probePublicTabRoutes,
   rasterDimensions,
   resetAfterPhaseFailure,
   reverifyEvidenceArtifacts,
+  runGatePhase,
   summarizePhase,
   validateEvidence,
 } from './release-loop.mjs';
+import { REQUIRED_COVERAGE_KEYS } from './teams-ui-matrix-validate.mjs';
 
 assert.deepEqual(
   parseArgs(['public', '--url', 'https://runtime.example.com']),
   { command: 'public', file: undefined, reason: undefined, url: 'https://runtime.example.com' },
   'release loop public phase accepts an explicit URL for reproducible probes',
+);
+
+const routeProbeRequests = [];
+const routeProbe = await probePublicTabRoutes({
+  baseUrl: 'https://runtime.example.com',
+  query: 'preview=1',
+  timeoutMs: 25,
+  fetchResource: async (url, timeoutMs, options) => {
+    routeProbeRequests.push({ url, timeoutMs, redirect: options.redirect });
+    if (url === 'https://runtime.example.com/tabs/home?preview=1') {
+      return {
+        response: {
+          status: 308,
+          url,
+          headers: { get: (name) => name === 'location' ? '/tabs/home/?preview=1' : null },
+        },
+      };
+    }
+    return {
+      response: {
+        status: 200,
+        url,
+        headers: { get: () => null },
+      },
+    };
+  },
+});
+assert.deepEqual(routeProbeRequests, [
+  {
+    url: 'https://runtime.example.com/tabs/home?preview=1',
+    timeoutMs: 25,
+    redirect: 'manual',
+  },
+  {
+    url: 'https://runtime.example.com/tabs/home/?preview=1',
+    timeoutMs: 25,
+    redirect: 'manual',
+  },
+], 'the public route probe must make independent bounded requests for both tab paths');
+assert.deepEqual(routeProbe, {
+  redirect: {
+    requestUrl: 'https://runtime.example.com/tabs/home?preview=1',
+    status: 308,
+    location: 'https://runtime.example.com/tabs/home/?preview=1',
+  },
+  canonical: {
+    requestUrl: 'https://runtime.example.com/tabs/home/?preview=1',
+    status: 200,
+    finalUrl: 'https://runtime.example.com/tabs/home/?preview=1',
+  },
+});
+const gateRouteProbeCalls = [];
+const augmentedPublicPayload = await runGatePhase('public', {
+  url: 'https://runtime.example.com',
+  runGate: async () => ({
+    code: 0,
+    stdout: JSON.stringify({ status: 'READY', evidence: [] }),
+    stderr: '',
+  }),
+  probeRoutes: async (options) => {
+    gateRouteProbeCalls.push(options);
+    return routeProbe;
+  },
+});
+assert.equal(gateRouteProbeCalls.length, 1, 'the public release phase must invoke the independent route probe');
+assert.equal(gateRouteProbeCalls[0].baseUrl, 'https://runtime.example.com');
+assert.equal(gateRouteProbeCalls[0].timeoutMs > 0, true);
+assert.deepEqual(augmentedPublicPayload.evidence, [{ tabRoutes: routeProbe }]);
+await assert.rejects(
+  probePublicTabRoutes({
+    baseUrl: 'https://runtime.example.com',
+    query: 'preview=1',
+    timeoutMs: 25,
+    fetchResource: async (url) => ({
+      response: {
+        status: url.endsWith('/tabs/home?preview=1') ? 308 : 503,
+        url,
+        headers: { get: (name) => name === 'location' ? '/tabs/home/?preview=1' : null },
+      },
+    }),
+  }),
+  /canonical.*200|trailing.*200/i,
+  'a healthy redirect must not hide a broken canonical trailing-slash route',
+);
+await assert.rejects(
+  probePublicTabRoutes({
+    baseUrl: 'https://runtime.example.com',
+    query: 'preview=1',
+    timeoutMs: 25,
+    fetchResource: async (url) => ({
+      response: {
+        status: 200,
+        url,
+        headers: { get: (name) => name === 'location' ? '/tabs/home/?preview=1' : null },
+      },
+    }),
+  }),
+  /no-slash.*308/i,
+  'a canonical 200 must not hide a broken no-slash redirect contract',
 );
 
 assert.deepEqual(
@@ -168,6 +270,18 @@ const publicAsset = {
   sha256: publicAssetSha256,
   buildId: publicBuildId,
 };
+const publicTabRoutes = {
+  redirect: {
+    requestUrl: 'https://runtime.example.com/tabs/home?release-loop-probe=1',
+    status: 308,
+    location: 'https://runtime.example.com/tabs/home/?release-loop-probe=1',
+  },
+  canonical: {
+    requestUrl: 'https://runtime.example.com/tabs/home/?release-loop-probe=1',
+    status: 200,
+    finalUrl: 'https://runtime.example.com/tabs/home/?release-loop-probe=1',
+  },
+};
 const surfaceArtifactBytes = Object.fromEntries(
   Object.keys(surfaceArtifactPaths).map((surface) => [surface, pngFixture(surface)]),
 );
@@ -192,7 +306,73 @@ const identity = {
   startedAt: '2026-08-09T00:00:00.000Z',
 };
 
-function coverageMatrixBytes(surface) {
+function coverageMatrixBytes(surface, { mutateRow } = {}) {
+  const matrixEvidence = (evidencePath, reason) => ({
+    fresh: true,
+    state: 'captured',
+    path: evidencePath,
+    capturedAt: '2026-08-09T00:04:00.000Z',
+    reason,
+    releaseIdentity: {
+      appVersion: identity.version,
+      sourceCommit: identity.commit,
+      packageSha256,
+      installedVersion: null,
+    },
+  });
+  const rows = Array.from({ length: 4 }, (_, index) => {
+    const row = {
+      id: `${surface}-row-${index}`,
+      feature: `fixture feature ${index}`,
+      surface: 'personal-tab',
+      location: `fixture location ${index}`,
+      branch: `fixture branch ${index}`,
+      precondition: `fixture precondition ${index}`,
+      action: {
+        userGesture: 'click the fixture control',
+        input: `fixture input ${index}`,
+        operation: `fixture operation ${index}`,
+      },
+      visibleControl: {
+        role: 'button',
+        label: `Fixture control ${index}`,
+        presenceAssertion: 'the fixture control is visible in the current AX tree',
+        freshAxAssertion: 'the fixture control is present in the fresh AX capture',
+        separateFromServerResult: true,
+      },
+      serverAction: {
+        transport: 'HTTP fixture request',
+        trigger: 'the visible fixture control sends the request',
+        handler: `fixture handler ${index}`,
+        request: `fixture request ${index}`,
+        resultProof: `fixture response proof ${index}`,
+        notVisibleOnly: true,
+      },
+      expected: {
+        before: `fixture before state ${index}`,
+        after: `fixture after state ${index}`,
+        server: `fixture server state ${index}`,
+        failure: `fixture failure state ${index}`,
+      },
+      screenshotBefore: matrixEvidence(surfaceBeforePaths[surface], 'fixture before screenshot captured'),
+      screenshotAfter: matrixEvidence(surfaceAfterPaths[surface], 'fixture after screenshot captured'),
+      accessibilityEvidence: {
+        schema: 'paired-before-after-v1',
+        before: matrixEvidence(surfaceBeforePaths[surface], 'fixture accessibility before evidence captured'),
+        after: matrixEvidence(surfaceAfterPaths[surface], 'fixture accessibility after evidence captured'),
+      },
+      runtimeEvidence: matrixEvidence(surfaceRuntimePaths[surface], 'fixture runtime evidence captured'),
+      result: {
+        status: 'PASS',
+        reason: 'fixture row passed with fresh evidence',
+        visibleControl: 'the fixture control was visible',
+        serverAction: 'the fixture server action returned its result',
+        nextAction: 'continue to the next fixture row',
+      },
+      coverage: REQUIRED_COVERAGE_KEYS.filter((_, keyIndex) => keyIndex % 4 === index),
+    };
+    return mutateRow ? mutateRow(row, index) : row;
+  });
   return Buffer.from(JSON.stringify({
     schemaVersion: 1,
     matrixId: `fixture-${surface}`,
@@ -200,12 +380,11 @@ function coverageMatrixBytes(surface) {
       appVersion: identity.version,
       sourceCommit: identity.commit,
       packageSha256,
+      installedVersion: null,
     },
-    coverage: { count: 4 },
-    rows: Array.from({ length: 4 }, (_, index) => ({
-      id: `${surface}-row-${index}`,
-      result: { status: 'PASS' },
-    })),
+    evidencePolicy: { fixture: 'fresh evidence is required for every PASS row' },
+    coverage: { count: rows.length },
+    rows,
   }) + '\n');
 }
 
@@ -243,6 +422,7 @@ function machineReadyState() {
       finalUrl: 'https://runtime.example.com/tabs/home',
       buildId: publicBuildId,
     },
+    tabRoutes: structuredClone(publicTabRoutes),
     asset: { ...publicAsset },
     completedAt: '2026-08-09T00:03:00.000Z',
   };
@@ -288,6 +468,30 @@ function isEvidenceFile(surface, candidate) {
     surfaceCoveragePaths[surface],
   ]).has(candidate);
 }
+
+const invalidRowCoveragePath = path.join(tempDir, 'portal-row-invalid-coverage.md');
+const invalidRowCoverageBytes = coverageMatrixBytes('portal', {
+  mutateRow: (row, index) => index === 0
+    ? { ...row, visibleControl: { ...row.visibleControl, separateFromServerResult: false } }
+    : row,
+});
+await fs.writeFile(invalidRowCoveragePath, invalidRowCoverageBytes);
+const validPortalEvidence = evidence('portal');
+assert.throws(
+  () => validateEvidence({
+    ...validPortalEvidence,
+    coverage: {
+      ...validPortalEvidence.coverage,
+      matrixPath: invalidRowCoveragePath,
+      matrixSha256: crypto.createHash('sha256').update(invalidRowCoverageBytes).digest('hex'),
+    },
+  }, machineReadyState(), {
+    fileExists: () => true,
+    now: new Date('2026-08-09T00:05:00.000Z'),
+  }),
+  /row validation|separateFromServerResult|portal-row-0/i,
+  'a row-level UI matrix defect must fail even when aggregate row counts remain unchanged',
+);
 
 const initial = createInitialState(identity);
 assert.equal(initial.status, 'INIT');
@@ -488,6 +692,9 @@ for (const surface of ['portal', 'installed', 'desktop', 'mobile']) {
 }
 assert.equal(completeState.status, 'MOBILE_READY');
 assert.deepEqual(missingGates(completeState), []);
+const terminalCompleteState = { ...completeState, status: 'COMPLETE' };
+assert.equal(deriveStatus(terminalCompleteState), 'COMPLETE', 'a completed release remains complete in status views');
+assert.equal(deriveStatus({ ...completeState, status: 'SUPERSEDED' }), 'SUPERSEDED', 'a superseded release remains terminal');
 const replacementPortalEvidence = validateEvidence(evidence('portal', {
   observedAt: '2026-08-09T00:05:00.000Z',
 }), completeState, {
@@ -557,6 +764,7 @@ assert.doesNotThrow(() => assertPublicProbeMatches(completeState, {
   version: identity.version,
   packageSha256,
   tab: { finalUrl: 'https://runtime.example.com/tabs/home' },
+  tabRoutes: structuredClone(publicTabRoutes),
   asset: { ...publicAsset },
 }));
 assert.throws(
@@ -564,6 +772,7 @@ assert.throws(
     version: identity.version,
     packageSha256,
     tab: { finalUrl: 'https://wrong.example.com/tabs/home' },
+    tabRoutes: structuredClone(publicTabRoutes),
     asset: { ...publicAsset },
   }),
   /origin|host|packaged/i,
@@ -575,6 +784,7 @@ assert.throws(
     version: identity.version,
     packageSha256: staleRecordedPublic.package.sha256,
     tab: { finalUrl: 'https://runtime.example.com/tabs/home' },
+    tabRoutes: structuredClone(publicTabRoutes),
     asset: { ...publicAsset },
   }),
   /recorded.*public.*(?:package|SHA)|public.*(?:package|SHA).*recorded/i,
@@ -585,6 +795,7 @@ assert.throws(
     version: identity.version,
     packageSha256,
     tab: { finalUrl: 'https://runtime.example.com/tabs/home' },
+    tabRoutes: structuredClone(publicTabRoutes),
     asset: { ...publicAsset, buildId: 'f'.repeat(12), sha256: 'f'.repeat(64) },
   }),
   /asset|build|deployed.*identity/i,
@@ -598,6 +809,7 @@ const completedAgain = await completeReleaseState(completeState, {
       version: identity.version,
       packageSha256,
       tab: { finalUrl: 'https://runtime.example.com/tabs/home' },
+      tabRoutes: structuredClone(publicTabRoutes),
       asset: { ...publicAsset },
     };
   },
@@ -672,6 +884,7 @@ await assert.rejects(
       version: identity.version,
       packageSha256,
       tab: { finalUrl: 'https://wrong.example.com/tabs/home' },
+      tabRoutes: structuredClone(publicTabRoutes),
       asset: { ...publicAsset },
     }),
   }),
@@ -699,6 +912,7 @@ const publicPayloadWithoutAsset = {
     { package: packagePath, version: identity.version, sha256: packageSha256 },
     { health: { version: identity.version, environment: 'production' } },
     { tab: { status: 200, finalUrl: 'https://runtime.example.com/tabs/home', buildId: publicBuildId } },
+    { tabRoutes: structuredClone(publicTabRoutes) },
   ],
 };
 assert.throws(
@@ -710,6 +924,7 @@ const publicSummary = summarizePhase('public', {
   evidence: [...publicPayloadWithoutAsset.evidence, { asset: { ...publicAsset } }],
 });
 assert.deepEqual(publicSummary.asset, publicAsset);
+assert.deepEqual(publicSummary.tabRoutes, publicTabRoutes);
 assert.deepEqual(parseGatePayload('', JSON.stringify({ status: 'BLOCKED', phase: 'public' })), {
   status: 'BLOCKED',
   phase: 'public',

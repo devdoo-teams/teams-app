@@ -7,6 +7,7 @@ import {
   WorkItemForbiddenError,
   WorkItemIdempotencyConflictError,
   WorkItemNotFoundError,
+  presentWorkItem,
   WorkItemService,
   WorkItemValidationError,
 } from '../src/server/work-item-service.js';
@@ -52,7 +53,13 @@ const membership = {
 
 try {
   const store = new WorkItemStore(filePath);
-  const service = new WorkItemService(store, { membership });
+  const changes: Array<{ operation: string; mutationKey: string; itemId: string }> = [];
+  const service = new WorkItemService(store, {
+    membership,
+    onChanged: (change) => {
+      changes.push({ operation: change.operation, mutationKey: change.mutationKey, itemId: change.item.id });
+    },
+  });
   await service.initialize();
 
   const createInput = {
@@ -67,6 +74,7 @@ try {
 
   const created = await service.create(scopeA, createInput);
   assert.equal(created.status, 'todo', 'new work items start in the generic todo state');
+  assert.deepEqual(changes[0], { operation: 'create', mutationKey: 'create-parity-item', itemId: created.id }, 'durable mutations publish a change event for notifications');
   assert.equal(created.createdBy, scopeA.requesterId);
   assert.deepEqual(created.labels, ['parity', 'teams']);
   assert.deepEqual(created.codexJobLink, {
@@ -79,9 +87,15 @@ try {
     path: `/tabs/home/?workItemId=${encodeURIComponent(created.id)}`,
     href: `/tabs/home/?workItemId=${encodeURIComponent(created.id)}`,
   }, 'deep-link metadata is stable and controller-ready');
+  assert.equal(
+    presentWorkItem(created, scopeA).assignedToRequester,
+    false,
+    'the presentation contract reports that an unassigned item is not assigned to the requester',
+  );
 
   const duplicateCreate = await service.create(scopeA, createInput);
   assert.deepEqual(duplicateCreate, created, 'retrying create with the same mutation key returns the original item');
+  assert.equal(changes.filter((change) => change.mutationKey === 'create-parity-item').length, 2, 'replayed mutations publish the same idempotent change key');
   assert.equal(service.search(scopeA).length, 1, 'an idempotent create does not duplicate the item');
   await assert.rejects(
     () => service.create(scopeA, { ...createInput, title: 'different payload' }),
@@ -115,6 +129,16 @@ try {
     mutationKey: 'assign-to-user-b',
   });
   assert.equal(assigned.assigneeId, scopeB.requesterId);
+  assert.equal(
+    presentWorkItem(assigned, scopeB).assignedToRequester,
+    true,
+    'the presentation contract derives assigned-to-requester from the server scope',
+  );
+  assert.equal(
+    presentWorkItem(assigned, scopeA).assignedToRequester,
+    false,
+    'the presentation contract does not treat another requester as assigned',
+  );
   assert.deepEqual(service.assigned(scopeB).map((item) => item.id), [created.id]);
   assert.equal(service.get(scopeB, created.id)?.id, created.id, 'assignees gain scoped access');
 

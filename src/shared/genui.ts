@@ -47,6 +47,8 @@ export const GENUI_ACTIONS = [
   'feedback',
 ] as const;
 
+export const MAX_GENUI_CARD_ACTIONS = 6;
+
 /** Commands exposed as safe, payload-free quick actions on the help card. */
 export const GENUI_COMMANDS = ['help', 'weather', 'status', 'list', 'work', 'collaboration'] as const;
 
@@ -222,7 +224,7 @@ export const GenUiEnvelopeV1BaseSchema = z.object({
   summary: z.string().max(2_000).optional(),
   prompt: z.string().max(2_000).optional(),
   sections: z.array(GenUiSectionSchema).max(32).default([]),
-  actions: z.array(GenUiActionSchema).max(8).default([]),
+  actions: z.array(GenUiActionSchema).max(MAX_GENUI_CARD_ACTIONS).default([]),
   citations: z.array(GenUiCitationSchema).max(8).default([]),
   images: z.array(GenUiImageSchema).max(6).default([]),
   aiGenerated: z.boolean().default(false),
@@ -232,6 +234,14 @@ export const GenUiEnvelopeV1BaseSchema = z.object({
 }).strict();
 
 export const GenUiEnvelopeV1Schema = GenUiEnvelopeV1BaseSchema.superRefine((value, context) => {
+  const renderedActionCount = value.actions.length + (value.prompt ? 1 : 0);
+  if (renderedActionCount > MAX_GENUI_CARD_ACTIONS) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['actions'],
+      message: `prompt and actions must render at most ${MAX_GENUI_CARD_ACTIONS} Teams card actions`,
+    });
+  }
   if (!value.aiGenerated && value.citations.length > 0) {
     context.addIssue({
       code: z.ZodIssueCode.custom,

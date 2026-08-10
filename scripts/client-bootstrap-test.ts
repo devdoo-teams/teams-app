@@ -43,7 +43,7 @@ const hooks = registerHooks({
   },
 });
 
-const { createTeamsBootstrapController } = await import('../src/client/main.js');
+const { createTeamsBootstrapController, isExplicitBrowserPreview } = await import('../src/client/main.js');
 
 class FakeButton {
   private clickHandler: (() => void) | null = null;
@@ -108,6 +108,20 @@ async function testInitializationCanFinishAfterLegacyTwoSecondWindow(): Promise<
   );
   assert.equal(hostReadyCalls, 1, 'a slow but successful initialization marks the host ready once');
   assert.equal(renderCalls, 1, 'a slow but successful initialization mounts the app once');
+}
+
+async function testExplicitPreviewWorksInsideAnEmbeddedBrowserFrame(): Promise<void> {
+  const previousWindow = (globalThis as { window?: unknown }).window;
+  (globalThis as { window?: unknown }).window = {
+    parent: {},
+    location: { search: '?preview=1' },
+  };
+  try {
+    assert.equal(isExplicitBrowserPreview(), true, 'explicit preview mode works when the in-app browser embeds the page in an iframe');
+  } finally {
+    if (previousWindow === undefined) delete (globalThis as { window?: unknown }).window;
+    else (globalThis as { window?: unknown }).window = previousWindow;
+  }
 }
 
 async function testRetryResetsTeamsInitializationBeforeStartingAgain(): Promise<void> {
@@ -234,6 +248,7 @@ await testHungInitializationMountsRetryableRecoveryAndGuardsLateResult();
 await testImmediateInitializationRejectionMountsTeamsRecovery();
 await testInitializationCanFinishAfterLegacyTwoSecondWindow();
 await testRetryResetsTeamsInitializationBeforeStartingAgain();
+await testExplicitPreviewWorksInsideAnEmbeddedBrowserFrame();
 
 hooks.deregister();
 console.log('PASS: bounded Teams bootstrap recovery and retry guards');

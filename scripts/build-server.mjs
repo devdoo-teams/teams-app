@@ -16,10 +16,11 @@ await buildServerAtomically({
     platform: 'node',
     // Bundle the Teams SDK and its transitive runtime dependencies so the
     // production process does not pay the very large cold module-load cost on
-    // every start. Only explicitly optional provider packages stay external in
-    // the core build; externalizing every package makes Node resolve the Teams
-    // SDK's large export graph at startup and can hang before listen().
+    // every start. Prefer the SDK's ESM entry point: selecting its CommonJS
+    // main entry with the current esbuild release can hang indefinitely while
+    // resolving the dynamic export graph (0% CPU, no output).
     packages: 'bundle',
+    mainFields: ['module', 'main'],
     // These imports are only reached by explicitly enabled optional branches.
     // Leave them external in the core artifact so the deterministic Teams
     // server has no MCP/CopilotKit chunks to ship or initialize.

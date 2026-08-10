@@ -6,7 +6,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inflateSync } from 'node:zlib';
 
-import { runWithTimeout } from './release-gate.mjs';
+import { parseDotEnv, resolvePublicUrl, runWithTimeout } from './release-gate.mjs';
+import { validateMatrix } from './teams-ui-matrix-validate.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const surfaces = ['portal', 'installed', 'desktop', 'mobile'];
@@ -17,6 +18,7 @@ const MAX_RASTER_DIMENSION = 16_384;
 const MAX_RASTER_PIXELS = 50_000_000;
 const MAX_RASTER_DECODED_BYTES = 128 * 1024 * 1024;
 const MAX_SUPPORTING_ARTIFACT_BYTES = 4 * 1024 * 1024;
+const PUBLIC_ROUTE_PROBE_TIMEOUT_MS = 10_000;
 
 function hashBytes(bytes) {
   if (!(bytes instanceof Uint8Array)) throw new Error('artifact must be binary data');
@@ -440,6 +442,10 @@ function inspectCoverageMatrix(bytes, coverage, identity) {
   ) {
     throw new Error('coverage matrix release identity does not match the release package evidence');
   }
+  const validation = validateMatrix(matrix, { requirePass: true });
+  if (!validation.ok) {
+    throw new Error(`coverage matrix row validation failed: ${validation.errors.join('; ')}`);
+  }
   const expected = {
     totalRows: matrix.rows.length,
     passedRows: counts.PASS,
@@ -598,6 +604,7 @@ function hasCurrentPublicReady(state) {
 }
 
 export function deriveStatus(state) {
+  if (state.status === 'COMPLETE' || state.status === 'SUPERSEDED') return state.status;
   if (!hasReady(state.machine)) return 'INIT';
   if (!hasReady(state.package)) return 'MACHINE_READY';
   if (!hasCurrentPublicReady(state)) return 'PACKAGE_READY';
@@ -918,6 +925,139 @@ export function applyEvidence(state, evidence) {
   return next;
 }
 
+function routeResponseHeader(response, name) {
+  const fromHeaders = response?.headers?.get?.(name);
+  if (typeof fromHeaders === 'string') return fromHeaders;
+  const direct = response?.headers?.[name] ?? response?.headers?.[name.toLowerCase()];
+  return typeof direct === 'string' ? direct : undefined;
+}
+
+function routeUrl(value, label) {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${label} must be an absolute URL`);
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error(`${label} must use HTTP or HTTPS`);
+  }
+  return parsed;
+}
+
+function routeSearch(query) {
+  const value = String(query ?? '');
+  if (!value) return '';
+  return value.startsWith('?') ? value : `?${value}`;
+}
+
+function routeProbeError(message, code = 'ELOOPPHASE') {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+async function fetchPublicRoute(url, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return { response: await fetch(url, { redirect: 'manual', signal: controller.signal }) };
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw routeProbeError(`public tab route probe timed out after ${timeoutMs}ms`, 'ETIMEDOUT');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export function assertPublicTabRoutes(routes, label = 'public tab route probe') {
+  const redirect = routes?.redirect;
+  const canonical = routes?.canonical;
+  if (!redirect || !canonical) throw routeProbeError(`${label} must contain redirect and canonical route evidence`);
+
+  const redirectRequest = routeUrl(redirect.requestUrl, `${label} no-slash request URL`);
+  if (redirectRequest.pathname !== '/tabs/home') {
+    throw routeProbeError(`${label} no-slash request must use /tabs/home`);
+  }
+  if (redirect.status !== 308) {
+    throw routeProbeError(`${label} no-slash /tabs/home must return HTTP 308`);
+  }
+  const redirectLocation = routeUrl(redirect.location, `${label} redirect location`);
+  if (redirectLocation.pathname !== '/tabs/home/') {
+    throw routeProbeError(`${label} redirect location must use /tabs/home/`);
+  }
+  if (redirectLocation.search !== redirectRequest.search) {
+    throw routeProbeError(`${label} /tabs/home redirect must preserve its query string`);
+  }
+
+  const canonicalRequest = routeUrl(canonical.requestUrl, `${label} canonical request URL`);
+  if (canonicalRequest.pathname !== '/tabs/home/') {
+    throw routeProbeError(`${label} canonical request must use /tabs/home/`);
+  }
+  if (canonical.status !== 200) {
+    throw routeProbeError(`${label} canonical /tabs/home/ must return HTTP 200`);
+  }
+  const canonicalFinal = routeUrl(canonical.finalUrl, `${label} canonical final URL`);
+  if (canonicalFinal.pathname !== '/tabs/home/') {
+    throw routeProbeError(`${label} canonical final URL must use /tabs/home/`);
+  }
+  if (canonicalFinal.search !== canonicalRequest.search) {
+    throw routeProbeError(`${label} canonical /tabs/home/ must preserve its query string`);
+  }
+  return routes;
+}
+
+export async function probePublicTabRoutes({
+  baseUrl,
+  query = 'release-loop-probe=1',
+  timeoutMs = PUBLIC_ROUTE_PROBE_TIMEOUT_MS,
+  fetchResource = fetchPublicRoute,
+} = {}) {
+  if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new Error('public tab route probe timeout must be a positive integer');
+  }
+  const base = routeUrl(baseUrl, 'public route probe base URL');
+  const search = routeSearch(query);
+  const noSlashUrl = new URL(`/tabs/home${search}`, base.origin).href;
+  const canonicalUrl = new URL(`/tabs/home/${search}`, base.origin).href;
+
+  const redirectResult = await fetchResource(noSlashUrl, timeoutMs, { redirect: 'manual' });
+  const redirectResponse = redirectResult?.response ?? redirectResult;
+  const location = routeResponseHeader(redirectResponse, 'location');
+  if (!location) throw routeProbeError('public tab route probe did not return a redirect location for /tabs/home');
+  const redirectEvidence = {
+    requestUrl: noSlashUrl,
+    status: redirectResponse?.status,
+    location: new URL(location, redirectResponse?.url || noSlashUrl).href,
+  };
+  if (routeUrl(redirectEvidence.location, 'public tab redirect location').origin !== base.origin) {
+    throw routeProbeError('public tab redirect location must remain on the public tab origin');
+  }
+  if (redirectEvidence.status !== 308) {
+    return assertPublicTabRoutes({
+      redirect: redirectEvidence,
+      canonical: { requestUrl: canonicalUrl, status: undefined, finalUrl: canonicalUrl },
+    });
+  }
+
+  const canonicalResult = await fetchResource(canonicalUrl, timeoutMs, { redirect: 'manual' });
+  const canonicalResponse = canonicalResult?.response ?? canonicalResult;
+  const canonicalFinalUrl = canonicalResponse?.url || canonicalUrl;
+  if (routeUrl(canonicalFinalUrl, 'public tab canonical final URL').origin !== base.origin) {
+    throw routeProbeError('public tab canonical final URL must remain on the public tab origin');
+  }
+  return assertPublicTabRoutes({
+    redirect: redirectEvidence,
+    canonical: {
+      requestUrl: canonicalUrl,
+      status: canonicalResponse?.status,
+      finalUrl: canonicalFinalUrl,
+    },
+  });
+}
+
 function originAndPath(value, label) {
   let parsed;
   try {
@@ -961,6 +1101,16 @@ export function assertPublicProbeMatches(state, currentPublic) {
   }
   if (originAndPath(currentUrl, 'current tab URL') !== expected) {
     throw new Error('current public tab URL does not match the packaged host and path');
+  }
+  const recordedRoutes = assertPublicTabRoutes(state.public?.tabRoutes, 'recorded public tab route probe');
+  const currentRoutes = assertPublicTabRoutes(currentPublic?.tabRoutes, 'current public tab route probe');
+  const packagedOrigin = routeUrl(packagedUrl, 'packaged tab URL').origin;
+  for (const [label, routes] of [['recorded', recordedRoutes], ['current', currentRoutes]]) {
+    for (const candidate of [routes.redirect.requestUrl, routes.redirect.location, routes.canonical.requestUrl, routes.canonical.finalUrl]) {
+      if (routeUrl(candidate, `${label} public tab route URL`).origin !== packagedOrigin) {
+        throw new Error(`${label} public tab route probe does not match the packaged host`);
+      }
+    }
   }
   const recordedAsset = assertPublicAssetIdentity(state.public?.asset, 'recorded');
   const currentAsset = assertPublicAssetIdentity(currentPublic?.asset, 'current');
@@ -1097,15 +1247,20 @@ export function summarizePhase(phase, payload) {
   const health = payload.evidence?.find((entry) => entry.health)?.health;
   const tab = payload.evidence?.find((entry) => entry.tab)?.tab;
   const asset = payload.evidence?.find((entry) => entry.asset)?.asset;
+  const tabRoutes = payload.evidence?.find((entry) => entry.tabRoutes)?.tabRoutes ?? payload.tabRoutes;
   const packageEntry = payload.evidence?.find((entry) => typeof entry.package === 'string');
-  if (!health || !tab || !asset || !packageEntry) throw new Error('public gate returned incomplete public asset evidence');
+  if (!health || !tab || !asset || !tabRoutes || !packageEntry) {
+    throw new Error('public gate returned incomplete public asset or route evidence');
+  }
   assertPublicAssetIdentity(asset, 'public gate');
+  assertPublicTabRoutes(tabRoutes, 'public gate');
   return {
     status: 'READY',
     completedAt,
     version: health.version,
     health,
     tab,
+    tabRoutes,
     asset,
     packagePath: packageEntry.package,
     packageSha256: packageEntry.sha256,
@@ -1128,11 +1283,14 @@ export function parseGatePayload(stdout, stderr) {
   return JSON.parse(source);
 }
 
-async function runGatePhase(phase, { url } = {}) {
+export async function runGatePhase(
+  phase,
+  { url, runGate = runWithTimeout, probeRoutes = probePublicTabRoutes } = {},
+) {
   const gatePath = path.join(root, 'scripts', 'release-gate.mjs');
   const args = [gatePath, gatePhaseForLoop(phase)];
   if (url) args.push('--url', url);
-  const result = await runWithTimeout(process.execPath, args, {
+  const result = await runGate(process.execPath, args, {
     cwd: root,
     timeoutMs: phaseTimeouts[phase],
     maxOutputChars: 20_000,
@@ -1152,6 +1310,27 @@ async function runGatePhase(phase, { url } = {}) {
     error.code = result.code === null ? 'ETIMEDOUT' : 'ELOOPPHASE';
     error.output = output.slice(-4_000);
     throw error;
+  }
+  if (phase === 'public') {
+    let runtimeValues = {};
+    try {
+      runtimeValues = parseDotEnv(await fs.readFile(path.join(root, '.env.runtime'), 'utf8'));
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    const publicUrl = url || resolvePublicUrl({ ...runtimeValues, ...process.env });
+    if (!publicUrl) throw routeProbeError('public route probe requires --url, TEAMS_PUBLIC_URL, PUBLIC_BASE_URL, or TAB_DOMAIN');
+    let tabRoutes;
+    try {
+      tabRoutes = await probeRoutes({
+        baseUrl: publicUrl,
+        timeoutMs: PUBLIC_ROUTE_PROBE_TIMEOUT_MS,
+      });
+    } catch (error) {
+      if (!error?.code) error.code = 'ELOOPPHASE';
+      throw error;
+    }
+    payload.evidence = [...(Array.isArray(payload.evidence) ? payload.evidence : []), { tabRoutes }];
   }
   return payload;
 }

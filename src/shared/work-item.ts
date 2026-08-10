@@ -73,6 +73,11 @@ export type WorkItem = {
   activitySequence?: number;
 };
 
+export type WorkItemPresentation = WorkItem & {
+  watching: boolean;
+  assignedToRequester: boolean;
+};
+
 export type WorkItemCreateInput = {
   mutationKey: string;
   title: string;

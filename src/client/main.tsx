@@ -125,8 +125,8 @@ export function createTeamsBootstrapController(options: BootstrapOptions): { sta
   return { start };
 }
 
-function isExplicitBrowserPreview(): boolean {
-  if (typeof window === 'undefined' || window.parent !== window) return false;
+export function isExplicitBrowserPreview(): boolean {
+  if (typeof window === 'undefined') return false;
   const preview = new URLSearchParams(window.location.search).get('preview');
   return preview === '1' || preview === 'true';
 }

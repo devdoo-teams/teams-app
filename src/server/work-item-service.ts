@@ -15,6 +15,7 @@ import {
   type WorkItemMembershipContract,
   type WorkItemMembershipRequest,
   type WorkItemPriority,
+  type WorkItemPresentation,
   type WorkItemQuery,
   type WorkItemScope,
   type WorkItemStatus,
@@ -68,11 +69,31 @@ export type WorkItemServiceOptions = {
   clock?: () => Date;
   /** Trusted server-side membership lookup used before assigning another user. */
   membership?: WorkItemMembershipContract;
+  /** Called after a durable mutation so integrations can publish a scoped update. */
+  onChanged?: (change: WorkItemChange) => Promise<void> | void;
 };
+
+export type WorkItemChange = {
+  scope: WorkItemScope;
+  operation: WorkItemMutationOperation;
+  mutationKey: string;
+  item: WorkItem;
+};
+
+export type AssignedWorkItemSummary = { assigned: number; dueToday: number; overdue: number };
+
+export function presentWorkItem(item: WorkItem, scope: WorkItemScope): WorkItemPresentation {
+  return {
+    ...item,
+    watching: item.watcherIds.includes(scope.requesterId),
+    assignedToRequester: item.assigneeId === scope.requesterId,
+  };
+}
 
 export class WorkItemService {
   private readonly clock: () => Date;
   private readonly membership: WorkItemMembershipContract;
+  private readonly onChanged?: WorkItemServiceOptions['onChanged'];
 
   constructor(
     private readonly store: WorkItemStore,
@@ -82,6 +103,7 @@ export class WorkItemService {
     this.membership = options.membership ?? {
       isMember: (request) => request.userId === request.requesterId,
     };
+    this.onChanged = options.onChanged;
   }
 
   async initialize(): Promise<void> {
@@ -111,6 +133,23 @@ export class WorkItemService {
       assigneeId: normalizedScope.requesterId,
       limit,
     });
+  }
+
+  assignedSummary(scope: WorkItemScope, today: string): AssignedWorkItemSummary {
+    const normalizedScope = normalizeScope(scope);
+    const normalizedToday = normalizeDate(today, 'today');
+    const assigned = this.store.list(normalizedScope)
+      .filter((item) => item.assigneeId === normalizedScope.requesterId);
+    return {
+      assigned: assigned.length,
+      dueToday: assigned.filter((item) => item.dueDate === normalizedToday).length,
+      overdue: assigned.filter((item) =>
+        item.dueDate !== undefined
+        && item.dueDate < normalizedToday
+        && item.status !== 'done'
+        && item.status !== 'cancelled',
+      ).length,
+    };
   }
 
   calendar(scope: WorkItemScope, query: WorkItemCalendarQuery = {}): WorkItem[] {
@@ -367,7 +406,7 @@ export class WorkItemService {
     action: Parameters<WorkItemStore['runMutation']>[4],
     replayCheck: Parameters<WorkItemStore['runMutation']>[5],
   ): Promise<WorkItem> {
-    return this.store.runMutation(
+    const item = await this.store.runMutation(
       scope,
       mutationKey,
       operation,
@@ -375,6 +414,8 @@ export class WorkItemService {
       action,
       replayCheck,
     );
+    await this.onChanged?.({ scope, operation, mutationKey, item });
+    return item;
   }
 
   private timestamp(): string {

@@ -4,6 +4,12 @@ import { fileURLToPath } from 'node:url';
 
 export const MATRIX_SCHEMA_VERSION = 1;
 
+// PASS/FAIL rows use this explicit paired schema for accessibility evidence:
+// { schema: ACCESSIBILITY_EVIDENCE_SCHEMA, before: Evidence, after: Evidence }.
+// BLOCKED/N/A rows keep the legacy single-slot accessibilityEvidence shape so
+// the current matrix remains structurally compatible without treating it as proof.
+export const ACCESSIBILITY_EVIDENCE_SCHEMA = 'paired-before-after-v1';
+
 export const REQUIRED_COVERAGE_KEYS = Object.freeze([
   'chat.commands.help',
   'chat.commands.mode',
@@ -180,6 +186,7 @@ const EVIDENCE_STATES = new Set(['captured', 'not-captured', 'not-applicable']);
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const SEMVER = /^\d+\.\d+\.\d+$/;
 const SHA256 = /^[a-f0-9]{64}$/i;
+const RELEASE_IDENTITY_KEYS = Object.freeze(['appVersion', 'sourceCommit', 'packageSha256', 'installedVersion']);
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -195,6 +202,18 @@ function hasOwn(value, key) {
 
 function push(errors, rowId, message) {
   errors.push(rowId ? `${rowId}: ${message}` : message);
+}
+
+function validateScopedReason(reason, name, rowId, resultStatus, errors) {
+  if (!isNonBlank(reason)) return;
+  const normalizedReason = reason.toUpperCase();
+  const statusMarker = resultStatus === 'N/A' ? 'N/A' : 'BLOCKED';
+  if (!normalizedReason.includes(statusMarker)) {
+    push(errors, rowId, `${name}.reason must explicitly include ${statusMarker} for ${resultStatus}`);
+  }
+  if (name !== 'result' && !normalizedReason.includes(name.toUpperCase())) {
+    push(errors, rowId, `${name}.reason must be scoped to ${name}`);
+  }
 }
 
 function validateReleaseIdentity(identity, errors, label, { requirePackageSha = false } = {}) {
@@ -215,7 +234,25 @@ function validateReleaseIdentity(identity, errors, label, { requirePackageSha = 
   }
 }
 
-function validateEvidence(evidence, name, rowId, resultStatus, matrixIdentity, errors) {
+function resolveEvidencePath(evidencePath, evidenceBaseDir) {
+  return path.isAbsolute(evidencePath) ? path.normalize(evidencePath) : path.resolve(evidenceBaseDir, evidencePath);
+}
+
+function validateExistingEvidencePath(evidence, name, rowId, errors, evidenceBaseDir) {
+  if (isNonBlank(evidence.path) && !fs.existsSync(resolveEvidencePath(evidence.path, evidenceBaseDir))) {
+    push(errors, rowId, `${name}.path must point to an existing evidence path`);
+  }
+}
+
+function validateEvidence(
+  evidence,
+  name,
+  rowId,
+  resultStatus,
+  matrixIdentity,
+  errors,
+  { evidenceBaseDir = process.cwd() } = {},
+) {
   if (!isObject(evidence)) {
     push(errors, rowId, `${name} must be an object`);
     return;
@@ -232,6 +269,9 @@ function validateEvidence(evidence, name, rowId, resultStatus, matrixIdentity, e
     push(errors, rowId, `${name}.capturedAt must be an ISO UTC timestamp or null`);
   }
   if (!isNonBlank(evidence.reason)) push(errors, rowId, `${name}.reason is required`);
+  if (resultStatus === 'BLOCKED' || resultStatus === 'N/A') {
+    validateScopedReason(evidence.reason, name, rowId, resultStatus, errors);
+  }
   validateReleaseIdentity(evidence.releaseIdentity, errors, `${rowId}.${name}.releaseIdentity`);
 
   const shouldBeFresh = resultStatus === 'PASS' || resultStatus === 'FAIL';
@@ -245,8 +285,9 @@ function validateEvidence(evidence, name, rowId, resultStatus, matrixIdentity, e
     if (!isObject(evidence.releaseIdentity) || evidence.releaseIdentity.packageSha256 === null) {
       push(errors, rowId, `${name} must identify a package SHA for ${resultStatus}`);
     }
+    validateExistingEvidencePath(evidence, name, rowId, errors, evidenceBaseDir);
     if (isObject(evidence.releaseIdentity) && isObject(matrixIdentity)) {
-      for (const key of ['appVersion', 'sourceCommit', 'packageSha256']) {
+      for (const key of RELEASE_IDENTITY_KEYS) {
         if (evidence.releaseIdentity[key] !== matrixIdentity[key]) {
           push(errors, rowId, `${name}.releaseIdentity.${key} must match matrix releaseIdentity`);
         }
@@ -258,6 +299,66 @@ function validateEvidence(evidence, name, rowId, resultStatus, matrixIdentity, e
     if (evidence.state !== expectedState) push(errors, rowId, `${name}.state must be ${expectedState} for ${resultStatus}`);
     if (evidence.path !== null) push(errors, rowId, `${name}.path must be null until evidence is captured`);
     if (evidence.capturedAt !== null) push(errors, rowId, `${name}.capturedAt must be null until evidence is captured`);
+  }
+}
+
+function validateAccessibilityEvidence(
+  evidence,
+  rowId,
+  resultStatus,
+  matrixIdentity,
+  errors,
+  options,
+) {
+  const shouldBeFresh = resultStatus === 'PASS' || resultStatus === 'FAIL';
+  if (!shouldBeFresh) {
+    validateEvidence(evidence, 'accessibilityEvidence', rowId, resultStatus, matrixIdentity, errors, options);
+    return;
+  }
+
+  if (!isObject(evidence)) {
+    push(errors, rowId, 'accessibilityEvidence must be an object');
+    return;
+  }
+  if (evidence.schema !== ACCESSIBILITY_EVIDENCE_SCHEMA) {
+    push(errors, rowId, `accessibilityEvidence.schema must be ${ACCESSIBILITY_EVIDENCE_SCHEMA} for ${resultStatus}`);
+  }
+
+  for (const phase of ['before', 'after']) {
+    if (!hasOwn(evidence, phase)) {
+      push(errors, rowId, `accessibilityEvidence.${phase} is required for ${resultStatus}`);
+      continue;
+    }
+    validateEvidence(
+      evidence[phase],
+      `accessibilityEvidence.${phase}`,
+      rowId,
+      resultStatus,
+      matrixIdentity,
+      errors,
+      options,
+    );
+  }
+
+  const beforePath = isObject(evidence.before) ? evidence.before.path : null;
+  const afterPath = isObject(evidence.after) ? evidence.after.path : null;
+  if (isNonBlank(beforePath) && isNonBlank(afterPath)) {
+    const resolvedBeforePath = resolveEvidencePath(beforePath, options?.evidenceBaseDir ?? process.cwd());
+    const resolvedAfterPath = resolveEvidencePath(afterPath, options?.evidenceBaseDir ?? process.cwd());
+    if (resolvedBeforePath === resolvedAfterPath) {
+      push(errors, rowId, 'accessibilityEvidence.before and accessibilityEvidence.after must use distinct paths');
+    }
+  }
+}
+
+function validateDistinctEvidencePaths(beforeEvidence, afterEvidence, beforeName, afterName, rowId, errors, evidenceBaseDir) {
+  const beforePath = isObject(beforeEvidence) ? beforeEvidence.path : null;
+  const afterPath = isObject(afterEvidence) ? afterEvidence.path : null;
+  if (!isNonBlank(beforePath) || !isNonBlank(afterPath)) return;
+  const resolvedBeforePath = resolveEvidencePath(beforePath, evidenceBaseDir);
+  const resolvedAfterPath = resolveEvidencePath(afterPath, evidenceBaseDir);
+  if (resolvedBeforePath === resolvedAfterPath) {
+    push(errors, rowId, `${beforeName} and ${afterName} must use distinct paths`);
   }
 }
 
@@ -312,13 +413,16 @@ function validateResult(result, rowId, errors) {
   }
   if (!RESULT_STATUSES.has(result.status)) push(errors, rowId, 'result.status must be PASS, FAIL, BLOCKED, or N/A');
   if (!isNonBlank(result.reason)) push(errors, rowId, 'result.reason is required');
+  if (result.status === 'BLOCKED' || result.status === 'N/A') {
+    validateScopedReason(result.reason, 'result', rowId, result.status, errors);
+  }
   for (const key of ['visibleControl', 'serverAction', 'nextAction']) {
     if (!isNonBlank(result[key])) push(errors, rowId, `result.${key} is required`);
   }
   return result.status;
 }
 
-function validateRow(row, index, matrixIdentity, errors, seenIds, foundCoverage) {
+function validateRow(row, index, matrixIdentity, errors, seenIds, foundCoverage, options) {
   const rowId = isObject(row) && isNonBlank(row.id) ? row.id : `row[${index}]`;
   if (!isObject(row)) {
     push(errors, rowId, 'row must be an object');
@@ -346,10 +450,21 @@ function validateRow(row, index, matrixIdentity, errors, seenIds, foundCoverage)
     for (const [name, evidence] of [
       ['screenshotBefore', row.screenshotBefore],
       ['screenshotAfter', row.screenshotAfter],
-      ['accessibilityEvidence', row.accessibilityEvidence],
       ['runtimeEvidence', row.runtimeEvidence],
     ]) {
-      validateEvidence(evidence, name, rowId, status, matrixIdentity, errors);
+      validateEvidence(evidence, name, rowId, status, matrixIdentity, errors, options);
+    }
+    validateAccessibilityEvidence(row.accessibilityEvidence, rowId, status, matrixIdentity, errors, options);
+    if (status === 'PASS' || status === 'FAIL') {
+      validateDistinctEvidencePaths(
+        row.screenshotBefore,
+        row.screenshotAfter,
+        'screenshotBefore',
+        'screenshotAfter',
+        rowId,
+        errors,
+        options.evidenceBaseDir,
+      );
     }
   }
 
@@ -375,7 +490,7 @@ export function extractMatrixData(markdown) {
   }
 }
 
-export function validateMatrix(matrix, { requirePass = false } = {}) {
+export function validateMatrix(matrix, { requirePass = false, evidenceBaseDir = process.cwd() } = {}) {
   const errors = [];
   const seenIds = new Set();
   const foundCoverage = new Set();
@@ -396,7 +511,7 @@ export function validateMatrix(matrix, { requirePass = false } = {}) {
 
   const rows = Array.isArray(matrix.rows) ? matrix.rows : [];
   for (const [index, row] of rows.entries()) {
-    validateRow(row, index, matrix.releaseIdentity, errors, seenIds, foundCoverage);
+    validateRow(row, index, matrix.releaseIdentity, errors, seenIds, foundCoverage, { evidenceBaseDir });
   }
 
   const missingCoverage = REQUIRED_COVERAGE_KEYS.filter((key) => !foundCoverage.has(key));
@@ -457,7 +572,7 @@ function runCli() {
     return;
   }
 
-  const result = validateMatrixDocument(markdown, { requirePass });
+  const result = validateMatrixDocument(markdown, { requirePass, evidenceBaseDir: path.dirname(matrixPath) });
   if (!result.ok) {
     console.error(`Teams UI matrix invalid: ${formatSummary(result.summary)}`);
     for (const error of result.errors) console.error(`- ${error}`);

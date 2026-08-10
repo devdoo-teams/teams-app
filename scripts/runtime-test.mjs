@@ -15,6 +15,7 @@ const runtimeEntry = path.join(runtimeDistRoot, 'server/index.js');
 const execFileAsync = promisify(execFile);
 const LOCAL_ACCESS_TOKEN_HEADER = 'x-teams-local-access-token';
 const localAccessTokens = new Map();
+const optionalProviderTestsEnabled = process.env.TEAMS_OPTIONAL_RUNTIME === 'true';
 const manifestVersion = JSON.parse(await fs.readFile(path.join(root, 'appPackage/manifest.json'), 'utf8')).version;
 const runtimeOutputReaders = new Map();
 
@@ -321,6 +322,7 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
       BOT_DOMAIN: '',
       DEV_TUNNEL_ID: '',
       MCP_PUBLIC_ENABLED: '',
+      TEAMS_OPTIONAL_RUNTIME: '',
       TEAMS_OPERATOR_REQUESTER_ALLOWLIST: [
         'local-tenant/local-user',
         'runtime-tenant/runtime-user',
@@ -386,6 +388,7 @@ async function expectStartupFailure(label, extraEnv, expectedMessage) {
       DEV_TUNNEL_ID: '',
       TEAMS_LOCAL_ACCESS_TOKEN: '',
       MCP_PUBLIC_ENABLED: '',
+      TEAMS_OPTIONAL_RUNTIME: '',
       ...extraEnv,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -444,6 +447,7 @@ async function expectStoreLeaseConflict(dataFile, jobDataFile) {
       BOT_DOMAIN: '',
       DEV_TUNNEL_ID: '',
       MCP_PUBLIC_ENABLED: '',
+      TEAMS_OPTIONAL_RUNTIME: '',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -689,8 +693,13 @@ async function stopServer(child) {
   });
 }
 
-async function runLocalFlow(dataFile, jobDataFile) {
-  const server = await startServer({ production: false, dataFile, jobDataFile });
+async function runLocalFlow(dataFile, jobDataFile, { optionalProviders = false } = {}) {
+  const server = await startServer({
+    production: false,
+    dataFile,
+    jobDataFile,
+    extraEnv: { TEAMS_OPTIONAL_RUNTIME: optionalProviders ? 'true' : '' },
+  });
 
   try {
     const health = await request(server.baseUrl, '/api/health');
@@ -702,7 +711,14 @@ async function runLocalFlow(dataFile, jobDataFile) {
     assert(health.body.version === manifestVersion, 'health version comes from the Teams manifest');
     assert(!('agent' in health.body) && !('agentWorkspace' in health.body), 'health does not expose agent binary or workspace paths');
     assert(health.body.storage === 'file-json-single-process', 'local runtime reports single-process file storage');
-    assert(health.body.copilotKit === 'enabled', 'CopilotKit runtime is enabled');
+    assert(
+      health.body.copilotKit === (optionalProviders ? 'enabled' : 'disabled'),
+      `CopilotKit runtime is ${optionalProviders ? 'enabled only for the optional provider run' : 'disabled in the Core runtime'}`,
+    );
+    assert(
+      health.body.copilotKitRuntime === (optionalProviders ? '/api/copilotkit' : 'disabled'),
+      'CopilotKit route availability matches the explicit optional provider condition',
+    );
     assert(health.body.genAI === 'deterministic-test', 'local runtime reports explicit deterministic test mode');
     assert(health.body.genAIProvider?.provider === 'openai', 'health identifies the optional OpenAI provider without exposing credentials');
     assert(health.body.genAIProvider?.configured === false, 'no-key local health reports the OpenAI provider as unavailable');
@@ -713,7 +729,14 @@ async function runLocalFlow(dataFile, jobDataFile) {
     assert(health.body.genUiMode === 'hybrid', 'health reports the hybrid GenUI mode');
     assert(health.body.genUi === 'adaptive-cards', 'health reports Adaptive Cards as the GenUI renderer');
     assert(health.body.channelsShadow?.enabled === false, 'hybrid health disables Channels shadow diagnostics');
-    assert(health.body.mcp === '/mcp' && health.body.mcpEnabled === true, 'local health exposes only the explicitly gated local MCP route');
+    assert(
+      optionalProviders
+        ? health.body.mcp === '/mcp' && health.body.mcpEnabled === true
+        : health.body.mcp === 'disabled' && health.body.mcpEnabled === false,
+      optionalProviders
+        ? 'optional provider run exposes the explicitly gated local MCP route'
+        : 'Core runtime keeps the optional MCP route disabled',
+    );
     const healthSerialized = JSON.stringify(health.body);
     assert(!healthSerialized.includes(server.localAccessToken), 'local access token is absent from health output');
     assert(!healthSerialized.includes('OPENAI_API_KEY') && !healthSerialized.includes('LOCAL_MODEL_BASE_URL'), 'health omits provider secrets and endpoint URLs');
@@ -743,7 +766,10 @@ async function runLocalFlow(dataFile, jobDataFile) {
     assert(responseModeActivity.response.status === 200, 'response-mode Bot command returns 200');
     assertAdaptiveCardActivity(responseModeActivity.body.activities?.[0], 'response-mode Bot command');
 
-    const staticTab = await rawRequest(server.baseUrl, '/tabs/home', {}, null);
+    const staticTabRedirect = await rawRequest(server.baseUrl, '/tabs/home?preview=1', {}, null);
+    assert(staticTabRedirect.response.statusCode === 308, 'the no-slash tab entry redirects to the canonical trailing-slash route');
+    assert(staticTabRedirect.response.headers.location === '/tabs/home/?preview=1', 'the tab redirect preserves preview query parameters');
+    const staticTab = await rawRequest(server.baseUrl, '/tabs/home/?preview=1', {}, null);
     assert(staticTab.response.statusCode === 200, 'static tab entry loads without the local access token');
     assert(!String(staticTab.body).includes(server.localAccessToken), 'static tab entry does not contain the local access token');
 
@@ -761,6 +787,7 @@ async function runLocalFlow(dataFile, jobDataFile) {
     const rewrittenLocalHost = await rawRequest(server.baseUrl, '/api/health', { host: '127.0.0.1' }, null);
     assert(rewrittenLocalHost.response.statusCode === 401, 'a rewritten local Host without a token is still denied');
 
+    if (optionalProviders) {
     const initialize = await mcpRequest(server.baseUrl, {
       jsonrpc: '2.0',
       id: 1,
@@ -872,6 +899,12 @@ async function runLocalFlow(dataFile, jobDataFile) {
       body: JSON.stringify({ conversationId: 'runtime-rest-approval-race' }),
     });
     assert(staleRestApproval.response.status === 409, 'REST returns 409 for a stale approval');
+    } else {
+      const disabledMcp = await request(server.baseUrl, '/mcp');
+      assert(disabledMcp.response.status === 404, 'Core runtime does not mount the optional MCP route');
+      const disabledCopilotKit = await request(server.baseUrl, '/api/copilotkit/info');
+      assert(disabledCopilotKit.response.status === 404, 'Core runtime does not mount the optional CopilotKit route');
+    }
 
     const initial = await request(server.baseUrl, '/api/items');
     assert(initial.response.status === 200, 'local item list returns 200');
@@ -1033,10 +1066,26 @@ async function runLocalFlow(dataFile, jobDataFile) {
     assert(carousel.response.status === 200, 'Bot carousel command completes locally');
     assert(carousel.body.messages.length === 1, 'Bot carousel command sends one explanatory text record');
     const carouselActivity = carousel.body.activities?.[0];
+    assert(!Object.prototype.hasOwnProperty.call(carouselActivity ?? {}, 'text'), 'carousel activity omits duplicate top-level text');
     assert(carouselActivity?.attachmentLayout === 'carousel', 'Bot carousel command uses the Teams carousel attachment layout');
     assert(carouselActivity?.attachments?.length === 3, 'Bot carousel command returns three Adaptive Card attachments');
     assert(carouselActivity.attachments.every((attachment) => attachment.content?.version === '1.2'), 'carousel attachments use Adaptive Card 1.2');
     assert(carouselActivity.attachments.every((attachment) => attachment.content?.body?.some((element) => element.type === 'ImageSet')), 'carousel cards include inline ImageSet content');
+    const carouselImages = carouselActivity.attachments.flatMap((attachment) => {
+      const imageSet = attachment.content?.body?.find((element) => element.type === 'ImageSet');
+      return Array.isArray(imageSet?.images) ? imageSet.images : [];
+    });
+    assert(carouselImages.length === 4, 'carousel runtime includes every configured inline image');
+    assert(carouselImages.every((image) => (
+      typeof image.url === 'string'
+      && image.url.startsWith('https://')
+      && typeof image.altText === 'string'
+      && image.altText.length > 0
+      && image.size === 'Medium'
+    )), 'carousel runtime images keep HTTPS, altText, and Medium size constraints');
+    assert(carouselActivity.attachments.every((attachment) => (
+      (attachment.content?.actions?.length ?? 0) <= 6
+    )), 'carousel cards stay within the Teams six-action limit');
 
     const status = await request(server.baseUrl, '/api/messages', {
       method: 'POST',
@@ -1389,7 +1438,10 @@ async function runChannelsShadowFlow(dataFile, jobDataFile) {
     production: false,
     dataFile,
     jobDataFile,
-    extraEnv: { TEAMS_GENUI_MODE: 'channels-shadow' },
+    extraEnv: {
+      TEAMS_GENUI_MODE: 'channels-shadow',
+      TEAMS_OPTIONAL_RUNTIME: 'true',
+    },
   });
 
   try {
@@ -1753,13 +1805,19 @@ try {
   console.log('Runtime verification: local-auth and public-MCP startup gates');
   await runStartupGateFlow();
   console.log('Runtime verification: local authenticated-bypass flow');
-  await runLocalFlow(localDataFile, localJobDataFile);
+  await runLocalFlow(localDataFile, localJobDataFile, {
+    optionalProviders: optionalProviderTestsEnabled,
+  });
   console.log('Runtime verification: legacy text fallback flow');
   await runLegacyCarouselFlow(legacyDataFile, legacyJobDataFile);
   console.log('Runtime verification: file store process lease flow');
   await runStoreLeaseFlow(leaseDataFile, leaseJobDataFile);
-  console.log('Runtime verification: Channels shadow comparison flow');
-  await runChannelsShadowFlow(channelsShadowDataFile, channelsShadowJobDataFile);
+  if (optionalProviderTestsEnabled) {
+    console.log('Runtime verification: optional Channels shadow comparison flow');
+    await runChannelsShadowFlow(channelsShadowDataFile, channelsShadowJobDataFile);
+  } else {
+    console.log('Runtime verification: optional provider flows skipped for the Core runtime');
+  }
   console.log('Runtime verification: Teams SDK Activity flow');
   await runTeamsSdkFlow(sdkDataFile, sdkJobDataFile);
   console.log('Runtime verification: approved Git commit flow');

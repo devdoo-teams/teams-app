@@ -23,10 +23,22 @@ registerHooks({
   },
 });
 
-const [{ mergeDeepLinkedWorkItem, parseWorkItemDeepLinkId }, { parseCollaborationDeepLink }] = await Promise.all([
+const [{ mergeDeepLinkedWorkItem, parseWorkItemDeepLinkId }, collaborationModule] = await Promise.all([
   import('../src/client/WorkItemPanel.js'),
   import('../src/client/CollaborationPanel.js'),
 ]);
+const { parseCollaborationDeepLink } = collaborationModule;
+const collaborationExports = collaborationModule as Record<string, unknown>;
+assert.equal(
+  typeof collaborationExports.parseCollaborationDeepLinkState,
+  'function',
+  'partial collaboration links expose an explicit invalid state instead of silently using demo data',
+);
+assert.equal(
+  typeof collaborationExports.collaborationDeepLinkNotice,
+  'function',
+  'a valid deep-link target missing from Activity data produces a visible notice',
+);
 
 assert.equal(parseWorkItemDeepLinkId('?workItemId=work-123'), 'work-123');
 assert.equal(parseWorkItemDeepLinkId('?workItemId=%20work-123%20'), 'work-123');
@@ -71,5 +83,47 @@ assert.deepEqual(parseCollaborationDeepLink('?collaborationType=work-item&collab
 assert.equal(parseCollaborationDeepLink('?collaborationType=unknown&collaborationId=x'), null);
 assert.equal(parseCollaborationDeepLink('?collaborationType=project'), null);
 assert.equal(parseCollaborationDeepLink(undefined), null);
+
+if (typeof collaborationExports.parseCollaborationDeepLinkState === 'function') {
+  const parseCollaborationDeepLinkState = collaborationExports.parseCollaborationDeepLinkState as (search?: string) => unknown;
+  assert.deepEqual(parseCollaborationDeepLinkState('?collaborationType=goal&collaborationId=goal-7'), {
+    kind: 'valid',
+    targetType: 'goal',
+    targetId: 'goal-7',
+  });
+  assert.deepEqual(parseCollaborationDeepLinkState('?collaborationType=project'), {
+    kind: 'invalid',
+    message: '협업 딥링크에 대상 유형과 대상 ID가 모두 필요합니다.',
+  });
+  assert.deepEqual(parseCollaborationDeepLinkState('?collaborationId=project-9'), {
+    kind: 'invalid',
+    message: '협업 딥링크에 대상 유형과 대상 ID가 모두 필요합니다.',
+  });
+  assert.deepEqual(parseCollaborationDeepLinkState('?collaborationType=unknown&collaborationId=x'), {
+    kind: 'invalid',
+    message: '지원하지 않는 협업 대상 유형입니다.',
+  });
+  assert.deepEqual(parseCollaborationDeepLinkState('?view=activity'), { kind: 'none' });
+
+  if (typeof collaborationExports.collaborationDeepLinkNotice === 'function') {
+    const collaborationDeepLinkNotice = collaborationExports.collaborationDeepLinkNotice as (
+      state: unknown,
+      data: { subscriptions: unknown[]; notifications: unknown[]; digest: { entries: unknown[] } },
+    ) => string;
+    const valid = parseCollaborationDeepLinkState('?collaborationType=goal&collaborationId=goal-7');
+    assert.equal(
+      collaborationDeepLinkNotice(valid, { subscriptions: [], notifications: [], digest: { entries: [] } }),
+      '요청한 협업 대상을 현재 활동 데이터에서 찾을 수 없습니다.',
+    );
+    assert.equal(
+      collaborationDeepLinkNotice(valid, {
+        subscriptions: [{ target: { type: 'goal', id: 'goal-7' } }],
+        notifications: [],
+        digest: { entries: [] },
+      }),
+      '',
+    );
+  }
+}
 
 console.log('Client deep-link parsing tests passed');
