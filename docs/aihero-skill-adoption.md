@@ -1,8 +1,12 @@
 # AIHero Skills 적용 판정
 
-작성일: 2026-08-10
+작성일: 2026-08-11
 
 이 문서는 [Matt Pocock의 공식 skills 저장소](https://github.com/mattpocock/skills)를 현재 TeamsApp 워크플로우에 대조한 결과다. 전체 스킬을 일괄 설치하지 않고, 현재의 Teams 네이티브 카드·Jira MP·기존 인앱 브라우저 탭·스크린샷 증거·공개 배포 게이트를 보존하는 범위에서 적용한다.
+
+## 카탈로그 기준일과 명칭
+
+AIHero의 현재 카탈로그 레슨 페이지는 25개 항목을 열거하며, `/wizard`와 `/to-questionnaire`도 별도 문서가 아니라 카탈로그 항목으로 포함한다. 따라서 “23개 + 2개 문서형”이라는 이전 집계는 현재 공식 카탈로그와 일치하지 않는다. 또한 v1.1에서 `/writing-great-skills`가 `/writing-for-agents`로 이름이 바뀌었으므로 새 문서와 설치 판정에는 후자를 사용한다. 이 문서의 평가는 2026-08-11에 확인한 [공식 카탈로그](https://www.aihero.dev/skills-catalog), [변경 이력](https://www.aihero.dev/skills/skills-changelog-v1-announcement), [writing-for-agents](https://www.aihero.dev/skills-writing-for-agents)를 기준으로 한다.
 
 ## 즉시 적용
 
@@ -12,7 +16,7 @@
 | `tdd` | Activity 알림, collaboration deep-link, Today 요약, GenUI 액션 제한 | 실패 회귀 테스트를 먼저 만들고 수정 후 같은 테스트가 통과한다. loading/empty/error/retry/permission/auth-expiry/duplicate 분기를 테스트 목록에 넣는다. |
 | `code-review` | 커밋 직전 및 패키지 생성 직전 | 요구사항·보안·Teams 카드 제한·소스/ZIP/매니페스트/증거 ID 불일치를 독립 검토로 차단한다. |
 | `research` | Teams SDK/Adaptive Card/모바일 호스트/Loop 등 외부 동작 | Microsoft 공식 문서와 실제 호스트 증거를 분리해 기록한다. 지원 여부를 코드 존재만으로 추정하지 않는다. |
-| `writing-great-skills` | 이 문서와 릴리스 지침을 수정할 때 | 기존 탭 재사용, 로컬 원본 우선, 스크린샷 필수, 공개 전환 후 Teams 확인이라는 정책을 실행 가능한 체크 항목으로 유지한다. AIHero 공식 v1에서 skill 작성·수정용으로 안내하는 현재 slug를 사용한다. |
+| `writing-for-agents` | `AGENTS.md`, 릴리스 지침, 스펙, 티켓처럼 에이전트가 읽는 문서를 수정할 때 | 기존 탭 재사용, 로컬 원본 우선, 스크린샷 필수, 공개 전환 후 Teams 확인이라는 정책을 중복 없이 실행 가능한 체크 항목으로 유지한다. `/writing-great-skills`의 현재 명칭이다. |
 
 ## 조건부 적용
 
@@ -26,7 +30,7 @@
 - `setup-matt-pocock-skills`: 현재 프로젝트의 Jira MP와 충돌할 수 있고 저장소 README의 기본 설정 선택지가 GitHub/Linear/local 중심이므로 원형 그대로 실행하지 않는다.
 - `wayfinder`, `prototype`: 현재는 이미 존재하는 Teams 탭/카드의 런타임 결함을 고치는 단계라 우선순위가 낮다.
 - `handoff`, `teach`, `wait-what`: 현재 병렬 에이전트 감독과 실행 로그가 이미 있어 이번 P0 수정에는 중복이다.
-- 전체 스킬 일괄 설치: 스킬 수 자체를 성과로 보지 않고, 동일 요구사항의 전후 증거가 있는 항목만 채택한다.
+- 전체 스킬 일괄 설치: 스킬 수 자체를 성과로 보지 않고, 동일 요구사항의 전후 증거가 있는 항목만 채택한다. 현재는 공식 개별 스킬 문서와 로컬 지침으로 충분하므로 설치하지 않는다.
 
 ## 프로젝트 적용 순서
 
