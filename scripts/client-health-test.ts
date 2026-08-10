@@ -26,6 +26,7 @@ const {
   healthBotLabel,
   healthStorageLabel,
   healthUserAuthLabel,
+  genAiLabel,
   runtimeBadgeLabel,
 } = await import('../src/client/App.js');
 
@@ -42,6 +43,9 @@ assert.equal(healthBotLabel('local-handler'), '로컬 핸들러');
 assert.equal(healthBotLabel('not-configured'), 'Bot 설정 필요');
 
 assert.equal(healthStorageLabel('file-json-single-process'), '파일 JSON (단일 프로세스)');
+assert.equal(genAiLabel('not-configured'), '미사용 · 결정형 기본');
+assert.equal(genAiLabel('deterministic-test'), '결정형 테스트');
+assert.equal(genAiLabel('openai-configured'), 'OpenAI (선택형)');
 assert.equal(
   runtimeBadgeLabel({ healthLoading: false, teamsHost: false, auth: 'not-configured' }),
   '인증 설정 필요',

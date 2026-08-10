@@ -284,6 +284,12 @@ export function healthStorageLabel(value: HealthResponse['storage'] | undefined)
   return '-';
 }
 
+export function genAiLabel(value: HealthResponse['genAI'] | undefined): string {
+  if (value === 'openai-configured') return 'OpenAI (선택형)';
+  if (value === 'deterministic-test') return '결정형 테스트';
+  return '미사용 · 결정형 기본';
+}
+
 export function runtimeBadgeLabel(input: {
   healthLoading: boolean;
   teamsHost: boolean;
@@ -855,8 +861,8 @@ export function App() {
           <strong>{healthBotLabel(health?.bot)}</strong>
         </div>
         <div>
-          <span>GenAI</span>
-          <strong>{health?.genAI === 'openai-configured' ? 'OpenAI 연결됨' : health?.genAI === 'deterministic-test' ? '테스트 모드' : '설정 필요'}</strong>
+          <span>선택형 AI 엔진</span>
+          <strong>{genAiLabel(health?.genAI)}</strong>
         </div>
         <div>
           <span>응답 모드</span>

@@ -223,17 +223,52 @@ function sectionElements(section: GenUiSection, canonicalStatus?: GenUiState): A
   }
 }
 
-function renderSection(section: GenUiSection, canonicalStatus: GenUiState): AdaptiveCardElement {
-  const heading = section.title ?? section.label;
+function sameDisplayedText(left: string | undefined, right: string | undefined): boolean {
+  if (!left || !right) return false;
+  return left.trim().replace(/\s+/g, ' ') === right.trim().replace(/\s+/g, ' ');
+}
+
+function withoutDuplicateSummary(section: GenUiSection, summary: string | undefined): GenUiSection {
+  if (!summary) return section;
+
+  if (section.type === 'text') {
+    const textIsDuplicate = sameDisplayedText(section.text, summary);
+    const contentIsDuplicate = sameDisplayedText(section.content, summary);
+    if (textIsDuplicate || contentIsDuplicate) {
+      return {
+        ...section,
+        ...(textIsDuplicate ? { text: undefined } : {}),
+        ...(contentIsDuplicate ? { content: undefined } : {}),
+      } as GenUiSection;
+    }
+  }
+
+  if (sameDisplayedText(section.description, summary)) {
+    return { ...section, description: undefined } as GenUiSection;
+  }
+  return section;
+}
+
+function renderSection(
+  section: GenUiSection,
+  canonicalStatus: GenUiState,
+  summary?: string,
+): AdaptiveCardElement | undefined {
+  const effectiveSection = withoutDuplicateSummary(section, summary);
+  const heading = effectiveSection.title ?? effectiveSection.label;
+  const items = [
+    ...(heading ? [textBlock(heading, { weight: 'Bolder', color: 'Accent' })] : []),
+    ...(effectiveSection.description && effectiveSection.type !== 'status'
+      ? [textBlock(effectiveSection.description, { isSubtle: true })]
+      : []),
+    ...sectionElements(effectiveSection, canonicalStatus),
+  ];
+  if (items.length === 0) return undefined;
   return {
     type: 'Container',
     spacing: 'Medium',
     separator: true,
-    items: [
-      ...(heading ? [textBlock(heading, { weight: 'Bolder', color: 'Accent' })] : []),
-      ...(section.description && section.type !== 'status' ? [textBlock(section.description, { isSubtle: true })] : []),
-      ...sectionElements(section, canonicalStatus),
-    ],
+    items,
   };
 }
 
@@ -343,10 +378,10 @@ function renderGenUiCardFromEnvelope(
   body.push(renderStatusBadge(envelope.status));
   const renderedImages = imageSet(envelope.images);
   if (renderedImages) body.push(renderedImages);
-  body.push(...envelope.sections.map((section) => {
-    const renderedSection = renderSection(section, envelope.status);
+  body.push(...envelope.sections.flatMap((section) => {
+    const renderedSection = renderSection(section, envelope.status, envelope.summary);
     renderedSectionTypes.push(section.type);
-    return renderedSection;
+    return renderedSection ? [renderedSection] : [];
   }));
 
   if (envelope.aiGenerated && envelope.citations.length > 0) {
@@ -449,10 +484,12 @@ export function genUiTextFallback(input: GenUiEnvelopeV1): string {
   if (envelope.summary) lines.push(envelope.summary);
   lines.push(`상태: ${envelope.status}`);
   for (const section of envelope.sections) {
-    const heading = section.title ?? section.label;
+    const effectiveSection = withoutDuplicateSummary(section, envelope.summary);
+    const heading = effectiveSection.title ?? effectiveSection.label;
     if (heading) lines.push(heading);
-    if (section.description && section.type !== 'status') lines.push(section.description);
-    lines.push(...sectionText(section, envelope.status));
+    if (effectiveSection.description && effectiveSection.type !== 'status') lines.push(effectiveSection.description);
+    lines.push(...sectionText(effectiveSection, envelope.status)
+      .filter((line) => !sameDisplayedText(line, envelope.summary)));
   }
   if (envelope.aiGenerated && envelope.citations.length > 0) {
     lines.push('출처:');

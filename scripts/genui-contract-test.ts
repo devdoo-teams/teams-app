@@ -166,6 +166,27 @@ assert.equal(card.version, '1.2');
 assert.equal(card.msteams.width, 'Full');
 assert.ok(card.body.every((element) => element.type !== 'TextBlock' || element.wrap === true));
 
+const duplicateSummaryEnvelope = GenUiEnvelopeV1Schema.parse({
+  ...nonAiEnvelope,
+  id: 'duplicate-summary-answer',
+  title: '업무 허브',
+  summary: '같은 내용은 한 번만 표시합니다.',
+  sections: [{ type: 'text', text: '같은 내용은 한 번만 표시합니다.' }],
+  actions: [],
+});
+const duplicateSummaryCard = renderGenUiCard(duplicateSummaryEnvelope);
+const duplicateSummaryCardText = JSON.stringify(duplicateSummaryCard.body);
+assert.equal(
+  duplicateSummaryCardText.split('같은 내용은 한 번만 표시합니다.').length - 1,
+  1,
+  'Adaptive Card must not repeat a section body identical to summary',
+);
+assert.equal(
+  genUiTextFallback(duplicateSummaryEnvelope).split('같은 내용은 한 번만 표시합니다.').length - 1,
+  1,
+  'text fallback must not repeat a section body identical to summary',
+);
+
 const personalTabUrl = 'https://teams.microsoft.com/l/entity/9b20fd94-2ac9-4423-ac1f-ff528ab245c1/home?webUrl=https%3A%2F%2Fexample.com%2Ftabs%2Fhome&label=%EC%97%85%EB%AC%B4%20%ED%97%88%EB%B8%8C';
 const tabEnvelope = GenUiEnvelopeV1Schema.parse({
   ...nonAiEnvelope,
