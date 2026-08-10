@@ -1338,7 +1338,7 @@ export function parseGatePayload(stdout, stderr) {
 
 export async function runGatePhase(
   phase,
-  { url, runGate = runWithTimeout, probeRoutes = probePublicTabRoutes } = {},
+  { url, env, runGate = runWithTimeout, probeRoutes = probePublicTabRoutes } = {},
 ) {
   const gatePath = path.join(root, 'scripts', 'release-gate.mjs');
   const args = [gatePath, gatePhaseForLoop(phase)];
@@ -1347,6 +1347,7 @@ export async function runGatePhase(
     cwd: root,
     timeoutMs: phaseTimeouts[phase],
     maxOutputChars: 20_000,
+    ...(env ? { env: { ...process.env, ...env } } : {}),
   });
   const output = `${result.stdout}\n${result.stderr}`.trim();
   let payload;
@@ -1518,7 +1519,12 @@ async function executePhase(phase, statePath, { url } = {}) {
     if (phase === 'package' && !hasReady(state.machine)) throw new Error('machine phase must be READY before package');
     if (phase === 'public' && !hasReady(state.package)) throw new Error('package phase must be READY before public');
     if (phase === 'public') assertPackageIntegrity(state);
-    const payload = await runGatePhase(phase, { url });
+    const payload = await runGatePhase(phase, {
+      url,
+      env: state.sourceIoMode === 'index-tree-fileprovider-fallback'
+        ? { TEAMS_FILEPROVIDER_SERVER_REUSE: '1' }
+        : undefined,
+    });
     const summarized = summarizePhase(phase, payload);
     if (phase === 'package' && summarized.version !== state.version) throw new Error('package version does not match the release run');
     if (phase === 'public') {

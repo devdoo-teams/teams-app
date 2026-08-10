@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { transform } from 'esbuild';
@@ -16,8 +17,12 @@ const files = [
   'src/client/main.tsx',
 ];
 
+const readSource = process.env.TEAMS_FILEPROVIDER_SERVER_REUSE === '1'
+  ? (relativePath) => execFileSync('git', ['show', `HEAD:${relativePath}`], { cwd: root, encoding: 'utf8', timeout: 10_000 })
+  : (relativePath) => fs.readFile(path.join(root, relativePath), 'utf8');
+
 for (const relativePath of files) {
-  const source = await fs.readFile(path.join(root, relativePath), 'utf8');
+  const source = await readSource(relativePath);
   const loader = relativePath.endsWith('.tsx') ? 'tsx' : 'ts';
   const result = await transform(source, {
     loader,

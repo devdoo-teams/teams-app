@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { build } from 'esbuild';
@@ -9,6 +10,33 @@ import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 const root = process.cwd();
 const outputDir = path.join(resolveRuntimeDistRoot(root), 'client');
 const coreBuild = process.argv.includes('--core');
+const reuseFileProviderSources = process.env.TEAMS_FILEPROVIDER_SERVER_REUSE === '1';
+
+async function materializeGitClientSource() {
+  const temporaryRoot = await fs.mkdtemp(path.join(root, '.teams-fileprovider-client-'));
+  const relativeFiles = execFileSync('git', ['ls-files', 'src/client', 'src/shared'], {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: 10_000,
+  }).split('\n').filter(Boolean);
+  for (const relativeFile of relativeFiles) {
+    const target = path.join(temporaryRoot, relativeFile.slice('src/'.length));
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    const contents = execFileSync('git', ['show', `HEAD:${relativeFile}`], {
+      cwd: root,
+      encoding: 'utf8',
+      timeout: 10_000,
+    });
+    await fs.writeFile(target, contents, 'utf8');
+  }
+  return {
+    sourceRoot: path.join(temporaryRoot, 'client'),
+    cleanup: () => fs.rm(temporaryRoot, { recursive: true, force: true }),
+  };
+}
+
+const materializedSource = reuseFileProviderSources ? await materializeGitClientSource() : null;
+const sourceRoot = materializedSource?.sourceRoot ?? path.join(root, 'src', 'client');
 
 await buildClientAtomically({
   outputDir,
@@ -17,7 +45,7 @@ await buildClientAtomically({
     await fs.mkdir(assetsDir, { recursive: true });
 
     await build({
-      entryPoints: [path.join(root, 'src/client/main.tsx')],
+      entryPoints: [path.join(sourceRoot, 'main.tsx')],
       bundle: true,
       format: 'esm',
       splitting: true,
@@ -43,7 +71,7 @@ await buildClientAtomically({
       logLevel: 'info',
     });
 
-    const sourceHtml = await fs.readFile(path.join(root, 'src/client/index.html'), 'utf8');
+    const sourceHtml = await fs.readFile(path.join(sourceRoot, 'index.html'), 'utf8');
     const clientBundle = await fs.readFile(path.join(assetsDir, 'main.js'));
     const assetVersion = crypto.createHash('sha256').update(clientBundle).digest('hex').slice(0, 12);
     const html = sourceHtml
@@ -53,5 +81,7 @@ await buildClientAtomically({
     await fs.writeFile(path.join(temporaryDir, 'index.html'), html, 'utf8');
   },
 });
+
+await materializedSource?.cleanup();
 
 console.log(`Client bundle created: ${path.relative(root, outputDir)}`);
