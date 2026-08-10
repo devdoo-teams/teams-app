@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert';
 
-const { buildHubSearch, parseHubView, preserveBrowserPreview } = await import('../src/client/hub-navigation.js');
+const { buildHubNavigation, buildHubSearch, parseHubView, preserveBrowserPreview } = await import('../src/client/hub-navigation.js');
 
 assert.equal(parseHubView(undefined), 'today');
 assert.equal(parseHubView('?view=work'), 'work');
@@ -18,6 +18,16 @@ assert.equal(buildHubSearch('', 'today'), '');
 assert.equal(buildHubSearch('?workItemId=work-123', 'work'), '?workItemId=work-123&view=work');
 assert.equal(buildHubSearch('?view=settings&workItemId=work-123', 'today'), '?workItemId=work-123');
 assert.equal(buildHubSearch('?q=a%20b', 'activity'), '?q=a+b&view=activity');
+assert.deepEqual(
+  buildHubNavigation('?view=today', 'work'),
+  { search: '?view=work', view: 'work' },
+  'URL and React navigation state derive from one computed target',
+);
+assert.deepEqual(
+  buildHubNavigation('?collaborationType=goal&collaborationId=goal-7&view=activity', 'today'),
+  { search: '', view: 'today' },
+  'leaving a deep-linked view clears both the URL state and the rendered view',
+);
 assert.equal(
   buildHubSearch('?collaborationType=goal&collaborationId=goal-7', 'today'),
   '',

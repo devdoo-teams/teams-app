@@ -26,7 +26,7 @@ import { WorkItemPanel } from './WorkItemPanel.js';
 import { CollaborationPanel } from './CollaborationPanel.js';
 import { TodaySummary } from './TodaySummary.js';
 import {
-  buildHubSearch,
+  buildHubNavigation,
   hubViewLabels,
   parseHubView,
   type HubView,
@@ -759,9 +759,13 @@ export function App() {
   }
 
   function navigateHubView(view: HubView): void {
-    setHubView(view);
-    if (typeof window === 'undefined') return;
-    window.history.replaceState(null, '', buildHubSearch(window.location.search, view));
+    if (typeof window === 'undefined') {
+      setHubView(view);
+      return;
+    }
+    const next = buildHubNavigation(window.location.search, view);
+    window.history.replaceState(null, '', next.search);
+    setHubView(next.view);
   }
 
   const runtimeBadge = healthLoading

@@ -33,6 +33,19 @@ export function buildHubSearch(search: string | undefined, view: HubView): strin
 }
 
 /**
+ * Compute the URL and rendered view from one navigation target. Keeping both
+ * values together avoids a transient mismatch between history.replaceState
+ * and the React state used for the active panel.
+ */
+export function buildHubNavigation(search: string | undefined, view: HubView): {
+  search: string;
+  view: HubView;
+} {
+  const nextSearch = buildHubSearch(search, view);
+  return { search: nextSearch, view: parseHubView(nextSearch) };
+}
+
+/**
  * Browser-only preview is an explicit opt-in. Preserve it when a card/link
  * navigates within the same local tab; production Teams deep links remain
  * unchanged because they do not carry the preview parameter.
