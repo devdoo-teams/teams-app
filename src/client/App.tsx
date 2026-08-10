@@ -844,6 +844,19 @@ export function App() {
 
       {(hubView === 'today' || hubView === 'settings') && (
       <section className="runtime-panel" aria-label="런타임 상태">
+        <div className="runtime-panel-heading">
+          <span>런타임 상태</span>
+          <button
+            aria-busy={healthLoading}
+            aria-label="런타임 상태 새로고침"
+            className="secondary"
+            disabled={healthLoading}
+            onClick={() => void refreshRuntime()}
+            type="button"
+          >
+            {healthLoading ? '확인 중…' : '새로고침'}
+          </button>
+        </div>
         <div>
           <span>서비스</span>
           <strong>{health?.ok ? '정상' : '확인 필요'}</strong>

@@ -24,8 +24,6 @@ import { CodexRunner } from './codex-runner.js';
 import { probeCliCapabilities } from './codex-capability.js';
 import { GitService } from './git-service.js';
 import { DeterministicResponseEngine } from './response-engine-deterministic.js';
-import { LocalCompatibleResponseEngine } from './response-engine-local.js';
-import { OpenAIResponseEngine } from './response-engine-openai.js';
 import { ResponseEngineRouter, configureResponseEngineRouter } from './response-engine.js';
 import { ResponseModeStore } from './response-mode-store.js';
 import {
@@ -207,6 +205,17 @@ const optionalRuntimeEnabled = !coreBuild && process.env.TEAMS_OPTIONAL_RUNTIME 
 const genUiMode = process.env.TEAMS_GENUI_MODE === 'legacy' || process.env.TEAMS_GENUI_MODE === 'channels-shadow'
   ? process.env.TEAMS_GENUI_MODE
   : 'hybrid';
+let optionalResponseEngines: Array<import('./response-engine.js').ResponseEngine> = [];
+if (optionalRuntimeEnabled) {
+  const [{ LocalCompatibleResponseEngine }, { OpenAIResponseEngine }] = await Promise.all([
+    import('./response-engine-local.js'),
+    import('./response-engine-openai.js'),
+  ]);
+  optionalResponseEngines = [
+    new LocalCompatibleResponseEngine(),
+    new OpenAIResponseEngine(),
+  ];
+}
 type ChannelsShadowRenderer = typeof import('./copilot-channels-shadow.js')['renderChannelsShadow'];
 let renderChannelsShadow: ChannelsShadowRenderer | undefined;
 if (optionalRuntimeEnabled && genUiMode === 'channels-shadow') {
@@ -230,8 +239,8 @@ const openAiModel = process.env.OPENAI_MODEL?.trim() || 'gpt-4o-mini';
 const weatherMode = process.env.WEATHER_MODE === 'demo' ? 'demo' : 'live';
 const responseProviders = {
   deterministic: true,
-  openai: openAiConfigured,
-  local: isLocalModelBaseUrlConfigured(process.env.LOCAL_MODEL_BASE_URL),
+  openai: optionalRuntimeEnabled && openAiConfigured,
+  local: optionalRuntimeEnabled && isLocalModelBaseUrlConfigured(process.env.LOCAL_MODEL_BASE_URL),
 } as const;
 
 if (legacyPublicMcp) {
@@ -337,7 +346,7 @@ await genUiActionStore.initialize();
 await responseModeStore.initialize();
 
 configureResponseEngineRouter({
-  engines: [new LocalCompatibleResponseEngine()],
+  engines: optionalResponseEngines,
   resolveMode: async (input) => {
     // This environment flag is intentionally retained only for the existing
     // deterministic test harness. Production users are resolved from the
@@ -354,7 +363,7 @@ configureResponseEngineRouter({
 // The router constructor also includes the globally configured local engine.
 const botResponseEngineRouter = new ResponseEngineRouter([
   new DeterministicResponseEngine(),
-  new OpenAIResponseEngine(),
+  ...optionalResponseEngines,
 ]);
 
 let http: any;

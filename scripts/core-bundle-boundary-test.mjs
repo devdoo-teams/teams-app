@@ -27,6 +27,11 @@ const clientHtml = await fs.readFile(path.join(runtimeRoot, 'client', 'index.htm
 assert.match(clientHtml, /assets\/main\.js\?v=/, 'core tab points to the built main asset');
 const serverEntry = await fs.readFile(path.join(serverDir, 'index.js'), 'utf8');
 assert.match(serverEntry, /mcpEnabled/, 'core health still reports MCP disabled state');
+assert.doesNotMatch(
+  serverEntry,
+  /\b(?:LocalCompatibleResponseEngine|OpenAIResponseEngine)\b/,
+  'core server artifact must not embed optional response engine implementations',
+);
 const serverBuildConfig = await fs.readFile(path.join(root, 'scripts', 'build-server.mjs'), 'utf8');
 assert.match(
   serverBuildConfig,

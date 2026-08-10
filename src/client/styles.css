@@ -57,6 +57,9 @@ h2 { font-size: 1.35rem; }
 .copilot-approval-actions { display: flex; gap: 8px; }
 .copilot-approval-actions button { min-height: 38px; padding: 8px 12px; }
 .runtime-panel { background: #eef2ff; border: 1px solid #dce2ff; border-radius: 14px; display: grid; gap: 12px; grid-template-columns: repeat(3, 1fr); margin-bottom: 18px; padding: 14px 16px; }
+.runtime-panel-heading { align-items: center; display: flex !important; flex-direction: row !important; grid-column: 1 / -1; justify-content: space-between; }
+.runtime-panel-heading > span { color: #34366f; font-size: 0.9rem; font-weight: 700; }
+.runtime-panel-heading .secondary { margin: 0; padding: 7px 10px; }
 .runtime-panel div { display: flex; flex-direction: column; gap: 4px; }
 .runtime-panel span { color: #667085; font-size: 0.75rem; }
 .runtime-panel strong { color: #34366f; font-size: 0.9rem; }
