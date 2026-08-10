@@ -44,8 +44,8 @@ assert.deepEqual(
 );
 assert.deepEqual(
   getWorkItemAssigneeButtonState(true),
-  { label: '나에게 할당됨', disabled: true },
-  'an item assigned to the requester renders a truthful disabled Korean state',
+  { label: '나에게서 해제', disabled: false },
+  'an item assigned to the requester exposes an enabled unassign action',
 );
 
 {

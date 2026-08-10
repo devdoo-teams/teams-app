@@ -1292,6 +1292,25 @@ http.delete('/api/work-items/:id/watch', async (request: any, response: any) => 
   }
 });
 
+http.delete('/api/work-items/:id', async (request: any, response: any) => {
+  const resolved = workItemRestScope(request, response);
+  if (!resolved.scope) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid work item scope' });
+    return;
+  }
+  try {
+    const item = await workItemService.delete(resolved.scope, {
+      itemId: request.params.id,
+      mutationKey: nonEmptyString(request.body?.mutationKey, 200)
+        ?? nonEmptyString(request.query?.mutationKey, 200)
+        ?? `delete-${Date.now()}`,
+    });
+    response.json({ item: presentWorkItem(item, resolved.scope) });
+  } catch (error) {
+    sendWorkItemError(response, error);
+  }
+});
+
 http.use(
   '/api/collaboration',
   createUserAuthMiddleware({

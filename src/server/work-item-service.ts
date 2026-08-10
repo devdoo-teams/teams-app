@@ -9,6 +9,7 @@ import {
   type WorkItemCalendarQuery,
   type WorkItemCommentInput,
   type WorkItemCreateInput,
+  type WorkItemDeleteInput,
   type WorkItemEditInput,
   type WorkItemEditPatch,
   type WorkItemMutationOperation,
@@ -379,6 +380,33 @@ export class WorkItemService {
     );
   }
 
+  async delete(scope: WorkItemScope, input: WorkItemDeleteInput): Promise<WorkItem> {
+    const normalizedScope = normalizeScope(scope);
+    const normalized = normalizeDeleteInput(input);
+    const deletedAt = this.timestamp();
+    return this.runMutation(
+      normalizedScope,
+      'delete',
+      normalized.mutationKey,
+      { itemId: normalized.itemId },
+      (context) => {
+        const current = requireVisibleItem(context, normalized.itemId);
+        assertCanManage(current, normalizedScope.requesterId);
+        const updated = context.update(normalized.itemId, (item) => {
+          item.deletedAt = deletedAt;
+          item.updatedAt = deletedAt;
+        });
+        if (!updated) throw new WorkItemNotFoundError(normalized.itemId);
+        return updated;
+      },
+      (context) => {
+        const current = context.getInConversation(normalized.itemId);
+        if (!current) throw new WorkItemNotFoundError(normalized.itemId);
+        assertCanManage(current, normalizedScope.requesterId);
+      },
+    );
+  }
+
   private assertAssigneeAllowed(
     scope: WorkItemScope,
     itemId: string,
@@ -553,6 +581,14 @@ function normalizeCommentInput(input: WorkItemCommentInput): WorkItemCommentInpu
 
 function normalizeWatchInput(input: WorkItemWatchInput): WorkItemWatchInput {
   if (!input || typeof input !== 'object') throw new WorkItemValidationError('watch input is required');
+  return {
+    itemId: normalizeId(input.itemId),
+    mutationKey: normalizeMutationKey(input.mutationKey),
+  };
+}
+
+function normalizeDeleteInput(input: WorkItemDeleteInput): WorkItemDeleteInput {
+  if (!input || typeof input !== 'object') throw new WorkItemValidationError('delete input is required');
   return {
     itemId: normalizeId(input.itemId),
     mutationKey: normalizeMutationKey(input.mutationKey),

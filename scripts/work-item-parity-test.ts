@@ -224,6 +224,31 @@ try {
   assert.equal(service.recent(scopeA, 1)[0]?.id, second.id, 'recent view is ordered by the latest mutation');
 
   await assert.rejects(
+    () => service.delete(scopeB, {
+      itemId: second.id,
+      mutationKey: 'unauthorized-delete',
+    }),
+    (error: unknown) => error instanceof WorkItemNotFoundError,
+    'a requester outside the visible scope cannot discover or delete an item by id',
+  );
+  const deleted = await service.delete(scopeA, {
+    itemId: second.id,
+    mutationKey: 'delete-second-item',
+  });
+  assert.equal(typeof deleted.deletedAt, 'string', 'delete records a durable soft-delete timestamp');
+  assert.equal(service.get(scopeA, second.id), undefined, 'deleted items are absent from normal reads');
+  assert.deepEqual(
+    service.search(scopeA, { text: 'checklist' }).map((item) => item.id),
+    [],
+    'deleted items are absent from search and list views',
+  );
+  assert.deepEqual(
+    await service.delete(scopeA, { itemId: second.id, mutationKey: 'delete-second-item' }),
+    deleted,
+    'retrying delete with the same mutation key returns the original soft-deleted item',
+  );
+
+  await assert.rejects(
     () => service.transition(scopeB, {
       itemId: second.id,
       status: 'done',
@@ -251,6 +276,7 @@ try {
   await restartedService.initialize();
   const restored = restartedService.get(scopeA, created.id);
   assert.deepEqual(restored, unassigned, 'persisted work items survive a store restart');
+  assert.equal(restartedService.get(scopeA, second.id), undefined, 'soft deletion survives a store restart');
   assert.deepEqual(
     await restartedService.create(scopeA, createInput),
     created,

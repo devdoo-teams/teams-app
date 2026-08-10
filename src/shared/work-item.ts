@@ -67,6 +67,8 @@ export type WorkItem = {
   comments: WorkItemComment[];
   deepLink: WorkItemDeepLink;
   codexJobLink?: WorkItemCodexLink;
+  /** Soft deletion keeps the record recoverable in the persisted store. */
+  deletedAt?: string;
   createdAt: string;
   updatedAt: string;
   /** Monotonic, persisted activity order for deterministic recent views. */
@@ -128,6 +130,11 @@ export type WorkItemWatchInput = {
   mutationKey: string;
 };
 
+export type WorkItemDeleteInput = {
+  itemId: string;
+  mutationKey: string;
+};
+
 export type WorkItemQuery = {
   text?: string;
   status?: WorkItemStatus | readonly WorkItemStatus[];
@@ -152,7 +159,8 @@ export type WorkItemMutationOperation =
   | 'assign'
   | 'comment'
   | 'watch'
-  | 'unwatch';
+  | 'unwatch'
+  | 'delete';
 
 export function buildWorkItemDeepLink(itemId: string): WorkItemDeepLink {
   const path = `${WORK_ITEM_TAB_PATH}?workItemId=${encodeURIComponent(itemId)}`;

@@ -273,7 +273,7 @@ function validateMutation(mutation: WorkItemMutationRecord, filePath: string, in
   try {
     assertScope(mutation, `mutations[${index}]`);
     assertText(mutation.mutationKey, 'mutationKey', MAX_WORK_ITEM_MUTATION_KEY_LENGTH, true);
-    if (!['create', 'edit', 'transition', 'assign', 'comment', 'watch', 'unwatch'].includes(mutation.operation)) {
+    if (!['create', 'edit', 'transition', 'assign', 'comment', 'watch', 'unwatch', 'delete'].includes(mutation.operation)) {
       throw new Error('operation is invalid');
     }
     assertText(mutation.fingerprint, 'fingerprint', 20_000, true);
@@ -340,6 +340,7 @@ function validateWorkItem(item: WorkItem, label: string): void {
       throw new Error(`${label}.codexJobLink.relation is invalid`);
     }
   }
+  if (item.deletedAt !== undefined) assertTimestamp(item.deletedAt, `${label}.deletedAt`);
   assertTimestamp(item.createdAt, `${label}.createdAt`);
   assertTimestamp(item.updatedAt, `${label}.updatedAt`);
   if (item.activitySequence !== undefined) {
@@ -409,9 +410,9 @@ function sameConversation(item: Pick<WorkItem, 'tenantId' | 'conversationId'>, s
 }
 
 function isVisibleTo(item: WorkItem, requesterId: string): boolean {
-  return item.createdBy === requesterId ||
+  return item.deletedAt === undefined && (item.createdBy === requesterId ||
     item.assigneeId === requesterId ||
-    item.watcherIds.includes(requesterId);
+    item.watcherIds.includes(requesterId));
 }
 
 function mutationScopeKey(scope: WorkItemScope, mutationKey: string): string {

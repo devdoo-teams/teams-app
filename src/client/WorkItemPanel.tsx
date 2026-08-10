@@ -128,7 +128,7 @@ export function getWorkItemAssigneeButtonState(assignedToRequester: boolean): {
   disabled: boolean;
 } {
   return assignedToRequester
-    ? { label: '나에게 할당됨', disabled: true }
+    ? { label: '나에게서 해제', disabled: false }
     : { label: '나에게 할당', disabled: false };
 }
 
@@ -156,6 +156,7 @@ export function WorkItemPanel() {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [deepLinkNotice, setDeepLinkNotice] = useState('');
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const pendingMutationsRef = useRef(new Map<string, PendingMutation>());
   const selectedIdRef = useRef(selectedId);
   const queryRef = useRef(query);
@@ -295,6 +296,25 @@ export function WorkItemPanel() {
     if (shouldClearWorkItemComment(succeeded)) setComment('');
   }
 
+  async function deleteItem(itemId: string): Promise<void> {
+    const succeeded = await mutate('/api/work-items/' + encodeURIComponent(itemId), {
+      method: 'DELETE',
+      body: JSON.stringify({}),
+    }, 'delete:' + itemId);
+    if (succeeded) {
+      setPendingDeleteId(null);
+      if (selectedIdRef.current === itemId) setSelectedId(null);
+    }
+  }
+
+  function requestDelete(itemId: string): void {
+    if (pendingDeleteId === itemId) {
+      void deleteItem(itemId);
+      return;
+    }
+    setPendingDeleteId(itemId);
+  }
+
   return (
     <section className="panel work-item-panel" aria-label="Atlassian parity 업무 항목">
       <div className="section-heading">
@@ -364,8 +384,36 @@ export function WorkItemPanel() {
                   <select aria-label={item.title + ' 상태'} disabled={Boolean(busy)} onChange={(event) => void mutate(itemPath + '/status', { method: 'PATCH', body: JSON.stringify({ status: event.target.value }) }, 'status:' + item.id)} value={item.status}>
                     {statuses.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                   </select>
-                  <button className="toggle" disabled={Boolean(busy) || assigneeButton.disabled} onClick={() => void mutate(itemPath + '/assignee', { method: 'PATCH', body: JSON.stringify({ assigneeId: 'self' }) }, 'assign:' + item.id)} type="button">{assigneeButton.label}</button>
+                  <button
+                    className="toggle"
+                    disabled={Boolean(busy)}
+                    onClick={() => void mutate(
+                      itemPath + '/assignee',
+                      { method: 'PATCH', body: JSON.stringify({ assigneeId: item.assignedToRequester ? null : 'self' }) },
+                      'assign:' + item.id,
+                    )}
+                    type="button"
+                  >{assigneeButton.label}</button>
                   <button className="toggle" disabled={Boolean(busy)} onClick={() => void mutate(itemPath + '/watch', { method: item.watching ? 'DELETE' : 'POST', body: item.watching ? undefined : JSON.stringify({}) }, 'watch:' + item.id)} type="button">{item.watching ? 'watch 해제' : 'watch'}</button>
+                  {pendingDeleteId === item.id ? (
+                    <span aria-label={item.title + ' 삭제 확인'} className="delete-confirmation">
+                      <span>삭제할까요?</span>
+                      <button
+                        className="toggle danger"
+                        disabled={Boolean(busy)}
+                        onClick={() => void requestDelete(item.id)}
+                        type="button"
+                      >삭제 확인</button>
+                      <button
+                        className="toggle"
+                        disabled={Boolean(busy)}
+                        onClick={() => setPendingDeleteId(null)}
+                        type="button"
+                      >취소</button>
+                    </span>
+                  ) : (
+                    <button className="toggle danger" disabled={Boolean(busy)} onClick={() => requestDelete(item.id)} type="button">삭제</button>
+                  )}
                   <a className="work-item-link" href={item.deepLink.href}>탭에서 열기</a>
                 </div>
                 {selectedItem && (
