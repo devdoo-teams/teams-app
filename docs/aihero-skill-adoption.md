@@ -2,7 +2,7 @@
 
 작성일: 2026-08-11
 
-이 문서는 [Matt Pocock의 공식 skills 저장소](https://github.com/mattpocock/skills)를 현재 TeamsApp 워크플로우에 대조한 결과다. 전체 스킬을 일괄 설치하지 않고, 현재의 Teams 네이티브 카드·Jira MP·기존 인앱 브라우저 탭·스크린샷 증거·공개 배포 게이트를 보존하는 범위에서 적용한다.
+이 문서는 [Matt Pocock의 공식 skills 저장소](https://github.com/mattpocock/skills)를 현재 TeamsApp 워크플로우에 대조한 결과다. 사용자의 2026-08-11 결정에 따라 공식 저장소 커밋 `84fdeffd12f2ee307994d1eb6feb48173b6e0502`의 공개 스킬 35개를 전역 Codex 스킬 디렉터리에 설치했다. 설치와 호출은 분리하며, 현재의 Teams 네이티브 카드·Jira MP·기존 인앱 브라우저 탭·스크린샷 증거·공개 배포 게이트를 보존하는 범위에서 관련 스킬만 실행한다.
 
 ## 카탈로그 기준일과 명칭
 
@@ -17,6 +17,8 @@ AIHero의 현재 카탈로그 레슨 페이지는 25개 항목을 열거하며, 
 | `code-review` | 커밋 직전 및 패키지 생성 직전 | 요구사항·보안·Teams 카드 제한·소스/ZIP/매니페스트/증거 ID 불일치를 독립 검토로 차단한다. |
 | `research` | Teams SDK/Adaptive Card/모바일 호스트/Loop 등 외부 동작 | Microsoft 공식 문서와 실제 호스트 증거를 분리해 기록한다. 지원 여부를 코드 존재만으로 추정하지 않는다. |
 | `writing-for-agents` | `AGENTS.md`, 릴리스 지침, 스펙, 티켓처럼 에이전트가 읽는 문서를 수정할 때 | 기존 탭 재사용, 로컬 원본 우선, 스크린샷 필수, 공개 전환 후 Teams 확인이라는 정책을 중복 없이 실행 가능한 체크 항목으로 유지한다. `/writing-great-skills`의 현재 명칭이다. |
+| `setup-matt-pocock-skills` | Jira MP, 기본 triage 라벨, 단일 컨텍스트 domain docs | `docs/agents/`와 `AGENTS.md`의 짧은 포인터를 통해 tracker·label·domain 규칙을 한 번 설정한다. |
+| `wayfinder` | 여러 세션에 걸친 Teams Core 릴리스 복구 | Jira map과 결정 티켓의 frontier·blocking 관계로 현재 복구 경로를 추적한다. 실제 Jira 응답 전에는 map 생성을 완료로 주장하지 않는다. |
 
 ## 조건부 적용
 
@@ -25,12 +27,14 @@ AIHero의 현재 카탈로그 레슨 페이지는 25개 항목을 열거하며, 
 - `to-spec` / `to-tickets` / `triage`: 사용할 수 있지만 기본 추적 시스템은 Jira 프로젝트 `MP`, 기본 담당자는 사용자로 고정한다. GitHub/Linear로 자동 전환하는 설치 흐름은 사용하지 않는다.
 - `to-tickets` 결과는 Jira 이슈와 연결되기 전까지 완료 증거로 보지 않는다.
 
-## 당장 적용하지 않음
+## 설치 완료, 현재 호출하지 않음
 
-- `setup-matt-pocock-skills`: 현재 프로젝트의 Jira MP와 충돌할 수 있고 저장소 README의 기본 설정 선택지가 GitHub/Linear/local 중심이므로 원형 그대로 실행하지 않는다.
-- `wayfinder`, `prototype`: 현재는 이미 존재하는 Teams 탭/카드의 런타임 결함을 고치는 단계라 우선순위가 낮다.
-- `handoff`, `teach`, `wait-what`: 현재 병렬 에이전트 감독과 실행 로그가 이미 있어 이번 P0 수정에는 중복이다.
-- 전체 스킬 일괄 설치: 스킬 수 자체를 성과로 보지 않고, 동일 요구사항의 전후 증거가 있는 항목만 채택한다. 현재는 공식 개별 스킬 문서와 로컬 지침으로 충분하므로 설치하지 않는다.
+- `prototype`: 현재 Teams 탭/카드의 제품 결정보다 런타임 복구가 먼저이므로 UI 결정이 새로 생길 때만 호출한다.
+- `handoff`, `claude-handoff`, `loop-me`, `teach`, `wait-what`, `to-questionnaire`: 세션 경계, 교육, 설명 실패, 외부 의사결정이 실제로 생길 때 호출한다.
+- `git-guardrails-claude-code`, `setup-pre-commit`, `setup-ts-deep-modules`, `migrate-to-shoehorn`, `scaffold-exercises`: 현재 Teams 릴리스 복구와 무관하므로 설치 상태만 유지한다.
+- `writing-beats`, `writing-fragments`, `writing-shape`: 콘텐츠 집필 요청이 아니므로 현재 작업에서는 호출하지 않는다.
+
+전체 설치는 기능 완료 증거가 아니다. 각 스킬은 설명과 현재 작업이 일치할 때만 읽고 실행하며, 무관한 스킬을 호출해 저장소 범위를 넓히지 않는다.
 
 ## 프로젝트 적용 순서
 
@@ -41,11 +45,11 @@ AIHero의 현재 카탈로그 레슨 페이지는 25개 항목을 열거하며, 
 5. `research`로 공식 Teams 호스트 제약을 확인하고, 기존 Teams 탭의 데스크톱 스크린샷과 접근성 트리로 실제 동작을 검증한다.
 6. 공개 앱 업데이트와 모바일 사용자 확인 전에는 완료 메시지를 보내지 않는다.
 
-이 매핑은 스킬 설치 완료를 의미하지 않는다. 각 항목은 해당 단계의 증거와 함께 적용되며, 효과가 확인되지 않은 스킬은 채택하지 않는다.
+이 매핑은 설치 성공과 작업 성공을 구분한다. 각 항목은 해당 단계의 증거와 함께 적용되며, 효과가 확인되지 않은 호출은 릴리스 완료 근거로 사용하지 않는다.
 
 ## 2026-08-11 즉시 적용 결과
 
-전체 카탈로그를 설치해 효과를 주장하지 않고, 현재 장애·릴리스·실사용 검증에 직접 연결되는 다섯 항목만 실행했다.
+전체 스킬은 설치했지만, 현재 장애·릴리스·실사용 검증에 직접 연결되는 항목만 실행했다.
 
 | 스킬 | 이번 적용 증거 | 판정 |
 | --- | --- | --- |

@@ -94,7 +94,7 @@ Teams 앱 변경 요청에는 별도 예외 승인이 없는 한 다음 순서�
 
 - 반복 가능한 검사는 Computer Use나 화면 잠금 상태에 의존하지 않는다. 구현·타입체크·전체 테스트·배포 환경·ZIP 내부 매니페스트·공개 health·공개 탭 HTTP 응답은 명령어로 먼저 검증한다.
 - `/Users/doosansmacbookpro/Documents/TeamsApp`은 이 프로젝트의 로컬 원본 소스이자 유일한 Git 이력 기준이다. 이를 사본·미러·동기화 대상이라고 추정하거나 다른 경로를 원본으로 취급하지 않는다.
-- 이 저장소에는 Git 원격이 구성되어 있지 않다. 원격 저장소·원격 브랜치·clone·pull·push를 전제로 설명하거나 시도하지 않으며, 사용자가 명시적으로 원격을 추가하기 전에는 로컬 커밋만 관리한다.
+- 이 저장소에는 아직 Git 원격이 구성되어 있지 않다. 사용자는 Bitbucket 추가를 승인했지만, 인증된 Bitbucket 화면에서 workspace·repository slug·visibility·clone URL을 확인하기 전에는 `origin`을 만들거나 원격 브랜치·clone·pull·push를 전제로 설명하지 않는다. 정확한 Bitbucket 저장소가 확인될 때까지 로컬 커밋만 관리한다.
 - 빌드·테스트·소스 수정은 원본 작업공간에서 수행한다. `/tmp`는 일회성 로그, 격리 검증, 새 ZIP 산출물에만 사용할 수 있고 `/tmp`의 Git 이력이나 파일을 원본 상태로 보고하지 않는다. 검증된 최종 변경과 커밋은 반드시 원본 작업공간에 존재해야 한다.
 - 파일 업로드는 원본에서 생성해 검증한 최신 ZIP의 명시적 로컬 경로를 브라우저 파일 선택기에 직접 전달한다. Finder, 동기화 상태, 다운로드 대기 또는 별도 소스 복제를 업로드 선행 조건으로 만들지 않는다.
 - 릴리스 판정에는 다음 제한시간 게이트를 사용한다. `release:preflight`는 API/MCP 선택 경로와 분리된 core source compile check(60초), `build:core`(300초), `test:core`(300초), 배포 환경(30초)을 순서대로 실행한다. `test:core`에는 API 키 없이 실제 production Teams SDK 번들을 기동하는 `core-runtime-smoke.mjs`가 포함되어 `listen()`, `/api/health`, `/tabs/home/`을 확인한다. 서버 core 번들은 Teams SDK·필수 런타임을 포함하고 CopilotKit/MCP는 선택 청크로 분리한다. `test:optional`/`build:optional`은 별도 실험 경로이며 core 통과를 막지 않는다. `release:package`는 검증된 새 ZIP과 내부 매니페스트·SHA-256을 생성하며, `release:public`은 공개 health와 `/tabs/home/`을 확인한다. 전부 실행할 때는 `npm run release:gate`를 사용한다.
@@ -119,3 +119,17 @@ Teams 앱 변경 요청에는 별도 예외 승인이 없는 한 다음 순서�
 - 모든 버그 수정·신규 기능은 `release:loop start → machine → package → public → evidence(portal/installed/desktop/mobile) → complete` 순서로 진행한다. `.release/current.json`의 run identity와 현재 Git commit·앱 버전·ZIP SHA가 일치하지 않으면 다음 단계로 넘어가지 않는다. `installed` 증거에는 Teams 앱 정보 화면의 `installedVersion`을 반드시 기록하고, 게시 카탈로그 버전이나 Bot 왕복만으로 설치본 버전을 추정하지 않는다.
 - `release:loop complete`가 `READY`를 반환하기 전에는 Teams 완료 메시지를 보내지 않는다. 이 명령은 실제 UI 증거를 만들지 않으며, 포털 업로드·설치본·데스크톱·모바일을 직접 확인한 뒤 제공된 증거 파일만 검증한다.
 - 오래된 커밋을 가리키는 활성 run 때문에 새 릴리스를 시작할 수 없으면 상태 파일을 삭제하거나 `COMPLETE`로 바꾸지 않는다. 원인을 확인한 뒤 `npm run release:loop -- supersede --reason "..."`로 기존 run을 명시적으로 `SUPERSEDED` 처리하고, 같은 상태 경로에서 새 `start`를 실행한다. `SUPERSEDED`는 완료·배포 성공을 의미하지 않는다.
+
+## Agent skills
+
+### Issue tracker
+
+실패 테스트, 재현 결함, Core 작업, 릴리스 blocker는 Jira Cloud 프로젝트 `MP`에서 추적한다. Jira 쓰기·전환·Wayfinder 관계를 만들기 전에 [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md)를 읽는다.
+
+### Triage labels
+
+Matt Pocock 스킬의 기본 triage 역할을 같은 이름의 Jira 라벨에 매핑한다. 이슈를 분류하거나 상태 라벨을 바꾸기 전에 [`docs/agents/triage-labels.md`](docs/agents/triage-labels.md)를 읽는다.
+
+### Domain docs
+
+이 저장소는 단일 컨텍스트다. 기능 용어·ADR·릴리스 도메인 문서를 읽거나 갱신할 때 [`docs/agents/domain.md`](docs/agents/domain.md)를 따른다.
