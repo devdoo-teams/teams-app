@@ -43,7 +43,7 @@ const hooks = registerHooks({
   },
 });
 
-const { createTeamsBootstrapController, isExplicitBrowserPreview } = await import('../src/client/main.js');
+const { DEFAULT_TEAMS_BOOTSTRAP_TIMEOUT_MS, createTeamsBootstrapController, isExplicitBrowserPreview } = await import('../src/client/main.js');
 
 class FakeButton {
   private clickHandler: (() => void) | null = null;
@@ -108,6 +108,13 @@ async function testInitializationCanFinishAfterLegacyTwoSecondWindow(): Promise<
   );
   assert.equal(hostReadyCalls, 1, 'a slow but successful initialization marks the host ready once');
   assert.equal(renderCalls, 1, 'a slow but successful initialization mounts the app once');
+}
+
+async function testDefaultTimeoutAllowsTeamsJsInitializationToSettle(): Promise<void> {
+  assert.ok(
+    DEFAULT_TEAMS_BOOTSTRAP_TIMEOUT_MS >= 60_000,
+    'the production bootstrap timeout must not race TeamsJS\' internal 60-second initialization timeout',
+  );
 }
 
 async function testExplicitPreviewWorksInsideAnEmbeddedBrowserFrame(): Promise<void> {
@@ -247,6 +254,7 @@ async function testHungInitializationMountsRetryableRecoveryAndGuardsLateResult(
 await testHungInitializationMountsRetryableRecoveryAndGuardsLateResult();
 await testImmediateInitializationRejectionMountsTeamsRecovery();
 await testInitializationCanFinishAfterLegacyTwoSecondWindow();
+await testDefaultTimeoutAllowsTeamsJsInitializationToSettle();
 await testRetryResetsTeamsInitializationBeforeStartingAgain();
 await testExplicitPreviewWorksInsideAnEmbeddedBrowserFrame();
 

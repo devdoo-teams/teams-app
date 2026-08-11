@@ -9,7 +9,10 @@ import './styles.css';
 type BootstrapResult = 'ready' | 'preview' | 'recovery' | 'stale';
 type BootstrapMode = 'teams' | 'preview';
 
-export const DEFAULT_TEAMS_BOOTSTRAP_TIMEOUT_MS = 10_000;
+// TeamsJS keeps app.initialize() pending for up to 60 seconds. Keep the
+// controller timeout outside that window so a retry cannot reset a still-live
+// SDK initialization promise and race its late host response.
+export const DEFAULT_TEAMS_BOOTSTRAP_TIMEOUT_MS = 65_000;
 
 type BootstrapOptions = {
   mode?: BootstrapMode;
