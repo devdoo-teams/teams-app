@@ -21,6 +21,7 @@ type BootstrapOptions = {
   markHostReady: () => void;
   setHost: () => void;
   renderApp: () => void;
+  notifySuccess?: () => Promise<unknown> | unknown;
   root: HTMLElement;
   timeoutMs?: number;
 };
@@ -94,6 +95,9 @@ export function createTeamsBootstrapController(options: BootstrapOptions): { sta
         options.markHostReady();
         options.setHost();
         options.renderApp();
+        if (options.mode === 'teams') {
+          await options.notifySuccess?.();
+        }
         ready = true;
         return 'ready';
       } catch (error) {
@@ -157,6 +161,7 @@ if (typeof document !== 'undefined') {
       document.documentElement.dataset.host = 'teams';
     },
     renderApp: () => renderApp(root),
+    notifySuccess: () => app.notifySuccess(),
     root,
   });
 

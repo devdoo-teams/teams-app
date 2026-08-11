@@ -110,6 +110,30 @@ async function testInitializationCanFinishAfterLegacyTwoSecondWindow(): Promise<
   assert.equal(renderCalls, 1, 'a slow but successful initialization mounts the app once');
 }
 
+async function testSuccessfulInitializationNotifiesTeamsHostLoaded(): Promise<void> {
+  const root = new FakeRoot();
+  let notifySuccessCalls = 0;
+
+  const controller = createTeamsBootstrapController({
+    mode: 'teams',
+    initialize: async () => undefined,
+    markHostReady: () => undefined,
+    setHost: () => undefined,
+    renderApp: () => undefined,
+    root: root as unknown as HTMLElement,
+    notifySuccess: async () => {
+      notifySuccessCalls += 1;
+    },
+  });
+
+  assert.equal(await controller.start(), 'ready', 'successful Teams initialization reaches the app');
+  assert.equal(
+    notifySuccessCalls,
+    1,
+    'successful Teams initialization notifies the host so an existing updated tab is released from its loading state',
+  );
+}
+
 async function testDefaultTimeoutAllowsTeamsJsInitializationToSettle(): Promise<void> {
   assert.ok(
     DEFAULT_TEAMS_BOOTSTRAP_TIMEOUT_MS >= 60_000,
@@ -254,6 +278,7 @@ async function testHungInitializationMountsRetryableRecoveryAndGuardsLateResult(
 await testHungInitializationMountsRetryableRecoveryAndGuardsLateResult();
 await testImmediateInitializationRejectionMountsTeamsRecovery();
 await testInitializationCanFinishAfterLegacyTwoSecondWindow();
+await testSuccessfulInitializationNotifiesTeamsHostLoaded();
 await testDefaultTimeoutAllowsTeamsJsInitializationToSettle();
 await testRetryResetsTeamsInitializationBeforeStartingAgain();
 await testExplicitPreviewWorksInsideAnEmbeddedBrowserFrame();
