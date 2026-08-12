@@ -77,7 +77,7 @@ npm run release:gate
 
 게이트는 하위 명령어의 출력·종료 코드·제한시간을 기록한다. timeout 또는 비정상 종료는 `BLOCKED`로 보고하고, 프로세스 그룹만 정리한다. 공개 서버·Dev Tunnel·기존 로그인 탭은 이 과정에서 종료하지 않는다. `release:public`이 HTTP 200을 확인하기 전에는 Teams UI 검증이나 완료 메시지로 넘어가지 않는다.
 
-`release:public`은 `--url`을 우선 사용하고, 없으면 `TEAMS_PUBLIC_URL`, `PUBLIC_BASE_URL`, `.env.runtime`의 `TAB_DOMAIN` 순서로 현재 공개 origin을 해석한다. 별도 URL을 매번 복사해 넣지 않아도 되지만, 실제 `portUri`가 바뀌면 `.env.runtime`을 먼저 갱신하고 패키지·업로드 절차를 다시 시작한다. 운영 `typecheck`는 `tsconfig.release.json`의 작은 vendor type stub으로 선언 그래프 폭주를 차단하며, 실제 패키지 선언을 별도로 진단할 때만 `npm run typecheck:vendor`를 사용한다.
+`release:public`은 `--url`을 우선 사용하고, 없으면 `TEAMS_PUBLIC_URL`, `PUBLIC_BASE_URL`, `.env.runtime`의 `TAB_DOMAIN` 순서로 현재 공개 origin을 해석한다. 별도 URL을 매번 복사해 넣지 않아도 되지만, 실제 `portUri`가 바뀌면 `.env.runtime`을 먼저 갱신하고 패키지·업로드 절차를 다시 시작한다. `typecheck:core`는 direct bounded esbuild CLI stdin transform을 사용하고 workspace tsconfig auto-discovery를 끄며 long-lived service mode를 사용하지 않는다. 실제 패키지 선언은 별도 bounded 진단에서만 확인하고, 필요할 때만 `npm run typecheck:vendor`를 사용한다.
 
 클라이언트는 `dist/client`를 선삭제하지 않고 임시 디렉터리에서 성공적으로 만든 뒤 교체한다. CopilotKit v2 대형 번들에서 현재 Node 24 + esbuild API의 source map 생성이 무기한 대기하는 회귀가 있으므로 운영 빌드 source map은 끈다. 이 문제를 다시 만나도 제한시간 게이트가 공개 산출물을 비우지 않은 채 중단되어야 한다.
 `/api/health`가 200이어도 탭이 정상이라는 뜻은 아니다. 공개 프로세스 교체 직후에는 반드시 같은 origin에서 `/api/health` 200 → `/tabs/home/` 200 → HTML에 선언된 해시 자산 200을 연속 확인한다. health만 살아 있고 탭이 404이면 `TAB_RUNTIME_UNAVAILABLE`로 실패 처리하고, 이전 공개 프로세스를 유지한 채 산출물 경로·FileProvider 상태를 조사한다. Teams SDK 봇 분기에서도 개인 탭 HTTP 라우트가 항상 등록되어야 한다. `dist/client`가 `dist/client <n>`처럼 충돌 이름으로 바뀌었거나 원래 경로가 사라진 경우에는 빌드 성공으로 간주하지 않고, 새 `index.html`과 해시 자산을 확인한 뒤 3단계 HTTP probe를 재실행한다.
@@ -89,7 +89,7 @@ Core 서버 번들은 Teams SDK·Express 등 필수 런타임을 포함하고 Co
 ### 로컬 원본 소스 기준
 
 - `/Users/doosansmacbookpro/Documents/TeamsApp`이 로컬 원본 소스이며 유일한 Git 이력 기준이다. 다른 폴더나 임시 경로를 원본·원격·복구 기준으로 추정하지 않는다.
-- 현재 Git 원격은 구성되어 있지 않다. 원격 저장소, clone, pull, push를 전제로 한 절차를 수행하거나 진행 보고에 포함하지 않는다.
+- 현재 Git `origin`은 `https://github.com/devdoo-teams/teams-app.git`이다. Bitbucket은 선택적인 추가 remote일 뿐이며, 인증된 Bitbucket 화면에서 workspace·repository slug·visibility·clone URL을 확인하기 전에는 추론·추가하거나 절차의 전제로 두지 않는다. 이후 PR이 필요해지면 저장소 설정이 명시적으로 바뀌지 않은 한 현재 구성된 GitHub `origin` 워크플로우를 사용한다.
 - 구현·빌드·테스트·버전 증가·커밋은 원본 작업공간에서 수행한다. `/tmp`는 일회성 로그·격리 검증·업로드용 ZIP 산출물에만 사용하고, 원본 상태와 커밋의 증거는 원본 작업공간에서 다시 확인한다.
 - Teams 업로드는 원본에서 생성하고 SHA-256 및 ZIP 내부 매니페스트를 검증한 최신 ZIP의 절대 로컬 경로를 브라우저 파일 선택기에 직접 전달한다. Finder 다운로드나 동기화 대기를 선행 조건으로 만들지 않는다.
 
@@ -112,7 +112,7 @@ macOS FileProvider가 원본 작업공간의 파일을 placeholder 상태로 만
 이 상태에서 `cp`, Git 객체 읽기, 빌드, 서버 시작을 파일별로 무기한 반복하지 않는다. 각 PID·경과 시간·마지막 로그를 30초 간격으로 확인하고, 두 번 연속 변화가 없으면 stale 작업으로 분리한다. 의존성 캐시 재구성·이미 로컬인 산출물 검증·공개 health 확인 같은 독립 명령어 검증은 계속할 수 있지만, `/Users/doosansmacbookpro/Documents/TeamsApp` 외의 `/tmp`·iCloud·동기화 경로·Git 객체 복구 결과를 원본으로 취급하지 않는다. 복구 임시 파일은 worktree 밖의 recoverable 경로로 이동하고 clean worktree를 다시 확인한다.
 `dist` 자체가 `blocks=0`인 경우에는 `build:core`가 OS 안정 런타임 경로를 선택하고, `npm start`가 `scripts/start-server.mjs`로 그 동일 경로의 서버를 기동하게 한다. 클라이언트·서버 source materialize와 실행 의존성은 작업공간 바깥 OS 임시 경로에서 수행하고, `scripts/fileprovider-runtime-deps.mjs`가 준비한 로컬 dependency cache를 esbuild `nodePaths`와 서버 `node_modules` 링크에 명시적으로 사용한다. 테스트가 서버를 기동할 때도 `resolveRuntimeDistRoot()`의 동일한 검증 산출물을 사용하며 workspace `dist/server/index.js`를 직접 실행하지 않는다. 런타임 산출물은 재생성 가능한 파생 파일이며 원본 소스·Git 이력·Teams 업로드 ZIP의 기준이 아니다.
 
-`typecheck:core`에서 esbuild 서비스가 중단되면 서비스 정리 후 한 번만 재시작·재시도한다. 두 번째 실패는 실제 게이트 실패로 기록한다. 기본 API-free 테스트에는 CopilotKit Channels shadow 같은 optional provider를 섞지 않고, 별도 명령에서만 실행한다.
+`typecheck:core`에서 정확히 legacy `The service was stopped` 시그니처가 나오면 새 CLI invocation 하나로만 재시도한다. 두 번째 실패나 timeout은 실제 게이트 실패로 기록한다. 기본 API-free 테스트에는 CopilotKit Channels shadow 같은 optional provider를 섞지 않고, 별도 명령에서만 실행한다.
 
 매니페스트의 `developer.websiteUrl`·static-tab `websiteUrl`이 origin root를 가리키므로 공개 검증은 `/api/health`와 `/tabs/home/`뿐 아니라 `/`도 따라간다. `/`의 최종 URL은 canonical `/tabs/home/`와 같아야 하며, root 404는 `TAB_RUNTIME_UNAVAILABLE`이다.
 
