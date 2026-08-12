@@ -11,10 +11,11 @@ updating, linking, or transitioning an issue.
 - Default assignee: the currently signed-in Jira user (`self`)
 - Issue types: reproducible defect or release blocker=`Bug`; planned Core slice=`Task`;
   non-blocking optimization=`Improvement`
-- Bitbucket is the user-approved Git hosting target, but `origin` remains unconfigured until an
-  authenticated Bitbucket page confirms the workspace, repository slug, visibility, and clone URL.
-  Pull requests are not a request surface until that exact remote is configured and this document
-  is updated with its workflow. GitHub and GitLab must not be inferred.
+- Git hosting source of truth: `origin=https://github.com/devdoo-teams/teams-app.git`. Treat
+  Bitbucket as an optional additional remote only after an authenticated Bitbucket view confirms
+  the workspace, repository slug, visibility, and clone URL. If a pull request is requested, use
+  the configured GitHub `origin` workflow unless the repository configuration is explicitly
+  changed. Do not infer or add Bitbucket before that confirmation.
 
 ## Live writes
 
