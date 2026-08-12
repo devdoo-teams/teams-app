@@ -111,6 +111,24 @@ function getErrorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function matchesLegacyServiceStoppedSignature(error) {
+  const legacySignature = 'The service was stopped';
+  const message = error?.message;
+  if (typeof message === 'string' && message.trim() === legacySignature) {
+    return true;
+  }
+
+  const stderr = error?.stderr;
+  if (typeof stderr === 'string') {
+    return stderr.trim() === legacySignature;
+  }
+  if (Buffer.isBuffer(stderr)) {
+    return stderr.toString('utf8').trim() === legacySignature;
+  }
+
+  return false;
+}
+
 function statCheckedSource(relativePath, adapters) {
   try {
     return adapters.statFile(relativePath);
@@ -183,7 +201,7 @@ function compileSource(relativePath, source, adapters) {
     try {
       result = adapters.compileSource({ relativePath, source, loader });
     } catch (error) {
-      if (error?.code === 'ETIMEDOUT' || !getErrorMessage(error).includes('The service was stopped')) {
+      if (error?.code === 'ETIMEDOUT' || !matchesLegacyServiceStoppedSignature(error)) {
         throw error;
       }
       result = adapters.compileSource({ relativePath, source, loader });

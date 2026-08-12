@@ -265,6 +265,57 @@ function assertThrowsMessage(callback, pattern) {
   const adapters = makeAdapters({
     compileSource({ relativePath, source, loader }) {
       adapters.calls.compileSource.push({ relativePath, source, loader });
+      throw new Error('prefix: The service was stopped');
+    },
+  });
+
+  assertThrowsMessage(
+    () => runWithAdapters(adapters, { files: ['src/server/index.ts'] }),
+    /Core source compile check failed for src\/server\/index\.ts: prefix: The service was stopped/,
+  );
+  assert.equal(adapters.calls.compileSource.length, 1);
+}
+
+{
+  const adapters = makeAdapters({
+    compileSource({ relativePath, source, loader }) {
+      adapters.calls.compileSource.push({ relativePath, source, loader });
+      if (adapters.calls.compileSource.length === 1) {
+        const error = new Error('Command failed');
+        error.stderr = Buffer.from('The service was stopped\n', 'utf8');
+        throw error;
+      }
+      return { code: 'const ok = true;\n' };
+    },
+  });
+
+  const result = runWithAdapters(adapters, { files: ['src/server/index.ts'] });
+
+  assert.equal(result.checkedFileCount, 1);
+  assert.equal(adapters.calls.compileSource.length, 2);
+}
+
+{
+  const adapters = makeAdapters({
+    compileSource({ relativePath, source, loader }) {
+      adapters.calls.compileSource.push({ relativePath, source, loader });
+      const error = new Error('Command failed');
+      error.stderr = 'prefix The service was stopped';
+      throw error;
+    },
+  });
+
+  assertThrowsMessage(
+    () => runWithAdapters(adapters, { files: ['src/server/index.ts'] }),
+    /Core source compile check failed for src\/server\/index\.ts: Command failed/,
+  );
+  assert.equal(adapters.calls.compileSource.length, 1);
+}
+
+{
+  const adapters = makeAdapters({
+    compileSource({ relativePath, source, loader }) {
+      adapters.calls.compileSource.push({ relativePath, source, loader });
       throw new Error('The service was stopped');
     },
   });
