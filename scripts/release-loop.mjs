@@ -6,7 +6,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inflateSync } from 'node:zlib';
 
-import { parseDotEnv, resolvePublicUrl, runWithTimeout } from './release-gate.mjs';
+import {
+  createPreflightCommands,
+  parseDotEnv,
+  resolvePublicUrl,
+  runWithTimeout,
+} from './release-gate.mjs';
 import { validateMatrix } from './teams-ui-matrix-validate.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -1358,7 +1363,10 @@ export function summarizePhase(phase, payload) {
 }
 
 const phaseTimeouts = {
-  machine: 330_000,
+  // Keep the outer process alive for every sequential inner command plus
+  // bounded process startup and cleanup overhead.
+  machine: createPreflightCommands()
+    .reduce((total, [, , timeoutMs]) => total + timeoutMs, 30_000),
   package: 60_000,
   public: 30_000,
 };

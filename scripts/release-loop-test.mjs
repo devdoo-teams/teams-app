@@ -38,6 +38,22 @@ assert.deepEqual(
   'release loop public phase accepts an explicit URL for reproducible probes',
 );
 
+let machineGateOptions;
+await runGatePhase('machine', {
+  runGate: async (_command, _args, options) => {
+    machineGateOptions = options;
+    return {
+      code: 0,
+      stdout: JSON.stringify({ status: 'READY', evidence: [] }),
+      stderr: '',
+    };
+  },
+});
+assert.ok(
+  machineGateOptions.timeoutMs >= 690_000,
+  'the outer machine gate must cover the sum of all sequential inner preflight timeouts',
+);
+
 const routeProbeRequests = [];
 const routeProbe = await probePublicTabRoutes({
   baseUrl: 'https://runtime.example.com',
