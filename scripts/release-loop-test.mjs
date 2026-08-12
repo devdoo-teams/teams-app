@@ -25,6 +25,7 @@ import {
   probePublicTabRoutes,
   rasterDimensions,
   resetAfterPhaseFailure,
+  requestedSourceIoMode,
   reverifyEvidenceArtifacts,
   runGatePhase,
   summarizePhase,
@@ -36,6 +37,16 @@ assert.deepEqual(
   parseArgs(['public', '--url', 'https://runtime.example.com']),
   { command: 'public', file: undefined, reason: undefined, url: 'https://runtime.example.com' },
   'release loop public phase accepts an explicit URL for reproducible probes',
+);
+assert.equal(
+  requestedSourceIoMode({ TEAMS_FILEPROVIDER_SERVER_REUSE: '1' }),
+  'index-tree-fileprovider-fallback',
+  'an explicit FileProvider fallback must be recorded in the release identity',
+);
+assert.equal(
+  requestedSourceIoMode({}),
+  'normal',
+  'a release without an explicit fallback request starts in normal source-I/O mode',
 );
 
 let machineGateOptions;

@@ -1250,6 +1250,12 @@ export function classifyGitStatus(porcelain) {
   };
 }
 
+export function requestedSourceIoMode(env = process.env) {
+  return env.TEAMS_FILEPROVIDER_SERVER_REUSE === '1'
+    ? 'index-tree-fileprovider-fallback'
+    : 'normal';
+}
+
 function gitSnapshot() {
   const run = (args) => {
     try {
@@ -1272,7 +1278,7 @@ function gitSnapshot() {
     }
   };
   let porcelain;
-  let sourceIoMode = 'normal';
+  let sourceIoMode = requestedSourceIoMode();
   try {
     porcelain = run(['status', '--porcelain']);
   } catch (error) {
