@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import * as coreSourceCheckBehavior from './core-source-check-lib.mjs';
 
 const runner = fs.readFileSync(new URL('./api-free-test-runner.mjs', import.meta.url), 'utf8');
 const clientBuild = fs.readFileSync(new URL('./build-client.mjs', import.meta.url), 'utf8');
@@ -101,20 +102,119 @@ assert.match(
   /transformSync/,
   "core source checks must compile through esbuild's one-shot synchronous transform path",
 );
+assert.doesNotMatch(
+  coreSourceCheckModule,
+  /\btransform\s*\(/,
+  'core source checks must not use the old async esbuild transform() path',
+);
+assert.doesNotMatch(
+  coreSourceCheckModule,
+  /\.stop\s*\(/,
+  'core source checks must not manage a long-lived esbuild service with stop()',
+);
+assert.doesNotMatch(
+  coreSourceCheckModule,
+  /transformWithBoundedRetry/,
+  'core source checks must not use the old transformWithBoundedRetry implementation',
+);
+assert.match(
+  coreSourceCheckModule,
+  /ESBUILD_WORKER_THREADS/,
+  'core source checks must disable esbuild worker threads before compiling',
+);
+{
+  const timeoutMatch = coreSourceCheckModule.match(/const CORE_COMPILE_TIMEOUT_MS = ([\d_]+);/);
+  assert.ok(timeoutMatch, 'core source checks must declare a finite compile timeout');
+  const timeoutMs = Number(timeoutMatch[1].replaceAll('_', ''));
+  assert.ok(Number.isFinite(timeoutMs) && timeoutMs > 0 && timeoutMs <= 10_000);
+}
 assert.match(
   coreSourceCheckModule,
   /git', \['show', `HEAD:\$\{relativePath\}`\]/,
   'FileProvider fallback must read checked Core sources from git show HEAD:<path>',
-);
-assert.doesNotMatch(
-  coreSourceCheckModule,
-  /transformWithBoundedRetry|service was stopped/i,
-  'the Core source-check module must not keep the long-lived esbuild service retry path',
 );
 assert.match(
   esbuildBounded,
   /attempt <= 2|retrying once/,
   'esbuild builds must retry the known service-stop failure once and then fail fast',
 );
+
+{
+  const captured = {};
+  const adapters = coreSourceCheckBehavior.createDefaultAdapters('/tmp/core-source-check-root', {
+    runCommandSync(command, args, options) {
+      captured.command = command;
+      captured.args = args;
+      captured.options = options;
+      return 'const ok = true;\n';
+    },
+  });
+
+  const result = adapters.compileSource({
+    relativePath: 'src/server/index.ts',
+    source: 'export const ok = true;',
+    loader: 'ts',
+  });
+
+  assert.equal(result.code, 'const ok = true;\n');
+  assert.equal(captured.command, process.execPath);
+  assert.deepEqual(captured.args.slice(0, 2), ['--input-type=module', '-e']);
+  assert.equal(captured.options.cwd, '/tmp/core-source-check-root');
+  assert.equal(captured.options.encoding, 'utf8');
+  assert.equal(captured.options.shell, false);
+  assert.equal(captured.options.env.ESBUILD_WORKER_THREADS, '0');
+  assert.match(captured.options.input, /export const ok = true;/);
+  assert.equal(typeof captured.options.timeout, 'number');
+  assert.ok(captured.options.timeout > 0 && captured.options.timeout <= 10_000);
+}
+
+function makeCoreSourceAdapters(compileSource) {
+  return {
+    statFile() {
+      return { size: 12, blocks: 8 };
+    },
+    readWorkspaceFile() {
+      return 'export const ok = true;';
+    },
+    getTrackedWorktreeStatus() {
+      return '';
+    },
+    readCommittedSource() {
+      return 'export const ok = true;';
+    },
+    compileSource,
+  };
+}
+
+{
+  let attempts = 0;
+  coreSourceCheckBehavior.runCoreSourceCheck({
+    files: ['src/server/index.ts'],
+    env: {},
+    adapters: makeCoreSourceAdapters(() => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('The service was stopped');
+      return { code: 'const ok = true;\n' };
+    }),
+  });
+  assert.equal(attempts, 2, 'core compile must retry the exact service-stop failure once');
+}
+
+{
+  let attempts = 0;
+  assert.throws(
+    () =>
+      coreSourceCheckBehavior.runCoreSourceCheck({
+        files: ['src/server/index.ts'],
+        env: {},
+        adapters: makeCoreSourceAdapters(() => {
+          attempts += 1;
+          throw new Error('The service was stopped');
+        }),
+      }),
+    /Core source compile check failed for src\/server\/index\.ts: The service was stopped/,
+  );
+  assert.equal(attempts, 2, 'core compile must fail after exactly two service-stop attempts');
+}
 
 console.log('PASS: API-free runner avoids the unbounded full typecheck');

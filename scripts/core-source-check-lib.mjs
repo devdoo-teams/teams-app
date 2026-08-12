@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { transformSync } from 'esbuild';
 
 export const CORE_SOURCE_CHECK_FILES = [
   'src/server/codex-capability.ts',
@@ -17,10 +16,27 @@ export const CORE_SOURCE_CHECK_FILES = [
 ];
 
 const GIT_TIMEOUT_MS = 10_000;
+const CORE_COMPILE_TIMEOUT_MS = 10_000;
 const EXPLICIT_FILEPROVIDER_FALLBACK = 'explicit-env';
 const DATALESS_FILEPROVIDER_FALLBACK = 'dataless-tracked-input';
 
-function createDefaultAdapters(root) {
+const CORE_COMPILE_WORKER_SOURCE = `
+const chunks = [];
+for await (const chunk of process.stdin) chunks.push(chunk);
+const payload = JSON.parse(chunks.join(''));
+process.env.ESBUILD_WORKER_THREADS = '0';
+const { transformSync } = await import('esbuild');
+const result = transformSync(payload.source, {
+  loader: payload.loader,
+  format: 'esm',
+  target: 'es2022',
+  jsx: 'automatic',
+  sourcemap: false,
+});
+process.stdout.write(result.code ?? '');
+`;
+
+export function createDefaultAdapters(root, { runCommandSync = execFileSync } = {}) {
   return {
     statFile(relativePath) {
       return fs.statSync(path.join(root, relativePath));
@@ -43,13 +59,15 @@ function createDefaultAdapters(root) {
       });
     },
     compileSource({ source, loader }) {
-      return transformSync(source, {
-        loader,
-        format: 'esm',
-        target: 'es2022',
-        jsx: 'automatic',
-        sourcemap: false,
+      const code = runCommandSync(process.execPath, ['--input-type=module', '-e', CORE_COMPILE_WORKER_SOURCE], {
+        cwd: root,
+        encoding: 'utf8',
+        timeout: CORE_COMPILE_TIMEOUT_MS,
+        input: JSON.stringify({ source, loader }),
+        env: { ...process.env, ESBUILD_WORKER_THREADS: '0' },
+        shell: false,
       });
+      return { code };
     },
   };
 }
@@ -130,11 +148,24 @@ function compileSource(relativePath, source, adapters) {
   const loader = relativePath.endsWith('.tsx') ? 'tsx' : 'ts';
 
   try {
-    const result = adapters.compileSource({ relativePath, source, loader });
+    let result;
+    try {
+      result = adapters.compileSource({ relativePath, source, loader });
+    } catch (error) {
+      if (error?.code === 'ETIMEDOUT' || !getErrorMessage(error).includes('The service was stopped')) {
+        throw error;
+      }
+      result = adapters.compileSource({ relativePath, source, loader });
+    }
     assert.ok(result?.code?.length > 0, `${relativePath} produced no compiled output`);
     return { loader, code: result.code };
   } catch (error) {
-    throw new Error(`Core source compile check failed for ${relativePath}: ${getErrorMessage(error)}`, { cause: error });
+    const wrapped = new Error(`Core source compile check failed for ${relativePath}: ${getErrorMessage(error)}`, {
+      cause: error,
+    });
+    if (error?.code) wrapped.code = error.code;
+    if (error?.signal) wrapped.signal = error.signal;
+    throw wrapped;
   }
 }
 

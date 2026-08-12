@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { CORE_SOURCE_CHECK_FILES, runCoreSourceCheck } from './core-source-check-lib.mjs';
+import path from 'node:path';
+import * as coreSourceCheckModule from './core-source-check-lib.mjs';
+
+const { CORE_SOURCE_CHECK_FILES, runCoreSourceCheck } = coreSourceCheckModule;
 
 const validSource = 'export const ok = true;';
 
@@ -238,6 +241,91 @@ function assertThrowsMessage(callback, pattern) {
     () => runWithAdapters(adapters),
     /Core source compile check failed for src\/server\/codex-capability\.ts: Expected ";" but found "}"/,
   );
+}
+
+{
+  const adapters = makeAdapters({
+    compileSource({ relativePath, source, loader }) {
+      adapters.calls.compileSource.push({ relativePath, source, loader });
+      if (adapters.calls.compileSource.length === 1) {
+        throw new Error('The service was stopped');
+      }
+      return { code: 'const ok = true;\n' };
+    },
+  });
+
+  const result = runWithAdapters(adapters, { files: ['src/server/index.ts'] });
+
+  assert.equal(result.checkedFileCount, 1);
+  assert.equal(adapters.calls.compileSource.length, 2);
+}
+
+{
+  const adapters = makeAdapters({
+    compileSource({ relativePath, source, loader }) {
+      adapters.calls.compileSource.push({ relativePath, source, loader });
+      throw new Error('The service was stopped');
+    },
+  });
+
+  assertThrowsMessage(
+    () => runWithAdapters(adapters, { files: ['src/server/index.ts'] }),
+    /Core source compile check failed for src\/server\/index\.ts: The service was stopped/,
+  );
+  assert.equal(adapters.calls.compileSource.length, 2);
+}
+
+{
+  const adapters = makeAdapters({
+    compileSource({ relativePath, source, loader }) {
+      adapters.calls.compileSource.push({ relativePath, source, loader });
+      const error = new Error('spawn timed out');
+      error.code = 'ETIMEDOUT';
+      throw error;
+    },
+  });
+
+  assert.throws(
+    () => runWithAdapters(adapters, { files: ['src/server/index.ts'] }),
+    (error) => {
+      assert.match(error.message, /Core source compile check failed for src\/server\/index\.ts: spawn timed out/);
+      assert.equal(error.code, 'ETIMEDOUT');
+      return true;
+    },
+  );
+  assert.equal(adapters.calls.compileSource.length, 1);
+}
+
+{
+  const captured = {};
+  const adapters = coreSourceCheckModule.createDefaultAdapters('/tmp/core-source-check-root', {
+    runCommandSync(command, args, options) {
+      captured.command = command;
+      captured.args = args;
+      captured.options = options;
+      return 'const ok = true;\n';
+    },
+  });
+
+  const result = adapters.compileSource({
+    relativePath: 'src/client/App.tsx',
+    source: 'export const ok = <div />;',
+    loader: 'tsx',
+  });
+
+  assert.equal(result.code, 'const ok = true;\n');
+  assert.equal(captured.command, process.execPath);
+  assert.equal(path.isAbsolute(captured.command), true);
+  assert.deepEqual(captured.args.slice(0, 2), ['--input-type=module', '-e']);
+  assert.equal(typeof captured.args[2], 'string');
+  assert.equal(captured.options.cwd, '/tmp/core-source-check-root');
+  assert.equal(captured.options.encoding, 'utf8');
+  assert.equal(captured.options.shell, false);
+  assert.equal(captured.options.env.ESBUILD_WORKER_THREADS, '0');
+  assert.equal(typeof captured.options.input, 'string');
+  assert.match(captured.options.input, /export const ok = <div \/>;/);
+  assert.equal(typeof captured.options.timeout, 'number');
+  assert.ok(captured.options.timeout > 0 && captured.options.timeout <= 10_000);
 }
 
 {
