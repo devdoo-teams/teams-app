@@ -8,6 +8,7 @@ const responseModeApiTest = fs.readFileSync(new URL('./response-mode-api-test.ts
 const authStartupTest = fs.readFileSync(new URL('./auth-startup-gate-test.mjs', import.meta.url), 'utf8');
 const operatorAllowlistTest = fs.readFileSync(new URL('./operator-allowlist-runtime-test.mjs', import.meta.url), 'utf8');
 const coreSourceCheck = fs.readFileSync(new URL('./core-source-check.mjs', import.meta.url), 'utf8');
+const coreSourceCheckModule = fs.readFileSync(new URL('./core-source-check-lib.mjs', import.meta.url), 'utf8');
 const esbuildBounded = fs.readFileSync(new URL('./esbuild-bounded.mjs', import.meta.url), 'utf8');
 
 assert.match(
@@ -92,8 +93,23 @@ assert.match(
 );
 assert.match(
   coreSourceCheck,
+  /runCoreSourceCheck/,
+  'the npm typecheck:core entrypoint must delegate to the deep Core source-check module',
+);
+assert.match(
+  coreSourceCheckModule,
+  /transformSync/,
+  "core source checks must compile through esbuild's one-shot synchronous transform path",
+);
+assert.match(
+  coreSourceCheckModule,
+  /git', \['show', `HEAD:\$\{relativePath\}`\]/,
+  'FileProvider fallback must read checked Core sources from git show HEAD:<path>',
+);
+assert.doesNotMatch(
+  coreSourceCheckModule,
   /transformWithBoundedRetry|service was stopped/i,
-  'core source checks must retry only the known transient esbuild service-stop failure within a bounded attempt count',
+  'the Core source-check module must not keep the long-lived esbuild service retry path',
 );
 assert.match(
   esbuildBounded,

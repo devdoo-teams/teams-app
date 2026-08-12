@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.release.json",
     "typecheck:core": "node scripts/core-source-check.mjs",
     "test:typecheck-boundary": "node scripts/typecheck-boundary-test.mjs",
+    "test:core-source-check": "node scripts/core-source-check-test.mjs",
     "typecheck:vendor": "tsc --noEmit -p tsconfig.json",
     "check:types": "npm run typecheck",
     "check:deployment": "node --env-file-if-exists=.env.runtime scripts/validate-deployment-env.mjs",
