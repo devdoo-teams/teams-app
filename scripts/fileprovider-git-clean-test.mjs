@@ -20,6 +20,11 @@ function commandRunner(responses) {
   assert.deepEqual(runner.calls.map(({ args }) => args), [
     ['status', '--porcelain', '--untracked-files=no'],
   ]);
+  assert.equal(
+    runner.calls[0].options.env.GIT_OPTIONAL_LOCKS,
+    '0',
+    'background clean verification must not refresh and lock the index as a status side effect',
+  );
 }
 
 {
@@ -34,11 +39,12 @@ function commandRunner(responses) {
 {
   const timeout = new Error('git status timed out');
   timeout.code = 'ETIMEDOUT';
-  const runner = commandRunner([timeout, 'tree-a\n', 'tree-a\n']);
+  const runner = commandRunner([timeout, '', 'tree-a\n', 'tree-a\n']);
   const result = assertCleanTrackedWorktreeForFileProvider('/repo', runner);
-  assert.equal(result.verificationMode, 'head-index-tree');
+  assert.equal(result.verificationMode, 'worktree-index-head');
   assert.deepEqual(runner.calls.map(({ args }) => args), [
     ['status', '--porcelain', '--untracked-files=no'],
+    ['diff-files', '--quiet', '--'],
     ['rev-parse', 'HEAD^{tree}'],
     ['write-tree'],
   ]);
@@ -47,7 +53,20 @@ function commandRunner(responses) {
 {
   const timeout = new Error('git status timed out');
   timeout.code = 'ETIMEDOUT';
-  const runner = commandRunner([timeout, 'head-tree', 'dirty-index-tree']);
+  const unstagedDirty = new Error('worktree differs from index');
+  unstagedDirty.status = 1;
+  const runner = commandRunner([timeout, unstagedDirty]);
+  assert.throws(
+    () => assertCleanTrackedWorktreeForFileProvider('/repo', runner),
+    /requires a clean tracked Git worktree/,
+  );
+  assert.equal(runner.calls.length, 2, 'unstaged changes must stop before HEAD/index comparison');
+}
+
+{
+  const timeout = new Error('git status timed out');
+  timeout.code = 'ETIMEDOUT';
+  const runner = commandRunner([timeout, '', 'head-tree', 'dirty-index-tree']);
   assert.throws(
     () => assertCleanTrackedWorktreeForFileProvider('/repo', runner),
     /requires a clean tracked Git worktree/,
@@ -66,15 +85,26 @@ function commandRunner(responses) {
 }
 
 {
+  const interrupted = new Error('git status interrupted');
+  interrupted.signal = 'SIGINT';
+  const runner = commandRunner([interrupted]);
+  assert.throws(
+    () => assertCleanTrackedWorktreeForFileProvider('/repo', runner),
+    /Failed to inspect tracked Git worktree.*interrupted/,
+  );
+  assert.equal(runner.calls.length, 1, 'an abnormal signal must not enter the timeout fallback');
+}
+
+{
   const timeout = new Error('git status timed out');
   timeout.code = 'ETIMEDOUT';
   const treeFailure = new Error('write tree failed');
   treeFailure.code = 'EIO';
-  const runner = commandRunner([timeout, 'head-tree', treeFailure]);
+  const runner = commandRunner([timeout, '', 'head-tree', treeFailure]);
   assert.throws(
     () => assertCleanTrackedWorktreeForFileProvider('/repo', runner),
-    /HEAD\/index tree fallback could not verify/,
+    /worktree\/index\/HEAD fallback could not verify/,
   );
 }
 
-console.log('PASS: FileProvider clean-worktree verification is fail-closed with a bounded HEAD/index fallback');
+console.log('PASS: FileProvider clean-worktree verification is fail-closed with bounded worktree/index/HEAD checks');

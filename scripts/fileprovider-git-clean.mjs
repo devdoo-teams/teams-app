@@ -7,7 +7,7 @@ function commandErrorMessage(error) {
 }
 
 function isTimedOutGitCommand(error) {
-  return error?.code === 'ETIMEDOUT' || error?.killed === true || Boolean(error?.signal);
+  return error?.code === 'ETIMEDOUT';
 }
 
 function dirtyWorktreeError() {
@@ -18,10 +18,11 @@ function dirtyWorktreeError() {
   return error;
 }
 
-function runGit(root, args, runCommandSync, timeoutMs) {
+function runGit(root, args, runCommandSync, timeoutMs, env) {
   return runCommandSync('git', args, {
     cwd: root,
     encoding: 'utf8',
+    env: { ...env, GIT_OPTIONAL_LOCKS: '0' },
     timeout: timeoutMs,
   }).trim();
 }
@@ -31,6 +32,7 @@ export function assertCleanTrackedWorktreeForFileProvider(
   {
     runCommandSync = execFileSync,
     timeoutMs = DEFAULT_GIT_TIMEOUT_MS,
+    env = process.env,
   } = {},
 ) {
   try {
@@ -39,6 +41,7 @@ export function assertCleanTrackedWorktreeForFileProvider(
       ['status', '--porcelain', '--untracked-files=no'],
       runCommandSync,
       timeoutMs,
+      env,
     );
     if (porcelain) throw dirtyWorktreeError();
     return { verificationMode: 'git-status' };
@@ -57,11 +60,13 @@ export function assertCleanTrackedWorktreeForFileProvider(
   let headTree;
   let indexTree;
   try {
-    headTree = runGit(root, ['rev-parse', 'HEAD^{tree}'], runCommandSync, timeoutMs);
-    indexTree = runGit(root, ['write-tree'], runCommandSync, timeoutMs);
+    runGit(root, ['diff-files', '--quiet', '--'], runCommandSync, timeoutMs, env);
+    headTree = runGit(root, ['rev-parse', 'HEAD^{tree}'], runCommandSync, timeoutMs, env);
+    indexTree = runGit(root, ['write-tree'], runCommandSync, timeoutMs, env);
   } catch (error) {
+    if (error?.status === 1 && !error?.signal) throw dirtyWorktreeError();
     const wrapped = new Error(
-      `Git worktree inspection timed out and the HEAD/index tree fallback could not verify a clean tracked worktree: ${commandErrorMessage(error)}`,
+      `Git worktree inspection timed out and the worktree/index/HEAD fallback could not verify a clean tracked worktree: ${commandErrorMessage(error)}`,
       { cause: error },
     );
     wrapped.code = isTimedOutGitCommand(error) ? 'ETIMEDOUT' : (error?.code ?? 'EGITVERIFY');
@@ -69,5 +74,5 @@ export function assertCleanTrackedWorktreeForFileProvider(
   }
 
   if (!headTree || headTree !== indexTree) throw dirtyWorktreeError();
-  return { verificationMode: 'head-index-tree' };
+  return { verificationMode: 'worktree-index-head' };
 }
