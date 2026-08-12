@@ -89,6 +89,7 @@ export function createDefaultAdapters(
         '--jsx=automatic',
         '--log-level=warning',
         `--sourcefile=${relativePath}`,
+        '--tsconfig-raw={}',
       ];
       const code = runCommandSync(binaryPath, args, {
         cwd: root,

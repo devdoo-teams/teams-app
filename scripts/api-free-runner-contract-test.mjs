@@ -127,6 +127,11 @@ assert.doesNotMatch(
   /--service(?:=|\b)/,
   'core source checks must not invoke esbuild service mode',
 );
+assert.match(
+  coreSourceCheckModule,
+  /'--tsconfig-raw=\{\}'/,
+  'core source checks must force an empty tsconfig payload so direct CLI transforms stay isolated from workspace tsconfig discovery',
+);
 assert.doesNotMatch(
   coreSourceCheckModule,
   /transformWithBoundedRetry/,
@@ -176,6 +181,7 @@ assert.match(
     '--jsx=automatic',
     '--log-level=warning',
     '--sourcefile=src/server/index.ts',
+    '--tsconfig-raw={}',
   ]);
   assert.equal(captured.options.cwd, '/tmp/core-source-check-root');
   assert.equal(captured.options.encoding, 'utf8');

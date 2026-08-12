@@ -328,6 +328,7 @@ function assertThrowsMessage(callback, pattern) {
     '--jsx=automatic',
     '--log-level=warning',
     '--sourcefile=src/client/App.tsx',
+    '--tsconfig-raw={}',
   ]);
   assert.equal(captured.options.cwd, '/tmp/core-source-check-root');
   assert.equal(captured.options.encoding, 'utf8');
@@ -365,6 +366,7 @@ function assertThrowsMessage(callback, pattern) {
     '--jsx=automatic',
     '--log-level=warning',
     '--sourcefile=src/server/index.ts',
+    '--tsconfig-raw={}',
   ]);
   assert.equal(captured.options.input, 'export const ok = true;');
 }
