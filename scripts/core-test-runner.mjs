@@ -5,6 +5,7 @@ const plainTests = [
   'scripts/core-optional-boundary-test.mjs',
   'scripts/server-build-mode-test.mjs',
   'scripts/core-source-check-test.mjs',
+  'scripts/fileprovider-git-clean-test.mjs',
   'scripts/typecheck-boundary-test.mjs',
   'scripts/deployment-env-test.mjs',
   'scripts/validate-manifest-test.mjs',

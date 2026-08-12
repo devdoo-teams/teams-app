@@ -14,6 +14,7 @@ Node.js documents that a positive child-process timeout causes the parent to sen
 - A regression test now requires the outer machine timeout to cover at least the 690-second sum. The implementation uses 720 seconds, leaving 30 seconds for process startup and cleanup.
 - A subsequent retry reached the inner 300-second `build:core` limit. Inspection then showed `blocks=0` and `compressed,dataless` on `package-lock.json`, `appPackage/manifest.json`, `scripts/release-loop.mjs`, `src/server/index.ts`, and `src/client/App.tsx`.
 - The release loop now records an explicit `TEAMS_FILEPROVIDER_SERVER_REUSE=1` request as `sourceIoMode=index-tree-fileprovider-fallback`. This preserves the selected source-I/O mode in the release identity while the existing clean tracked-worktree gate remains enforced.
+- The Core source check then showed the lower-level duplicate `git status --porcelain --untracked-files=no` guard timing out after 10 seconds. A shared fail-closed verifier now lets the source check, client fallback, and server fallback use the same bounded rule: normal `git status` when available; only on timeout, exact `HEAD^{tree}` versus `git write-tree` equality. A mismatch or any unverifiable tree command remains fatal.
 
 ## Conclusion
 

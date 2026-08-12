@@ -6,6 +6,7 @@ import { build } from 'esbuild';
 import { buildServerAtomically } from './build-server-atomic.mjs';
 import { ensureFileProviderRuntimeDependencies } from './fileprovider-runtime-deps.mjs';
 import { buildWithBoundedRetry } from './esbuild-bounded.mjs';
+import { assertCleanTrackedWorktreeForFileProvider } from './fileprovider-git-clean.mjs';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 import { createServerBuildMarker, isReusableServerBuild, parseServerBuildMarker } from './server-build-marker.mjs';
 
@@ -13,23 +14,6 @@ const root = process.cwd();
 const outputDir = path.join(resolveRuntimeDistRoot(root), 'server');
 const coreBuild = process.argv.includes('--core');
 const reuseFileProviderBundle = process.env.TEAMS_FILEPROVIDER_SERVER_REUSE === '1';
-
-function hasTrackedWorktreeChanges() {
-  try {
-    return execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], {
-      cwd: root,
-      encoding: 'utf8',
-      timeout: 10_000,
-    }).trim().length > 0;
-  } catch (error) {
-    if (error?.code === 'ETIMEDOUT') {
-      throw new Error(
-        'Git worktree inspection timed out under FileProvider. Materialize the local source or commit from a normal local checkout before building.',
-      );
-    }
-    throw error;
-  }
-}
 
 async function ensureRuntimeNodeModulesLink(targetPath, dependencyPath) {
   try {
@@ -91,11 +75,7 @@ let reusedBundle = null;
 let materializedSource = null;
 let fileProviderRuntimeNodeModules = null;
 if (reuseFileProviderBundle) {
-  if (hasTrackedWorktreeChanges()) {
-    throw new Error(
-      'FileProvider fallback requires a clean tracked Git worktree. Commit tracked source changes before building or packaging.',
-    );
-  }
+  assertCleanTrackedWorktreeForFileProvider(root);
   reusedBundle = await findReusableServerBundle();
   fileProviderRuntimeNodeModules = await ensureFileProviderRuntimeDependencies(root);
   const currentCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();

@@ -9,12 +9,14 @@ import { buildClientAtomically } from './build-client-atomic.mjs';
 import { buildWithBoundedRetry } from './esbuild-bounded.mjs';
 import { ensureFileProviderRuntimeDependencies } from './fileprovider-runtime-deps.mjs';
 import { filterClientSourceFiles } from './fileprovider-client-source.mjs';
+import { assertCleanTrackedWorktreeForFileProvider } from './fileprovider-git-clean.mjs';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 
 const root = process.cwd();
 const outputDir = path.join(resolveRuntimeDistRoot(root), 'client');
 const coreBuild = process.argv.includes('--core');
 const reuseFileProviderSources = process.env.TEAMS_FILEPROVIDER_SERVER_REUSE === '1';
+if (reuseFileProviderSources) assertCleanTrackedWorktreeForFileProvider(root);
 const runtimeNodeModules = reuseFileProviderSources
   ? await ensureFileProviderRuntimeDependencies(root)
   : path.join(root, 'node_modules');
