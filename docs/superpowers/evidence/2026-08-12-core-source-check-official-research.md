@@ -1,13 +1,13 @@
 # 2026-08-12 Core source-check official research
 
-Scope: investigate the reproducible Core source-check failure mode where Node-based esbuild async `transform()` can surface `The service was stopped` inside a macOS File Provider-backed checkout. This note uses only primary sources: official esbuild source/issues, official Node.js docs, official Apple File Provider docs, and official Microsoft Teams docs where they affect release gating.
+Scope: investigate the historical Core source-check failure mode where Node-based esbuild async `transform()` could surface `The service was stopped` inside a macOS File Provider-backed checkout, and record the current post-change behavior separately. This note uses only primary sources: official esbuild source/issues, official Node.js docs, official Apple File Provider docs, and official Microsoft Teams docs where they affect release gating.
 
 ## Local evidence from this checkout (not web claims)
 
 - This repo wires the Core source check through `package.json` as `"typecheck:core": "node scripts/core-source-check.mjs"`.
-- [`scripts/core-source-check.mjs`](/Users/doosansmacbookpro/Documents/TeamsApp/scripts/core-source-check.mjs) imports async `transform` and `stop` from `esbuild`, checks 9 fixed files, retries once only when the error message matches `service was stopped` or `service is no longer running`, then sleeps 100 ms and calls `stop()`.
-- The checker itself is in the same File Provider-backed tree: `scripts/core-source-check.mjs` had `blocks=0 flags=compressed,dataless` at inspection time, while `scripts/esbuild-bounded.mjs` had `blocks=8 flags=-`.
-- All 9 checked source files in the current Core source-check list had `blocks=0 flags=compressed,dataless` at inspection time:
+- Historical pre-change observation from 2026-08-12: [`scripts/core-source-check.mjs`](/Users/doosansmacbookpro/Documents/TeamsApp/scripts/core-source-check.mjs) then imported async `transform` and `stop` from `esbuild`, checked 9 fixed files, retried once only when the error message matched `service was stopped` or `service is no longer running`, then slept 100 ms and called `stop()`.
+- Historical pre-change observation from 2026-08-12: the checker itself was in the same File Provider-backed tree; `scripts/core-source-check.mjs` had `blocks=0 flags=compressed,dataless` at inspection time, while `scripts/esbuild-bounded.mjs` had `blocks=8 flags=-`.
+- Historical pre-change observation from 2026-08-12: all 9 checked source files in the Core source-check list had `blocks=0 flags=compressed,dataless` at inspection time:
   - `src/server/codex-capability.ts`
   - `src/server/index.ts`
   - `src/server/genui-response.ts`
@@ -17,8 +17,11 @@ Scope: investigate the reproducible Core source-check failure mode where Node-ba
   - `src/client/build-flags.ts`
   - `src/client/App.tsx`
   - `src/client/main.tsx`
-- Additional tracked files in `src/`, `scripts/`, `types/`, and `appPackage/manifest.json` also showed `blocks=0 flags=compressed,dataless`.
-- A read-only run on 2026-08-12 of `node scripts/core-source-check.mjs` first emitted `esbuild service stopped while checking src/server/codex-capability.ts; retrying once`, then completed with `PASS: core source compile check covered 9 Teams/CLI files`.
+- Historical pre-change observation from 2026-08-12: additional tracked files in `src/`, `scripts/`, `types/`, and `appPackage/manifest.json` also showed `blocks=0 flags=compressed,dataless`.
+- Historical pre-change observation from 2026-08-12: a read-only run of `node scripts/core-source-check.mjs` first emitted `esbuild service stopped while checking src/server/codex-capability.ts; retrying once`, then completed with `PASS: core source compile check covered 9 Teams/CLI files`.
+- Current post-change observation: [`scripts/core-source-check.mjs`](/Users/doosansmacbookpro/Documents/TeamsApp/scripts/core-source-check.mjs) is now a thin wrapper around [`scripts/core-source-check-lib.mjs`](/Users/doosansmacbookpro/Documents/TeamsApp/scripts/core-source-check-lib.mjs).
+- Current post-change observation: the library imports esbuild `transformSync`, compiles each checked file through the one-shot synchronous path, preserves automatic `blocks === 0` dataless detection for the non-explicit path, and requires a clean tracked worktree plus `git show HEAD:<path>` reads during fallback.
+- Current post-change observation: explicit `TEAMS_FILEPROVIDER_SERVER_REUSE=1` fallback now chooses Git fallback before any workspace `stat`/read attempt, while non-explicit fallback still fails closed on checked-source `stat` errors.
 
 ## Official-source findings
 

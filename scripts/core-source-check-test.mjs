@@ -99,6 +99,23 @@ function assertThrowsMessage(callback, pattern) {
   const adapters = makeAdapters({
     statFile(relativePath) {
       adapters.calls.statFile.push(relativePath);
+      throw new Error(`cannot stat ${relativePath}`);
+    },
+  });
+  const result = runWithAdapters(adapters, { env: { TEAMS_FILEPROVIDER_SERVER_REUSE: '1' } });
+
+  assert.equal(result.sourceMode, 'fallback');
+  assert.equal(result.fallbackReason, 'explicit-env');
+  assert.deepEqual(adapters.calls.statFile, []);
+  assert.deepEqual(adapters.calls.readWorkspaceFile, []);
+  assert.equal(adapters.calls.getTrackedWorktreeStatus, 1);
+  assert.deepEqual(adapters.calls.readCommittedSource, CORE_SOURCE_CHECK_FILES);
+}
+
+{
+  const adapters = makeAdapters({
+    statFile(relativePath) {
+      adapters.calls.statFile.push(relativePath);
       return relativePath === CORE_SOURCE_CHECK_FILES[0] ? { size: 42, blocks: 0 } : { size: 42, blocks: 8 };
     },
     getTrackedWorktreeStatus() {

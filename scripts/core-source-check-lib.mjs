@@ -144,8 +144,11 @@ export function runCoreSourceCheck({
   env = process.env,
   adapters = createDefaultAdapters(root),
 } = {}) {
-  const datalessTrackedFiles = files.filter((relativePath) => isNonEmptyDatalessFile(statCheckedSource(relativePath, adapters)));
-  const fallbackReason = env.TEAMS_FILEPROVIDER_SERVER_REUSE === '1'
+  const explicitFallback = env.TEAMS_FILEPROVIDER_SERVER_REUSE === '1';
+  const datalessTrackedFiles = explicitFallback
+    ? []
+    : files.filter((relativePath) => isNonEmptyDatalessFile(statCheckedSource(relativePath, adapters)));
+  const fallbackReason = explicitFallback
     ? EXPLICIT_FILEPROVIDER_FALLBACK
     : datalessTrackedFiles.length > 0
       ? DATALESS_FILEPROVIDER_FALLBACK
