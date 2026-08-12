@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import * as coreSourceCheckModule from './core-source-check-lib.mjs';
 
@@ -313,19 +314,78 @@ function assertThrowsMessage(callback, pattern) {
     loader: 'tsx',
   });
 
+  const expectedBinary = createRequire(import.meta.url).resolve(
+    `@esbuild/${process.platform}-${process.arch}/bin/esbuild`,
+  );
+
   assert.equal(result.code, 'const ok = true;\n');
-  assert.equal(captured.command, process.execPath);
+  assert.equal(captured.command, expectedBinary);
   assert.equal(path.isAbsolute(captured.command), true);
-  assert.deepEqual(captured.args.slice(0, 2), ['--input-type=module', '-e']);
-  assert.equal(typeof captured.args[2], 'string');
+  assert.deepEqual(captured.args, [
+    '--loader=tsx',
+    '--format=esm',
+    '--target=es2022',
+    '--jsx=automatic',
+    '--log-level=warning',
+    '--sourcefile=src/client/App.tsx',
+  ]);
   assert.equal(captured.options.cwd, '/tmp/core-source-check-root');
   assert.equal(captured.options.encoding, 'utf8');
   assert.equal(captured.options.shell, false);
-  assert.equal(captured.options.env.ESBUILD_WORKER_THREADS, '0');
-  assert.equal(typeof captured.options.input, 'string');
-  assert.match(captured.options.input, /export const ok = <div \/>;/);
-  assert.equal(typeof captured.options.timeout, 'number');
-  assert.ok(captured.options.timeout > 0 && captured.options.timeout <= 10_000);
+  assert.equal(captured.options.input, 'export const ok = <div />;');
+  assert.equal(captured.options.timeout, 10_000);
+  assert.ok(!captured.args.includes('--service'));
+}
+
+{
+  const captured = {};
+  const adapters = coreSourceCheckModule.createDefaultAdapters('/tmp/core-source-check-root', {
+    env: { ESBUILD_BINARY_PATH: '/tmp/custom-esbuild' },
+    runCommandSync(command, args, options) {
+      captured.command = command;
+      captured.args = args;
+      captured.options = options;
+      return 'const ok = true;\n';
+    },
+  });
+
+  const result = adapters.compileSource({
+    relativePath: 'src/server/index.ts',
+    source: 'export const ok = true;',
+    loader: 'ts',
+  });
+
+  assert.equal(result.code, 'const ok = true;\n');
+  assert.equal(captured.command, '/tmp/custom-esbuild');
+  assert.equal(path.isAbsolute(captured.command), true);
+  assert.deepEqual(captured.args, [
+    '--loader=ts',
+    '--format=esm',
+    '--target=es2022',
+    '--jsx=automatic',
+    '--log-level=warning',
+    '--sourcefile=src/server/index.ts',
+  ]);
+  assert.equal(captured.options.input, 'export const ok = true;');
+}
+
+{
+  const adapters = coreSourceCheckModule.createDefaultAdapters('/tmp/core-source-check-root', {
+    env: { ESBUILD_BINARY_PATH: 'relative/esbuild' },
+    runCommandSync() {
+      throw new Error('should not spawn with relative binary path');
+    },
+  });
+
+  assertThrowsMessage(
+    () =>
+      adapters.compileSource({
+        relativePath: 'src/server/index.ts',
+        source: 'export const ok = true;',
+        loader: 'ts',
+      }),
+    /ESBUILD_BINARY_PATH must be an absolute path/,
+  );
 }
 
 {

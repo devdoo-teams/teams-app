@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 
 export const CORE_SOURCE_CHECK_FILES = [
@@ -19,24 +20,45 @@ const GIT_TIMEOUT_MS = 10_000;
 const CORE_COMPILE_TIMEOUT_MS = 10_000;
 const EXPLICIT_FILEPROVIDER_FALLBACK = 'explicit-env';
 const DATALESS_FILEPROVIDER_FALLBACK = 'dataless-tracked-input';
+const MODULE_REQUIRE = createRequire(import.meta.url);
 
-const CORE_COMPILE_WORKER_SOURCE = `
-const chunks = [];
-for await (const chunk of process.stdin) chunks.push(chunk);
-const payload = JSON.parse(chunks.join(''));
-process.env.ESBUILD_WORKER_THREADS = '0';
-const { transformSync } = await import('esbuild');
-const result = transformSync(payload.source, {
-  loader: payload.loader,
-  format: 'esm',
-  target: 'es2022',
-  jsx: 'automatic',
-  sourcemap: false,
-});
-process.stdout.write(result.code ?? '');
-`;
+function resolveEsbuildBinaryPath({
+  env = process.env,
+  resolveModulePath = MODULE_REQUIRE.resolve.bind(MODULE_REQUIRE),
+} = {}) {
+  const explicitBinaryPath = env.ESBUILD_BINARY_PATH?.trim();
+  if (explicitBinaryPath) {
+    if (!path.isAbsolute(explicitBinaryPath)) {
+      throw new Error(`ESBUILD_BINARY_PATH must be an absolute path, got: ${explicitBinaryPath}`);
+    }
+    return explicitBinaryPath;
+  }
 
-export function createDefaultAdapters(root, { runCommandSync = execFileSync } = {}) {
+  let resolvedBinaryPath;
+  try {
+    resolvedBinaryPath = resolveModulePath(`@esbuild/${process.platform}-${process.arch}/bin/esbuild`);
+  } catch (error) {
+    throw new Error(
+      `Failed to resolve the platform esbuild CLI binary @esbuild/${process.platform}-${process.arch}/bin/esbuild: ${getErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
+
+  if (!path.isAbsolute(resolvedBinaryPath)) {
+    throw new Error(`Resolved platform esbuild binary path must be absolute, got: ${resolvedBinaryPath}`);
+  }
+
+  return resolvedBinaryPath;
+}
+
+export function createDefaultAdapters(
+  root,
+  {
+    runCommandSync = execFileSync,
+    env = process.env,
+    resolveModulePath = MODULE_REQUIRE.resolve.bind(MODULE_REQUIRE),
+  } = {},
+) {
   return {
     statFile(relativePath) {
       return fs.statSync(path.join(root, relativePath));
@@ -58,13 +80,21 @@ export function createDefaultAdapters(root, { runCommandSync = execFileSync } = 
         timeout: GIT_TIMEOUT_MS,
       });
     },
-    compileSource({ source, loader }) {
-      const code = runCommandSync(process.execPath, ['--input-type=module', '-e', CORE_COMPILE_WORKER_SOURCE], {
+    compileSource({ relativePath, source, loader }) {
+      const binaryPath = resolveEsbuildBinaryPath({ env, resolveModulePath });
+      const args = [
+        `--loader=${loader}`,
+        '--format=esm',
+        '--target=es2022',
+        '--jsx=automatic',
+        '--log-level=warning',
+        `--sourcefile=${relativePath}`,
+      ];
+      const code = runCommandSync(binaryPath, args, {
         cwd: root,
         encoding: 'utf8',
         timeout: CORE_COMPILE_TIMEOUT_MS,
-        input: JSON.stringify({ source, loader }),
-        env: { ...process.env, ESBUILD_WORKER_THREADS: '0' },
+        input: source,
         shell: false,
       });
       return { code };

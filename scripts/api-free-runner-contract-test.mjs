@@ -99,8 +99,18 @@ assert.match(
 );
 assert.match(
   coreSourceCheckModule,
+  /createRequire/,
+  'core source checks must resolve the platform esbuild CLI through createRequire',
+);
+assert.match(
+  coreSourceCheckModule,
+  /@esbuild\/\$\{process\.platform\}-\$\{process\.arch\}\/bin\/esbuild/,
+  'core source checks must resolve the platform esbuild CLI binary package path directly',
+);
+assert.doesNotMatch(
+  coreSourceCheckModule,
   /transformSync/,
-  "core source checks must compile through esbuild's one-shot synchronous transform path",
+  "core source checks must not use esbuild's transformSync API",
 );
 assert.doesNotMatch(
   coreSourceCheckModule,
@@ -114,13 +124,13 @@ assert.doesNotMatch(
 );
 assert.doesNotMatch(
   coreSourceCheckModule,
+  /--service(?:=|\b)/,
+  'core source checks must not invoke esbuild service mode',
+);
+assert.doesNotMatch(
+  coreSourceCheckModule,
   /transformWithBoundedRetry/,
   'core source checks must not use the old transformWithBoundedRetry implementation',
-);
-assert.match(
-  coreSourceCheckModule,
-  /ESBUILD_WORKER_THREADS/,
-  'core source checks must disable esbuild worker threads before compiling',
 );
 {
   const timeoutMatch = coreSourceCheckModule.match(/const CORE_COMPILE_TIMEOUT_MS = ([\d_]+);/);
@@ -157,15 +167,22 @@ assert.match(
   });
 
   assert.equal(result.code, 'const ok = true;\n');
-  assert.equal(captured.command, process.execPath);
-  assert.deepEqual(captured.args.slice(0, 2), ['--input-type=module', '-e']);
+  assert.equal(typeof captured.command, 'string');
+  assert.equal(captured.command.startsWith('/'), true);
+  assert.deepEqual(captured.args, [
+    '--loader=ts',
+    '--format=esm',
+    '--target=es2022',
+    '--jsx=automatic',
+    '--log-level=warning',
+    '--sourcefile=src/server/index.ts',
+  ]);
   assert.equal(captured.options.cwd, '/tmp/core-source-check-root');
   assert.equal(captured.options.encoding, 'utf8');
   assert.equal(captured.options.shell, false);
-  assert.equal(captured.options.env.ESBUILD_WORKER_THREADS, '0');
-  assert.match(captured.options.input, /export const ok = true;/);
-  assert.equal(typeof captured.options.timeout, 'number');
-  assert.ok(captured.options.timeout > 0 && captured.options.timeout <= 10_000);
+  assert.equal(captured.options.input, 'export const ok = true;');
+  assert.equal(captured.options.timeout, 10_000);
+  assert.ok(!captured.args.includes('--service'));
 }
 
 function makeCoreSourceAdapters(compileSource) {
