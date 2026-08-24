@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import path from 'node:path';
@@ -14,15 +15,40 @@ const testFilePath = fileURLToPath(import.meta.url);
 const FRESH_CAPTURED_AT = '2026-08-10T12:00:00.000Z';
 
 function freshEvidence(pathValue, releaseIdentity, reason) {
+  const artifact = fs.readFileSync(pathValue);
   return {
     state: 'captured',
     fresh: true,
     path: pathValue,
+    sha256: crypto.createHash('sha256').update(artifact).digest('hex'),
+    bytes: artifact.length,
     capturedAt: FRESH_CAPTURED_AT,
     source: 'focused-validator-test',
     releaseIdentity: structuredClone(releaseIdentity),
     reason,
   };
+}
+
+function upgradeMatrixFixtureToV2(candidate, evidenceScope = 'desktop') {
+  candidate.schemaVersion = 2;
+  candidate.evidenceScope = evidenceScope;
+  for (const row of candidate.rows) {
+    row.evidenceSurface = evidenceScope;
+    for (const evidence of [row.screenshotBefore, row.screenshotAfter, row.runtimeEvidence]) {
+      evidence.sha256 ??= null;
+      evidence.bytes ??= null;
+    }
+    if (row.accessibilityEvidence?.before || row.accessibilityEvidence?.after) {
+      for (const evidence of [row.accessibilityEvidence.before, row.accessibilityEvidence.after]) {
+        evidence.sha256 ??= null;
+        evidence.bytes ??= null;
+      }
+    } else {
+      row.accessibilityEvidence.sha256 ??= null;
+      row.accessibilityEvidence.bytes ??= null;
+    }
+  }
+  return candidate;
 }
 
 function promoteRowToPass(candidate) {
@@ -79,10 +105,15 @@ async function loadValidatorAndMatrix() {
   assert.ok(fs.existsSync(matrixPath), 'the authoritative matrix document must exist');
   const validator = await import(validatorPath);
   const markdown = await fsPromises.readFile(matrixPath, 'utf8');
-  return { validator, matrix: validator.extractMatrixData(markdown) };
+  const legacyMatrix = validator.extractMatrixData(markdown);
+  return {
+    validator,
+    legacyMatrix,
+    matrix: upgradeMatrixFixtureToV2(structuredClone(legacyMatrix)),
+  };
 }
 
-test('validator accepts the authoritative Teams UI matrix document', () => {
+test('validator CLI explicitly rejects the authoritative legacy matrix pending schema migration', () => {
   assert.ok(fs.existsSync(validatorPath), 'the validator CLI must exist');
   assert.ok(fs.existsSync(matrixPath), 'the authoritative matrix document must exist');
 
@@ -90,8 +121,38 @@ test('validator accepts the authoritative Teams UI matrix document', () => {
     encoding: 'utf8',
   });
 
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-  assert.match(result.stdout, /Teams UI matrix valid/);
+  assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(`${result.stdout}\n${result.stderr}`, /schemaVersion 1.*legacy|migrate.*schemaVersion 2/i);
+});
+
+test('validator rejects legacy schema 1 with an explicit migration error', async () => {
+  const { validator, legacyMatrix } = await loadValidatorAndMatrix();
+  const result = validator.validateMatrix(legacyMatrix);
+
+  assert.equal(result.ok, false, 'schema 1 must not be accepted as current release evidence');
+  assert.match(result.errors.join('\n'), /schemaVersion 1.*legacy|migrate.*schemaVersion 2/i);
+});
+
+test('schema 2 requires evidenceSurface plus SHA-256 and bytes on every evidence slot', async () => {
+  const { validator, legacyMatrix } = await loadValidatorAndMatrix();
+  const candidate = structuredClone(legacyMatrix);
+  candidate.schemaVersion = 2;
+  candidate.evidenceScope = 'desktop';
+
+  const result = validator.validateMatrix(candidate);
+  const errors = result.errors.join('\n');
+  assert.equal(result.ok, false);
+  assert.match(errors, /evidenceSurface/);
+  assert.match(errors, /sha256|SHA-256/);
+  assert.match(errors, /bytes|byte count/);
+});
+
+test('schema 2 fixture with explicit surface and integrity metadata remains structurally valid', async () => {
+  const { validator, matrix } = await loadValidatorAndMatrix();
+  const candidate = upgradeMatrixFixtureToV2(structuredClone(matrix));
+
+  const result = validator.validateMatrix(candidate, { evidenceScope: 'desktop' });
+  assert.equal(result.ok, true, result.errors.join('\n'));
 });
 
 test('validator enforces exhaustive coverage and records blocked evidence without treating it as a pass', async () => {
@@ -284,4 +345,71 @@ test('validator rejects duplicate row IDs and strict release readiness with bloc
   const strictResult = validator.validateMatrix(matrix, { requirePass: true });
   assert.equal(strictResult.ok, false);
   assert.match(strictResult.errors.join('\n'), /BLOCKED|FAIL|strict/i);
+});
+
+function fullScopeFixtureFromLegacy(legacyMatrix) {
+  const candidate = upgradeMatrixFixtureToV2(structuredClone(legacyMatrix), 'full');
+  const surfaceKeys = new Map([
+    ['deep-link.trailing-slash', 'portal'],
+    ['deep-link.static-tab', 'portal'],
+    ['chat.install', 'installed'],
+    ['deep-link.open-tab-action', 'installed'],
+    ['chat.card.tab-link', 'installed'],
+    ['chat.card.no-top-level-duplicate', 'desktop'],
+    ['chat.commands.status.summary', 'desktop'],
+    ['personal.home.hero', 'desktop'],
+    ['personal.home.runtime-panel', 'desktop'],
+    ['personal.mobile.narrow-home', 'mobile'],
+    ['personal.mobile.narrow-card', 'mobile'],
+    ['personal.auth.expired', 'mobile'],
+    ['personal.auth.retry', 'mobile'],
+  ]);
+  for (const row of candidate.rows) {
+    const firstKey = Array.isArray(row.coverage) ? row.coverage[0] : undefined;
+    row.evidenceSurface = surfaceKeys.get(firstKey) ?? 'desktop';
+  }
+  return candidate;
+}
+
+test('validator requires an injective required-key to distinct-row matching per surface', async () => {
+  const { validator, legacyMatrix } = await loadValidatorAndMatrix();
+  const candidate = fullScopeFixtureFromLegacy(legacyMatrix);
+  const desktopKeys = [
+    'chat.card.no-top-level-duplicate',
+    'chat.commands.status.summary',
+    'personal.home.hero',
+    'personal.home.runtime-panel',
+  ];
+  const desktopRows = candidate.rows.filter((row) => row.evidenceSurface === 'desktop');
+  assert.ok(desktopRows.length >= 4, 'fixture needs four desktop rows for the Hall-condition case');
+  const preservedCoverage = desktopRows.slice(0, 4).map((row) => row.coverage.filter((key) => !desktopKeys.includes(key)));
+  for (const row of desktopRows) {
+    const remaining = row.coverage.filter((key) => !desktopKeys.includes(key));
+    row.coverage = remaining.length > 0 ? remaining : ['chat.commands.help'];
+  }
+  desktopRows[0].coverage = [...desktopKeys.slice(0, 3), ...preservedCoverage[0]];
+  desktopRows[1].coverage = [...desktopKeys.slice(0, 3), ...preservedCoverage[1]];
+  desktopRows[2].coverage = [desktopKeys[3], ...preservedCoverage[2]];
+  desktopRows[3].coverage = [desktopKeys[3], ...preservedCoverage[3]];
+
+  const result = validator.validateMatrix(candidate);
+
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join('\n'), /injective|distinct rows|one.*required.*row|matching/i);
+});
+
+test('validator rejects full scope when a mobile baseline key is omitted', async () => {
+  const { validator, legacyMatrix } = await loadValidatorAndMatrix();
+  const candidate = fullScopeFixtureFromLegacy(legacyMatrix);
+  const missingKey = 'personal.mobile.narrow-card';
+  const target = candidate.rows.find((row) => row.coverage.includes(missingKey));
+  assert.ok(target, `fixture must contain ${missingKey}`);
+  target.coverage = target.coverage.filter((key) => key !== missingKey);
+  if (target.coverage.length === 0) target.coverage = ['chat.commands.help'];
+
+  const result = validator.validateMatrix(candidate);
+
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join('\n'), new RegExp(`missing coverage:.*${missingKey.replaceAll('.', '\\.')}`));
+  assert.match(result.errors.join('\n'), /full scope surface mobile missing required coverage/);
 });

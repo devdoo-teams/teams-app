@@ -28,6 +28,7 @@ function currentJob(overrides: Partial<AgentJob> = {}): AgentJob {
   return {
     id: 'task-current-1',
     prompt: '현재 형식 작업',
+    provider: 'codex',
     mode: 'read-only',
     status: 'completed',
     conversationId: scope.conversationId,
@@ -65,6 +66,7 @@ try {
   await assertRejectedUnchanged('control-character-id', [currentJob({ id: `task\u0000${'x'.repeat(4)}` })]);
   await assertRejectedUnchanged('oversized-current-id', [currentJob({ id: 'x'.repeat(MAX_AGENT_JOB_ID_LENGTH + 1) })]);
   await assertRejectedUnchanged('invalid-mode', [currentJob({ mode: 'admin' as AgentJob['mode'] })]);
+  await assertRejectedUnchanged('invalid-provider', [currentJob({ provider: 'unknown' as AgentJob['provider'] })]);
   await assertRejectedUnchanged('invalid-status', [currentJob({ status: 'pending' as AgentJob['status'] })]);
   await assertRejectedUnchanged('completed-without-result', [currentJob()]);
   await assertRejectedUnchanged('blank-tenant', [currentJob({ tenantId: '   ' })]);
@@ -165,6 +167,11 @@ try {
     /completed jobs must contain a result/i,
     'an in-memory mutation cannot create a completed job without a result',
   );
+  await assert.rejects(
+    () => currentStore.update('task-current-1', scope, { provider: 'copilot' }),
+    /provider identity is immutable/i,
+    'provider identity cannot be changed after job creation',
+  );
 
   const legacyPath = path.join(storeDirectory, 'legacy.json');
   const legacyRecord = {
@@ -186,10 +193,11 @@ try {
   const legacyRaw = JSON.stringify([legacyRecord]);
   await fs.writeFile(legacyPath, legacyRaw, 'utf8');
 
-  const legacyStore = new AgentJobStore(legacyPath);
+  const legacyStore = new AgentJobStore(legacyPath, { legacyProvider: 'copilot' });
   await legacyStore.initialize();
   const migrated = legacyStore.getLocalOnly('task-legacy-1');
   assert.ok(migrated, 'valid legacy job remains available to the local recovery reader');
+  assert.equal(migrated.provider, 'copilot', 'legacy migration uses only the explicitly configured provider');
   assert.equal(migrated.tenantId, undefined, 'legacy migration never invents tenant ownership');
   assert.ok(migrated.prompt.length <= MAX_AGENT_PROMPT_LENGTH, 'legacy prompt is bounded');
   assert.ok(migrated.progress.length === 1, 'blank legacy progress entries are removed');
@@ -209,6 +217,7 @@ try {
   await assert.rejects(
     () => persistenceFailureStore.create({
       prompt: '저장 실패 작업',
+      provider: 'codex',
       mode: 'read-only',
       scope,
     }),
@@ -225,6 +234,7 @@ try {
   assert.notEqual(migratedRaw, legacyRaw, 'legacy normalization is persisted');
   const persistedLegacy = JSON.parse(migratedRaw) as Array<Record<string, unknown>>;
   assert.equal(Object.prototype.hasOwnProperty.call(persistedLegacy[0], 'tenantId'), false, 'persisted migration has no guessed tenantId');
+  assert.equal(persistedLegacy[0].provider, 'copilot', 'legacy provider migration is persisted atomically');
   assert.equal(persistedLegacy[0].createdAt, '2026-08-07T01:02:03.000Z');
   assert.equal(persistedLegacy[0].finishedAt, '2026-08-07T01:02:04.000Z');
 

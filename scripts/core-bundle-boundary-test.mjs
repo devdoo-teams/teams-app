@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import crypto from 'node:crypto';
 
+import { isFullCommitOid } from './fileprovider-git-clean.mjs';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 import { parseServerBuildMarker } from './server-build-marker.mjs';
 
@@ -10,13 +11,20 @@ const root = process.cwd();
 const runtimeRoot = resolveRuntimeDistRoot(root);
 const clientAssets = path.join(runtimeRoot, 'client', 'assets');
 const serverDir = path.join(runtimeRoot, 'server');
+const currentCommit = process.env.TEAMS_SOURCE_COMMIT;
+assert.equal(
+  isFullCommitOid(currentCommit),
+  true,
+  'core bundle boundary requires the runner-pinned full source Git OID',
+);
 const clientFiles = await fs.readdir(clientAssets, { recursive: true });
 const serverFiles = await fs.readdir(serverDir);
 const marker = parseServerBuildMarker(await fs.readFile(path.join(serverDir, '.teams-server-build-commit'), 'utf8'));
-const currentCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+const serverEntryBytes = await fs.readFile(path.join(serverDir, 'index.js'));
+const bundleSha256 = crypto.createHash('sha256').update(serverEntryBytes).digest('hex');
 assert.deepEqual(
   marker,
-  { schemaVersion: 2, commit: currentCommit, mode: 'core', worktree: 'clean' },
+  { schemaVersion: 3, sourceCommit: currentCommit, commit: currentCommit, mode: 'core', worktree: 'clean', bundleSha256 },
   'core server artifact must be freshly built for the current commit in core mode',
 );
 
@@ -34,7 +42,7 @@ assert.equal(
 
 const clientHtml = await fs.readFile(path.join(runtimeRoot, 'client', 'index.html'), 'utf8');
 assert.match(clientHtml, /assets\/main\.js\?v=/, 'core tab points to the built main asset');
-const serverEntry = await fs.readFile(path.join(serverDir, 'index.js'), 'utf8');
+const serverEntry = serverEntryBytes.toString('utf8');
 assert.match(serverEntry, /mcpEnabled/, 'core health still reports MCP disabled state');
 assert.doesNotMatch(
   serverEntry,

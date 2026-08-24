@@ -8,10 +8,16 @@ import { inflateSync } from 'node:zlib';
 
 import {
   createPreflightCommands,
+  packageGateTimeoutMs,
   parseDotEnv,
   resolvePublicUrl,
   runWithTimeout,
 } from './release-gate.mjs';
+import {
+  assertCleanTrackedWorktreeForFileProvider,
+  isFullCommitOid,
+  resolvePinnedCommitOid,
+} from './fileprovider-git-clean.mjs';
 import { validateMatrix } from './teams-ui-matrix-validate.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -24,7 +30,68 @@ const MAX_RASTER_DIMENSION = 16_384;
 const MAX_RASTER_PIXELS = 50_000_000;
 const MAX_RASTER_DECODED_BYTES = 128 * 1024 * 1024;
 const MAX_SUPPORTING_ARTIFACT_BYTES = 4 * 1024 * 1024;
+const MAX_MATRIX_ROWS = 512;
+const MAX_MATRIX_ARTIFACTS = MAX_MATRIX_ROWS * 5;
+const MAX_TOP_LEVEL_ARTIFACT_PATHS = 64;
+const MAX_MATRIX_ARTIFACT_BYTES = 20 * 1024 * 1024;
+const MAX_MATRIX_AGGREGATE_BYTES = 64 * 1024 * 1024;
 const PUBLIC_ROUTE_PROBE_TIMEOUT_MS = 10_000;
+const RELEASE_VERSION_PATTERN = /^(\d+)\.(\d+)\.(\d+)$/;
+
+const FULL_RELEASE_LOOP_EVIDENCE_FIELDS = [
+  'surface',
+  'observedAt',
+  'commit',
+  'version',
+  'packageSha256',
+  'summary',
+  'screenshotBeforePath',
+  'screenshotAfterPath',
+  'accessibilityPath',
+  'runtimeLogPath',
+  'coverage',
+];
+
+function isEvidenceObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasEvidenceField(value, field) {
+  if (field === 'coverage') return isEvidenceObject(value[field]);
+  return typeof value[field] === 'string' && value[field].trim() !== '';
+}
+
+/**
+ * Browser evidence has two independent contracts: the parent browser
+ * observation and release-loop's artifact-backed evidence. Keep the
+ * contracts separate in one JSON document so the update driver can validate
+ * the former while this process validates the latter. The historical merged
+ * top-level shape remains accepted for existing evidence files.
+ */
+export function splitBrowserEvidenceInput(input, { requireFullEvidence = false } = {}) {
+  if (!isEvidenceObject(input)) throw new Error('browser evidence input must be a JSON object');
+  const hasAttestation = Object.prototype.hasOwnProperty.call(input, 'attestation');
+  const hasEvidence = Object.prototype.hasOwnProperty.call(input, 'evidence');
+  if (hasAttestation || hasEvidence) {
+    if (!hasAttestation || !hasEvidence || !isEvidenceObject(input.attestation) || !isEvidenceObject(input.evidence)) {
+      throw new Error('browser evidence envelope requires both attestation and evidence objects');
+    }
+    const bundle = { format: 'envelope', attestation: input.attestation, evidence: input.evidence };
+    if (requireFullEvidence) assertFullReleaseLoopEvidenceShape(bundle.evidence);
+    return bundle;
+  }
+  if (requireFullEvidence) assertFullReleaseLoopEvidenceShape(input);
+  return { format: 'merged', attestation: input, evidence: input };
+}
+
+function assertFullReleaseLoopEvidenceShape(evidence) {
+  const missing = FULL_RELEASE_LOOP_EVIDENCE_FIELDS.filter((field) => !hasEvidenceField(evidence, field));
+  if (missing.length > 0) {
+    throw new Error(
+      `browser evidence requires full release-loop evidence; missing: ${missing.join(', ')}`,
+    );
+  }
+}
 
 function hashBytes(bytes) {
   if (!(bytes instanceof Uint8Array)) throw new Error('artifact must be binary data');
@@ -360,7 +427,7 @@ export function rasterDimensions(bytes) {
 
 function inspectArtifact(bytes) {
   const { width, height } = rasterDimensions(bytes);
-  return { sha256: hashBytes(bytes), width, height };
+  return { sha256: hashBytes(bytes), bytes: bytes.length, width, height };
 }
 
 function inspectSupportingArtifact(bytes, label) {
@@ -386,10 +453,129 @@ function absoluteEvidencePath(value, label) {
   return path.normalize(value);
 }
 
+function isPathInside(rootPath, candidatePath) {
+  const relative = path.relative(rootPath, candidatePath);
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+function artifactIdentityKey(artifact) {
+  const inodeKey = Number.isSafeInteger(artifact.device) && Number.isSafeInteger(artifact.inode)
+    ? `${artifact.device}:${artifact.inode}`
+    : null;
+  return {
+    realPath: artifact.realPath,
+    inodeKey,
+    contentKey: /^[a-f0-9]{64}$/.test(artifact.sha256 ?? '') && Number.isSafeInteger(artifact.bytes)
+      ? `${artifact.sha256}:${artifact.bytes}`
+      : null,
+  };
+}
+
+function identityEntries(artifact) {
+  return Object.entries(artifactIdentityKey(artifact));
+}
+
+function pathIdentityIndex(source = null) {
+  return {
+    realPath: new Map(source?.realPath ?? []),
+    inodeKey: new Map(source?.inodeKey ?? []),
+  };
+}
+
+function assertPathIdentityNotReused(seen, artifact, label) {
+  for (const [kind, key] of identityEntries(artifact)) {
+    if (kind === 'contentKey' || !key) continue;
+    const previous = seen[kind].get(key);
+    if (previous) throw new Error(`${label} reuses evidence from ${previous}: ${key}`);
+  }
+}
+
+function rememberPathIdentity(seen, artifact, label) {
+  for (const [kind, key] of identityEntries(artifact)) {
+    if (kind === 'contentKey' || !key) continue;
+    seen[kind].set(key, label);
+  }
+}
+
+function preflightArtifactPath(
+  candidate,
+  label,
+  kind,
+  {
+    allowedRoot,
+    fileExists = (value) => fsSync.existsSync(value),
+    statArtifact = (value) => fsSync.statSync(value),
+    realpathArtifact = (value) => fsSync.realpathSync(value),
+  } = {},
+) {
+  const normalizedPath = absoluteEvidencePath(candidate, label);
+  if (!fileExists(normalizedPath)) throw new Error(`${label} artifact does not exist: ${normalizedPath}`);
+
+  let realPath;
+  let stats;
+  try {
+    realPath = path.normalize(realpathArtifact(normalizedPath));
+    stats = statArtifact(normalizedPath);
+  } catch (error) {
+    throw new Error(`${label} artifact preflight failed: ${error?.message ?? normalizedPath}`);
+  }
+  if (allowedRoot && !isPathInside(allowedRoot, realPath)) {
+    throw new Error(`${label} symlink or canonical path escapes the allowed evidence root: ${realPath}`);
+  }
+  if (typeof stats?.isFile === 'function' && !stats.isFile()) {
+    throw new Error(`${label} artifact must be a regular file`);
+  }
+  const maxBytes = kind === 'visual' ? MAX_MATRIX_ARTIFACT_BYTES : MAX_SUPPORTING_ARTIFACT_BYTES;
+  if (!Number.isSafeInteger(stats?.size) || stats.size <= 0 || stats.size > maxBytes) {
+    throw new Error(`${label} artifact file size exceeds the ${kind === 'visual' ? '20 MiB' : '4 MiB'} preflight limit`);
+  }
+  return {
+    path: normalizedPath,
+    realPath,
+    bytes: stats.size,
+    device: Number.isSafeInteger(stats.dev) ? stats.dev : null,
+    inode: Number.isSafeInteger(stats.ino) ? stats.ino : null,
+  };
+}
+
+function assertArtifactNotReused(seen, artifact, label) {
+  for (const [kind, key] of identityEntries(artifact)) {
+    if (!key) continue;
+    const previous = seen[kind].get(key);
+    if (previous) {
+      throw new Error(`${label} reuses evidence from ${previous}: ${key}`);
+    }
+    seen[kind].set(key, label);
+  }
+}
+
+function createArtifactIdentityIndex(artifacts = []) {
+  const seen = { realPath: new Map(), inodeKey: new Map(), contentKey: new Map() };
+  for (const artifact of artifacts) {
+    if (!artifact || typeof artifact.sha256 !== 'string' || !Number.isSafeInteger(artifact.bytes)) continue;
+    const label = `${artifact.evidenceSurface ?? 'release'} ${artifact.rowId ?? artifact.role ?? 'artifact'}`;
+    for (const [kind, key] of identityEntries(artifact)) if (key) seen[kind].set(key, label);
+  }
+  return seen;
+}
+
+function readBoundedArtifact(candidate, expectedBytes, maxBytes, label, readArtifact) {
+  const bytes = readArtifact(candidate);
+  if (!(bytes instanceof Uint8Array)) throw new Error(`${label} artifact must be binary data`);
+  if (!Number.isSafeInteger(bytes.length) || bytes.length > maxBytes) {
+    throw new Error(`${label} artifact exceeds its bounded ${maxBytes} byte read limit`);
+  }
+  if (bytes.length !== expectedBytes) {
+    throw new Error(`${label} artifact size changed after preflight: ${candidate}`);
+  }
+  return bytes;
+}
+
 function allEvidenceArtifacts(evidence) {
   return [
     ...(Array.isArray(evidence?.artifacts) ? evidence.artifacts : []),
     ...(Array.isArray(evidence?.supportingArtifacts) ? evidence.supportingArtifacts : []),
+    ...(Array.isArray(evidence?.matrixArtifacts) ? evidence.matrixArtifacts : []),
   ];
 }
 
@@ -414,6 +600,9 @@ function parseCoverageMatrix(bytes, label = 'coverage matrix') {
   if (!Array.isArray(matrix.rows) || matrix.rows.length === 0) {
     throw new Error(`${label} must contain a non-empty rows array`);
   }
+  if (matrix.rows.length > MAX_MATRIX_ROWS) {
+    throw new Error(`${label} row count exceeds the ${MAX_MATRIX_ROWS} row limit`);
+  }
   if (!matrix.coverage || matrix.coverage.count !== matrix.rows.length) {
     throw new Error(`${label} coverage count does not match rows`);
   }
@@ -432,7 +621,18 @@ function parseCoverageMatrix(bytes, label = 'coverage matrix') {
   return { source, matrix, counts };
 }
 
-function inspectCoverageMatrix(bytes, coverage, identity) {
+function inspectCoverageMatrix(
+  bytes,
+  coverage,
+  identity,
+  {
+    fileExists = (candidate) => fsSync.existsSync(candidate),
+    readArtifact = (candidate) => fsSync.readFileSync(candidate),
+    statArtifact = (candidate) => fsSync.statSync(candidate),
+    realpathArtifact = (candidate) => fsSync.realpathSync(candidate),
+    identityIndex = createArtifactIdentityIndex(),
+  } = {},
+) {
   const parsed = parseCoverageMatrix(bytes);
   const { matrix, counts, source } = parsed;
   if (hashBytes(source) !== coverage.matrixSha256) {
@@ -442,8 +642,7 @@ function inspectCoverageMatrix(bytes, coverage, identity) {
   if (
     !releaseIdentity
     || releaseIdentity.appVersion !== identity.version
-    || typeof releaseIdentity.sourceCommit !== 'string'
-    || !/^[a-f0-9]{7,40}$/.test(releaseIdentity.sourceCommit)
+    || !isFullCommitOid(releaseIdentity.sourceCommit)
     || releaseIdentity.packageSha256 !== identity.packageSha256
   ) {
     throw new Error('coverage matrix release identity does not match the release package evidence');
@@ -451,22 +650,39 @@ function inspectCoverageMatrix(bytes, coverage, identity) {
   if (releaseIdentity.sourceCommit !== identity.commit) {
     throw new Error('coverage matrix release identity sourceCommit does not match the release run commit');
   }
-  const scope = coverage.scope ?? matrix.evidenceScope ?? 'full';
+  // The evidence contract owns the scope. A matrix may repeat that value for
+  // integrity, but it must never silently narrow an omitted evidence scope and
+  // then be normalized as full coverage (especially for the mobile gate).
+  const scope = coverage.scope ?? 'full';
   if (!evidenceScopes.has(scope)) throw new Error(`coverage matrix evidence scope is invalid: ${scope}`);
-  if (scope !== 'full') {
-    throw new Error(`coverage matrix evidence scope ${scope} cannot establish surface readiness; full coverage is required`);
-  }
   if (matrix.evidenceScope && matrix.evidenceScope !== scope) {
     throw new Error('coverage matrix evidence scope does not match the supplied coverage');
   }
+  for (const row of matrix.rows) {
+    if (!surfaces.includes(row.evidenceSurface)) {
+      throw new Error(`coverage matrix row ${row.id} must declare a valid evidence surface`);
+    }
+    if (scope !== 'full' && row.evidenceSurface !== scope) {
+      throw new Error(
+        `coverage matrix row ${row.id} evidence surface ${row.evidenceSurface} does not match scope ${scope}`,
+      );
+    }
+  }
   const validation = validateMatrix(matrix, {
     requirePass: true,
-    requiredCoverageKeys: scope === 'full' ? undefined : [],
+    evidenceBaseDir: path.dirname(path.resolve(coverage.matrixPath)),
+    evidenceScope: scope,
   });
   if (!validation.ok) {
     throw new Error(`coverage matrix row validation failed: ${validation.errors.join('; ')}`);
   }
-  assertUniqueMatrixEvidencePaths(matrix, coverage);
+  const artifacts = inspectMatrixEvidenceArtifacts(matrix, coverage, {
+    fileExists,
+    readArtifact,
+    statArtifact,
+    realpathArtifact,
+    identityIndex,
+  });
   const expected = {
     totalRows: matrix.rows.length,
     passedRows: counts.PASS,
@@ -477,37 +693,105 @@ function inspectCoverageMatrix(bytes, coverage, identity) {
   for (const [key, value] of Object.entries(expected)) {
     if (coverage[key] !== value) throw new Error(`coverage matrix ${key} does not match row results`);
   }
-  return { sha256: hashBytes(source), bytes: source.length, ...expected };
+  return { sha256: hashBytes(source), bytes: source.length, artifacts, ...expected };
 }
 
-function assertUniqueMatrixEvidencePaths(matrix, coverage) {
-  const evidenceBaseDir = path.dirname(path.resolve(coverage.matrixPath));
-  const seen = new Map();
-  const add = (row, role, evidence) => {
+function inspectMatrixEvidenceArtifacts(
+  matrix,
+  coverage,
+  {
+    fileExists = (candidate) => fsSync.existsSync(candidate),
+    readArtifact = (candidate) => fsSync.readFileSync(candidate),
+    statArtifact = (candidate) => fsSync.statSync(candidate),
+    realpathArtifact = (candidate) => fsSync.realpathSync(candidate),
+    identityIndex = createArtifactIdentityIndex(),
+  } = {},
+) {
+  const evidenceBaseDir = path.normalize(realpathArtifact(path.dirname(path.resolve(coverage.matrixPath))));
+  const descriptors = [];
+  const add = (row, role, evidence, kind) => {
     if (typeof evidence?.path !== 'string' || evidence.path.trim() === '') return;
     const evidencePath = path.normalize(
       path.isAbsolute(evidence.path) ? evidence.path : path.resolve(evidenceBaseDir, evidence.path),
     );
-    const previous = seen.get(evidencePath);
-    if (previous) {
-      throw new Error(
-        `coverage matrix evidence artifact path is reused by ${previous.rowId} (${previous.role}) and ${row.id} (${role}): ${evidencePath}`,
-      );
+    if (!/^[a-f0-9]{64}$/.test(evidence.sha256 ?? '')) {
+      throw new Error(`coverage matrix row ${row.id} ${role} artifact requires a SHA-256`);
     }
-    seen.set(evidencePath, { rowId: row.id, role });
+    if (!Number.isSafeInteger(evidence.bytes) || evidence.bytes <= 0) {
+      throw new Error(`coverage matrix row ${row.id} ${role} artifact requires a positive byte count`);
+    }
+    descriptors.push({ row, role, evidence, kind, evidencePath });
   };
 
   for (const row of matrix.rows) {
-    add(row, 'screenshotBefore', row.screenshotBefore);
-    add(row, 'screenshotAfter', row.screenshotAfter);
-    add(row, 'runtimeEvidence', row.runtimeEvidence);
+    add(row, 'screenshotBefore', row.screenshotBefore, 'visual');
+    add(row, 'screenshotAfter', row.screenshotAfter, 'visual');
+    add(row, 'runtimeEvidence', row.runtimeEvidence, 'supporting');
     if (row.accessibilityEvidence?.before || row.accessibilityEvidence?.after) {
-      add(row, 'accessibilityEvidence.before', row.accessibilityEvidence.before);
-      add(row, 'accessibilityEvidence.after', row.accessibilityEvidence.after);
+      add(row, 'accessibilityEvidence.before', row.accessibilityEvidence.before, 'supporting');
+      add(row, 'accessibilityEvidence.after', row.accessibilityEvidence.after, 'supporting');
     } else {
-      add(row, 'accessibilityEvidence', row.accessibilityEvidence);
+      add(row, 'accessibilityEvidence', row.accessibilityEvidence, 'supporting');
     }
   }
+
+  if (descriptors.length > MAX_MATRIX_ARTIFACTS) {
+    throw new Error(`coverage matrix artifact count exceeds the ${MAX_MATRIX_ARTIFACTS} artifact limit`);
+  }
+
+  const pathSeen = pathIdentityIndex(identityIndex);
+  let aggregateBytes = 0;
+  const preflight = descriptors.map(({ row, role, evidence, kind, evidencePath }) => {
+    const label = `coverage matrix row ${row.id} ${role}`;
+    const artifact = {
+      ...preflightArtifactPath(evidencePath, label, kind, {
+        allowedRoot: evidenceBaseDir,
+        fileExists,
+        statArtifact,
+        realpathArtifact,
+      }),
+      rowId: row.id,
+      role,
+      kind,
+      evidenceSurface: row.evidenceSurface,
+      sha256: evidence.sha256,
+    };
+    if (artifact.bytes !== evidence.bytes) {
+      throw new Error(`${label} artifact byte count does not match its preflight size`);
+    }
+    assertPathIdentityNotReused(pathSeen, artifact, label);
+    rememberPathIdentity(pathSeen, artifact, label);
+    aggregateBytes += artifact.bytes;
+    return artifact;
+  });
+  if (aggregateBytes > MAX_MATRIX_AGGREGATE_BYTES) {
+    throw new Error('coverage matrix aggregate artifact byte budget exceeds 64 MiB');
+  }
+
+  return preflight.map((artifact) => {
+    const label = `coverage matrix row ${artifact.rowId} ${artifact.role}`;
+    const actualBytes = readBoundedArtifact(
+      artifact.path,
+      artifact.bytes,
+      artifact.kind === 'visual' ? MAX_MATRIX_ARTIFACT_BYTES : MAX_SUPPORTING_ARTIFACT_BYTES,
+      label,
+      readArtifact,
+    );
+    const actual = artifact.kind === 'visual'
+      ? inspectArtifact(actualBytes)
+      : inspectSupportingArtifact(actualBytes, label);
+    if (actual.sha256 !== artifact.sha256) {
+      throw new Error(`${label} artifact SHA-256 does not match its content`);
+    }
+    if (actual.bytes !== artifact.bytes) {
+      throw new Error(`${label} artifact byte count does not match its content`);
+    }
+    assertArtifactNotReused(identityIndex, { ...artifact, ...actual }, label);
+    return {
+      ...artifact,
+      ...(artifact.kind === 'visual' ? { width: actual.width, height: actual.height } : {}),
+    };
+  });
 }
 
 function hasFullEvidenceCoverage(evidence) {
@@ -534,7 +818,7 @@ function hasSurfaceEvidenceCoverage(evidence, surface) {
   const scope = coverage?.scope ?? 'full';
   return Boolean(
     coverage
-    && scope === 'full'
+    && (scope === 'full' || scope === surface)
     && Number.isInteger(coverage.totalRows)
     && coverage.totalRows > 0
     && Number.isInteger(coverage.passedRows)
@@ -551,6 +835,7 @@ function hasSurfaceEvidence(state, surface) {
   if (evidence.surface !== surface || evidence.commit !== state.commit || evidence.version !== state.version) return false;
   if (!Array.isArray(evidence.artifacts) || evidence.artifacts.length < 2) return false;
   if (!Array.isArray(evidence.supportingArtifacts) || evidence.supportingArtifacts.length < 2) return false;
+  if (!Array.isArray(evidence.matrixArtifacts) || evidence.matrixArtifacts.length === 0) return false;
   if (!evidence.screenshotBeforePath || !evidence.screenshotAfterPath) return false;
   if (!hasSurfaceEvidenceCoverage(evidence, surface)) return false;
   if (state.package?.sha256 && evidence.packageSha256 !== state.package.sha256) return false;
@@ -621,11 +906,27 @@ export function applyPhaseSuccess(state, phase, summary, now = new Date()) {
   return next;
 }
 
-export function createInitialState({ runId, commit, shortCommit, version, startedAt, untrackedAtStart = [], sourceIoMode = 'normal' }) {
+export function createInitialState({
+  runId,
+  commit,
+  shortCommit,
+  version,
+  startedAt,
+  untrackedAtStart = [],
+  untrackedAtStartBaseline = [],
+  sourceIoMode = 'normal',
+}) {
   for (const [name, value] of Object.entries({ runId, commit, shortCommit, version, startedAt })) {
     if (typeof value !== 'string' || value.trim() === '') {
       throw new Error(`release loop requires ${name}`);
     }
+  }
+  if (!Array.isArray(untrackedAtStart)) throw new Error('release loop requires untrackedAtStart to be an array');
+  if (!Array.isArray(untrackedAtStartBaseline)) {
+    throw new Error('release loop requires untrackedAtStartBaseline for untracked files');
+  }
+  if (untrackedAtStart.length !== untrackedAtStartBaseline.length) {
+    throw new Error('release loop requires one untracked baseline fingerprint per untrackedAtStart path');
   }
   return {
     schemaVersion: 1,
@@ -636,6 +937,7 @@ export function createInitialState({ runId, commit, shortCommit, version, starte
     shortCommit,
     version,
     untrackedAtStart: [...untrackedAtStart],
+    untrackedAtStartBaseline: untrackedAtStartBaseline.map((entry) => ({ ...entry })),
     sourceIoMode,
     status: 'INIT',
     machine: null,
@@ -668,6 +970,8 @@ function hasPublicAssetIdentity(asset) {
 function hasCurrentPublicReady(state) {
   return hasReady(state.public)
     && hasReady(state.package)
+    && state.package.sourceCommit === state.commit
+    && state.public.sourceCommit === state.commit
     && state.public.version === state.version
     && state.public.packageSha256 === state.package.sha256
     && hasPublicAssetIdentity(state.public.asset);
@@ -695,6 +999,31 @@ export function missingGates(state) {
   if (!hasSurfaceEvidence(state, 'desktop')) gates.push('DESKTOP_READY');
   if (!hasSurfaceEvidence(state, 'mobile')) gates.push('MOBILE_READY');
   return gates;
+}
+
+/**
+ * The resumable release:update runner stores browser/Jira attestations under
+ * releaseUpdate. Keep the raw CLI completion path from bypassing that contract
+ * when it is used directly or invoked by an outdated operator script.
+ */
+export function assertReleaseUpdateCompletionContract(state) {
+  if (!state?.releaseUpdate?.identity) {
+    const error = new Error('release completion requires a recorded package/public identity');
+    error.code = 'ELOOPBLOCKED';
+    throw error;
+  }
+  if (!['READY', 'VERIFIED'].includes(state.releaseUpdate?.jira?.status)) {
+    const error = new Error('release completion requires Jira reconciliation');
+    error.code = 'ELOOPBLOCKED';
+    throw error;
+  }
+  const missing = RELEASE_SURFACES.filter((surface) => !state.releaseUpdate?.attestations?.[surface]);
+  if (missing.length > 0) {
+    const error = new Error(`release completion requires browser attestations: ${missing.join(', ')}`);
+    error.code = 'ELOOPBLOCKED';
+    throw error;
+  }
+  return true;
 }
 
 function assertSurface(surface) {
@@ -739,10 +1068,57 @@ function assertEvidenceAfterPrerequisite(observedAt, state, surface) {
   }
 }
 
+function assertExactSupportingArtifactSet(evidence, supportingArtifacts, label) {
+  let expected;
+  try {
+    expected = new Map([
+      ['accessibility', absoluteEvidencePath(evidence?.accessibilityPath, `${label} accessibility`)],
+      ['runtime-log', absoluteEvidencePath(evidence?.runtimeLogPath, `${label} runtime log`)],
+      ['coverage-matrix', absoluteEvidencePath(evidence?.coverage?.matrixPath, `${label} coverage matrix`)],
+    ]);
+  } catch (error) {
+    throw new Error(`${label} requires an exact supporting artifact role/path set: ${error?.message ?? error}`);
+  }
+  if (!Array.isArray(supportingArtifacts) || supportingArtifacts.length !== expected.size) {
+    throw new Error(`${label} requires exactly accessibility, runtime-log, and coverage-matrix supporting artifacts`);
+  }
+  const seenRoles = new Set();
+  for (const artifact of supportingArtifacts) {
+    if (!artifact || typeof artifact.role !== 'string' || !expected.has(artifact.role)) {
+      throw new Error(`${label} contains an unsupported supporting artifact role`);
+    }
+    if (seenRoles.has(artifact.role)) {
+      throw new Error(`${label} contains a duplicate supporting artifact role ${artifact.role}`);
+    }
+    seenRoles.add(artifact.role);
+    let actualPath;
+    try {
+      actualPath = absoluteEvidencePath(artifact.path, `${label} ${artifact.role}`);
+    } catch (error) {
+      throw new Error(`${label} supporting artifact ${artifact.role} path is invalid: ${error?.message ?? error}`);
+    }
+    if (actualPath !== expected.get(artifact.role)) {
+      throw new Error(
+        `${label} supporting artifact ${artifact.role} path must exactly match its declared path`,
+      );
+    }
+  }
+  if (seenRoles.size !== expected.size) {
+    throw new Error(`${label} supporting artifact role/path set is incomplete`);
+  }
+  return true;
+}
+
 export function validateEvidence(
   input,
   state,
-  { fileExists = (candidate) => true, readArtifact = (candidate) => fsSync.readFileSync(candidate), now = new Date() } = {},
+  {
+    fileExists = (candidate) => true,
+    readArtifact = (candidate) => fsSync.readFileSync(candidate),
+    statArtifact = (candidate) => fsSync.statSync(candidate),
+    realpathArtifact = (candidate) => fsSync.realpathSync(candidate),
+    now = new Date(),
+  } = {},
 ) {
   if (!input || typeof input !== 'object') throw new Error('evidence must be an object');
   const {
@@ -762,8 +1138,13 @@ export function validateEvidence(
   } = input;
   const artifactPaths = Array.isArray(input.artifactPaths)
     ? input.artifactPaths
-    : Array.isArray(input.artifacts) ? input.artifacts.map((artifact) => artifact?.path) : undefined;
+    : Array.isArray(input.artifacts) ? input.artifacts.map((artifact) => artifact?.path) : [];
   assertSurface(surface);
+  if (artifactPaths.length > MAX_TOP_LEVEL_ARTIFACT_PATHS) {
+    throw new Error(
+      `top-level artifactPaths count exceeds the ${MAX_TOP_LEVEL_ARTIFACT_PATHS} artifact path limit`,
+    );
+  }
   if (state.status === 'COMPLETE') throw new Error('cannot add evidence to a completed release run');
   if (!hasReady(state.package) || !state.package.sha256) throw new Error('package must be READY before evidence is registered');
   if (!surfacePrerequisites[surface](state)) throw new Error(`${surface} evidence prerequisite is not READY`);
@@ -789,8 +1170,8 @@ export function validateEvidence(
   if (coverageScope !== 'full' && coverageScope !== surface) {
     throw new Error(`evidence coverage scope ${coverageScope} does not match surface ${surface}`);
   }
-  if (coverageScope !== 'full') {
-    throw new Error(`${surface} evidence requires a full coverage matrix; surface-scoped readiness is not allowed`);
+  if (surface === 'mobile' && coverageScope !== 'full') {
+    throw new Error('mobile evidence requires a full coverage matrix');
   }
   if (
     coverage.commit !== commit
@@ -810,7 +1191,7 @@ export function validateEvidence(
   const beforePath = absoluteEvidencePath(screenshotBeforePath, 'screenshotBefore');
   const afterPath = absoluteEvidencePath(screenshotAfterPath, 'screenshotAfter');
   if (beforePath === afterPath) throw new Error('before and after screenshots must use different paths');
-  const visualPaths = [...new Set([beforePath, afterPath, ...(artifactPaths ?? [])])];
+  const visualPaths = [...new Set([beforePath, afterPath, ...artifactPaths])];
   if (visualPaths.length < 2) {
     throw new Error('evidence requires distinct before and after screenshot paths');
   }
@@ -819,44 +1200,106 @@ export function validateEvidence(
     absoluteEvidencePath(runtimeLogPath, 'runtime log'),
     absoluteEvidencePath(coverage.matrixPath, 'coverage matrix'),
   ];
-  inspectCoverageMatrix(
-    readArtifact(supportingPaths[2]),
+  const evidenceRoot = path.normalize(realpathArtifact(path.dirname(supportingPaths[2])));
+  const visualPreflight = visualPaths.map((candidate) => preflightArtifactPath(
+    candidate,
+    'evidence visual',
+    'visual',
+    { allowedRoot: evidenceRoot, fileExists, statArtifact, realpathArtifact },
+  ));
+  const supportingPreflight = supportingPaths.map((candidate) => preflightArtifactPath(
+    candidate,
+    'supporting evidence',
+    'supporting',
+    { allowedRoot: evidenceRoot, fileExists, statArtifact, realpathArtifact },
+  ));
+  const allTopLevelPreflight = [...visualPreflight, ...supportingPreflight];
+  const topLevelPathIdentity = pathIdentityIndex();
+  for (const artifact of allTopLevelPreflight) {
+    assertPathIdentityNotReused(topLevelPathIdentity, artifact, `top-level evidence ${artifact.path}`);
+    rememberPathIdentity(topLevelPathIdentity, artifact, `top-level evidence ${artifact.path}`);
+  }
+  const topLevelAggregateBytes = allTopLevelPreflight.reduce((total, artifact) => total + artifact.bytes, 0);
+  if (topLevelAggregateBytes > MAX_MATRIX_AGGREGATE_BYTES) {
+    throw new Error('top-level evidence aggregate artifact byte budget exceeds 64 MiB');
+  }
+
+  const topLevelIdentity = createArtifactIdentityIndex();
+  const topLevelBytes = new Map();
+  const topLevelInspections = new Map();
+  for (const preflight of visualPreflight) {
+    const bytes = readBoundedArtifact(
+      preflight.path,
+      preflight.bytes,
+      MAX_MATRIX_ARTIFACT_BYTES,
+      `top-level evidence ${preflight.path}`,
+      readArtifact,
+    );
+    const actual = inspectArtifact(bytes);
+    const inspected = { ...preflight, kind: 'visual', ...actual };
+    assertArtifactNotReused(topLevelIdentity, inspected, `top-level evidence ${preflight.path}`);
+    topLevelBytes.set(preflight.path, bytes);
+    topLevelInspections.set(preflight.path, inspected);
+  }
+  for (const preflight of supportingPreflight) {
+    const bytes = readBoundedArtifact(
+      preflight.path,
+      preflight.bytes,
+      MAX_SUPPORTING_ARTIFACT_BYTES,
+      `top-level supporting evidence ${preflight.path}`,
+      readArtifact,
+    );
+    const actual = inspectSupportingArtifact(bytes, `top-level supporting evidence ${preflight.path}`);
+    const inspected = { ...preflight, kind: 'supporting', ...actual };
+    assertArtifactNotReused(topLevelIdentity, inspected, `top-level supporting evidence ${preflight.path}`);
+    topLevelBytes.set(preflight.path, bytes);
+    topLevelInspections.set(preflight.path, inspected);
+  }
+  const matrixInspection = inspectCoverageMatrix(
+    topLevelBytes.get(supportingPaths[2]),
     coverage,
     { commit, version, packageSha256 },
+    { fileExists, readArtifact, statArtifact, realpathArtifact, identityIndex: topLevelIdentity },
   );
   if (new Set(supportingPaths).size !== supportingPaths.length) {
     throw new Error('accessibility, runtime, and coverage artifacts must use distinct paths');
   }
-  const artifacts = visualPaths.map((candidate) => {
-    if (typeof candidate !== 'string' || !path.isAbsolute(candidate)) {
-      throw new Error('evidence artifact paths must be absolute');
-    }
-    const normalized = path.normalize(candidate);
-    if (!fileExists(normalized)) throw new Error(`evidence artifact does not exist: ${normalized}`);
+  const artifacts = visualPreflight.map((preflight) => {
+    const normalized = preflight.path;
+    const inspected = topLevelInspections.get(normalized);
     return {
-      path: normalized,
+      ...inspected,
       role: normalized === beforePath ? 'screenshot-before' : normalized === afterPath ? 'screenshot-after' : 'screenshot-extra',
-      ...inspectArtifact(readArtifact(normalized)),
     };
   });
-  const supportingArtifacts = supportingPaths.map((candidate) => {
-    const normalized = path.normalize(candidate);
-    if (!fileExists(normalized)) throw new Error(`supporting evidence artifact does not exist: ${normalized}`);
+  const supportingArtifacts = supportingPreflight.map((preflight) => {
+    const normalized = preflight.path;
+    const inspected = topLevelInspections.get(normalized);
     const role = normalized === path.normalize(accessibilityPath)
       ? 'accessibility'
       : normalized === path.normalize(runtimeLogPath) ? 'runtime-log' : 'coverage-matrix';
-    return { path: normalized, role, ...inspectSupportingArtifact(readArtifact(normalized), role) };
+    return { ...inspected, role };
   });
+  assertExactSupportingArtifactSet({
+    accessibilityPath: path.normalize(accessibilityPath),
+    runtimeLogPath: path.normalize(runtimeLogPath),
+    coverage: { matrixPath: path.normalize(coverage.matrixPath) },
+  }, supportingArtifacts, 'registered supporting evidence');
+  const currentArtifacts = [...artifacts, ...supportingArtifacts, ...matrixInspection.artifacts];
   for (const existingSurface of surfaces) {
     if (existingSurface === surface) continue;
     const existingArtifacts = allEvidenceArtifacts(state.evidence?.[existingSurface]);
     if (existingArtifacts.length === 0) continue;
-    for (const artifact of [...artifacts, ...supportingArtifacts]) {
-      if (existingArtifacts.some((existing) => path.normalize(existing.path) === artifact.path)) {
-        throw new Error(`evidence artifact path is already used by ${existingSurface}; cross-surface reuse is forbidden`);
-      }
-      if (existingArtifacts.some((existing) => existing.sha256 === artifact.sha256)) {
-        throw new Error(`evidence artifact hash is already used by ${existingSurface}; cross-surface reuse is forbidden`);
+    const existingIdentity = createArtifactIdentityIndex(existingArtifacts);
+    for (const artifact of currentArtifacts) {
+      const identity = artifactIdentityKey(artifact);
+      const reusedBy = identity.realPath && existingIdentity.realPath.get(identity.realPath)
+        || identity.inodeKey && existingIdentity.inodeKey.get(identity.inodeKey)
+        || identity.contentKey && existingIdentity.contentKey.get(identity.contentKey);
+      if (reusedBy) {
+        throw new Error(
+          `evidence artifact ${artifact.rowId ?? artifact.role ?? artifact.path} is already used by ${existingSurface} (${reusedBy}); cross-surface reuse is forbidden`,
+        );
       }
     }
   }
@@ -882,16 +1325,36 @@ export function validateEvidence(
     artifactPaths: artifacts.map(({ path: artifactPath }) => artifactPath),
     artifacts,
     supportingArtifacts,
+    matrixArtifacts: matrixInspection.artifacts,
   };
 }
 
 export function reverifyEvidenceArtifacts(
   state,
-  { fileExists = (candidate) => fsSync.existsSync(candidate), readArtifact = (candidate) => fsSync.readFileSync(candidate) } = {},
+  {
+    fileExists = (candidate) => fsSync.existsSync(candidate),
+    readArtifact = (candidate) => fsSync.readFileSync(candidate),
+    statArtifact = (candidate) => fsSync.statSync(candidate),
+    realpathArtifact = (candidate) => fsSync.realpathSync(candidate),
+  } = {},
 ) {
+  const identityIndex = createArtifactIdentityIndex();
+  const pathSeen = pathIdentityIndex(identityIndex);
   for (const surface of surfaces) {
     const evidence = state.evidence?.[surface];
     if (!evidence) continue;
+    try {
+      assertExactSupportingArtifactSet(evidence, evidence.supportingArtifacts, `${surface} evidence`);
+    } catch (error) {
+      throw integrityError(error?.message ?? `${surface} supporting artifact role/path set is invalid`, surface);
+    }
+    const coverageMatrixPath = path.normalize(evidence.coverage?.matrixPath ?? '');
+    let evidenceRoot;
+    try {
+      evidenceRoot = path.normalize(realpathArtifact(path.dirname(coverageMatrixPath)));
+    } catch (error) {
+      throw integrityError(`${surface} evidence root is unavailable: ${error?.message ?? coverageMatrixPath}`, surface);
+    }
     if (!Array.isArray(evidence.artifacts) || evidence.artifacts.length === 0) {
       throw integrityError(`${surface} evidence is missing artifact integrity metadata`, surface);
     }
@@ -901,22 +1364,46 @@ export function reverifyEvidenceArtifacts(
       }
       const artifactPath = path.normalize(artifact.path);
       if (!fileExists(artifactPath)) throw integrityError(`evidence artifact does not exist: ${artifactPath}`, surface);
-      let actual;
       try {
-        actual = inspectArtifact(readArtifact(artifactPath));
+        const preflight = preflightArtifactPath(artifactPath, `${surface} evidence`, 'visual', {
+          allowedRoot: evidenceRoot,
+          fileExists,
+          statArtifact,
+          realpathArtifact,
+        });
+        for (const field of ['realPath', 'bytes', 'device', 'inode']) {
+          if (preflight[field] !== artifact[field]) throw new Error(`${field} changed after registration`);
+        }
+        assertPathIdentityNotReused(pathSeen, preflight, `${surface} evidence ${artifactPath}`);
+        rememberPathIdentity(pathSeen, preflight, `${surface} evidence ${artifactPath}`);
+        const actual = inspectArtifact(readBoundedArtifact(
+          artifactPath,
+          preflight.bytes,
+          MAX_MATRIX_ARTIFACT_BYTES,
+          `${surface} evidence ${artifactPath}`,
+          readArtifact,
+        ));
+        if (actual.sha256 !== artifact.sha256) {
+          throw new Error(`evidence artifact hash changed: ${artifactPath}`);
+        }
+        if (actual.width !== artifact.width || actual.height !== artifact.height) {
+          throw new Error(`evidence artifact dimensions changed: ${artifactPath}`);
+        }
+        assertArtifactNotReused(identityIndex, {
+          ...preflight,
+          ...actual,
+          kind: 'visual',
+          role: artifact.role,
+          evidenceSurface: surface,
+          rowId: artifact.rowId,
+        }, `${surface} evidence ${artifactPath}`);
       } catch (error) {
         if (error?.code === 'ELOOPINTEGRITY') throw error;
         throw integrityError(`${surface} evidence artifact is invalid: ${error?.message ?? artifactPath}`, surface);
       }
-      if (actual.sha256 !== artifact.sha256) {
-        throw integrityError(`evidence artifact hash changed: ${artifactPath}`, surface);
-      }
-      if (actual.width !== artifact.width || actual.height !== artifact.height) {
-        throw integrityError(`evidence artifact dimensions changed: ${artifactPath}`, surface);
-      }
     }
-    if (!Array.isArray(evidence.supportingArtifacts) || evidence.supportingArtifacts.length < 2) {
-      throw integrityError(`${surface} evidence is missing accessibility, runtime, or coverage artifacts`, surface);
+    if (!Array.isArray(evidence.matrixArtifacts) || evidence.matrixArtifacts.length === 0) {
+      throw integrityError(`${surface} evidence is missing persisted row artifact metadata`, surface);
     }
     for (const artifact of evidence.supportingArtifacts) {
       if (!artifact || typeof artifact.path !== 'string' || !path.isAbsolute(artifact.path)) {
@@ -924,23 +1411,85 @@ export function reverifyEvidenceArtifacts(
       }
       const artifactPath = path.normalize(artifact.path);
       if (!fileExists(artifactPath)) throw integrityError(`supporting evidence artifact does not exist: ${artifactPath}`, surface);
-      let actual;
       try {
-        actual = inspectSupportingArtifact(readArtifact(artifactPath), artifact.role ?? 'supporting');
+        const preflight = preflightArtifactPath(artifactPath, `${surface} supporting evidence`, 'supporting', {
+          allowedRoot: evidenceRoot,
+          fileExists,
+          statArtifact,
+          realpathArtifact,
+        });
+        for (const field of ['realPath', 'bytes', 'device', 'inode']) {
+          if (preflight[field] !== artifact[field]) throw new Error(`${field} changed after registration`);
+        }
+        assertPathIdentityNotReused(pathSeen, preflight, `${surface} supporting evidence ${artifactPath}`);
+        rememberPathIdentity(pathSeen, preflight, `${surface} supporting evidence ${artifactPath}`);
+        const artifactBytes = readBoundedArtifact(
+          artifactPath,
+          preflight.bytes,
+          MAX_SUPPORTING_ARTIFACT_BYTES,
+          `${surface} supporting evidence ${artifactPath}`,
+          readArtifact,
+        );
+        const actual = inspectSupportingArtifact(artifactBytes, artifact.role ?? 'supporting');
+        if (actual.sha256 !== artifact.sha256 || actual.bytes !== artifact.bytes) {
+          throw new Error(`supporting evidence artifact hash changed: ${artifactPath}`);
+        }
+        assertArtifactNotReused(identityIndex, {
+          ...preflight,
+          ...actual,
+          kind: 'supporting',
+          role: artifact.role,
+          evidenceSurface: surface,
+        }, `${surface} supporting evidence ${artifactPath}`);
         if (artifact.role === 'coverage-matrix') {
-          inspectCoverageMatrix(readArtifact(artifactPath), evidence.coverage, {
+          const matrixInspection = inspectCoverageMatrix(artifactBytes, evidence.coverage, {
             commit: evidence.commit,
             version: evidence.version,
             packageSha256: evidence.packageSha256,
-          });
+          }, { fileExists, readArtifact, statArtifact, realpathArtifact, identityIndex });
+          if (matrixInspection.artifacts.length !== evidence.matrixArtifacts.length) {
+            throw new Error('persisted row artifact count changed');
+          }
+          const persisted = new Map(evidence.matrixArtifacts.map((entry) => [`${entry.rowId}\0${entry.role}`, entry]));
+          for (const current of matrixInspection.artifacts) {
+            const previous = persisted.get(`${current.rowId}\0${current.role}`);
+            if (!previous) throw new Error(`persisted row artifact metadata is missing ${current.rowId} ${current.role}`);
+            for (const field of ['path', 'realPath', 'sha256', 'bytes', 'device', 'inode', 'kind', 'evidenceSurface']) {
+              if (current[field] !== previous[field]) {
+                throw new Error(`persisted row artifact ${current.rowId} ${current.role} ${field} changed`);
+              }
+            }
+          }
         }
       } catch (error) {
         if (error?.code === 'ELOOPINTEGRITY') throw error;
         throw integrityError(`${surface} supporting evidence artifact is invalid: ${error?.message ?? artifactPath}`, surface);
       }
-      if (actual.sha256 !== artifact.sha256 || actual.bytes !== artifact.bytes) {
-        throw integrityError(`supporting evidence artifact hash changed: ${artifactPath}`, surface);
+    }
+  }
+  return true;
+}
+
+export function reopenCoverageMatrices(
+  state,
+  { readArtifact = (candidate) => fsSync.readFileSync(candidate) } = {},
+) {
+  for (const surface of surfaces) {
+    const evidence = state.evidence?.[surface];
+    if (!evidence) throw integrityError(`${surface} coverage matrix is missing at completion`, surface);
+    let matrixPath;
+    try {
+      matrixPath = absoluteEvidencePath(evidence.coverage?.matrixPath, `${surface} coverage matrix`);
+      const bytes = readArtifact(matrixPath);
+      if (!(bytes instanceof Uint8Array) || bytes.length === 0 || bytes.length > MAX_SUPPORTING_ARTIFACT_BYTES) {
+        throw new Error(`${surface} coverage matrix reopen returned invalid bounded bytes`);
       }
+      if (hashBytes(bytes) !== evidence.coverage.matrixSha256) {
+        throw new Error(`${surface} coverage matrix hash changed before completion`);
+      }
+    } catch (error) {
+      if (error?.code === 'ELOOPINTEGRITY') throw error;
+      throw integrityError(`${surface} coverage matrix could not be reopened at completion: ${error?.message ?? matrixPath}`, surface);
     }
   }
   return true;
@@ -953,6 +1502,9 @@ export function assertPackageIntegrity(
   const packageEntry = state.package;
   if (!hasReady(packageEntry) || typeof packageEntry.packagePath !== 'string' || typeof packageEntry.sha256 !== 'string') {
     throw integrityError('release package integrity metadata is missing', 'package');
+  }
+  if (packageEntry.sourceCommit !== state.commit) {
+    throw integrityError('release package source commit does not match the release run', 'package');
   }
   if (!path.isAbsolute(packageEntry.packagePath)) throw integrityError('release package path must be absolute', 'package');
   if (!fileExists(packageEntry.packagePath)) throw integrityError(`release package does not exist: ${packageEntry.packagePath}`, 'package');
@@ -976,6 +1528,7 @@ export function applyEvidence(state, evidence) {
   const nextEvidence = {
     ...state.evidence,
     [evidence.surface]: {
+      status: 'READY',
       surface: evidence.surface,
       observedAt: evidence.observedAt,
       commit: evidence.commit,
@@ -992,6 +1545,7 @@ export function applyEvidence(state, evidence) {
       artifactPaths: [...evidence.artifactPaths],
       artifacts: evidence.artifacts.map((artifact) => ({ ...artifact })),
       supportingArtifacts: evidence.supportingArtifacts.map((artifact) => ({ ...artifact })),
+      matrixArtifacts: evidence.matrixArtifacts.map((artifact) => ({ ...artifact })),
     },
   };
   for (const downstream of surfaces.slice(surfaces.indexOf(evidence.surface) + 1)) {
@@ -1157,6 +1711,13 @@ function assertPublicAssetIdentity(asset, label) {
 
 export function assertPublicProbeMatches(state, currentPublic) {
   if (
+    state.package?.sourceCommit !== state.commit
+    || state.public?.sourceCommit !== state.commit
+    || currentPublic?.sourceCommit !== state.commit
+  ) {
+    throw new Error('current or recorded public source commit does not match the release run');
+  }
+  if (
     currentPublic?.version !== state.version
     || (currentPublic?.health?.version !== undefined && currentPublic.health.version !== currentPublic.version)
     || state.public?.version !== state.version
@@ -1227,6 +1788,15 @@ export function statePathFromEnv(env = process.env) {
   return path.resolve(env.RELEASE_LOOP_STATE_PATH || path.join(root, '.release', 'current.json'));
 }
 
+export function assertCanonicalReleaseDriver(env = process.env) {
+  if (env.RELEASE_UPDATE_DRIVER === '1' && env.RELEASE_LOOP_STATE_PATH) return true;
+  const error = new Error(
+    'release-loop is an internal state-machine driver; use `npm run release:update -- run` so the canonical .release/update-current.json state and lock are preserved',
+  );
+  error.code = 'ERELEASEENTRYPOINT';
+  throw error;
+}
+
 export async function readState(statePath = statePathFromEnv()) {
   return JSON.parse(await fs.readFile(statePath, 'utf8'));
 }
@@ -1256,61 +1826,383 @@ export function requestedSourceIoMode(env = process.env) {
     : 'normal';
 }
 
-function gitSnapshot() {
-  const run = (args) => {
-    try {
-      return execFileSync('git', args, {
-        cwd: root,
-        encoding: 'utf8',
-        timeout: GIT_SNAPSHOT_TIMEOUT_MS,
-        maxBuffer: 4 * 1024 * 1024,
-      }).trim();
-    } catch (error) {
-      if (error?.code === 'ETIMEDOUT' || error?.killed || error?.signal) {
-        const blocker = new Error(
-          'Git worktree inspection timed out; check for macOS FileProvider/dataless files before retrying the release loop',
-        );
-        blocker.code = 'ESOURCEIOBLOCKED';
-        blocker.cause = error;
-        throw blocker;
-      }
-      throw error;
-    }
-  };
-  let porcelain;
-  let sourceIoMode = requestedSourceIoMode();
+function runGitReadOnly(rootDir, args, env = process.env) {
   try {
-    porcelain = run(['status', '--porcelain']);
+    return execFileSync('git', args, {
+      cwd: rootDir,
+      encoding: 'utf8',
+      env: { ...env, GIT_OPTIONAL_LOCKS: '0' },
+      timeout: GIT_SNAPSHOT_TIMEOUT_MS,
+      maxBuffer: 4 * 1024 * 1024,
+      killSignal: 'SIGKILL',
+    });
   } catch (error) {
-    if (error?.code !== 'ESOURCEIOBLOCKED') throw error;
-    const headTree = run(['rev-parse', 'HEAD^{tree}']);
-    const indexTree = run(['write-tree']);
-    if (headTree !== indexTree) throw error;
-    const untrackedBytes = run(['ls-files', '--others', '--exclude-standard', '-z']);
-    const untracked = untrackedBytes.split('\0').filter(Boolean);
-    porcelain = untracked.map((fileName) => `?? ${fileName}`).join('\n');
-    sourceIoMode = 'index-tree-fileprovider-fallback';
+    if (error?.code === 'ETIMEDOUT' || error?.killed || error?.signal) {
+      const blocker = new Error(
+        'Git worktree inspection timed out; check for macOS FileProvider/dataless files before retrying the release loop',
+      );
+      blocker.code = 'ESOURCEIOBLOCKED';
+      blocker.cause = error;
+      throw blocker;
+    }
+    throw error;
   }
-  const status = classifyGitStatus(porcelain);
+}
+
+export function createGitSnapshot({
+  rootDir = root,
+  env = process.env,
+  verifySource = assertCleanTrackedWorktreeForFileProvider,
+  resolveSource = resolvePinnedCommitOid,
+  runGit = (args) => runGitReadOnly(rootDir, args, env),
+} = {}) {
+  const pinnedCommitOid = env.TEAMS_SOURCE_COMMIT ?? resolveSource(rootDir, {
+    env,
+    timeoutMs: GIT_SNAPSHOT_TIMEOUT_MS,
+  });
+  if (!isFullCommitOid(pinnedCommitOid)) {
+    throw new Error('release loop source resolver did not return a full Git OID');
+  }
+  let verification;
+  try {
+    verification = verifySource(rootDir, {
+      commitOid: pinnedCommitOid,
+      env,
+      timeoutMs: GIT_SNAPSHOT_TIMEOUT_MS,
+    });
+  } catch (error) {
+    if (error?.code === 'ETIMEDOUT' || error?.signal) {
+      const blocker = new Error(
+        'Git worktree inspection timed out; check for macOS FileProvider/dataless files before retrying the release loop',
+        { cause: error },
+      );
+      blocker.code = 'ESOURCEIOBLOCKED';
+      throw blocker;
+    }
+    throw error;
+  }
+  const commit = verification?.commitOid;
+  if (commit !== pinnedCommitOid) {
+    throw new Error('release loop source verification changed the pinned Git OID');
+  }
+
+  let untrackedBytes;
+  try {
+    untrackedBytes = runGit(['ls-files', '--others', '--exclude-standard', '-z', '--']);
+  } catch (error) {
+    if (error?.code === 'ESOURCEIOBLOCKED') throw error;
+    throw new Error(`failed to inspect untracked release artifacts: ${error?.message ?? error}`, { cause: error });
+  }
+  const untracked = String(untrackedBytes).split('\0').filter(Boolean).map((fileName) => `?? ${fileName}`);
   return {
-    commit: run(['rev-parse', 'HEAD']),
-    shortCommit: run(['rev-parse', '--short=7', 'HEAD']),
-    dirty: status.trackedDirty,
-    untracked: status.untracked,
-    porcelain,
-    sourceIoMode,
+    commit,
+    shortCommit: commit.slice(0, 7),
+    dirty: false,
+    untracked,
+    porcelain: untracked.join('\n'),
+    sourceIoMode: requestedSourceIoMode(env),
+    verificationMode: verification.verificationMode,
   };
 }
 
-function sourceVersion() {
-  const manifest = JSON.parse(fsSync.readFileSync(path.join(root, 'appPackage', 'manifest.json'), 'utf8'));
-  return manifest.version;
+const UNTRACKED_HASH_CHUNK_BYTES = 1024 * 1024;
+const UNTRACKED_BASELINE_FIELDS = ['type', 'device', 'inode', 'mode', 'size', 'sha256', 'target'];
+
+function untrackedRelativePath(entry) {
+  if (typeof entry !== 'string') throw new Error('release loop untracked path must be a string');
+  const candidate = entry.startsWith('?? ')
+    ? entry.slice(3)
+    : entry.startsWith('??')
+      ? entry.slice(2)
+      : entry;
+  if (candidate.length === 0 || candidate.includes('\0')) {
+    throw new Error('release loop untracked path must be non-empty and NUL-free');
+  }
+  return candidate;
+}
+
+function untrackedPathOnDisk(relativePath, rootDir, realpath = fsSync.realpathSync) {
+  if (path.isAbsolute(relativePath)) {
+    throw new Error(`release loop untracked path must be relative: ${relativePath}`);
+  }
+  const absoluteRoot = path.resolve(rootDir);
+  const absolutePath = path.resolve(absoluteRoot, relativePath);
+  if (!isPathInside(absoluteRoot, absolutePath) || absolutePath === absoluteRoot) {
+    throw new Error(`release loop untracked path escapes the repository: ${relativePath}`);
+  }
+  const canonicalRoot = realpath(absoluteRoot);
+  const canonicalParent = realpath(path.dirname(absolutePath));
+  if (!isPathInside(canonicalRoot, canonicalParent)) {
+    throw new Error(`release loop untracked path escapes the repository through a symlinked parent: ${relativePath}`);
+  }
+  // Use the canonical parent for all subsequent operations so a parent
+  // symlink cannot be swapped after the containment check and redirect the
+  // hash/open operation outside the repository.
+  return path.join(canonicalParent, path.basename(absolutePath));
+}
+
+function statFingerprint(metadata) {
+  return {
+    device: safeStatNumber(metadata.dev),
+    inode: safeStatNumber(metadata.ino),
+    mode: safeStatNumber(metadata.mode) === null ? null : metadata.mode & 0o7777,
+    size: safeStatNumber(metadata.size),
+  };
+}
+
+function assertSameFileFingerprint(expected, observed, filePath) {
+  const expectedFingerprint = statFingerprint(expected);
+  const observedFingerprint = statFingerprint(observed);
+  for (const field of ['device', 'inode', 'mode', 'size']) {
+    if (expectedFingerprint[field] !== observedFingerprint[field]) {
+      throw new Error(`release loop untracked file changed while reading: ${filePath}`);
+    }
+  }
+}
+
+function hashUntrackedFileSync(filePath, expectedMetadata) {
+  const noFollow = fsSync.constants.O_NOFOLLOW ?? 0;
+  const descriptor = fsSync.openSync(filePath, fsSync.constants.O_RDONLY | noFollow);
+  const digest = crypto.createHash('sha256');
+  const buffer = Buffer.allocUnsafe(UNTRACKED_HASH_CHUNK_BYTES);
+  let position = 0;
+  try {
+    const observedBeforeRead = fsSync.fstatSync(descriptor);
+    if (expectedMetadata) assertSameFileFingerprint(expectedMetadata, observedBeforeRead, filePath);
+    while (true) {
+      const bytesRead = fsSync.readSync(descriptor, buffer, 0, buffer.length, position);
+      if (bytesRead === 0) break;
+      digest.update(buffer.subarray(0, bytesRead));
+      position += bytesRead;
+    }
+    const observedAfterRead = fsSync.fstatSync(descriptor);
+    assertSameFileFingerprint(observedBeforeRead, observedAfterRead, filePath);
+    return digest.digest('hex');
+  } finally {
+    fsSync.closeSync(descriptor);
+  }
+}
+
+function safeStatNumber(value) {
+  return Number.isSafeInteger(value) ? value : null;
+}
+
+function snapshotUntrackedPath(
+  relativePath,
+  {
+    rootDir = root,
+    lstat = (candidate) => fsSync.lstatSync(candidate),
+    readlink = (candidate) => fsSync.readlinkSync(candidate),
+    hashFile = hashUntrackedFileSync,
+    realpath = (candidate) => fsSync.realpathSync(candidate),
+  } = {},
+) {
+  const absolutePath = untrackedPathOnDisk(relativePath, rootDir, realpath);
+  const metadata = lstat(absolutePath);
+  const base = {
+    path: relativePath,
+    type: null,
+    device: safeStatNumber(metadata.dev),
+    inode: safeStatNumber(metadata.ino),
+    mode: safeStatNumber(metadata.mode) === null ? null : metadata.mode & 0o7777,
+    size: safeStatNumber(metadata.size),
+    sha256: null,
+    target: null,
+  };
+  if (metadata.isSymbolicLink()) {
+    const target = readlink(absolutePath);
+    return {
+      ...base,
+      type: 'symlink',
+      size: Buffer.byteLength(target),
+      sha256: hashBytes(Buffer.from(target, 'utf8')),
+      target,
+    };
+  }
+  if (!metadata.isFile()) {
+    throw new Error(`release loop baseline untracked path must be a regular file or symlink: ${relativePath}`);
+  }
+  return {
+    ...base,
+    type: 'file',
+    sha256: hashFile(absolutePath, metadata),
+  };
+}
+
+export function captureUntrackedBaseline(
+  untrackedAtStart,
+  {
+    rootDir = root,
+    lstat,
+    readlink,
+    hashFile,
+    realpath,
+  } = {},
+) {
+  if (!Array.isArray(untrackedAtStart)) throw new Error('release loop requires untrackedAtStart to be an array');
+  const paths = untrackedAtStart.map(untrackedRelativePath);
+  const seen = new Set();
+  return paths.map((relativePath) => {
+    if (seen.has(relativePath)) throw new Error(`release loop has duplicate untracked baseline path: ${relativePath}`);
+    seen.add(relativePath);
+    try {
+      return snapshotUntrackedPath(relativePath, { rootDir, lstat, readlink, hashFile, realpath });
+    } catch (error) {
+      const blocker = new Error(
+        `release loop could not fingerprint initial untracked path ${relativePath}: ${error?.message ?? error}`,
+        { cause: error },
+      );
+      blocker.code = 'EUNTRACKEDBASELINEINVALID';
+      throw blocker;
+    }
+  });
+}
+
+function untrackedMutationError(relativePath, reason, cause) {
+  const blocker = new Error(
+    `release loop baseline untracked file was deleted, moved, or replaced: ${relativePath} (${reason})`,
+    cause ? { cause } : undefined,
+  );
+  blocker.code = 'EUNTRACKEDSTARTMUTATED';
+  return blocker;
+}
+
+export function assertInitialUntrackedPreserved(
+  state,
+  {
+    rootDir = root,
+    lstat,
+    readlink,
+    hashFile,
+    realpath,
+  } = {},
+) {
+  const paths = (state?.untrackedAtStart ?? []).map(untrackedRelativePath);
+  if (paths.length === 0) return { checked: 0 };
+  const baseline = state?.untrackedAtStartBaseline;
+  if (!Array.isArray(baseline) || baseline.length !== paths.length) {
+    const blocker = new Error(
+      'release loop cannot verify baseline untracked files because untrackedAtStart fingerprints are unavailable; supersede and restart the release loop',
+    );
+    blocker.code = 'EUNTRACKEDBASELINEUNAVAILABLE';
+    throw blocker;
+  }
+  const baselineByPath = new Map();
+  for (const entry of baseline) {
+    if (!entry || typeof entry.path !== 'string' || baselineByPath.has(entry.path)) {
+      const blocker = new Error('release loop baseline untracked fingerprints are invalid; supersede and restart the release loop');
+      blocker.code = 'EUNTRACKEDBASELINEUNAVAILABLE';
+      throw blocker;
+    }
+    baselineByPath.set(entry.path, entry);
+  }
+  for (const relativePath of paths) {
+    const expected = baselineByPath.get(relativePath);
+    if (!expected) {
+      const blocker = new Error(
+        `release loop baseline fingerprint is missing for initial untracked path ${relativePath}; supersede and restart the release loop`,
+      );
+      blocker.code = 'EUNTRACKEDBASELINEUNAVAILABLE';
+      throw blocker;
+    }
+    let current;
+    try {
+      current = snapshotUntrackedPath(relativePath, { rootDir, lstat, readlink, hashFile, realpath });
+    } catch (error) {
+      throw untrackedMutationError(relativePath, 'the path is missing or cannot be read', error);
+    }
+    const changedFields = UNTRACKED_BASELINE_FIELDS.filter((field) => current[field] !== expected[field]);
+    if (changedFields.length > 0) {
+      throw untrackedMutationError(relativePath, `fingerprint changed (${changedFields.join(', ')})`);
+    }
+  }
+  return { checked: paths.length };
+}
+
+export function readSourceVersion(
+  sourceCommit,
+  {
+    rootDir = root,
+    env = process.env,
+    runGit = (args) => runGitReadOnly(rootDir, args, env),
+  } = {},
+) {
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sourceCommit ?? '')) {
+    throw new Error('release source version requires a full Git OID');
+  }
+  return JSON.parse(runGit(['show', `${sourceCommit}:appPackage/manifest.json`])).version;
+}
+
+function releaseVersionParts(value, label) {
+  const match = RELEASE_VERSION_PATTERN.exec(String(value ?? ''));
+  if (!match) {
+    const error = new Error(`${label} must be a stable X.Y.Z release version; received ${value ?? '<missing>'}`);
+    error.code = 'EVERSIONNOTBUMPED';
+    throw error;
+  }
+  return match.slice(1).map(Number);
+}
+
+/**
+ * Teams treats an app update as a new versioned package. Keep the release
+ * entrypoint from starting a new identity when only the source commit changed.
+ */
+export function assertReleaseVersionAdvanced(currentVersion, previousVersion) {
+  const current = releaseVersionParts(currentVersion, 'current release version');
+  const previous = releaseVersionParts(previousVersion, 'previous release version');
+  const advanced = current.some((part, index) => part !== previous[index]
+    && part > previous[index]
+    && current.slice(0, index).every((prefix, prefixIndex) => prefix === previous[prefixIndex]));
+  if (!advanced) {
+    const error = new Error(
+      `release version ${currentVersion} must be greater than the previous source version ${previousVersion}; bump package.json, package-lock.json, and appPackage/manifest.json before release`,
+    );
+    error.code = 'EVERSIONNOTBUMPED';
+    throw error;
+  }
+  return true;
+}
+
+export function readPreviousSourceVersion(
+  sourceCommit,
+  {
+    rootDir = root,
+    env = process.env,
+    runGit = (args) => runGitReadOnly(rootDir, args, env),
+  } = {},
+) {
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sourceCommit ?? '')) {
+    throw new Error('previous release version requires a full Git OID');
+  }
+  let parentCommit;
+  try {
+    parentCommit = runGit(['rev-parse', `${sourceCommit}^`]).trim();
+  } catch {
+    return null;
+  }
+  return { commit: parentCommit, version: readSourceVersion(parentCommit, { rootDir, env, runGit }) };
+}
+
+function gitSnapshot(env = process.env) {
+  return createGitSnapshot({ env });
 }
 
 function assertCurrentGit(state, { requireClean = true } = {}) {
-  const current = gitSnapshot();
+  const currentHead = resolvePinnedCommitOid(root, {
+    env: process.env,
+    timeoutMs: GIT_SNAPSHOT_TIMEOUT_MS,
+  });
+  if (currentHead !== state.commit) {
+    const error = new Error(
+      `release run is stale: recorded commit ${state.commit} does not match current Git HEAD ${currentHead}; supersede and restart the release loop`,
+    );
+    error.code = 'ESTALERELEASE';
+    throw error;
+  }
+  const current = gitSnapshot({ ...process.env, TEAMS_SOURCE_COMMIT: state.commit });
   if (current.commit !== state.commit) throw new Error('current Git commit does not match the release run');
   if (requireClean && current.dirty) throw new Error('release loop requires a clean Git worktree');
+  assertInitialUntrackedPreserved(state);
   return current;
 }
 
@@ -1330,15 +2222,27 @@ function phaseField(phase) {
 export function summarizePhase(phase, payload) {
   const completedAt = new Date().toISOString();
   if (phase === 'machine') {
-    return { status: 'READY', completedAt, commands: payload.evidence?.map(({ command, exitCode }) => ({ command, exitCode })) ?? [] };
+    const evidence = payload.evidence ?? [];
+    const sourceCommits = new Set(evidence.map((entry) => entry.sourceCommit).filter(Boolean));
+    if (sourceCommits.size !== 1) throw new Error('machine gate did not return one pinned source commit');
+    return {
+      status: 'READY',
+      completedAt,
+      sourceCommit: [...sourceCommits][0],
+      commands: evidence.map(({ command, exitCode }) => ({ command, exitCode })),
+    };
   }
   if (phase === 'package') {
     const packageEntry = payload.evidence?.find((entry) => typeof entry.package === 'string');
     const manifestEvidence = payload.evidence?.find((entry) => entry.manifest)?.manifest;
     if (!packageEntry || !manifestEvidence) throw new Error('package gate returned incomplete package evidence');
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(packageEntry.sourceCommit ?? '')) {
+      throw new Error('package gate returned no full pinned source commit');
+    }
     return {
       status: 'READY',
       completedAt,
+      sourceCommit: packageEntry.sourceCommit,
       packagePath: packageEntry.package,
       version: packageEntry.version,
       sha256: packageEntry.sha256,
@@ -1353,11 +2257,18 @@ export function summarizePhase(phase, payload) {
   if (!health || !tab || !asset || !tabRoutes || !packageEntry) {
     throw new Error('public gate returned incomplete public asset or route evidence');
   }
+  if (
+    !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(packageEntry.sourceCommit ?? '')
+    || health.sourceCommit !== packageEntry.sourceCommit
+  ) {
+    throw new Error('public gate source commit does not match the packaged source identity');
+  }
   assertPublicAssetIdentity(asset, 'public gate');
   assertPublicTabRoutes(tabRoutes, 'public gate');
   return {
     status: 'READY',
     completedAt,
+    sourceCommit: packageEntry.sourceCommit,
     version: health.version,
     health,
     tab,
@@ -1373,7 +2284,9 @@ const phaseTimeouts = {
   // bounded process startup and cleanup overhead.
   machine: createPreflightCommands()
     .reduce((total, [, , timeoutMs]) => total + timeoutMs, 30_000),
-  package: 60_000,
+  // release-gate/package runs four bounded commands in series; the outer
+  // process must not reap a healthy build halfway through that contract.
+  package: packageGateTimeoutMs(),
   public: 30_000,
 };
 
@@ -1412,7 +2325,7 @@ export async function runGatePhase(
   }
   if (result.code !== 0 || payload.status !== 'READY') {
     const error = new Error(`release gate ${phase} is ${payload.status ?? 'FAILED'}`);
-    error.code = result.code === null ? 'ETIMEDOUT' : 'ELOOPPHASE';
+    error.code = payload.blocker?.code ?? (result.code === null ? 'ETIMEDOUT' : 'ELOOPPHASE');
     error.output = output.slice(-4_000);
     throw error;
   }
@@ -1443,9 +2356,17 @@ export async function runGatePhase(
 export async function completeReleaseState(
   state,
   {
-    probePublic = async () => summarizePhase('public', await runGatePhase('public')),
+    probePublic = async () => summarizePhase('public', await runGatePhase('public', {
+      env: {
+        TEAMS_SOURCE_COMMIT: state.commit,
+        ...(state.sourceIoMode === 'index-tree-fileprovider-fallback'
+          ? { TEAMS_FILEPROVIDER_SERVER_REUSE: '1' }
+          : {}),
+      },
+    })),
     verifyPackage = () => assertPackageIntegrity(state),
-    verifyEvidence = () => reverifyEvidenceArtifacts(state),
+    verifyEvidence,
+    readArtifact,
     now = new Date(),
   } = {},
 ) {
@@ -1461,13 +2382,18 @@ export async function completeReleaseState(
     error.missing = missing;
     throw error;
   }
+  const verifyCurrentEvidence = verifyEvidence
+    ?? (() => reverifyEvidenceArtifacts(state, readArtifact ? { readArtifact } : undefined));
   verifyPackage();
-  verifyEvidence();
+  verifyCurrentEvidence();
   const probe = await probePublic();
   const currentPublic = probe?.evidence ? summarizePhase('public', probe) : probe;
   assertPublicProbeMatches(state, currentPublic);
   verifyPackage();
-  verifyEvidence();
+  verifyCurrentEvidence();
+  reopenCoverageMatrices(state, {
+    readArtifact: readArtifact ?? ((candidate) => fsSync.readFileSync(candidate)),
+  });
   const timestamp = now instanceof Date ? now.toISOString() : new Date().toISOString();
   return {
     ...state,
@@ -1513,14 +2439,18 @@ async function startRun(statePath) {
   }
   const git = gitSnapshot();
   if (git.dirty) throw new Error('release loop requires a clean Git worktree at start');
+  const previousRelease = readPreviousSourceVersion(git.commit);
+  if (previousRelease) assertReleaseVersionAdvanced(readSourceVersion(git.commit), previousRelease.version);
+  const untrackedAtStartBaseline = captureUntrackedBaseline(git.untracked);
   const startedAt = new Date().toISOString();
   const state = createInitialState({
     runId: crypto.randomUUID(),
     commit: git.commit,
     shortCommit: git.shortCommit,
-    version: sourceVersion(),
+    version: readSourceVersion(git.commit),
     startedAt,
     untrackedAtStart: git.untracked,
+    untrackedAtStartBaseline,
     sourceIoMode: git.sourceIoMode,
   });
   await writeState(state, statePath);
@@ -1573,11 +2503,17 @@ async function executePhase(phase, statePath, { url } = {}) {
     if (phase === 'public') assertPackageIntegrity(state);
     const payload = await runGatePhase(phase, {
       url,
-      env: state.sourceIoMode === 'index-tree-fileprovider-fallback'
-        ? { TEAMS_FILEPROVIDER_SERVER_REUSE: '1' }
-        : undefined,
+      env: {
+        TEAMS_SOURCE_COMMIT: state.commit,
+        ...(state.sourceIoMode === 'index-tree-fileprovider-fallback'
+          ? { TEAMS_FILEPROVIDER_SERVER_REUSE: '1' }
+          : {}),
+      },
     });
     const summarized = summarizePhase(phase, payload);
+    if (summarized.sourceCommit !== state.commit) {
+      throw new Error(`${phase} source commit does not match the release run`);
+    }
     if (phase === 'package' && summarized.version !== state.version) throw new Error('package version does not match the release run');
     if (phase === 'public') {
       if (summarized.version !== state.version) throw new Error('public health version does not match the release run');
@@ -1598,7 +2534,8 @@ async function addEvidence(statePath, evidencePath) {
   if (!evidencePath) throw new Error('evidence requires --file <path>');
   const state = await requireState(statePath);
   assertCurrentGit(state);
-  const input = JSON.parse(await fs.readFile(path.resolve(evidencePath), 'utf8'));
+  const rawInput = JSON.parse(await fs.readFile(path.resolve(evidencePath), 'utf8'));
+  const { evidence: input } = splitBrowserEvidenceInput(rawInput);
   const normalized = validateEvidence(input, state, { fileExists: (candidate) => fsSync.existsSync(candidate) });
   const next = applyEvidence(state, normalized);
   await writeState(next, statePath);
@@ -1668,7 +2605,12 @@ async function runCli(argv) {
     return jsonLog(publicResult(state));
   }
   if (command === 'evidence') return addEvidence(statePath, file);
-  if (command === 'complete') return completeRun(statePath);
+  if (command === 'complete') {
+    const state = await requireState(statePath);
+    assertCurrentGit(state);
+    assertReleaseUpdateCompletionContract(state);
+    return completeRun(statePath);
+  }
   throw new Error(`unknown release loop command: ${command}`);
 }
 
@@ -1678,13 +2620,38 @@ function isMainModule() {
 
 if (isMainModule()) {
   try {
+    assertCanonicalReleaseDriver(process.env);
     await runCli(process.argv.slice(2));
   } catch (error) {
-    const blocked = ['ELOOPBLOCKED', 'ELOOPACTIVE', 'ELOOPINTEGRITY', 'ETIMEDOUT', 'ESOURCEIOBLOCKED'].includes(error.code);
+    const blocked = [
+      'ELOOPBLOCKED',
+      'ELOOPACTIVE',
+      'ELOOPINTEGRITY',
+      'ESTALERELEASE',
+      'ETIMEDOUT',
+      'ESOURCEIOBLOCKED',
+      'EVERSIONNOTBUMPED',
+      'EWORKTREEDIRTY',
+      'EUPDATEOUTPUT',
+      'EPROCESSREAPTIMEOUT',
+      'ECOMMAND',
+      'ERELEASEENTRYPOINT',
+    ].includes(error.code);
     const result = {
       status: blocked ? 'BLOCKED' : 'FAILED',
       phase: process.argv[2] ?? 'status',
-      blocker: { code: error.code ?? 'EUNKNOWN', message: error.message },
+      blocker: {
+        code: error.code ?? 'EUNKNOWN',
+        message: error.message,
+        ...(error.output
+          ? {
+            detail: String(error.output)
+              .replace(/bearer\s+\S+/gi, 'Bearer [REDACTED]')
+              .replace(/(client[_ -]?secret|password|api[_ -]?key|token|secret)\s*[:=]\s*\S+/gi, '$1=[REDACTED]')
+              .slice(-4_000),
+          }
+          : {}),
+      },
       missingGates: error.missing ?? undefined,
       nextAction: error.missing?.[0] ?? 'Inspect the reported release loop failure.',
     };

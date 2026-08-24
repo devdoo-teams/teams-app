@@ -3,10 +3,27 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { assertCleanTrackedWorktreeForFileProvider } from './fileprovider-git-clean.mjs';
+import {
+  assertCleanTrackedWorktreeForFileProvider,
+  isFullCommitOid,
+  resolvePinnedCommitOid,
+} from './fileprovider-git-clean.mjs';
 
 export const CORE_SOURCE_CHECK_FILES = [
   'src/server/codex-capability.ts',
+  'src/server/cli-agent-runner.ts',
+  'src/server/provider-neutral-agent-runner.ts',
+  'src/server/cli-diagnostics.ts',
+  'src/server/a2a-contract.ts',
+  'src/server/a2a-role-catalog.ts',
+  'src/server/a2a-orchestrator.ts',
+  'src/server/a2a-observability.ts',
+  'src/server/a2a-execution.ts',
+  'src/server/a2a-http-scope.ts',
+  'src/server/a2a-jsonrpc-route.ts',
+  'src/server/a2a-production-runtime.ts',
+  'src/server/a2a-route.ts',
+  'src/server/a2a-store.ts',
   'src/server/index.ts',
   'src/server/genui-response.ts',
   'src/server/genui-teams.ts',
@@ -22,6 +39,36 @@ const CORE_COMPILE_TIMEOUT_MS = 10_000;
 const EXPLICIT_FILEPROVIDER_FALLBACK = 'explicit-env';
 const DATALESS_FILEPROVIDER_FALLBACK = 'dataless-tracked-input';
 const MODULE_REQUIRE = createRequire(import.meta.url);
+
+function isPathInside(rootPath, candidatePath) {
+  const relative = path.relative(rootPath, candidatePath);
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+function resolveOwnedSourcePath(root, relativePath) {
+  if (path.isAbsolute(relativePath)) {
+    throw new Error(`Checked source path must be relative: ${relativePath}`);
+  }
+
+  const resolvedRoot = path.resolve(root);
+  const candidate = path.resolve(resolvedRoot, relativePath);
+  if (!isPathInside(resolvedRoot, candidate)) {
+    throw new Error(`Checked source path escapes the owned source root: ${relativePath}`);
+  }
+
+  const metadata = fs.lstatSync(candidate);
+  if (metadata.isSymbolicLink()) {
+    throw new Error(`Checked source must not be a symbolic link: ${relativePath}`);
+  }
+
+  const realRoot = fs.realpathSync(resolvedRoot);
+  const realCandidate = fs.realpathSync(candidate);
+  if (!isPathInside(realRoot, realCandidate)) {
+    throw new Error(`Checked source realpath escapes the owned source root: ${relativePath}`);
+  }
+
+  return { metadata, realPath: realCandidate };
+}
 
 function resolveEsbuildBinaryPath({
   env = process.env,
@@ -61,24 +108,37 @@ export function createDefaultAdapters(
   } = {},
 ) {
   return {
-    statFile(relativePath) {
-      return fs.statSync(path.join(root, relativePath));
-    },
-    readWorkspaceFile(relativePath) {
-      return fs.readFileSync(path.join(root, relativePath), 'utf8');
-    },
-    getTrackedWorktreeStatus() {
-      assertCleanTrackedWorktreeForFileProvider(root, {
+    resolvePinnedCommitOid() {
+      return resolvePinnedCommitOid(root, {
         runCommandSync,
         timeoutMs: GIT_TIMEOUT_MS,
+        env,
       });
-      return '';
     },
-    readCommittedSource(relativePath) {
-      return execFileSync('git', ['show', `HEAD:${relativePath}`], {
+    statFile(relativePath) {
+      return resolveOwnedSourcePath(root, relativePath).metadata;
+    },
+    readWorkspaceFile(relativePath) {
+      return fs.readFileSync(resolveOwnedSourcePath(root, relativePath).realPath, 'utf8');
+    },
+    getTrackedWorktreeStatus(commitOid) {
+      return assertCleanTrackedWorktreeForFileProvider(root, {
+        runCommandSync,
+        timeoutMs: GIT_TIMEOUT_MS,
+        env,
+        commitOid,
+      });
+    },
+    readCommittedSource(relativePath, commitOid) {
+      if (!isFullCommitOid(commitOid)) {
+        throw new Error(`Committed source requires a full pinned commit OID, got: ${commitOid ?? '<missing>'}`);
+      }
+      return runCommandSync('git', ['show', `${commitOid}:${relativePath}`], {
         cwd: root,
         encoding: 'utf8',
+        env: { ...env, GIT_OPTIONAL_LOCKS: '0' },
         timeout: GIT_TIMEOUT_MS,
+        killSignal: 'SIGKILL',
       });
     },
     compileSource({ relativePath, source, loader }) {
@@ -96,6 +156,7 @@ export function createDefaultAdapters(
         cwd: root,
         encoding: 'utf8',
         timeout: CORE_COMPILE_TIMEOUT_MS,
+        killSignal: 'SIGKILL',
         input: source,
         shell: false,
       });
@@ -148,10 +209,24 @@ function rethrowTimedOutGitInspection(error) {
   throw wrapped;
 }
 
-function inspectTrackedWorktree(adapters) {
+function inspectTrackedWorktree(adapters, commitOid) {
   try {
-    return adapters.getTrackedWorktreeStatus();
+    const verification = adapters.getTrackedWorktreeStatus(commitOid);
+    if (!verification || !isFullCommitOid(verification.commitOid)) {
+      const error = new Error('Clean-worktree verification did not return a full pinned commit OID.');
+      error.code = 'EGITPROVENANCE';
+      throw error;
+    }
+    if (verification.commitOid !== commitOid) {
+      const error = new Error(
+        `Clean-worktree verification changed the pinned commit OID from ${commitOid} to ${verification.commitOid}.`,
+      );
+      error.code = 'EGITPROVENANCE';
+      throw error;
+    }
+    return verification;
   } catch (error) {
+    if (error?.code === 'EWORKTREEDIRTY') throw error;
     if (error?.code === 'ETIMEDOUT') rethrowTimedOutGitInspection(error);
     const wrapped = new Error(
       `Failed to inspect tracked Git worktree before FileProvider fallback: ${getErrorMessage(error)}`,
@@ -163,21 +238,13 @@ function inspectTrackedWorktree(adapters) {
   }
 }
 
-function readSource(relativePath, useFallback, adapters) {
-  if (!useFallback) {
-    try {
-      return adapters.readWorkspaceFile(relativePath);
-    } catch (error) {
-      throw new Error(`Failed to read workspace source for ${relativePath}: ${getErrorMessage(error)}`, { cause: error });
-    }
-  }
-
+function readSource(relativePath, commitOid, adapters) {
   try {
-    return adapters.readCommittedSource(relativePath);
+    return adapters.readCommittedSource(relativePath, commitOid);
   } catch (error) {
     if (error?.code === 'ETIMEDOUT') {
       const wrapped = new Error(
-        `Reading committed source timed out for ${relativePath} during FileProvider fallback (git show HEAD:${relativePath}).`,
+        `Reading committed source timed out for ${relativePath} during FileProvider fallback (git show ${commitOid}:${relativePath}).`,
         { cause: error },
       );
       wrapped.code = 'ETIMEDOUT';
@@ -185,7 +252,7 @@ function readSource(relativePath, useFallback, adapters) {
       throw wrapped;
     }
     const wrapped = new Error(
-      `Failed to read committed source for ${relativePath} from git show HEAD:${relativePath}: ${getErrorMessage(error)}`,
+      `Failed to read committed source for ${relativePath} from git show ${commitOid}:${relativePath}: ${getErrorMessage(error)}`,
       { cause: error },
     );
     if (error?.code) wrapped.code = error.code;
@@ -223,8 +290,15 @@ export function runCoreSourceCheck({
   root = process.cwd(),
   files = CORE_SOURCE_CHECK_FILES,
   env = process.env,
+  commitOid = env.TEAMS_SOURCE_COMMIT,
   adapters = createDefaultAdapters(root),
 } = {}) {
+  const pinnedCommitOid = commitOid ?? adapters.resolvePinnedCommitOid();
+  if (!isFullCommitOid(pinnedCommitOid)) {
+    const error = new Error(`Core source check requires a full pinned commit OID, got: ${pinnedCommitOid ?? '<missing>'}`);
+    error.code = 'EGITPROVENANCE';
+    throw error;
+  }
   const explicitFallback = env.TEAMS_FILEPROVIDER_SERVER_REUSE === '1';
   const datalessTrackedFiles = explicitFallback
     ? []
@@ -234,19 +308,11 @@ export function runCoreSourceCheck({
     : datalessTrackedFiles.length > 0
       ? DATALESS_FILEPROVIDER_FALLBACK
       : null;
-  const sourceMode = fallbackReason ? 'fallback' : 'workspace';
-
-  if (fallbackReason) {
-    const trackedWorktreeStatus = inspectTrackedWorktree(adapters);
-    if (trackedWorktreeStatus.length > 0) {
-      throw new Error(
-        'FileProvider fallback requires a clean tracked Git worktree. Commit tracked source changes before running the Core source check.',
-      );
-    }
-  }
+  const sourceMode = 'git-commit';
+  const verification = inspectTrackedWorktree(adapters, pinnedCommitOid);
 
   for (const relativePath of files) {
-    const source = readSource(relativePath, Boolean(fallbackReason), adapters);
+    const source = readSource(relativePath, verification.commitOid, adapters);
     compileSource(relativePath, source, adapters);
   }
 
@@ -255,6 +321,8 @@ export function runCoreSourceCheck({
     checkedFiles: [...files],
     sourceMode,
     fallbackReason,
+    verificationMode: verification.verificationMode,
+    commitOid: verification.commitOid,
     datalessTrackedFiles,
   };
 }

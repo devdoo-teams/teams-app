@@ -42,7 +42,7 @@ const hooks = registerHooks({
   },
 });
 
-const { App } = await import('../src/client/App.js');
+const { App, WeatherErrorNotice, runtimeBadgeLabel, weatherLocationMeta } = await import('../src/client/App.js');
 
 const initialDocument = await readFile('src/client/index.html', 'utf8');
 const rootFallback = initialDocument.match(/<div id="root">([\s\S]*?)<\/div>/)?.[1]
@@ -59,6 +59,31 @@ const locationButton = initialMarkup.match(/<button[^>]*aria-label="내 위치 �
 assert.ok(locationButton, 'initial weather UI renders the explicit location action');
 assert.doesNotMatch(locationButton, /disabled/, 'initial location action is enabled before the user requests OS or Teams location');
 assert.match(locationButton, />내 위치 사용<\/button>$/, 'initial weather UI waits for the user instead of starting a location request');
+
+const weatherErrorMarkup = renderToStaticMarkup(
+  React.createElement(WeatherErrorNotice, { message: '위치 권한을 허용한 뒤 다시 시도하세요.' }),
+);
+assert.match(weatherErrorMarkup, /role="alert"/, 'weather errors are exposed as an alert');
+assert.match(weatherErrorMarkup, /aria-live="assertive"/, 'weather errors are announced to assistive technology');
+assert.match(weatherErrorMarkup, /aria-atomic="true"/, 'weather error updates are announced as one message');
+assert.match(weatherErrorMarkup, /위치 권한을 허용한 뒤 다시 시도하세요/, 'weather error keeps actionable recovery guidance');
+assert.match(weatherLocationMeta({
+  source: 'browser',
+  teamsHost: true,
+  teamsClientType: 'web',
+  teamsHostName: 'Teams',
+}), /브라우저.*HTML5|Teams 호스트 위치와 분리/, 'browser location is visibly distinguished from Teams host location');
+assert.match(weatherLocationMeta({
+  source: 'teams-native',
+  teamsHost: true,
+  teamsClientType: 'android',
+  teamsHostName: 'Teams',
+}), /Teams 모바일/, 'mobile Teams location is visibly identified as native host location');
+assert.equal(
+  runtimeBadgeLabel({ healthLoading: false, teamsHost: true, auth: 'teams-authenticated' }),
+  'Teams 탭 · 기기 위치 권한',
+  'the Teams runtime badge does not claim HTML5 geolocation is Teams native location',
+);
 
 async function testTeamsCapabilityDiscoveryIsBounded(): Promise<void> {
   const dependencies = {
@@ -116,7 +141,7 @@ async function testTeamsInitializationIsBounded(): Promise<void> {
   assert.equal(runtime.available, false, 'hung Teams initialization returns an unavailable runtime after its deadline');
 }
 
-async function testTimedOutTeamsContextDoesNotLockBrowserRetry(): Promise<void> {
+async function testTimedOutTeamsContextRequiresFreshHostBeforeBrowserLocation(): Promise<void> {
   let contextCalls = 0;
   let browserCalls = 0;
   const dependencies = {
@@ -149,13 +174,212 @@ async function testTimedOutTeamsContextDoesNotLockBrowserRetry(): Promise<void> 
   } satisfies ClientLocationDependencies;
   const service = createClientLocationService(dependencies, { initializeTimeoutMs: 10, operationTimeoutMs: 20 });
 
-  const first = await service.getCurrentDeviceLocation(new AbortController().signal);
+  const first = await service.getCurrentDeviceLocation(new AbortController().signal)
+    .catch((caught: unknown) => caught);
+  const browserCallsAfterFirst = browserCalls;
   const second = await service.getCurrentDeviceLocation(new AbortController().signal);
 
-  assert.equal(first.source, 'browser', 'a timed-out Teams context falls back to browser location');
-  assert.equal(second.source, 'browser', 'the next user request can retry after a timed-out Teams context');
+  assert.match(first instanceof Error ? first.message : '', /Teams 호스트|브라우저.*사용하지 않|PC/, 'a timed-out Teams context does not use browser location');
+  assert.equal(browserCallsAfterFirst, 0, 'the timed-out Teams context does not start a browser/desktop location request');
+  assert.equal(second.source, 'browser', 'a later request can use browser location after a fresh web Teams context succeeds');
   assert.equal(contextCalls, 2, 'a timed-out Teams context is not reused forever');
-  assert.equal(browserCalls, 2, 'the retry performs a fresh browser location request');
+  assert.equal(browserCalls, 1, 'the fresh web Teams request performs one explicit browser location request');
+}
+
+async function testAndroidMobileUsesFreshBrowserLocation(): Promise<void> {
+  let browserCalls = 0;
+  let observedOptions: { enableHighAccuracy: boolean; maximumAge: number; timeout: number } | undefined;
+  const dependencies = {
+    teamsApp: {
+      isInitialized: () => true,
+      initialize: async () => undefined,
+      getContext: async () => ({ clientType: 'android', hostName: 'Teams' }),
+    },
+    legacyLocation: {
+      isSupported: () => false,
+      getLocation: () => undefined,
+    },
+    geoLocation: {
+      isSupported: () => true,
+      hasPermission: async () => true,
+      requestPermission: async () => true,
+      getCurrentLocation: async () => ({ latitude: 35.1796, longitude: 129.0756, accuracy: 6 }),
+    },
+    browserGeolocation: () => ({
+      getCurrentPosition: (success, _error, options) => {
+        browserCalls += 1;
+        observedOptions = options;
+        success({ coords: { latitude: 35.1796, longitude: 129.0756, accuracy: 6 } });
+      },
+    }),
+  } satisfies ClientLocationDependencies;
+  const service = createClientLocationService(dependencies, { operationTimeoutMs: 10 });
+
+  const result = await service.getCurrentDeviceLocation(new AbortController().signal);
+
+  assert.deepEqual(result, {
+    latitude: 35.1796,
+    longitude: 129.0756,
+    accuracy: 6,
+    source: 'browser',
+  }, 'Android Teams uses the fresh mobile WebView/device location contract');
+  assert.equal(browserCalls, 1, 'Android Teams starts one explicit browser geolocation request');
+  assert.deepEqual(observedOptions, {
+    enableHighAccuracy: true,
+    maximumAge: 0,
+    timeout: 10,
+  }, 'Android Teams disables cached desktop coordinates and requests a fresh high-accuracy fix');
+}
+
+async function testDefaultTeamsLocationUsesHtml5OnNewMobileHosts(): Promise<void> {
+  let browserCalls = 0;
+  let nativeCalls = 0;
+  const dependencies = {
+    teamsApp: {
+      isInitialized: () => true,
+      initialize: async () => undefined,
+      getContext: async () => ({ clientType: 'ios', hostName: 'Teams' }),
+    },
+    legacyLocation: {
+      isSupported: () => true,
+      getLocation: (callback) => {
+        nativeCalls += 1;
+        callback(null, { latitude: 37.5665, longitude: 126.978, accuracy: 900 });
+      },
+    },
+    geoLocation: {
+      isSupported: () => true,
+      hasPermission: async () => true,
+      requestPermission: async () => true,
+      getCurrentLocation: async () => {
+        nativeCalls += 1;
+        return { latitude: 37.5665, longitude: 126.978, accuracy: 900 };
+      },
+    },
+    browserGeolocation: () => ({
+      getCurrentPosition: (success, _error, options) => {
+        browserCalls += 1;
+        assert.equal(options.maximumAge, 0, 'new mobile Teams asks HTML5 geolocation for a fresh device fix');
+        success({ coords: { latitude: 35.1796, longitude: 129.0756, accuracy: 6 } });
+      },
+    }),
+  } satisfies ClientLocationDependencies;
+  const service = createClientLocationService(dependencies, { operationTimeoutMs: 10 });
+
+  const result = await service.getCurrentDeviceLocation(new AbortController().signal);
+
+  assert.deepEqual(result, {
+    latitude: 35.1796,
+    longitude: 129.0756,
+    accuracy: 6,
+    source: 'browser',
+  }, 'new Teams mobile uses the device WebView location rather than a native Teams location API');
+  assert.equal(browserCalls, 1, 'new Teams mobile starts one HTML5 location request');
+  assert.equal(nativeCalls, 0, 'new Teams mobile does not fall back to deprecated or preview Teams location APIs');
+}
+
+async function testUnavailableTeamsContextDoesNotUseBrowserLocation(): Promise<void> {
+  let browserCalls = 0;
+  const dependencies = {
+    teamsApp: {
+      isInitialized: () => true,
+      initialize: async () => undefined,
+      getContext: () => new Promise<never>(() => {}),
+    },
+    legacyLocation: {
+      isSupported: () => false,
+      getLocation: () => undefined,
+    },
+    geoLocation: {
+      isSupported: () => false,
+      hasPermission: async () => false,
+      requestPermission: async () => false,
+      getCurrentLocation: async () => ({ latitude: 35.1796, longitude: 129.0756 }),
+    },
+    browserGeolocation: () => ({
+      getCurrentPosition: (success) => {
+        browserCalls += 1;
+        success({ coords: { latitude: 37.5665, longitude: 126.978, accuracy: 900 } });
+      },
+    }),
+  } satisfies ClientLocationDependencies;
+  const service = createClientLocationService(dependencies, { initializeTimeoutMs: 10, operationTimeoutMs: 10 });
+
+  const error = await service.getCurrentDeviceLocation(new AbortController().signal)
+    .catch((caught: unknown) => caught);
+
+  assert.equal(browserCalls, 0, 'a missing Teams host context never falls back to browser/desktop location');
+  assert.match(error instanceof Error ? error.message : '', /Teams 호스트|브라우저.*사용하지 않|PC/, 'missing Teams context is explicit and actionable');
+}
+
+async function testAndroidMobileBrowserPermissionDeniedIsExplicit(): Promise<void> {
+  let browserCalls = 0;
+  const dependencies = {
+    teamsApp: {
+      isInitialized: () => true,
+      initialize: async () => undefined,
+      getContext: async () => ({ clientType: 'android', hostName: 'Teams' }),
+    },
+    legacyLocation: {
+      isSupported: () => false,
+      getLocation: () => undefined,
+    },
+    geoLocation: {
+      isSupported: () => true,
+      hasPermission: async () => false,
+      requestPermission: async () => false,
+      getCurrentLocation: async () => ({ latitude: 35.1796, longitude: 129.0756 }),
+    },
+    browserGeolocation: () => ({
+      getCurrentPosition: (_success, error) => {
+        browserCalls += 1;
+        error({ code: 1, message: 'permission denied' });
+      },
+    }),
+  } satisfies ClientLocationDependencies;
+  const service = createClientLocationService(dependencies, { operationTimeoutMs: 10, allowTeamsNativeFallback: false });
+
+  const error = await service.getCurrentDeviceLocation(new AbortController().signal)
+    .catch((caught: unknown) => caught);
+
+  assert.equal(browserCalls, 1, 'mobile permission denial comes from the explicit device WebView request');
+  assert.match(error instanceof Error ? error.message : '', /Android|권한이 거부/, 'mobile permission denial is explicit');
+  assert.match(error instanceof Error ? error.message : '', /앱 권한.*새로고침/, 'browser permission recovery names Teams App permissions and tab reload');
+}
+
+async function testAndroidMobileBrowserTimeoutIsExplicit(): Promise<void> {
+  let browserCalls = 0;
+  const dependencies = {
+    teamsApp: {
+      isInitialized: () => true,
+      initialize: async () => undefined,
+      getContext: async () => ({ clientType: 'android', hostName: 'Teams' }),
+    },
+    legacyLocation: {
+      isSupported: () => false,
+      getLocation: () => undefined,
+    },
+    geoLocation: {
+      isSupported: () => true,
+      hasPermission: async () => true,
+      requestPermission: async () => true,
+      getCurrentLocation: () => new Promise<never>(() => {}),
+    },
+    browserGeolocation: () => ({
+      getCurrentPosition: (_success, error) => {
+        browserCalls += 1;
+        error({ code: 3, message: 'position timeout' });
+      },
+    }),
+  } satisfies ClientLocationDependencies;
+  const service = createClientLocationService(dependencies, { operationTimeoutMs: 10, allowTeamsNativeFallback: false });
+
+  const error = await service.getCurrentDeviceLocation(new AbortController().signal)
+    .catch((caught: unknown) => caught);
+
+  assert.equal(browserCalls, 1, 'mobile timeout is reported from the explicit device WebView request');
+  assert.match(error instanceof Error ? error.message : '', /시간(?:이)? 초과/, 'mobile timeout is explicitly rendered as a timeout');
+  assert.match(error instanceof Error ? error.message : '', /Teams|새로고침|다시 열/, 'mobile timeout contains Teams recovery guidance');
 }
 
 async function testLegacyLocationTimeoutBlocksOverlappingRetry(): Promise<void> {
@@ -186,7 +410,7 @@ async function testLegacyLocationTimeoutBlocksOverlappingRetry(): Promise<void> 
     },
     browserGeolocation: () => undefined,
   } satisfies ClientLocationDependencies;
-  const serviceOptions = { initializeTimeoutMs: 10, operationTimeoutMs: 10 };
+  const serviceOptions = { initializeTimeoutMs: 10, operationTimeoutMs: 10, allowTeamsNativeFallback: true };
   const service = createClientLocationService(dependencies, serviceOptions);
 
   const firstResult = await Promise.race([
@@ -252,7 +476,7 @@ async function testPreviewLocationStagesAreBounded(): Promise<void> {
         getCurrentPosition: (_success, error) => error({ code: 2, message: 'position unavailable' }),
       }),
     } satisfies ClientLocationDependencies;
-    const serviceOptions = { initializeTimeoutMs: 10, operationTimeoutMs: 10 };
+    const serviceOptions = { initializeTimeoutMs: 10, operationTimeoutMs: 10, allowTeamsNativeFallback: true };
     const service = createClientLocationService(dependencies, serviceOptions);
 
     const result = await Promise.race([
@@ -292,7 +516,7 @@ async function testUnresolvedNativePromiseDoesNotReuseRejectedRequest(): Promise
     },
     browserGeolocation: () => undefined,
   } satisfies ClientLocationDependencies;
-  const service = createClientLocationService(dependencies, { operationTimeoutMs: 10 });
+  const service = createClientLocationService(dependencies, { operationTimeoutMs: 10, allowTeamsNativeFallback: true });
 
   const firstResult = await service.getCurrentDeviceLocation(new AbortController().signal)
     .catch((error: unknown) => error);
@@ -347,7 +571,7 @@ async function testIosLegacyDenialStopsFallbacks(): Promise<void> {
       },
     }),
   } satisfies ClientLocationDependencies;
-  const service = createClientLocationService(dependencies, { operationTimeoutMs: 10 });
+  const service = createClientLocationService(dependencies, { operationTimeoutMs: 10, allowTeamsNativeFallback: true });
 
   const error = await service.getCurrentDeviceLocation(new AbortController().signal).catch((caught: unknown) => caught);
 
@@ -385,7 +609,7 @@ async function testAndroidBrowserDenialFallsBackToTeamsGeoLocation(): Promise<vo
       getCurrentPosition: (_success, error) => error({ code: 1, message: 'permission denied' }),
     }),
   } satisfies ClientLocationDependencies;
-  const service = createClientLocationService(dependencies, { operationTimeoutMs: 10 });
+  const service = createClientLocationService(dependencies, { operationTimeoutMs: 10, allowTeamsNativeFallback: true });
 
   const result = await service.getCurrentDeviceLocation(new AbortController().signal);
 
@@ -424,7 +648,7 @@ async function testAndroidBrowserDenialFallsBackToLegacyWhenGeoLocationUnsupport
       getCurrentPosition: (_success, error) => error({ code: 1, message: 'permission denied' }),
     }),
   } satisfies ClientLocationDependencies;
-  const service = createClientLocationService(dependencies, { operationTimeoutMs: 10 });
+  const service = createClientLocationService(dependencies, { operationTimeoutMs: 10, allowTeamsNativeFallback: true });
 
   const result = await service.getCurrentDeviceLocation(new AbortController().signal);
 
@@ -499,12 +723,12 @@ async function testAndroidTeamsNativeDenialStopsFurtherFallbacks(): Promise<void
       },
     }),
   } satisfies ClientLocationDependencies;
-  const service = createClientLocationService(dependencies, { operationTimeoutMs: 10 });
+  const service = createClientLocationService(dependencies, { operationTimeoutMs: 10, allowTeamsNativeFallback: true });
 
   const error = await service.getCurrentDeviceLocation(new AbortController().signal)
     .catch((caught: unknown) => caught);
 
-  assert.equal(browserCalls, 1, 'Android native fallback follows the observed browser denial');
+  assert.equal(browserCalls, 1, 'compatibility fallback observes the browser permission denial before native APIs');
   assert.equal(nativePermissionChecks, 1, 'Teams native permission is checked once');
   assert.equal(legacyCalls, 0, 'Teams native denial does not cascade into legacy location');
   assert.match(error instanceof Error ? error.message : '', /Android/, 'Teams native denial provides Android recovery guidance');
@@ -535,7 +759,7 @@ async function testPreviewDenialStopsLegacyFallbackWithNeutralGuidance(): Promis
       getCurrentPosition: (_success, error) => error({ code: 2, message: 'position unavailable' }),
     }),
   } satisfies ClientLocationDependencies;
-  const service = createClientLocationService(dependencies, { operationTimeoutMs: 10 });
+  const service = createClientLocationService(dependencies, { operationTimeoutMs: 10, allowTeamsNativeFallback: true });
 
   const error = await service.getCurrentDeviceLocation(new AbortController().signal).catch((caught: unknown) => caught);
 
@@ -555,7 +779,7 @@ async function testConcurrentRequestsRemainDeduplicatedAndAbortIndependent(): Pr
     teamsApp: {
       isInitialized: () => true,
       initialize: async () => undefined,
-      getContext: async () => ({ clientType: 'android', hostName: 'Teams' }),
+      getContext: async () => ({ clientType: 'web', hostName: 'Teams' }),
     },
     legacyLocation: {
       isSupported: () => false,
@@ -598,7 +822,12 @@ async function testConcurrentRequestsRemainDeduplicatedAndAbortIndependent(): Pr
 for (const [name, test] of [
   ['capability', testTeamsCapabilityDiscoveryIsBounded],
   ['initialization', testTeamsInitializationIsBounded],
-  ['runtime-retry', testTimedOutTeamsContextDoesNotLockBrowserRetry],
+  ['runtime-retry', testTimedOutTeamsContextRequiresFreshHostBeforeBrowserLocation],
+  ['android-mobile-fresh-browser', testAndroidMobileUsesFreshBrowserLocation],
+  ['new-teams-mobile-default-provider', testDefaultTeamsLocationUsesHtml5OnNewMobileHosts],
+  ['teams-context-required', testUnavailableTeamsContextDoesNotUseBrowserLocation],
+  ['android-mobile-permission', testAndroidMobileBrowserPermissionDeniedIsExplicit],
+  ['android-mobile-timeout', testAndroidMobileBrowserTimeoutIsExplicit],
   ['legacy-timeout', testLegacyLocationTimeoutBlocksOverlappingRetry],
   ['preview-stages', testPreviewLocationStagesAreBounded],
   ['native-timeout', testUnresolvedNativePromiseDoesNotReuseRejectedRequest],

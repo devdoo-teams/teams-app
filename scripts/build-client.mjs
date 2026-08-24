@@ -9,57 +9,89 @@ import { buildClientAtomically } from './build-client-atomic.mjs';
 import { buildWithBoundedRetry } from './esbuild-bounded.mjs';
 import { ensureFileProviderRuntimeDependencies } from './fileprovider-runtime-deps.mjs';
 import { filterClientSourceFiles } from './fileprovider-client-source.mjs';
-import { assertCleanTrackedWorktreeForFileProvider } from './fileprovider-git-clean.mjs';
+import {
+  assertCleanTrackedWorktreeForFileProvider,
+  resolvePinnedCommitOid,
+} from './fileprovider-git-clean.mjs';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 
 const root = process.cwd();
 const outputDir = path.join(resolveRuntimeDistRoot(root), 'client');
 const coreBuild = process.argv.includes('--core');
 const reuseFileProviderSources = process.env.TEAMS_FILEPROVIDER_SERVER_REUSE === '1';
-if (reuseFileProviderSources) assertCleanTrackedWorktreeForFileProvider(root);
+const sourceCommit = process.env.TEAMS_SOURCE_COMMIT ?? resolvePinnedCommitOid(root);
+const sourceVerification = assertCleanTrackedWorktreeForFileProvider(root, {
+  commitOid: sourceCommit,
+});
+if (sourceVerification.commitOid !== sourceCommit) {
+  throw new Error('Client build source verification changed the pinned Git OID');
+}
 const runtimeNodeModules = reuseFileProviderSources
   ? await ensureFileProviderRuntimeDependencies(root)
   : path.join(root, 'node_modules');
 
-async function materializeGitClientSource() {
+async function materializeGitClientSource(sourceCommit) {
   // Do not put the materialized tree back under the FileProvider workspace.
   // On macOS that would create another dataless placeholder and esbuild can
   // wait indefinitely while reading it. The system temp directory is local.
   const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-sdk-mvp-client-'));
-  const relativeFiles = filterClientSourceFiles(execFileSync('git', ['ls-files', 'src/client', 'src/shared'], {
-    cwd: root,
-    encoding: 'utf8',
-    timeout: 10_000,
-  }).split('\n').filter(Boolean), { coreBuild });
-  for (const relativeFile of relativeFiles) {
-    const target = path.join(temporaryRoot, relativeFile.slice('src/'.length));
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    const contents = execFileSync('git', ['show', `HEAD:${relativeFile}`], {
+  try {
+    const gitEnv = { ...process.env, GIT_OPTIONAL_LOCKS: '0' };
+    const relativeFiles = filterClientSourceFiles(execFileSync('git', [
+      'ls-tree',
+      '-r',
+      '--name-only',
+      '-z',
+      sourceCommit,
+      '--',
+      'src/client',
+      'src/shared',
+    ], {
       cwd: root,
       encoding: 'utf8',
+      env: gitEnv,
       timeout: 10_000,
-    });
-    await fs.writeFile(target, contents, 'utf8');
+      killSignal: 'SIGKILL',
+    }).split('\0').filter(Boolean), { coreBuild });
+    for (const relativeFile of relativeFiles) {
+      const target = path.join(temporaryRoot, relativeFile.slice('src/'.length));
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      const contents = execFileSync('git', ['show', `${sourceCommit}:${relativeFile}`], {
+        cwd: root,
+        env: gitEnv,
+        timeout: 10_000,
+        killSignal: 'SIGKILL',
+      });
+      await fs.writeFile(target, contents);
+    }
+    return {
+      sourceRoot: path.join(temporaryRoot, 'client'),
+      cleanup: () => fs.rm(temporaryRoot, { recursive: true, force: true }),
+    };
+  } catch (error) {
+    await fs.rm(temporaryRoot, { recursive: true, force: true });
+    throw error;
   }
-  return {
-    sourceRoot: path.join(temporaryRoot, 'client'),
-    cleanup: () => fs.rm(temporaryRoot, { recursive: true, force: true }),
-  };
 }
 
-const materializedSource = reuseFileProviderSources ? await materializeGitClientSource() : null;
-const sourceRoot = materializedSource?.sourceRoot ?? path.join(root, 'src', 'client');
+const materializedSource = await materializeGitClientSource(sourceCommit);
+const sourceRoot = materializedSource.sourceRoot;
 
-await buildClientAtomically({
-  outputDir,
-  buildImplementation: async (temporaryDir) => {
-    const assetsDir = path.join(temporaryDir, 'assets');
-    await fs.mkdir(assetsDir, { recursive: true });
+try {
+  await buildClientAtomically({
+    outputDir,
+    buildImplementation: async (temporaryDir) => {
+      const assetsDir = path.join(temporaryDir, 'assets');
+      await fs.mkdir(assetsDir, { recursive: true });
 
-    await buildWithBoundedRetry(build, {
+      await buildWithBoundedRetry(build, {
       entryPoints: [path.join(sourceRoot, 'main.tsx')],
       bundle: true,
       format: 'esm',
+      // Source files use TypeScript's react-jsx contract and intentionally do
+      // not rely on a global React identifier. Keep the production bundle on
+      // the same automatic JSX runtime as tsconfig and core-source-check.
+      jsx: 'automatic',
       splitting: true,
       nodePaths: [runtimeNodeModules],
       minify: true,
@@ -82,19 +114,20 @@ await buildClientAtomically({
         ? ['@copilotkit/*', '@modelcontextprotocol/*', './CopilotWorkspaceAssistant.js']
         : [],
       logLevel: 'info',
-    }, `${coreBuild ? 'Core' : 'optional'} client bundle`);
+      }, `${coreBuild ? 'Core' : 'optional'} client bundle`);
 
-    const sourceHtml = await fs.readFile(path.join(sourceRoot, 'index.html'), 'utf8');
-    const clientBundle = await fs.readFile(path.join(assetsDir, 'main.js'));
-    const assetVersion = crypto.createHash('sha256').update(clientBundle).digest('hex').slice(0, 12);
-    const html = sourceHtml
-      .replace('<meta name="theme-color" content="#6264a7" />', '<meta name="theme-color" content="#6264a7" />\n    <link rel="stylesheet" href="./assets/main.css" />')
-      .replace('<script type="module" src="/main.tsx"></script>', `<script type="module" src="./assets/main.js?v=${assetVersion}"></script>`);
+      const sourceHtml = await fs.readFile(path.join(sourceRoot, 'index.html'), 'utf8');
+      const clientBundle = await fs.readFile(path.join(assetsDir, 'main.js'));
+      const assetVersion = crypto.createHash('sha256').update(clientBundle).digest('hex').slice(0, 12);
+      const html = sourceHtml
+        .replace('<meta name="theme-color" content="#6264a7" />', '<meta name="theme-color" content="#6264a7" />\n    <link rel="stylesheet" href="./assets/main.css" />')
+        .replace('<script type="module" src="/main.tsx"></script>', `<script type="module" src="./assets/main.js?v=${assetVersion}"></script>`);
 
-    await fs.writeFile(path.join(temporaryDir, 'index.html'), html, 'utf8');
-  },
-});
+      await fs.writeFile(path.join(temporaryDir, 'index.html'), html, 'utf8');
+    },
+  });
+} finally {
+  await materializedSource.cleanup();
+}
 
-await materializedSource?.cleanup();
-
-console.log(`Client bundle created: ${path.relative(root, outputDir)}`);
+console.log(`Client bundle created from ${sourceCommit}: ${path.relative(root, outputDir)}`);

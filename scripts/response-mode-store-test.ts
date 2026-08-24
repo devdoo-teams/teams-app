@@ -21,8 +21,9 @@ type ResponseModeStore = {
 type ResponseModeModules = {
   DEFAULT_RESPONSE_MODE: ResponseMode;
   ResponseModeSchema: { safeParse(value: unknown): { success: boolean } };
-  ResponseModeStore: new (filePath: string) => ResponseModeStore;
+  ResponseModeStore: new (filePath: string, options?: { providers?: { openai: boolean; local: boolean } }) => ResponseModeStore;
   responseModeLabel(mode: ResponseMode): string;
+  isLocalModelBaseUrlConfigured(value: string | undefined): boolean;
 };
 
 const localBaseUrlCases: Array<{ value: string; configured: boolean }> = [
@@ -36,15 +37,17 @@ const localBaseUrlCases: Array<{ value: string; configured: boolean }> = [
 
 async function loadResponseModeModules(): Promise<ResponseModeModules> {
   try {
-    const [contract, store] = await Promise.all([
+    const [contract, store, localModelUrl] = await Promise.all([
       import('../src/shared/response-mode.js'),
       import('../src/server/response-mode-store.js'),
+      import('../src/server/local-model-url.js'),
     ]);
     return {
       DEFAULT_RESPONSE_MODE: contract.DEFAULT_RESPONSE_MODE,
       ResponseModeSchema: contract.ResponseModeSchema,
       ResponseModeStore: store.ResponseModeStore,
       responseModeLabel: contract.responseModeLabel,
+      isLocalModelBaseUrlConfigured: localModelUrl.isLocalModelBaseUrlConfigured,
     };
   } catch (error) {
     assert.fail(
@@ -159,7 +162,8 @@ try {
   await withEnvironment(
     { OPENAI_API_KEY: '  ', LOCAL_MODEL_BASE_URL: 'not a url' },
     async () => {
-      assert.deepEqual(store.availability(), [
+      const unavailableStore = new modules.ResponseModeStore(storePath, { providers: { openai: false, local: false } });
+      assert.deepEqual(unavailableStore.availability(), [
         {
           mode: 'deterministic',
           label: '결정형',
@@ -185,7 +189,13 @@ try {
   await withEnvironment(
     { OPENAI_API_KEY: 'server-secret', LOCAL_MODEL_BASE_URL: 'https://model.internal.example/v1' },
     async () => {
-      const availability = store.availability();
+      const configuredStore = new modules.ResponseModeStore(storePath, {
+        providers: {
+          openai: Boolean(process.env.OPENAI_API_KEY?.trim()),
+          local: modules.isLocalModelBaseUrlConfigured(process.env.LOCAL_MODEL_BASE_URL),
+        },
+      });
+      const availability = configuredStore.availability();
       assert.equal(availability.find((entry) => entry.mode === 'deterministic')?.configured, true);
       assert.equal(availability.find((entry) => entry.mode === 'openai')?.configured, true);
       assert.equal(availability.find((entry) => entry.mode === 'local')?.configured, true);
@@ -197,7 +207,15 @@ try {
   for (const testCase of localBaseUrlCases) {
     await withEnvironment({ LOCAL_MODEL_BASE_URL: testCase.value }, async () => {
       assert.equal(
-        store.availability().find((entry) => entry.mode === 'local')?.configured,
+        modules.isLocalModelBaseUrlConfigured(process.env.LOCAL_MODEL_BASE_URL),
+        testCase.configured,
+        `local model URL configuration for ${testCase.value}`,
+      );
+      const availabilityStore = new modules.ResponseModeStore(storePath, {
+        providers: { openai: false, local: testCase.configured },
+      });
+      assert.equal(
+        availabilityStore.availability().find((entry) => entry.mode === 'local')?.configured,
         testCase.configured,
         `local response mode configuration for ${testCase.value}`,
       );

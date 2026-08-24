@@ -170,6 +170,32 @@ function adaptiveCardFromActivity(activityValue) {
   )?.content;
 }
 
+function actionSetActions(card) {
+  const actions = [];
+  const visit = (value) => {
+    if (!value || typeof value !== 'object') return;
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (value.type === 'ActionSet' && Array.isArray(value.actions)) actions.push(...value.actions);
+    Object.values(value).forEach(visit);
+  };
+  visit(card?.body);
+  return actions;
+}
+
+function cardActions(card) {
+  const visibleActions = [
+    ...(Array.isArray(card?.actions) ? card.actions : []),
+    ...actionSetActions(card),
+  ];
+  return [
+    ...visibleActions,
+    ...visibleActions.flatMap((action) => action?.card ? cardActions(action.card) : []),
+  ];
+}
+
 function assertAdaptiveCardActivity(activityValue, label) {
   assert(!('text' in (activityValue ?? {})), `${label} does not duplicate card content in a top-level text bubble`);
   const card = adaptiveCardFromActivity(activityValue);
@@ -301,6 +327,8 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
       WORK_ITEM_STORE_PATH: `${dataFile}.work-items.json`,
       COLLABORATION_STORE_PATH: `${dataFile}.collaboration.json`,
       AGENT_JOB_STORE_PATH: jobDataFile,
+      AGENT_ADMISSION_JOURNAL_PATH: `${jobDataFile}.agent-admission.json`,
+      A2A_STORE_PATH: `${jobDataFile}.a2a.json`,
       GENUI_ACTION_STORE_PATH: `${jobDataFile}.genui-actions.json`,
       RESPONSE_MODE_STORE_PATH: `${jobDataFile}.response-modes.json`,
       AGENT_WORKSPACE: workspace,
@@ -332,6 +360,7 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
       ...(teamsSdk
         ? {
             BOT_CLIENT_ID: '00000000-0000-4000-8000-000000000001',
+            TEAMS_CATALOG_APP_ID: '00000000-0000-4000-8000-000000000004',
             CLIENT_ID: '00000000-0000-4000-8000-000000000002',
             CLIENT_SECRET: 'runtime-test-secret',
             TENANT_ID: '00000000-0000-4000-8000-000000000003',
@@ -513,6 +542,7 @@ async function runStartupGateFlow() {
     WEATHER_MODE: 'live',
     TEAMS_USE_SDK: 'true',
     BOT_CLIENT_ID: '00000000-0000-4000-8000-000000000001',
+    TEAMS_CATALOG_APP_ID: '00000000-0000-4000-8000-000000000004',
     CLIENT_ID: '00000000-0000-4000-8000-000000000002',
     CLIENT_SECRET: 'runtime-test-secret',
     TENANT_ID: '00000000-0000-4000-8000-000000000003',
@@ -576,6 +606,13 @@ async function runStartupGateFlow() {
     'APPLICATION_ID_URI must match api://runtime.test/botid-00000000-0000-4000-8000-000000000001',
   );
   await expectStartupFailure(
+    'production without an org catalog app ID',
+    productionSsoEnv('missing-catalog-app-id', {
+      TEAMS_CATALOG_APP_ID: '',
+    }),
+    'Production TEAMS_CATALOG_APP_ID',
+  );
+  await expectStartupFailure(
     'production without TAB_DOMAIN',
     productionSsoEnv('missing-tab-domain', {
       TAB_DOMAIN: '',
@@ -607,6 +644,7 @@ async function runStartupGateFlow() {
       WEATHER_MODE: 'demo',
       TEAMS_USE_SDK: 'true',
       BOT_CLIENT_ID: '00000000-0000-4000-8000-000000000001',
+      TEAMS_CATALOG_APP_ID: '00000000-0000-4000-8000-000000000004',
       CLIENT_ID: '00000000-0000-4000-8000-000000000002',
       CLIENT_SECRET: 'runtime-test-secret',
       TENANT_ID: '00000000-0000-4000-8000-000000000003',
@@ -625,6 +663,7 @@ async function runStartupGateFlow() {
       NODE_ENV: 'production',
       TEAMS_USE_SDK: 'true',
       BOT_CLIENT_ID: '00000000-0000-4000-8000-000000000001',
+      TEAMS_CATALOG_APP_ID: '00000000-0000-4000-8000-000000000004',
       CLIENT_ID: '',
       CLIENT_SECRET: 'runtime-test-secret',
       TENANT_ID: '00000000-0000-4000-8000-000000000003',
@@ -658,6 +697,45 @@ async function waitForAgentStatus(baseUrl, jobId, expectedStatus) {
   }
 
   throw new Error(`Agent job did not reach ${expectedStatus}: ${jobId}`);
+}
+
+function findScopedQueuedOrRunningJob(jobs, jobId, scope) {
+  return jobs.find((job) => (
+    job.id === jobId
+    && job.mode === 'read-only'
+    && ['queued', 'running'].includes(job.status)
+    && job.conversationId === scope.conversationId
+    && job.requesterId === scope.requesterId
+    && job.tenantId === scope.tenantId
+  ));
+}
+
+async function waitForScopedAgentJobFromResponse(baseUrl, response, scope, label) {
+  const responseTaskId = response.body?.messages?.[0]?.match(/task-[\w-]+/)?.[0];
+  assert(Boolean(responseTaskId), `${label} response returns a task id`);
+  const deadline = Date.now() + 10_000;
+
+  while (Date.now() < deadline) {
+    const result = await request(baseUrl, '/api/debug/agent-jobs');
+    const job = findScopedQueuedOrRunningJob(result.body.jobs, responseTaskId, scope);
+    if (job) return job;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  throw new Error(`FAIL: ${label} response task id was not observed as a scoped queued/running job: ${responseTaskId}`);
+}
+
+async function assertNoNewAgentState(baseUrl, conversationId, jobIdsBefore, label) {
+  const jobsAfter = await request(baseUrl, '/api/debug/agent-jobs');
+  assert(
+    jobsAfter.body.jobs.every((job) => jobIdsBefore.has(job.id)),
+    `${label} does not persist a new job`,
+  );
+  const outbox = await request(baseUrl, `/api/debug/agent-outbox/${conversationId}`);
+  assert(
+    outbox.body.messages.length === 0 && outbox.body.activities.length === 0,
+    `${label} leaves its outbox empty`,
+  );
 }
 
 async function waitForOutboxMessage(baseUrl, conversationId, needle) {
@@ -945,6 +1023,8 @@ async function runLocalFlow(dataFile, jobDataFile, { optionalProviders = false }
     assertAdaptiveCardActivity(explicitWeatherCommand.body.activities[0], 'explicit coordinate weather');
 
     const naturalDelayedConversation = 'runtime-conversation-natural-delayed';
+    const jobsBeforeNaturalDelayed = await request(server.baseUrl, '/api/debug/agent-jobs');
+    const jobIdsBeforeNaturalDelayed = new Set(jobsBeforeNaturalDelayed.body.jobs.map((job) => job.id));
     const naturalRequestStartedAt = performance.now();
     const naturalDelayed = await request(server.baseUrl, '/api/messages', {
       method: 'POST',
@@ -953,32 +1033,50 @@ async function runLocalFlow(dataFile, jobDataFile, { optionalProviders = false }
     const naturalDelayedElapsedMs = performance.now() - naturalRequestStartedAt;
     assert(naturalDelayed.response.status === 200, 'natural-language Codex request returns an immediate Bot response');
     assert(naturalDelayedElapsedMs < 2_000, 'natural-language ACK does not wait for a delayed runner');
-    const naturalDelayedJobId = naturalDelayed.body.messages[0].match(/task-[\w-]+/)?.[0];
-    assert(Boolean(naturalDelayedJobId), 'natural-language ACK includes the queued/running task id');
-    assert(naturalDelayed.body.messages[0].includes('시작했습니다'), 'natural-language ACK describes the running task');
-    await waitForAgentStatus(server.baseUrl, naturalDelayedJobId, 'running');
-    const naturalDelayedOutbox = await waitForOutboxMessages(
-      server.baseUrl,
-      naturalDelayedConversation,
-      [naturalDelayedJobId, '실행을 시작했습니다', '분석을 시작했습니다'],
+    const naturalDelayedTaskId = naturalDelayed.body.messages[0].match(/task-[\w-]+/)?.[0];
+    const naturalDelayedJobs = await request(server.baseUrl, '/api/debug/agent-jobs');
+    const naturalDelayedJob = findScopedQueuedOrRunningJob(
+      naturalDelayedJobs.body.jobs,
+      naturalDelayedTaskId,
+      { conversationId: naturalDelayedConversation, requesterId: 'runtime-user', tenantId: 'runtime-tenant' },
     );
-    assert(
-      naturalDelayedOutbox.body.messages.every((message) => message.includes(naturalDelayedJobId)),
-      'natural-language progress notifications stay in the same conversation and identify the job',
-    );
-    const naturalCancel = await request(server.baseUrl, '/api/messages', {
-      method: 'POST',
-      body: JSON.stringify(activity(`cancel ${naturalDelayedJobId}`, server.baseUrl, 'natural-delayed-cancel', naturalDelayedConversation)),
-    });
-    assert(naturalCancel.response.status === 200 && naturalCancel.body.messages[0].includes('취소'), 'natural-language Codex work can be cancelled in the originating conversation');
-    const naturalCancelledJob = await waitForAgentJob(server.baseUrl, naturalDelayedJobId);
-    assert(naturalCancelledJob.status === 'cancelled', 'cancelled natural-language work stays terminally cancelled');
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    const naturalCancelledOutbox = await request(server.baseUrl, `/api/debug/agent-outbox/${naturalDelayedConversation}`);
-    assert(
-      !naturalCancelledOutbox.body.messages.some((message) => message.includes('실패했습니다') || message.includes('완료되었습니다')),
-      'cancelled natural-language work does not emit a later failure or completion notification',
-    );
+    const trustedAgentAvailable = Boolean(naturalDelayedJob);
+    if (trustedAgentAvailable) {
+      const naturalDelayedJobId = naturalDelayedJob.id;
+      assert(naturalDelayedTaskId === naturalDelayedJobId, 'natural-language ACK includes the observed scoped queued/running task id');
+      assert(naturalDelayed.body.messages[0].includes('시작했습니다'), 'natural-language ACK describes the running task');
+      await waitForAgentStatus(server.baseUrl, naturalDelayedJobId, 'running');
+      const naturalDelayedOutbox = await waitForOutboxMessages(
+        server.baseUrl,
+        naturalDelayedConversation,
+        [naturalDelayedJobId, '실행을 시작했습니다', '분석을 시작했습니다'],
+      );
+      assert(
+        naturalDelayedOutbox.body.messages.every((message) => message.includes(naturalDelayedJobId)),
+        'natural-language progress notifications stay in the same conversation and identify the job',
+      );
+      const naturalCancel = await request(server.baseUrl, '/api/messages', {
+        method: 'POST',
+        body: JSON.stringify(activity(`cancel ${naturalDelayedJobId}`, server.baseUrl, 'natural-delayed-cancel', naturalDelayedConversation)),
+      });
+      assert(naturalCancel.response.status === 200 && naturalCancel.body.messages[0].includes('취소'), 'natural-language Codex work can be cancelled in the originating conversation');
+      const naturalCancelledJob = await waitForAgentJob(server.baseUrl, naturalDelayedJobId);
+      assert(naturalCancelledJob.status === 'cancelled', 'cancelled natural-language work stays terminally cancelled');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const naturalCancelledOutbox = await request(server.baseUrl, `/api/debug/agent-outbox/${naturalDelayedConversation}`);
+      assert(
+        !naturalCancelledOutbox.body.messages.some((message) => message.includes('실패했습니다') || message.includes('완료되었습니다')),
+        'cancelled natural-language work does not emit a later failure or completion notification',
+      );
+    } else {
+      assert(naturalDelayed.body.messages[0].includes('신뢰된 격리'), 'natural-language ACK reports trusted isolation is unavailable');
+      await assertNoNewAgentState(
+        server.baseUrl,
+        naturalDelayedConversation,
+        jobIdsBeforeNaturalDelayed,
+        'unavailable natural-language work',
+      );
+    }
 
     const invalid = await request(server.baseUrl, '/api/items', {
       method: 'POST',
@@ -1039,14 +1137,21 @@ async function runLocalFlow(dataFile, jobDataFile, { optionalProviders = false }
     });
     assert(help.response.status === 200, 'Bot help activity completes locally');
     const helpCard = assertAdaptiveCardActivity(help.body.activities[0], 'help');
-    const commandActions = helpCard.actions?.filter((action) => genUiActionFromCard(action) === 'command') ?? [];
+    const commandActionSet = helpCard.body?.find((element) => element.type === 'ActionSet');
+    const commandActions = actionSetActions(helpCard).filter((action) => genUiActionFromCard(action) === 'command');
     assert(commandActions.length === 5, 'help card exposes five command buttons within the Teams action budget');
+    assert(commandActionSet?.type === 'ActionSet', 'help wraps Execute command buttons in an ActionSet for older Teams hosts');
+    assert(!helpCard.actions?.some((action) => action.type === 'Action.Execute'), 'help does not emit Execute command buttons at the top level');
     assert(
       JSON.stringify(commandActions.map((action) => action.type)) === JSON.stringify(Array.from({ length: 5 }, () => 'Action.Execute')),
       'default command buttons use direct Adaptive Card Execute actions',
     );
     assert(commandActions.every((action) => action.verb === 'genui.command'), 'default command buttons route through the GenUI command verb');
-    assert(commandActions.every((action) => action.fallback?.type === 'Action.Submit'), 'default command buttons keep Submit compatibility fallback');
+    assert(commandActions.every((action) => (
+      action.fallback?.type === 'Action.Submit'
+      && action.fallback.title === action.title
+      && JSON.stringify(action.fallback.data) === JSON.stringify(action.data)
+    )), 'default command buttons keep title and exact payload in their Submit compatibility fallback');
     assert(commandActions.every((action) => {
       const payload = actionPayloadFromCard(action);
       return payload?.action === 'command'
@@ -1121,13 +1226,19 @@ async function runLocalFlow(dataFile, jobDataFile, { optionalProviders = false }
       'Bot installation activity returns a useful welcome message',
     );
 
+    if (trustedAgentAvailable) {
     const agentRun = await request(server.baseUrl, '/api/messages', {
       method: 'POST',
       body: JSON.stringify(activity('run 저장소의 현재 상태를 안전하게 요약해줘', server.baseUrl, 'agent-run')),
     });
     assert(agentRun.response.status === 200, 'Bot accepts a remote Codex run request');
-    const readOnlyJobId = agentRun.body.messages[0].match(/task-[\w-]+/)?.[0];
-    assert(Boolean(readOnlyJobId), 'remote Codex request returns a task id');
+    const readOnlyJob = await waitForScopedAgentJobFromResponse(
+      server.baseUrl,
+      agentRun,
+      { conversationId: 'runtime-conversation-agent-run', requesterId: 'runtime-user', tenantId: 'runtime-tenant' },
+      'remote Codex request',
+    );
+    const readOnlyJobId = readOnlyJob.id;
 
     const completedReadOnly = await waitForAgentJob(server.baseUrl, readOnlyJobId);
     assert(completedReadOnly.status === 'completed', 'read-only Codex job completes');
@@ -1181,7 +1292,13 @@ async function runLocalFlow(dataFile, jobDataFile, { optionalProviders = false }
       method: 'POST',
       body: JSON.stringify(activity('같은 대화에서 한 줄로 이어서 확인해줘', server.baseUrl, 'agent-follow-up', 'runtime-conversation-agent-run')),
     });
-    const naturalFollowUpJobId = naturalFollowUp.body.messages[0].match(/task-[\w-]+/)?.[0];
+    const naturalFollowUpJob = await waitForScopedAgentJobFromResponse(
+      server.baseUrl,
+      naturalFollowUp,
+      { conversationId: 'runtime-conversation-agent-run', requesterId: 'runtime-user', tenantId: 'runtime-tenant' },
+      'Natural Teams follow-up',
+    );
+    const naturalFollowUpJobId = naturalFollowUpJob.id;
     assert(naturalFollowUp.body.messages[0].includes('이전 Codex 대화'), 'Natural Teams replies continue the latest Codex thread');
     const completedNaturalFollowUp = await waitForAgentJob(server.baseUrl, naturalFollowUpJobId);
     assert(completedNaturalFollowUp.status === 'completed', 'Natural Codex follow-up completes');
@@ -1192,7 +1309,13 @@ async function runLocalFlow(dataFile, jobDataFile, { optionalProviders = false }
       method: 'POST',
       body: JSON.stringify(activity(`continue ${readOnlyJobId} 같은 thread에서 한 줄로 이어서 확인해줘`, server.baseUrl, 'agent-continue', 'runtime-conversation-agent-run')),
     });
-    const continuedJobId = continued.body.messages[0].match(/task-[\w-]+/)?.[0];
+    const continuedJob = await waitForScopedAgentJobFromResponse(
+      server.baseUrl,
+      continued,
+      { conversationId: 'runtime-conversation-agent-run', requesterId: 'runtime-user', tenantId: 'runtime-tenant' },
+      'Codex continuation',
+    );
+    const continuedJobId = continuedJob.id;
     assert(continued.body.messages[0].includes('이전 Codex thread'), 'Teams can continue a previous Codex thread');
     const completedContinuation = await waitForAgentJob(server.baseUrl, continuedJobId);
     assert(completedContinuation.status === 'completed', 'continued Codex job completes');
@@ -1202,7 +1325,13 @@ async function runLocalFlow(dataFile, jobDataFile, { optionalProviders = false }
       method: 'POST',
       body: JSON.stringify(activity('run SLOW 취소 가능한 작업', server.baseUrl, 'agent-cancel')),
     });
-    const slowJobId = slowRun.body.messages[0].match(/task-[\w-]+/)?.[0];
+    const slowJob = await waitForScopedAgentJobFromResponse(
+      server.baseUrl,
+      slowRun,
+      { conversationId: 'runtime-conversation-agent-cancel', requesterId: 'runtime-user', tenantId: 'runtime-tenant' },
+      'cancellable Codex run',
+    );
+    const slowJobId = slowJob.id;
     await waitForAgentStatus(server.baseUrl, slowJobId, 'running');
     const cancelled = await request(server.baseUrl, '/api/messages', {
       method: 'POST',
@@ -1211,14 +1340,42 @@ async function runLocalFlow(dataFile, jobDataFile, { optionalProviders = false }
     assert(cancelled.body.messages[0].includes('취소'), 'running Codex job can be cancelled');
     const cancelledJob = await waitForAgentJob(server.baseUrl, slowJobId);
     assert(cancelledJob.status === 'cancelled', 'cancelled Codex job stays cancelled');
+    } else {
+      const agentRunJobIdsBefore = new Set((await request(server.baseUrl, '/api/debug/agent-jobs')).body.jobs.map((job) => job.id));
+      const agentRun = await request(server.baseUrl, '/api/messages', {
+        method: 'POST',
+        body: JSON.stringify(activity('run 저장소의 현재 상태를 안전하게 요약해줘', server.baseUrl, 'agent-run')),
+      });
+      assert(agentRun.response.status === 200, 'unavailable remote Codex run returns a Bot response');
+      assert(agentRun.body.messages[0].includes('신뢰된 격리'), 'unavailable remote Codex run reports trusted isolation is unavailable');
+      await assertNoNewAgentState(server.baseUrl, 'runtime-conversation-agent-run', agentRunJobIdsBefore, 'unavailable remote Codex run');
+
+      const followUpJobIdsBefore = new Set((await request(server.baseUrl, '/api/debug/agent-jobs')).body.jobs.map((job) => job.id));
+      const naturalFollowUp = await request(server.baseUrl, '/api/messages', {
+        method: 'POST',
+        body: JSON.stringify(activity('같은 대화에서 한 줄로 이어서 확인해줘', server.baseUrl, 'agent-follow-up', 'runtime-conversation-agent-run')),
+      });
+      assert(naturalFollowUp.response.status === 200, 'unavailable natural Codex follow-up returns a Bot response');
+      assert(naturalFollowUp.body.messages[0].includes('신뢰된 격리'), 'unavailable natural Codex follow-up reports trusted isolation is unavailable');
+      await assertNoNewAgentState(server.baseUrl, 'runtime-conversation-agent-run', followUpJobIdsBefore, 'unavailable natural Codex follow-up');
+
+      const slowRunJobIdsBefore = new Set((await request(server.baseUrl, '/api/debug/agent-jobs')).body.jobs.map((job) => job.id));
+      const slowRun = await request(server.baseUrl, '/api/messages', {
+        method: 'POST',
+        body: JSON.stringify(activity('run SLOW 취소 가능한 작업', server.baseUrl, 'agent-cancel')),
+      });
+      assert(slowRun.response.status === 200, 'unavailable cancellable Codex run returns a Bot response');
+      assert(slowRun.body.messages[0].includes('신뢰된 격리'), 'unavailable cancellable Codex run reports trusted isolation is unavailable');
+      await assertNoNewAgentState(server.baseUrl, 'runtime-conversation-agent-cancel', slowRunJobIdsBefore, 'unavailable cancellable Codex run');
+    }
 
     const genUiCancelRequest = await request(server.baseUrl, '/api/messages', {
       method: 'POST',
       body: JSON.stringify(activity('write GenUI 취소 액션을 검증해줘', server.baseUrl, 'genui-cancel')),
     });
     const genUiCancelCard = assertAdaptiveCardActivity(genUiCancelRequest.body.activities[0], 'write approval');
-    const approveAction = genUiCancelCard.actions?.find((action) => genUiActionFromCard(action) === 'approve');
-    const cancelAction = genUiCancelCard.actions?.find((action) => genUiActionFromCard(action) === 'cancel');
+    const approveAction = cardActions(genUiCancelCard).find((action) => genUiActionFromCard(action) === 'approve');
+    const cancelAction = cardActions(genUiCancelCard).find((action) => genUiActionFromCard(action) === 'cancel');
     const approvePayload = actionPayloadFromCard(approveAction);
     const cancelPayload = actionPayloadFromCard(cancelAction);
     assertExactGenUiActionPayload(approvePayload, 'approve');
@@ -1281,7 +1438,7 @@ async function runLocalFlow(dataFile, jobDataFile, { optionalProviders = false }
     });
     const genUiSubmitCard = assertAdaptiveCardActivity(genUiSubmitRequest.body.activities[0], 'Action.Submit approval');
     const submitApprovePayload = actionPayloadFromCard(
-      genUiSubmitCard.actions?.find((action) => genUiActionFromCard(action) === 'approve'),
+      cardActions(genUiSubmitCard).find((action) => genUiActionFromCard(action) === 'approve'),
     );
     assertExactGenUiActionPayload(submitApprovePayload, 'Action.Submit approve');
     const submitResult = await request(server.baseUrl, '/api/messages', {
@@ -1303,8 +1460,8 @@ async function runLocalFlow(dataFile, jobDataFile, { optionalProviders = false }
       body: JSON.stringify(activity('write 테스트 파일 변경 계획을 검토해줘', server.baseUrl, 'agent-write')),
     });
     const naturalApprovalCard = assertAdaptiveCardActivity(writeRequest.body.activities[0], 'natural-language workspace-write approval');
-    assert(naturalApprovalCard.actions?.some((action) => genUiActionFromCard(action) === 'approve'), 'natural-language approval card includes an approve action');
-    assert(naturalApprovalCard.actions?.some((action) => genUiActionFromCard(action) === 'cancel'), 'natural-language approval card includes a cancel action');
+    assert(cardActions(naturalApprovalCard).some((action) => genUiActionFromCard(action) === 'approve'), 'natural-language approval card includes an approve action');
+    assert(cardActions(naturalApprovalCard).some((action) => genUiActionFromCard(action) === 'cancel'), 'natural-language approval card includes a cancel action');
     const writeJobId = writeRequest.body.messages[0].match(/task-[\w-]+/)?.[0];
     assert(writeRequest.body.messages[0].includes('승인 대기'), 'workspace-write request requires approval');
 
@@ -1384,7 +1541,7 @@ async function runLocalFlow(dataFile, jobDataFile, { optionalProviders = false }
       method: 'POST',
       body: JSON.stringify({ requesterId: 'scope-owner' }),
     });
-    assert(missingConversationRest.response.status === 400, 'REST job mutation rejects missing conversationId');
+    assert(missingConversationRest.response.status === 404, 'REST job mutation rejects caller-supplied identity without a validated principal');
     const forgedRequesterRest = await request(server.baseUrl, `/api/agent-jobs/${scopedWriteJobId}/cancel`, {
       method: 'POST',
       body: JSON.stringify({ conversationId: scopeConversationId, requesterId: 'scope-owner' }),
@@ -1398,7 +1555,7 @@ async function runLocalFlow(dataFile, jobDataFile, { optionalProviders = false }
       body: JSON.stringify(activity('write scoped card approval', server.baseUrl, 'scope-card-create', cardConversationId, cardOwner)),
     });
     const card = assertAdaptiveCardActivity(cardCreate.body.activities[0], 'scoped card approval');
-    const cardApprovePayload = actionPayloadFromCard(card.actions?.find((action) => genUiActionFromCard(action) === 'approve'));
+    const cardApprovePayload = actionPayloadFromCard(cardActions(card).find((action) => genUiActionFromCard(action) === 'approve'));
     assertExactGenUiActionPayload(cardApprovePayload, 'scoped card approve');
     const cardAttack = await request(server.baseUrl, '/api/messages', {
       method: 'POST',
@@ -1445,6 +1602,54 @@ async function runLocalFlow(dataFile, jobDataFile, { optionalProviders = false }
   }
 }
 
+async function runAdaptiveCardDeliveryFallbackFlow(dataFile, jobDataFile) {
+  const server = await startServer({
+    production: false,
+    dataFile,
+    jobDataFile,
+    extraEnv: { TEAMS_ADAPTIVE_CARD_DELIVERY_TEST: 'true' },
+  });
+
+  try {
+    const cases = [
+      ['success', 'envelope', 1, 'normal successful card delivery'],
+      ['ambiguous', 'envelope', 1, 'known timeout'],
+      ['bare-status', 'envelope', 1, 'bare status metadata'],
+      ['bare-status-code', 'envelope', 1, 'bare statusCode metadata'],
+      ['status-timeout', 'envelope', 1, 'status plus timeout'],
+      ['status-abort', 'envelope', 1, 'statusCode plus AbortError'],
+      ['unknown', 'envelope', 1, 'unknown error'],
+      ['reset', 'envelope', 1, 'connection reset'],
+      ['socket', 'envelope', 1, 'socket error'],
+      ['confirmed-response', 'envelope', 2, 'confirmed provider response'],
+      ['nested-confirmed-response', 'envelope', 2, 'nested confirmed provider response'],
+      ['success', 'override', 1, 'activity override successful card delivery'],
+      ['ambiguous', 'override', 1, 'activity override timeout'],
+      ['confirmed-response', 'override', 2, 'activity override confirmed response'],
+    ];
+
+    for (const [scenario, path, expectedAttempts, label] of cases) {
+      const result = await request(server.baseUrl, '/api/debug/adaptive-card-delivery', {
+        method: 'POST',
+        body: JSON.stringify({ scenario, path }),
+      });
+      assert(result.response.status === 200, `${label} test completes`);
+      assert(result.body.attempts.length === expectedAttempts, `${label} has ${expectedAttempts === 1 ? 'no fallback' : 'exactly one fallback'}`);
+      assertAdaptiveCardActivity(result.body.attempts[0], `${label} card attempt`);
+      if (expectedAttempts === 2) {
+        assert(
+          result.body.attempts[1]?.type === 'message'
+            && typeof result.body.attempts[1]?.text === 'string'
+            && result.body.attempts[1]?.attachments === undefined,
+          `${label} fallback is one text activity`,
+        );
+      }
+    }
+  } finally {
+    await stopServer(server.child);
+  }
+}
+
 async function runChannelsShadowFlow(dataFile, jobDataFile) {
   const server = await startServer({
     production: false,
@@ -1471,9 +1676,9 @@ async function runChannelsShadowFlow(dataFile, jobDataFile) {
     const helpSerialized = JSON.stringify(help.body.activities[0]);
     assert(!helpSerialized.includes('copilotkit-channels-shadow'), 'delivered help activity omits the shadow renderer marker');
     assert(!helpSerialized.includes('"shadow":true'), 'delivered help activity omits shadow-only action data');
-    assert((helpCard.actions?.length ?? 0) === 5, 'help keeps the native command action set in shadow mode');
+    assert(actionSetActions(helpCard).length === 5, 'help keeps the native command ActionSet in shadow mode');
     assert(
-      helpCard.actions?.filter((action) => genUiActionFromCard(action) === 'command').length === 5,
+      actionSetActions(helpCard).filter((action) => genUiActionFromCard(action) === 'command').length === 5,
       'shadow mode keeps five native command buttons without shadow metadata',
     );
 
@@ -1486,7 +1691,7 @@ async function runChannelsShadowFlow(dataFile, jobDataFile) {
     assert(!approvalSerialized.includes('copilotkit-channels-shadow'), 'delivered approval activity omits the shadow renderer marker');
     assert(!approvalSerialized.includes('"shadow":true'), 'delivered approval activity omits shadow-only action data');
     const approvalPayload = actionPayloadFromCard(
-      approvalCard.actions?.find((action) => genUiActionFromCard(action) === 'approve'),
+      cardActions(approvalCard).find((action) => genUiActionFromCard(action) === 'approve'),
     );
     assertExactGenUiActionPayload(approvalPayload, 'Channels shadow native approval');
 
@@ -1569,25 +1774,9 @@ async function runAgentTimeoutFlow(dataFile, jobDataFile) {
       method: 'POST',
       body: JSON.stringify(activity('run SLOW 시간 제한 검증', server.baseUrl, 'agent-timeout')),
     });
-    const jobId = response.body.messages[0].match(/task-[\w-]+/)?.[0];
-    const failed = await waitForAgentJob(server.baseUrl, jobId);
-    assert(failed.status === 'failed', 'Codex job fails cleanly after timeout');
-    assert(failed.error.includes('시간 제한'), 'timeout failure explains the reason');
-
-    const timeoutOutbox = await waitForOutboxMessage(
-      server.baseUrl,
-      'runtime-conversation-agent-timeout',
-      '시간 제한',
-    );
-    assert(true, 'timeout failure is delivered to Teams');
-    const timeoutCards = timeoutOutbox.activities
-      .map((activityValue) => adaptiveCardFromActivity(activityValue))
-      .filter(Boolean);
-    assert(
-      timeoutCards.some((card) => JSON.stringify(card).includes('Codex 작업 오류'))
-        && timeoutCards.some((card) => JSON.stringify(card).includes('상태: failed')),
-      'proactive timeout failure uses an error/error card with the failed job state',
-    );
+    assert(response.body.messages[0].includes('신뢰된 격리'), 'Codex timeout fixture fails closed before a job can start without trusted isolation');
+    const jobs = await request(server.baseUrl, '/api/debug/agent-jobs');
+    assert(jobs.body.jobs.length === 0, 'Codex timeout fixture does not persist a job without trusted isolation');
   } finally {
     await stopServer(server.child);
   }
@@ -1670,11 +1859,11 @@ async function runTeamsSdkFlow(dataFile, jobDataFile) {
       if (jobs.some((job) => job.status === 'completed')) break;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    const sdkJob = jobs.find((job) => job.id.includes('task-') && job.status === 'completed');
-    assert(Boolean(sdkJob), 'Teams SDK Activity reaches and completes a Codex job');
+    const sdkJob = jobs.find((job) => job.id.includes('task-'));
+    assert(!sdkJob, 'Teams SDK Activity fails closed when trusted Codex isolation is unavailable');
 
     const outbox = await request(server.baseUrl, '/api/debug/agent-outbox/runtime-conversation-sdk-agent');
-    assert(outbox.body.messages.some((message) => message.includes(sdkJob.id)), 'Teams SDK completion is queued for outbound delivery');
+    assert(outbox.body.messages.length === 0, 'Teams SDK test does not synthesize outbound delivery when outbound is disabled');
   } finally {
     await stopServer(server.child);
   }
@@ -1810,36 +1999,46 @@ const timeoutDataFile = path.join(tempDir, 'timeout-items.json');
 const timeoutJobDataFile = path.join(tempDir, 'timeout-agent-jobs.json');
 const channelsShadowDataFile = path.join(tempDir, 'channels-shadow-items.json');
 const channelsShadowJobDataFile = path.join(tempDir, 'channels-shadow-agent-jobs.json');
+const adaptiveCardDeliveryDataFile = path.join(tempDir, 'adaptive-card-delivery-items.json');
+const adaptiveCardDeliveryJobDataFile = path.join(tempDir, 'adaptive-card-delivery-agent-jobs.json');
 const leaseDataFile = path.join(tempDir, 'lease-items.json');
 const leaseJobDataFile = path.join(tempDir, 'lease-agent-jobs.json');
+const runtimeTestOnly = process.env.TEAMS_RUNTIME_TEST_ONLY?.trim();
 
 try {
-  console.log('Runtime verification: local-auth and public-MCP startup gates');
-  await runStartupGateFlow();
-  console.log('Runtime verification: local authenticated-bypass flow');
-  await runLocalFlow(localDataFile, localJobDataFile, {
-    optionalProviders: optionalProviderTestsEnabled,
-  });
-  console.log('Runtime verification: legacy text fallback flow');
-  await runLegacyCarouselFlow(legacyDataFile, legacyJobDataFile);
-  console.log('Runtime verification: file store process lease flow');
-  await runStoreLeaseFlow(leaseDataFile, leaseJobDataFile);
-  if (optionalProviderTestsEnabled) {
-    console.log('Runtime verification: optional Channels shadow comparison flow');
-    await runChannelsShadowFlow(channelsShadowDataFile, channelsShadowJobDataFile);
+  if (runtimeTestOnly === 'adaptive-card-delivery') {
+    console.log('Runtime verification: Adaptive Card delivery fallback classification');
+    await runAdaptiveCardDeliveryFallbackFlow(adaptiveCardDeliveryDataFile, adaptiveCardDeliveryJobDataFile);
   } else {
-    console.log('Runtime verification: optional provider flows skipped for the Core runtime');
+    console.log('Runtime verification: local-auth and public-MCP startup gates');
+    await runStartupGateFlow();
+    console.log('Runtime verification: local authenticated-bypass flow');
+    await runLocalFlow(localDataFile, localJobDataFile, {
+      optionalProviders: optionalProviderTestsEnabled,
+    });
+    console.log('Runtime verification: Adaptive Card delivery fallback classification');
+    await runAdaptiveCardDeliveryFallbackFlow(adaptiveCardDeliveryDataFile, adaptiveCardDeliveryJobDataFile);
+    console.log('Runtime verification: legacy text fallback flow');
+    await runLegacyCarouselFlow(legacyDataFile, legacyJobDataFile);
+    console.log('Runtime verification: file store process lease flow');
+    await runStoreLeaseFlow(leaseDataFile, leaseJobDataFile);
+    if (optionalProviderTestsEnabled) {
+      console.log('Runtime verification: optional Channels shadow comparison flow');
+      await runChannelsShadowFlow(channelsShadowDataFile, channelsShadowJobDataFile);
+    } else {
+      console.log('Runtime verification: optional provider flows skipped for the Core runtime');
+    }
+    console.log('Runtime verification: Teams SDK Activity flow');
+    await runTeamsSdkFlow(sdkDataFile, sdkJobDataFile);
+    console.log('Runtime verification: approved Git commit flow');
+    await runGitCommitFlow(gitWorkspace, gitDataFile, gitJobDataFile);
+    console.log('Runtime verification: interrupted job recovery');
+    await runRecoveryFlow(recoveryDataFile, recoveryJobDataFile);
+    console.log('Runtime verification: Codex timeout flow');
+    await runAgentTimeoutFlow(timeoutDataFile, timeoutJobDataFile);
+    console.log('Runtime verification: production authentication guard');
+    await runProductionAuthFlow(productionDataFile, productionJobDataFile);
   }
-  console.log('Runtime verification: Teams SDK Activity flow');
-  await runTeamsSdkFlow(sdkDataFile, sdkJobDataFile);
-  console.log('Runtime verification: approved Git commit flow');
-  await runGitCommitFlow(gitWorkspace, gitDataFile, gitJobDataFile);
-  console.log('Runtime verification: interrupted job recovery');
-  await runRecoveryFlow(recoveryDataFile, recoveryJobDataFile);
-  console.log('Runtime verification: Codex timeout flow');
-  await runAgentTimeoutFlow(timeoutDataFile, timeoutJobDataFile);
-  console.log('Runtime verification: production authentication guard');
-  await runProductionAuthFlow(productionDataFile, productionJobDataFile);
   console.log('Runtime verification complete.');
 } finally {
   await fs.rm(tempDir, { recursive: true, force: true });

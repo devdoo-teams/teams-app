@@ -1,18 +1,24 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import * as coreSourceCheckModule from './core-source-check-lib.mjs';
 
 const { CORE_SOURCE_CHECK_FILES, runCoreSourceCheck } = coreSourceCheckModule;
 
 const validSource = 'export const ok = true;';
+const PINNED_COMMIT = 'a'.repeat(40);
+const MOVED_COMMIT = 'b'.repeat(40);
 
 function makeAdapters(overrides = {}) {
   const calls = {
     statFile: [],
     readWorkspaceFile: [],
+    resolvePinnedCommitOid: 0,
     getTrackedWorktreeStatus: 0,
     readCommittedSource: [],
+    committedSourceOids: [],
     compileSource: [],
   };
 
@@ -26,12 +32,18 @@ function makeAdapters(overrides = {}) {
       calls.readWorkspaceFile.push(relativePath);
       return validSource;
     },
-    getTrackedWorktreeStatus() {
-      calls.getTrackedWorktreeStatus += 1;
-      return '';
+    resolvePinnedCommitOid() {
+      calls.resolvePinnedCommitOid += 1;
+      return PINNED_COMMIT;
     },
-    readCommittedSource(relativePath) {
+    getTrackedWorktreeStatus(commitOid) {
+      calls.getTrackedWorktreeStatus += 1;
+      assert.equal(commitOid, PINNED_COMMIT);
+      return { verificationMode: 'worktree-index-commit', commitOid };
+    },
+    readCommittedSource(relativePath, commitOid) {
       calls.readCommittedSource.push(relativePath);
+      calls.committedSourceOids.push(commitOid);
       return validSource;
     },
     compileSource({ relativePath, source, loader }) {
@@ -48,6 +60,7 @@ function runWithAdapters(adapters, options = {}) {
   return runCoreSourceCheck({
     files: options.files ?? CORE_SOURCE_CHECK_FILES,
     env: options.env ?? {},
+    commitOid: options.commitOid,
     adapters,
   });
 }
@@ -63,13 +76,51 @@ function assertThrowsMessage(callback, pattern) {
   const adapters = makeAdapters();
   const result = runWithAdapters(adapters);
 
-  assert.equal(result.sourceMode, 'workspace');
+  assert.equal(result.sourceMode, 'git-commit');
   assert.equal(result.fallbackReason, null);
-  assert.equal(result.checkedFileCount, 9);
-  assert.deepEqual(adapters.calls.readWorkspaceFile, CORE_SOURCE_CHECK_FILES);
-  assert.deepEqual(adapters.calls.readCommittedSource, []);
-  assert.equal(adapters.calls.getTrackedWorktreeStatus, 0);
-  assert.equal(adapters.calls.compileSource.length, 9);
+  assert.equal(result.commitOid, PINNED_COMMIT);
+  assert.equal(result.checkedFileCount, CORE_SOURCE_CHECK_FILES.length);
+  assert.deepEqual(adapters.calls.readWorkspaceFile, []);
+  assert.deepEqual(adapters.calls.readCommittedSource, CORE_SOURCE_CHECK_FILES);
+  assert.deepEqual(adapters.calls.committedSourceOids, CORE_SOURCE_CHECK_FILES.map(() => PINNED_COMMIT));
+  assert.equal(adapters.calls.getTrackedWorktreeStatus, 1);
+  assert.equal(adapters.calls.resolvePinnedCommitOid, 1, 'the source-check caller pins OID once before clean inspection');
+  assert.equal(adapters.calls.compileSource.length, CORE_SOURCE_CHECK_FILES.length);
+}
+
+{
+  let pinned = false;
+  const adapters = makeAdapters({
+    resolvePinnedCommitOid() {
+      adapters.calls.resolvePinnedCommitOid += 1;
+      pinned = true;
+      return PINNED_COMMIT;
+    },
+    statFile(relativePath) {
+      assert.equal(pinned, true, 'source identity must be pinned before hydrated/dataless inspection');
+      adapters.calls.statFile.push(relativePath);
+      return { size: 12, blocks: 8 };
+    },
+  });
+  const result = runWithAdapters(adapters, { files: CORE_SOURCE_CHECK_FILES.slice(0, 1) });
+  assert.equal(result.commitOid, PINNED_COMMIT);
+  assert.equal(adapters.calls.resolvePinnedCommitOid, 1);
+}
+
+{
+  const adapters = makeAdapters({
+    getTrackedWorktreeStatus(commitOid) {
+      adapters.calls.getTrackedWorktreeStatus += 1;
+      assert.equal(commitOid, PINNED_COMMIT);
+      return { verificationMode: 'worktree-index-commit', commitOid };
+    },
+  });
+  const result = runWithAdapters(adapters, { commitOid: PINNED_COMMIT });
+  assert.equal(result.commitOid, PINNED_COMMIT);
+  assert.equal(adapters.calls.getTrackedWorktreeStatus, 1);
+  assert.equal(adapters.calls.resolvePinnedCommitOid, 0, 'an explicit OID must not trigger a second HEAD resolution');
+  assert.deepEqual(adapters.calls.committedSourceOids, CORE_SOURCE_CHECK_FILES.map(() => PINNED_COMMIT));
+  assert.deepEqual(adapters.calls.readWorkspaceFile, []);
 }
 
 {
@@ -81,22 +132,27 @@ function assertThrowsMessage(callback, pattern) {
   });
   const result = runWithAdapters(adapters);
 
-  assert.equal(result.sourceMode, 'fallback');
+  assert.equal(result.sourceMode, 'git-commit');
   assert.equal(result.fallbackReason, 'dataless-tracked-input');
+  assert.equal(result.commitOid, PINNED_COMMIT);
   assert.deepEqual(result.datalessTrackedFiles, [CORE_SOURCE_CHECK_FILES[3]]);
   assert.equal(adapters.calls.getTrackedWorktreeStatus, 1);
   assert.deepEqual(adapters.calls.readWorkspaceFile, []);
   assert.deepEqual(adapters.calls.readCommittedSource, CORE_SOURCE_CHECK_FILES);
+  assert.deepEqual(adapters.calls.committedSourceOids, CORE_SOURCE_CHECK_FILES.map(() => PINNED_COMMIT));
 }
 
 {
   const adapters = makeAdapters();
   const result = runWithAdapters(adapters, { env: { TEAMS_FILEPROVIDER_SERVER_REUSE: '1' } });
 
-  assert.equal(result.sourceMode, 'fallback');
+  assert.equal(result.sourceMode, 'git-commit');
   assert.equal(result.fallbackReason, 'explicit-env');
+  assert.equal(result.commitOid, PINNED_COMMIT);
   assert.equal(adapters.calls.getTrackedWorktreeStatus, 1);
+  assert.equal(adapters.calls.resolvePinnedCommitOid, 1);
   assert.deepEqual(adapters.calls.readCommittedSource, CORE_SOURCE_CHECK_FILES);
+  assert.deepEqual(adapters.calls.committedSourceOids, CORE_SOURCE_CHECK_FILES.map(() => PINNED_COMMIT));
 }
 
 {
@@ -108,12 +164,14 @@ function assertThrowsMessage(callback, pattern) {
   });
   const result = runWithAdapters(adapters, { env: { TEAMS_FILEPROVIDER_SERVER_REUSE: '1' } });
 
-  assert.equal(result.sourceMode, 'fallback');
+  assert.equal(result.sourceMode, 'git-commit');
   assert.equal(result.fallbackReason, 'explicit-env');
+  assert.equal(result.commitOid, PINNED_COMMIT);
   assert.deepEqual(adapters.calls.statFile, []);
   assert.deepEqual(adapters.calls.readWorkspaceFile, []);
   assert.equal(adapters.calls.getTrackedWorktreeStatus, 1);
   assert.deepEqual(adapters.calls.readCommittedSource, CORE_SOURCE_CHECK_FILES);
+  assert.deepEqual(adapters.calls.committedSourceOids, CORE_SOURCE_CHECK_FILES.map(() => PINNED_COMMIT));
 }
 
 {
@@ -124,7 +182,9 @@ function assertThrowsMessage(callback, pattern) {
     },
     getTrackedWorktreeStatus() {
       adapters.calls.getTrackedWorktreeStatus += 1;
-      return ' M src/server/index.ts';
+      const error = new Error('FileProvider fallback requires a clean tracked Git worktree.');
+      error.code = 'EWORKTREEDIRTY';
+      throw error;
     },
   });
 
@@ -184,10 +244,8 @@ function assertThrowsMessage(callback, pattern) {
     },
   });
 
-  assertThrowsMessage(
-    () => runWithAdapters(adapters),
-    /Failed to read workspace source for src\/server\/codex-capability\.ts: read failed/,
-  );
+  assert.doesNotThrow(() => runWithAdapters(adapters));
+  assert.deepEqual(adapters.calls.readWorkspaceFile, []);
 }
 
 {
@@ -196,8 +254,9 @@ function assertThrowsMessage(callback, pattern) {
       adapters.calls.statFile.push(relativePath);
       return relativePath === CORE_SOURCE_CHECK_FILES[0] ? { size: 42, blocks: 0 } : { size: 42, blocks: 8 };
     },
-    readCommittedSource(relativePath) {
+    readCommittedSource(relativePath, commitOid) {
       adapters.calls.readCommittedSource.push(relativePath);
+      adapters.calls.committedSourceOids.push(commitOid);
       const error = new Error('git show failed');
       error.status = 128;
       throw error;
@@ -206,7 +265,7 @@ function assertThrowsMessage(callback, pattern) {
 
   assertThrowsMessage(
     () => runWithAdapters(adapters),
-    /Failed to read committed source for src\/server\/codex-capability\.ts from git show HEAD:src\/server\/codex-capability\.ts: git show failed/,
+    new RegExp(`Failed to read committed source for src/server/codex-capability\\.ts from git show ${PINNED_COMMIT}:src/server/codex-capability\\.ts: git show failed`),
   );
 }
 
@@ -216,8 +275,9 @@ function assertThrowsMessage(callback, pattern) {
       adapters.calls.statFile.push(relativePath);
       return relativePath === CORE_SOURCE_CHECK_FILES[0] ? { size: 42, blocks: 0 } : { size: 42, blocks: 8 };
     },
-    readCommittedSource(relativePath) {
+    readCommittedSource(relativePath, commitOid) {
       adapters.calls.readCommittedSource.push(relativePath);
+      adapters.calls.committedSourceOids.push(commitOid);
       const error = new Error('git show timed out');
       error.code = 'ETIMEDOUT';
       throw error;
@@ -228,6 +288,31 @@ function assertThrowsMessage(callback, pattern) {
     () => runWithAdapters(adapters),
     /Reading committed source timed out for src\/server\/codex-capability\.ts during FileProvider fallback/,
   );
+}
+
+{
+  let observedHead = PINNED_COMMIT;
+  const adapters = makeAdapters({
+    statFile(relativePath) {
+      adapters.calls.statFile.push(relativePath);
+      return relativePath === CORE_SOURCE_CHECK_FILES[0] ? { size: 42, blocks: 0 } : { size: 42, blocks: 8 };
+    },
+    getTrackedWorktreeStatus() {
+      adapters.calls.getTrackedWorktreeStatus += 1;
+      return { verificationMode: 'worktree-index-commit', commitOid: observedHead };
+    },
+    readCommittedSource(relativePath, commitOid) {
+      adapters.calls.readCommittedSource.push(relativePath);
+      adapters.calls.committedSourceOids.push(commitOid);
+      observedHead = MOVED_COMMIT;
+      return validSource;
+    },
+  });
+
+  const result = runWithAdapters(adapters, { files: CORE_SOURCE_CHECK_FILES.slice(0, 2) });
+  assert.equal(observedHead, MOVED_COMMIT, 'fixture must simulate HEAD moving after the clean gate');
+  assert.equal(result.commitOid, PINNED_COMMIT);
+  assert.deepEqual(adapters.calls.committedSourceOids, [PINNED_COMMIT, PINNED_COMMIT]);
 }
 
 {
@@ -346,6 +431,40 @@ function assertThrowsMessage(callback, pattern) {
     },
   );
   assert.equal(adapters.calls.compileSource.length, 1);
+}
+
+{
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teams-core-source-check-root-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'teams-core-source-check-outside-'));
+  try {
+    fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(outside, 'escaped.ts'), validSource);
+    fs.symlinkSync(path.join(outside, 'escaped.ts'), path.join(root, 'src', 'escaped.ts'));
+    const adapters = coreSourceCheckModule.createDefaultAdapters(root);
+    assert.throws(() => adapters.statFile('src/escaped.ts'), /symbolic link|owned source root|escape/i);
+    assert.throws(() => adapters.readWorkspaceFile('src/escaped.ts'), /symbolic link|owned source root|escape/i);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+}
+
+{
+  const captured = {};
+  const adapters = coreSourceCheckModule.createDefaultAdapters('/tmp/core-source-check-root', {
+    runCommandSync(command, args, options) {
+      captured.command = command;
+      captured.args = args;
+      captured.options = options;
+      return validSource;
+    },
+  });
+
+  assert.equal(adapters.readCommittedSource('src/server/index.ts', PINNED_COMMIT), validSource);
+  assert.equal(captured.command, 'git');
+  assert.deepEqual(captured.args, ['show', `${PINNED_COMMIT}:src/server/index.ts`]);
+  assert.equal(captured.options.env.GIT_OPTIONAL_LOCKS, '0');
+  assert.equal(captured.options.killSignal, 'SIGKILL');
 }
 
 {

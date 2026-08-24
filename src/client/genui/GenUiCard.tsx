@@ -127,9 +127,9 @@ function displayScalar(value: string | number | boolean | null | undefined, unit
   return `${String(value)}${unit ? ` ${unit}` : ''}`;
 }
 
-function SectionBlock({ section, index }: { section: GenUiSection; index: number }) {
+function SectionBlock({ section }: { section: GenUiSection }) {
   const heading = section.title || section.label;
-  const sectionId = `genui-section-${section.id ?? index}`;
+  const sectionId = `genui-section-${useId()}`;
   const progress = section.type === 'progress' ? clampProgress(section.progress) : null;
 
   return (
@@ -388,7 +388,9 @@ export function GenUiCard({
       data-kind={kind}
       data-state={state}
       data-theme={theme}
+      aria-atomic={isLoading || isEmpty ? 'true' : undefined}
       aria-busy={isLoading}
+      aria-live={isLoading || isEmpty ? 'polite' : undefined}
       role={rootRole}
       aria-labelledby={headingId}
     >
@@ -420,7 +422,7 @@ export function GenUiCard({
             {hasText(envelope?.summary) && <p className="genui-card__summary">{envelope!.summary}</p>}
             <div className="genui-card__sections">
               {sections.map((section, index) => (
-                <SectionBlock key={section.id ?? index} index={index} section={section} />
+                <SectionBlock key={`${section.id ?? 'section'}-${index}`} section={section} />
               ))}
             </div>
           </>

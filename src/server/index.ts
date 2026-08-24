@@ -2,6 +2,7 @@ import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 import express from 'express';
 
@@ -20,8 +21,18 @@ import {
   normalizeAgentPrompt,
   type AgentNotification,
 } from './agent-service.js';
-import { CodexRunner } from './codex-runner.js';
-import { probeCliCapabilities } from './codex-capability.js';
+import { AgentExecutionUnavailableError } from './agent-execution-policy.js';
+import { createProductionAgentExecutionPolicy } from './production-agent-isolation.js';
+import { ProviderNeutralAgentRunner } from './provider-neutral-agent-runner.js';
+import type { CliAgentProvider } from './cli-agent-runner.js';
+import {
+  AGENT_ADMISSION_LIMIT_MAXIMA,
+  AgentAdmissionController,
+  AgentCapacityError,
+  publicAgentCapacityError as mapAgentCapacityError,
+  agentCapacityText as mapAgentCapacityText,
+} from './agent-admission-controller.js';
+import { probeCliCapabilities, unknownCliCapabilities, type CliCapabilities } from './codex-capability.js';
 import { GitService } from './git-service.js';
 import { DeterministicResponseEngine } from './response-engine-deterministic.js';
 import { ResponseEngineRouter, configureResponseEngineRouter } from './response-engine.js';
@@ -81,6 +92,24 @@ import {
 import { CollaborationStore } from './collaboration-store.js';
 import type { CollaborationScope } from '../shared/collaboration.js';
 import type { RunAgentInput } from '@ag-ui/core';
+import { A2AStore } from './a2a-store.js';
+import { createA2AExecutionAdapter } from './a2a-execution.js';
+import { serializeA2ADispatchAudit } from './a2a-observability.js';
+import { createA2AAgentAuthorizationPolicy } from './a2a-agent-authorization.js';
+import { A2ATelemetryCollector } from './a2a-telemetry.js';
+import { createConfiguredA2ARemoteAgent } from './a2a-remote-agent-adapter.js';
+import {
+  mountA2AProductionRuntime,
+  type A2AProductionChildCancellationInput,
+  type A2AProductionChildExecutionInput,
+} from './a2a-production-runtime.js';
+import { deriveServerOwnedRestConversationId } from './rest-scope.js';
+import { buildSecurityHeaders } from './security-headers.js';
+import {
+  resolveMcpAuthConfig,
+  type McpAuthConfig,
+} from './mcp-auth-config.js';
+import { mountMcpAuthenticatedBoundary } from './mcp-authenticated-route.js';
 
 const port = Number(process.env.PORT ?? 3978);
 const isProduction = process.env.NODE_ENV === 'production';
@@ -94,6 +123,7 @@ const LOCAL_ACCESS_TOKEN_HEADER = 'x-teams-local-access-token';
 const MIN_LOCAL_ACCESS_TOKEN_LENGTH = 32;
 const localAccessToken = process.env.TEAMS_LOCAL_ACCESS_TOKEN?.trim() ?? '';
 const legacyPublicMcp = process.env.MCP_PUBLIC_ENABLED?.trim().toLowerCase() === 'true';
+const authenticatedMcpRequested = process.env.TEAMS_MCP_AUTHENTICATED_ENABLED?.trim().toLowerCase() === 'true';
 const fileJsonMultiWorker = numericEnvGreaterThan('WEB_CONCURRENCY', 1)
   || numericEnvGreaterThan('NODE_APP_INSTANCE', 0);
 const runtimeDistRoot = process.env.TEAMS_RUNTIME_DIST_DIR?.trim()
@@ -104,8 +134,17 @@ const itemStorePath = process.env.ITEM_STORE_PATH ?? path.resolve(process.cwd(),
 const workItemStorePath = process.env.WORK_ITEM_STORE_PATH ?? path.resolve(process.cwd(), 'data/work-items.json');
 const collaborationStorePath = process.env.COLLABORATION_STORE_PATH ?? path.resolve(process.cwd(), 'data/collaboration.json');
 const agentJobStorePath = process.env.AGENT_JOB_STORE_PATH ?? path.resolve(process.cwd(), 'data/agent-jobs.json');
+const a2aStorePath = process.env.A2A_STORE_PATH ?? path.resolve(process.cwd(), 'data/a2a.json');
+const agentAdmissionJournalPath = process.env.AGENT_ADMISSION_JOURNAL_PATH ?? path.resolve(process.cwd(), 'data/agent-admission.json');
 const genUiActionStorePath = process.env.GENUI_ACTION_STORE_PATH ?? path.resolve(process.cwd(), 'data/genui-actions.json');
 const responseModeStorePath = process.env.RESPONSE_MODE_STORE_PATH ?? path.resolve(process.cwd(), 'data/response-modes.json');
+const providerMutationReplayStorePath = process.env.PROVIDER_MUTATION_REPLAY_STORE_PATH ?? path.resolve(process.cwd(), 'data/provider-mutation-replay.json');
+const configuredAgentProvider = process.env.TEAMS_AGENT_CLI_PROVIDER?.trim() || 'codex';
+if (configuredAgentProvider !== 'codex' && configuredAgentProvider !== 'copilot') {
+  throw new Error('TEAMS_AGENT_CLI_PROVIDER must be either codex or copilot.');
+}
+const agentProvider = configuredAgentProvider;
+const agentLabel = agentProvider === 'copilot' ? 'GitHub Copilot CLI' : 'Codex CLI';
 const itemStore = new ItemStore(
   itemStorePath,
 );
@@ -157,14 +196,38 @@ const workItemService = new WorkItemService(new WorkItemStore(workItemStorePath)
 });
 const agentJobStore = new AgentJobStore(
   agentJobStorePath,
+  { legacyProvider: agentProvider },
 );
-const codexRunner = new CodexRunner();
+const a2aStore = new A2AStore(a2aStorePath);
+const codexRunner = new ProviderNeutralAgentRunner({ provider: agentProvider });
+const a2aAgentProviders = parseAgentProviders(
+  process.env.TEAMS_A2A_AGENT_PROVIDERS,
+  agentProvider,
+);
+const providerRunners: Partial<Record<CliAgentProvider, ProviderNeutralAgentRunner>> = {
+  [agentProvider]: codexRunner,
+};
+for (const provider of a2aAgentProviders) {
+  if (!providerRunners[provider]) {
+    providerRunners[provider] = new ProviderNeutralAgentRunner({ provider });
+  }
+}
 const agentWorkspace = path.resolve(process.env.AGENT_WORKSPACE ?? process.cwd());
 const gitService = new GitService(agentWorkspace);
+const agentAdmissionController = new AgentAdmissionController({
+  globalLimit: boundedAgentLimitEnv('TEAMS_AGENT_GLOBAL_LIMIT', 4, AGENT_ADMISSION_LIMIT_MAXIMA.global),
+  perTenantLimit: boundedAgentLimitEnv('TEAMS_AGENT_TENANT_LIMIT', 2, AGENT_ADMISSION_LIMIT_MAXIMA.tenant),
+  perRequesterLimit: boundedAgentLimitEnv('TEAMS_AGENT_REQUESTER_LIMIT', 2, AGENT_ADMISSION_LIMIT_MAXIMA.requester),
+}, { journalPath: agentAdmissionJournalPath, retryLeaseMs: 60_000 });
 const explicitBotClientId = process.env.BOT_CLIENT_ID?.trim() ?? '';
 const configuredClientId = process.env.CLIENT_ID?.trim() ?? '';
 const configuredTenantId = process.env.TENANT_ID?.trim() ?? '';
 const configuredApplicationIdUri = process.env.APPLICATION_ID_URI?.trim() ?? '';
+const configuredCatalogAppId = process.env.TEAMS_CATALOG_APP_ID?.trim() ?? '';
+const mcpAuthClientId = process.env.TEAMS_MCP_AUTH_CLIENT_ID?.trim() ?? '';
+const mcpAuthApplicationIdUri = process.env.TEAMS_MCP_AUTH_APPLICATION_ID_URI?.trim() ?? '';
+const mcpAuthAcceptedAudiences = parseAcceptedAudiences(process.env.TEAMS_MCP_AUTH_ACCEPTED_AUDIENCES);
+const mcpAuthRequiredScope = process.env.TEAMS_MCP_AUTH_REQUIRED_SCOPE?.trim() ?? '';
 const botClientId = explicitBotClientId || (!isProduction ? configuredClientId : '');
 const tabDomain = process.env.TAB_DOMAIN?.trim() ?? '';
 const botConfigured = Boolean(botClientId && process.env.CLIENT_SECRET?.trim() && configuredTenantId);
@@ -175,6 +238,14 @@ const operatorAllowlist = parseOperatorAllowlist(
   process.env.TEAMS_OPERATOR_REQUESTER_ALLOWLIST,
   configuredTenantId,
 );
+const agentExecutionPolicy = createProductionAgentExecutionPolicy({
+  sourceWorkspace: agentWorkspace,
+  isProduction,
+  profilePath: process.env.AGENT_ISOLATION_PROFILE,
+  sandboxExecPath: process.env.AGENT_SANDBOX_EXEC_PATH,
+  canMutateScope: (scope) => isOperator(scope),
+  canReadScope: (scope) => isOperator(scope),
+});
 const appVersion = (() => {
   const configured = process.env.APP_VERSION?.trim();
   if (configured) return configured;
@@ -190,11 +261,42 @@ const appVersion = (() => {
     return 'unknown';
   }
 })();
+const serverBuildIdentity = (() => {
+  const unavailable = { sourceCommit: 'unavailable', serverBundleSha256: 'unavailable' };
+  try {
+    const entryPath = fileURLToPath(import.meta.url);
+    const markerPath = path.join(path.dirname(entryPath), '.teams-server-build-commit');
+    const marker = JSON.parse(readFileSync(markerPath, 'utf8')) as {
+      schemaVersion?: unknown;
+      commit?: unknown;
+      mode?: unknown;
+      worktree?: unknown;
+      bundleSha256?: unknown;
+    };
+    if (
+      marker.schemaVersion !== 3
+      || typeof marker.commit !== 'string'
+      || !/^[a-f0-9]{40}$/.test(marker.commit)
+      || (marker.mode !== 'core' && marker.mode !== 'optional')
+      || marker.worktree !== 'clean'
+      || typeof marker.bundleSha256 !== 'string'
+      || !/^[a-f0-9]{64}$/.test(marker.bundleSha256)
+    ) return unavailable;
+    const actualBundleSha256 = crypto.createHash('sha256').update(readFileSync(entryPath)).digest('hex');
+    if (actualBundleSha256 !== marker.bundleSha256) return unavailable;
+    return {
+      sourceCommit: marker.commit,
+      serverBundleSha256: actualBundleSha256,
+    };
+  } catch {
+    return unavailable;
+  }
+})();
 // The core artifact must not carry optional MCP/CopilotKit runtime graphs. A
-// normal source/optional build keeps the environment-gated local MCP route;
-// the `--core` bundle replaces this constant at build time with `true`.
+// normal source/optional build keeps MCP behind either the loopback-only local
+// gate or an explicit authenticated-provider contract; the `--core` bundle
+// replaces this constant at build time with `true`.
 const coreBuild = process.env.TEAMS_CORE_BUILD === 'true';
-const mcpEnabled = coreBuild ? false : safeLocal;
 // Optional CopilotKit/LLM runtime is explicitly opt-in in every environment.
 // The deterministic Teams Bot and tab must start without an OpenAI/API key and
 // must not load an optional provider graph merely because the process is local.
@@ -226,12 +328,13 @@ const genUiActionStore = new GenUiActionStore(
   genUiActionStorePath,
 );
 const personalTabDeepLink = buildTeamsPersonalTabDeepLink({
-  appId: process.env.TEAMS_APP_ID ?? '',
+  catalogAppId: configuredCatalogAppId,
   tabDomain: process.env.TAB_DOMAIN ?? '',
   tenantId: configuredTenantId || undefined,
 });
 const genUi = new GenUiResponseFactory(genUiActionStore, {
   openTabUrl: personalTabDeepLink,
+  agentLabel,
 });
 const channelsShadowMonitor = new ChannelsShadowMonitor();
 const openAiConfigured = process.env.TEAMS_CORE_BUILD !== 'true'
@@ -301,6 +404,10 @@ if (isProduction && !isDeploymentGuid(configuredTenantId)) {
   throw new Error('Production TENANT_ID must be a UUID.');
 }
 
+if (isProduction && !isDeploymentGuid(configuredCatalogAppId)) {
+  throw new Error('Production TEAMS_CATALOG_APP_ID must be an observed Teams org catalog UUID.');
+}
+
 if (isProduction && acceptedUserAudiences.length === 0) {
   throw new Error('Production requires TEAMS_USER_AUTH_ACCEPTED_AUDIENCES for delegated user-token audience validation.');
 }
@@ -347,6 +454,8 @@ storeProcessLease = await acquireStoreProcessLease([
   workItemStorePath,
   collaborationStorePath,
   agentJobStorePath,
+  a2aStorePath,
+  agentAdmissionJournalPath,
   genUiActionStorePath,
   responseModeStorePath,
 ]);
@@ -355,6 +464,7 @@ process.once('exit', () => storeProcessLease?.releaseSync());
 await itemStore.initialize();
 await workItemService.initialize();
 await collaborationService.initialize();
+await a2aStore.initialize();
 await genUiActionStore.initialize();
 await responseModeStore.initialize();
 
@@ -382,6 +492,8 @@ const botResponseEngineRouter = new ResponseEngineRouter([
 let http: any;
 let teamsApp: any;
 let userAuthValidator: any;
+let mcpAuthValidator: any;
+let a2aExecutionAdapter: ReturnType<typeof createA2AExecutionAdapter> | undefined;
 const localOutbox = new Map<string, string[]>();
 const localOutboxActivities = new Map<string, unknown[]>();
 
@@ -477,15 +589,46 @@ function restScope(request: any, response: any): { scope?: AgentJobScope; status
   const requesterId = nonEmptyString(claims?.requesterId) ?? nonEmptyString(claims?.oid) ?? nonEmptyString(claims?.sub);
   const tenantId = nonEmptyString(claims?.tid);
   const conversation = restConversationId(request);
-  if (conversation.error) return { status: 400, error: conversation.error };
 
   // Local deterministic tests have no token validator. Use a fixed server-side
   // principal; production always requires validated oid/sub and tid claims.
   if (skipAuth && !claims) {
+    if (conversation.error) return { status: 400, error: conversation.error };
     return { scope: { ...localRestScope(), conversationId: conversation.conversationId! } };
   }
   if (!requesterId || !tenantId) return { status: 401, error: 'validated user identity is required' };
-  return { scope: { requesterId, tenantId, conversationId: conversation.conversationId! } };
+  // A tab/browser request has no authenticated Teams conversation reference.
+  // Never let its body or headers select the conversation used by outbound
+  // notifications; use an opaque principal-owned REST scope instead.
+  return {
+    scope: {
+      requesterId,
+      tenantId,
+      conversationId: deriveServerOwnedRestConversationId({ tenantId, requesterId }),
+    },
+  };
+}
+
+function restPrincipal(request: any, response: any): { principal?: { requesterId: string; tenantId: string }; status?: number; error?: string } {
+  const claims = asRecord(response.locals?.user) as UserClaims | undefined;
+  const requesterId = nonEmptyString(claims?.requesterId) ?? nonEmptyString(claims?.oid) ?? nonEmptyString(claims?.sub);
+  const tenantId = nonEmptyString(claims?.tid);
+  if (skipAuth && !claims) return { principal: { requesterId: 'local-user', tenantId: 'local-tenant' } };
+  if (!requesterId || !tenantId) return { status: 401, error: 'validated user identity is required' };
+  return { principal: { requesterId, tenantId } };
+}
+
+function a2aScopeFromRequest(request: any): AgentJobScope | undefined {
+  const claims = asRecord(request.res?.locals?.user) as UserClaims | undefined;
+  const requesterId = nonEmptyString(claims?.requesterId)
+    ?? nonEmptyString(claims?.oid)
+    ?? nonEmptyString(claims?.sub);
+  const tenantId = nonEmptyString(claims?.tid);
+  if (skipAuth && !claims) {
+    return { requesterId: 'local-user', tenantId: 'local-tenant', conversationId: 'a2a-http' };
+  }
+  if (!requesterId || !tenantId) return undefined;
+  return { requesterId, tenantId, conversationId: 'a2a-http' };
 }
 
 function workItemRestScope(request: any, response: any): { scope?: WorkItemScope; status?: number; error?: string } {
@@ -591,9 +734,19 @@ async function buildStatusEnvelope(): Promise<GenUiEnvelopeV1> {
     environment: isProduction ? 'production' : 'local',
     authMode: safeLocal ? 'local-bypass' : teamsApp ? 'teams-authenticated' : 'not-configured',
     storage: 'file-json-single-process',
+    agentProvider,
     deterministic: true,
     codex: capabilities.codex,
     ghcp: capabilities.ghcp,
+    a2aProviders: a2aAgentProviders.map((provider) => ({
+      provider,
+      agentId: a2aAgentId(provider),
+      providerId: a2aProviderId(provider),
+    })).concat(configuredRemoteA2AAgent ? [{
+      provider: 'remote',
+      agentId: configuredRemoteA2AAgent.agentId,
+      providerId: configuredRemoteA2AAgent.providerId,
+    }] : []),
   });
 }
 
@@ -699,6 +852,89 @@ function recordChannelsShadowComparison(envelope: GenUiEnvelopeV1, nativeActivit
   }
 }
 
+type AdaptiveCardDeliveryErrorClassification = 'confirmed-rejection' | 'ambiguous-transport' | 'unknown';
+
+const AMBIGUOUS_ADAPTIVE_CARD_DELIVERY_CODES = new Set([
+  'ECONNABORTED',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'EHOSTDOWN',
+  'EHOSTUNREACH',
+  'ENETDOWN',
+  'ENETUNREACH',
+  'EPIPE',
+  'ETIMEDOUT',
+  'UND_ERR_BODY_TIMEOUT',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_SOCKET',
+]);
+
+/**
+ * The Teams SDK sender is Axios-backed. Only its rejected `response.status`
+ * (or the same response nested under `cause`) proves that the provider
+ * returned an HTTP rejection. Top-level status fields and response-body
+ * statusCode metadata are deliberately not treated as delivery provenance.
+ */
+type AdaptiveCardDeliveryHttpResponseError = {
+  response?: { status?: unknown };
+  cause?: { response?: { status?: unknown } };
+};
+
+function adaptiveCardDeliveryHttpResponseStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const candidate = error as AdaptiveCardDeliveryHttpResponseError;
+  const possibleStatuses = [candidate.response?.status, candidate.cause?.response?.status];
+
+  for (const value of possibleStatuses) {
+    const status = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+    if (Number.isInteger(status) && status >= 400 && status <= 599) return status;
+  }
+  return undefined;
+}
+
+function adaptiveCardDeliveryErrorClassification(error: unknown): AdaptiveCardDeliveryErrorClassification {
+  if (!error || typeof error !== 'object') return 'unknown';
+
+  // A known transport signal wins over any status metadata, because the
+  // provider may have accepted the card before the sender lost the response.
+  const candidates = [
+    error,
+    (error as { cause?: unknown }).cause,
+  ];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object') continue;
+    const transportError = candidate as { code?: unknown; name?: unknown };
+    if (
+      (typeof transportError.code === 'string'
+        && AMBIGUOUS_ADAPTIVE_CARD_DELIVERY_CODES.has(transportError.code))
+      || transportError.name === 'AbortError'
+      || transportError.name === 'TimeoutError'
+    ) {
+      return 'ambiguous-transport';
+    }
+  }
+
+  if (adaptiveCardDeliveryHttpResponseStatus(error) !== undefined) return 'confirmed-rejection';
+  return 'unknown';
+}
+
+async function deliverAdaptiveCardWithFallback(
+  deliver: (activity: unknown) => Promise<unknown>,
+  activity: unknown,
+  fallback: unknown,
+): Promise<void> {
+  try {
+    await deliver(activity);
+  } catch (error) {
+    // A timeout/reset leaves delivery ambiguous: the remote service may have
+    // accepted the card before the transport failed. Only an explicit HTTP
+    // rejection is safe to follow with one user-visible text fallback.
+    if (adaptiveCardDeliveryErrorClassification(error) !== 'confirmed-rejection') return;
+    await deliver(fallback);
+  }
+}
+
 async function deliverGenUiActivity(
   deliver: ((activity: unknown) => Promise<unknown>) | undefined,
   text: string,
@@ -712,13 +948,11 @@ async function deliverGenUiActivity(
     : { type: 'message', text };
 
   if (normalized) recordChannelsShadowComparison(normalized, activity);
-
-  try {
+  if (!normalized) {
     await deliver(activity);
-  } catch (error) {
-    if (!normalized) throw error;
-    await deliver(createTextFallbackActivity(normalized));
+    return;
   }
+  await deliverAdaptiveCardWithFallback(deliver, activity, createTextFallbackActivity(normalized));
 }
 
 function createBotSender(
@@ -742,11 +976,7 @@ function createBotSender(
 
     if (effectiveOverride) {
       if (!deliver) return;
-      try {
-        await deliver(effectiveOverride);
-      } catch {
-        await deliver({ type: 'message', text });
-      }
+      await deliverAdaptiveCardWithFallback(deliver, effectiveOverride, { type: 'message', text });
       return;
     }
 
@@ -781,11 +1011,61 @@ if (useTeamsSdk) {
     applicationIdUri: configuredApplicationIdUri || undefined,
   });
   userAuthValidator = userAuthApp.entraTokenValidator;
+  if (authenticatedMcpRequested && mcpAuthClientId && mcpAuthApplicationIdUri) {
+    const loadedMcpTeams = await import('@microsoft/teams.apps');
+    const mcpTeams = (loadedMcpTeams as any).default ?? loadedMcpTeams;
+    const mcpAuthApp = new mcpTeams.App({
+      clientId: mcpAuthClientId,
+      tenantId: configuredTenantId || undefined,
+      applicationIdUri: mcpAuthApplicationIdUri,
+    });
+    mcpAuthValidator = mcpAuthApp.entraTokenValidator;
+  }
 } else {
   // Local mode keeps the browser and API fully runnable even when the host machine
   // has an incompatible optional auth dependency. Production Teams traffic uses the SDK branch above.
   http = express();
 }
+
+const mcpResourceOrigin = process.env.MCP_RESOURCE_ORIGIN?.trim()
+  || (tabDomain ? `https://${tabDomain}` : process.env.PUBLIC_BASE_URL?.trim());
+const authenticatedMcpConfig: McpAuthConfig = resolveMcpAuthConfig({
+  requested: authenticatedMcpRequested,
+  coreBuild,
+  isProduction,
+  userAuthConfigured: Boolean(configuredTenantId && mcpAuthClientId && mcpAuthApplicationIdUri),
+  userAuthValidatorConfigured: Boolean(mcpAuthValidator),
+  acceptedAudiences: mcpAuthAcceptedAudiences,
+  resourceOrigin: mcpResourceOrigin,
+  authorizationServerUrl: process.env.MCP_AUTHORIZATION_SERVER_URL?.trim(),
+  requiredScope: mcpAuthRequiredScope,
+  providerToolsEnabled: process.env.TEAMS_MCP_PROVIDER_TOOLS === 'true',
+  providerEndpointConfigured: Boolean(process.env.ATLASSIAN_SITE_URL?.trim()),
+  providerCredentialConfigured: Boolean(
+    process.env.ATLASSIAN_ACCESS_TOKEN?.trim() || process.env.BITBUCKET_ACCESS_TOKEN?.trim(),
+  ),
+});
+if (authenticatedMcpRequested && !coreBuild && !authenticatedMcpConfig.enabled) {
+  throw new Error(`TEAMS_MCP_AUTHENTICATED_ENABLED=true cannot start: ${authenticatedMcpConfig.reason}`);
+}
+const mcpEnabled = !coreBuild && (safeLocal || authenticatedMcpConfig.enabled);
+
+// Keep the tab embeddable in Teams while applying response-level security
+// headers. The SDK adapter wraps an Express application and exposes the
+// middleware surface, but its wrapped app is intentionally not public in the
+// type definition; use the runtime property only for Express fingerprint
+// hardening.
+const httpApplication = (http as any).express ?? http;
+if (typeof httpApplication.disable === 'function') {
+  httpApplication.disable('x-powered-by');
+}
+const securityHeaders = buildSecurityHeaders();
+http.use((_request: any, response: any, next: any) => {
+  for (const [name, value] of Object.entries(securityHeaders)) {
+    response.setHeader(name, value);
+  }
+  next();
+});
 
 const loopbackOnly = safeLocal || process.env.TEAMS_BIND_HOST === '127.0.0.1';
 
@@ -828,18 +1108,141 @@ if (safeLocal) {
   });
 }
 
+const a2aPublicOrigin = (() => {
+  if (tabDomain) return `https://${tabDomain}`;
+  const configured = process.env.PUBLIC_BASE_URL?.trim();
+  if (configured) {
+    try {
+      const parsed = new URL(configured);
+      if (parsed.protocol === 'https:') return parsed.origin;
+    } catch {
+      // Local Core discovery uses the explicit loopback placeholder below.
+    }
+  }
+  return 'https://localhost';
+})();
+const a2aAuthenticate = createUserAuthMiddleware({
+  allowUnauthenticated: skipAuth,
+  validator: userAuthValidator,
+  configuredTenantId: configuredTenantId || undefined,
+  acceptedAudiences: acceptedUserAudiences,
+});
+let a2aProductionRuntime: ReturnType<typeof mountA2AProductionRuntime> | undefined;
+const a2aTelemetry = new A2ATelemetryCollector();
+const remoteA2AEndpoint = process.env.TEAMS_A2A_REMOTE_AGENT_ENDPOINT?.trim();
+const remoteA2ABearerToken = process.env.TEAMS_A2A_REMOTE_AGENT_BEARER_TOKEN?.trim();
+if (Boolean(remoteA2AEndpoint) !== Boolean(remoteA2ABearerToken)) {
+  throw new Error('TEAMS_A2A_REMOTE_AGENT_ENDPOINT and TEAMS_A2A_REMOTE_AGENT_BEARER_TOKEN must be configured together.');
+}
+const remoteA2AAgentId = process.env.TEAMS_A2A_REMOTE_AGENT_ID?.trim() || 'teams-core-remote';
+const remoteA2AProviderId = process.env.TEAMS_A2A_REMOTE_PROVIDER_ID?.trim() || 'remote-a2a';
+const configuredRemoteA2AAgent = remoteA2AEndpoint && remoteA2ABearerToken
+  ? await createConfiguredA2ARemoteAgent({
+    endpoint: remoteA2AEndpoint,
+    bearerToken: remoteA2ABearerToken,
+    agentId: remoteA2AAgentId,
+    providerId: remoteA2AProviderId,
+    authorizationPolicy: createA2AAgentAuthorizationPolicy({
+      authorize: (input) => (
+        input.agentId === remoteA2AAgentId
+        && Boolean(input.scope.tenantId && input.scope.requesterId && input.scope.conversationId)
+        && (!configuredTenantId || input.scope.tenantId === configuredTenantId)
+        && isOperator(input.scope)
+        && Boolean(input.role && input.capabilities?.length)
+      ),
+    }),
+    telemetry: a2aTelemetry,
+  })
+  : undefined;
+const a2aAgents = [
+  ...a2aAgentProviders.map((provider) => {
+  const agentId = a2aAgentId(provider);
+  return {
+    agentId,
+    providerId: a2aProviderId(provider),
+    authorize: ({ scope }: { scope: AgentJobScope }) => isOperator(scope),
+    authorizationPolicy: createA2AAgentAuthorizationPolicy({
+      authorize: (input) => (
+        input.agentId === agentId
+        && Boolean(input.scope.tenantId && input.scope.requesterId && input.scope.conversationId)
+        && (!configuredTenantId || input.scope.tenantId === configuredTenantId)
+        && isOperator(input.scope)
+        && Boolean(input.role && input.capabilities?.length)
+      ),
+    }),
+    executeChild: (input: A2AProductionChildExecutionInput) => executeA2AProviderChild(provider, input),
+    cancelChild: (input: A2AProductionChildCancellationInput) => cancelA2AProviderChild(provider, input),
+  };
+  }),
+  ...(configuredRemoteA2AAgent ? [configuredRemoteA2AAgent] : []),
+];
+a2aProductionRuntime = mountA2AProductionRuntime(http, {
+  publicOrigin: a2aPublicOrigin,
+  appVersion,
+  configuredApplicationIdUri: configuredApplicationIdUri || undefined,
+  configuredTenantId: configuredTenantId || undefined,
+  store: a2aStore,
+  authenticate: a2aAuthenticate,
+  resolveScope: a2aScopeFromRequest,
+  v026Execution: {
+    submit: async (event) => {
+      if (!a2aExecutionAdapter) throw new Error('A2A execution adapter is not ready.');
+      await a2aExecutionAdapter(event);
+    },
+    cancel: async ({ task }) => {
+      if (!a2aExecutionAdapter) throw new Error('A2A execution adapter is not ready.');
+      return a2aExecutionAdapter.cancel({ taskId: task.id, scope: task.scope });
+    },
+  },
+  legacyOnTaskSubmitted: async (event) => {
+    if (!a2aExecutionAdapter) throw new Error('A2A execution adapter is not ready.');
+    await a2aExecutionAdapter(event);
+  },
+  legacyOnTaskCancel: async ({ task, authenticatedScope }) => {
+    const cancelledDispatch = await a2aProductionRuntime?.cancelDispatch({
+      task,
+      authenticatedScope,
+    });
+    if (cancelledDispatch) return cancelledDispatch;
+    if (!a2aExecutionAdapter) throw new Error('A2A execution adapter is not ready.');
+    return a2aExecutionAdapter.cancel({ taskId: task.id, scope: task.scope });
+  },
+  coreA2A: {
+    agents: a2aAgents,
+    defaultAgentId: a2aAgents[0]?.agentId,
+    onDispatchAudit: (audit) => {
+      console.info('A2A orchestration audit', serializeA2ADispatchAudit(audit));
+    },
+  },
+  requireScopedAgentAuthorization: !skipAuth,
+  telemetry: a2aTelemetry,
+});
+
 http.use(express.json());
 
-http.get('/api/health', (_request: any, response: any) => {
+http.get('/api/health', async (_request: any, response: any) => {
+  let cliCapabilities: CliCapabilities;
+  try {
+    cliCapabilities = await probeCliCapabilities();
+  } catch {
+    // A capability probe is diagnostic only. If the runner itself fails, keep
+    // health available and report the dimensions as unknown rather than
+    // turning health into an implicit login or provider-availability claim.
+    cliCapabilities = unknownCliCapabilities();
+  }
+
   response.json({
     ok: true,
     service: 'teams-sdk-mvp',
     version: appVersion,
+    sourceCommit: serverBuildIdentity.sourceCommit,
+    serverBundleSha256: serverBuildIdentity.serverBundleSha256,
     environment: process.env.NODE_ENV ?? 'development',
     auth: safeLocal ? 'local-bypass' : teamsApp ? 'teams-authenticated' : 'not-configured',
     userAuth: safeLocal ? 'local-bypass' : userAuthConfigured && userAuthValidator ? 'entra-sso' : 'not-configured',
     bot: teamsApp ? 'teams-sdk' : safeLocal ? 'local-handler' : 'not-configured',
     outbound: teamsApp ? (skipOutbound ? 'disabled' : 'teams-sdk') : safeLocal ? 'local-outbox' : 'not-configured',
+    cliCapabilities,
     storage: 'file-json-single-process',
     copilotKit: optionalRuntimeEnabled ? 'enabled' : 'disabled',
     copilotKitRuntime: optionalRuntimeEnabled ? '/api/copilotkit' : 'disabled',
@@ -862,6 +1265,35 @@ http.get('/api/health', (_request: any, response: any) => {
       : { enabled: false },
     mcpEnabled,
     mcp: mcpEnabled ? '/mcp' : 'disabled',
+    mcpMode: authenticatedMcpConfig.enabled
+      ? 'authenticated-provider'
+      : safeLocal
+        ? 'local'
+        : 'disabled',
+    mcpAuth: authenticatedMcpConfig.enabled
+      ? {
+        enabled: true,
+        resource: authenticatedMcpConfig.resourceUrl,
+        metadata: authenticatedMcpConfig.metadataUrl,
+        authorizationServer: authenticatedMcpConfig.authorizationServerUrl,
+        requiredScope: authenticatedMcpConfig.requiredScope,
+      }
+      : { enabled: false, reason: authenticatedMcpConfig.reason },
+    a2aProviders: a2aAgentProviders.map((provider) => ({
+      provider,
+      agentId: a2aAgentId(provider),
+      providerId: a2aProviderId(provider),
+      configured: Boolean(providerRunners[provider]),
+    })),
+    a2aTelemetry: (() => {
+      const snapshot = a2aTelemetry.snapshot();
+      return {
+        schemaVersion: snapshot.schemaVersion,
+        totalEvents: snapshot.totalEvents,
+        retainedEvents: snapshot.retainedEvents,
+        droppedEvents: snapshot.droppedEvents,
+      };
+    })(),
     timestamp: new Date().toISOString(),
   });
 });
@@ -1565,21 +1997,106 @@ agentService = new AgentService(
   gitService,
   {
     canMutateScope: (scope) => isOperator(scope),
+    canReadScope: (scope) => isOperator(scope),
+    executionPolicy: agentExecutionPolicy,
+    admissionController: agentAdmissionController,
+    agentLabel,
+    defaultProvider: agentProvider,
+    providerRunners,
   },
 );
 await agentService.initialize();
 
+a2aExecutionAdapter = createA2AExecutionAdapter({
+  store: a2aStore,
+  agentService,
+  resolveProviderForRecovery: cliProviderFromA2AProviderId,
+  recoverChildForReconciliation: (input) => a2aProductionRuntime?.recoverChild(input) ?? Promise.resolve(undefined),
+  onDispatchAudit: (audit) => {
+    console.info('A2A dispatch audit', serializeA2ADispatchAudit(audit));
+  },
+});
+await a2aExecutionAdapter.initialize();
+
 let mcpRouter: McpGenUiRouter | undefined;
 if (mcpEnabled) {
   const { createMcpGenUiRouter } = await import('./mcp-genui.js');
+  let providerTools: import('./mcp-provider-tools.js').McpProviderToolRegistry | undefined;
+  let providerToolsForPrincipal: ((principal: import('./mcp-genui.js').McpPrincipal) => import('./mcp-provider-tools.js').McpProviderToolRegistry) | undefined;
+  if (process.env.TEAMS_MCP_PROVIDER_TOOLS === 'true') {
+    const { createMcpProviderToolRegistry } = await import('./mcp-provider-tools.js');
+    const { createPrincipalScopedProviderHttpBroker } = await import('./mcp-provider-http-broker.js');
+    const { ProviderMutationReplayStore } = await import('./provider-mutation-replay-store.js');
+    const atlassianSiteUrl = process.env.ATLASSIAN_SITE_URL?.trim();
+    if (!atlassianSiteUrl) {
+      throw new Error('TEAMS_MCP_PROVIDER_TOOLS=true requires ATLASSIAN_SITE_URL.');
+    }
+    const bitbucketBaseUrl = process.env.BITBUCKET_API_BASE_URL?.trim() || 'https://api.bitbucket.org/2.0/';
+    const atlassianOrigin = new URL(atlassianSiteUrl).origin;
+    const bitbucketOrigin = new URL(bitbucketBaseUrl).origin;
+    const mutationReplayStore = new ProviderMutationReplayStore(providerMutationReplayStorePath);
+    await mutationReplayStore.initialize();
+    const createProviderTools = (principal: import('./mcp-genui.js').McpPrincipal) => {
+      const providerBroker = createPrincipalScopedProviderHttpBroker({
+        principal,
+        resolveCredential: (provider) => provider === 'atlassian'
+          ? process.env.ATLASSIAN_ACCESS_TOKEN?.trim()
+          : process.env.BITBUCKET_ACCESS_TOKEN?.trim(),
+        allowedOrigins: {
+          atlassian: [atlassianOrigin],
+          bitbucket: [bitbucketOrigin],
+        },
+      });
+      return createMcpProviderToolRegistry({
+        principal,
+        ...(authenticatedMcpConfig.enabled ? { allowMutations: isOperator } : {}),
+        atlassianSiteUrl,
+        ...(process.env.BITBUCKET_API_BASE_URL?.trim()
+          ? { bitbucketBaseUrl }
+        : {}),
+        providerBroker,
+        mutationReplayStore,
+      });
+    };
+
+    if (authenticatedMcpConfig.enabled) {
+      providerToolsForPrincipal = createProviderTools;
+    } else {
+      const tenantId = process.env.TEAMS_MCP_PROVIDER_TENANT_ID?.trim();
+      const requesterId = process.env.TEAMS_MCP_PROVIDER_REQUESTER_ID?.trim();
+      if (!tenantId || !requesterId) {
+        throw new Error('TEAMS_MCP_PROVIDER_TOOLS=true in local mode requires TEAMS_MCP_PROVIDER_TENANT_ID and TEAMS_MCP_PROVIDER_REQUESTER_ID.');
+      }
+      providerTools = createProviderTools({ tenantId, requesterId });
+    }
+  }
   mcpRouter = createMcpGenUiRouter({
     itemStore,
     agentService,
     getWeather,
+    ...(providerTools ? { providerTools } : {}),
+    ...(providerToolsForPrincipal ? { providerToolsForPrincipal } : {}),
+    ...(authenticatedMcpConfig.enabled
+      ? {
+        includeWorkspaceTools: false,
+        resolvePrincipal: (_request: import('express').Request, response: import('express').Response) => copilotIdentity(undefined, response),
+      }
+      : {}),
     sessionMode: process.env.MCP_SESSION_MODE === 'stateless' ? 'stateless' : 'stateful',
     enableJsonResponse: true,
     serverVersion: appVersion,
   });
+
+  if (authenticatedMcpConfig.enabled) {
+    const authenticateMcp = createUserAuthMiddleware({
+      allowUnauthenticated: false,
+      validator: mcpAuthValidator,
+      configuredTenantId: configuredTenantId || undefined,
+      acceptedAudiences: mcpAuthAcceptedAudiences,
+      requiredDelegatedScope: authenticatedMcpConfig.requiredScope,
+    });
+    mountMcpAuthenticatedBoundary(http, authenticatedMcpConfig, authenticateMcp);
+  }
   http.use('/mcp', mcpRouter);
 }
 
@@ -1588,6 +2105,7 @@ const handleSignal = (signal: NodeJS.Signals): void => {
   if (shutdownPromise) return;
   shutdownPromise = (async () => {
     try {
+      await agentService.close();
       await mcpRouter?.close();
     } finally {
       await storeProcessLease?.release();
@@ -1672,14 +2190,59 @@ http.use(
     acceptedAudiences: acceptedUserAudiences,
   }),
 );
-http.post('/api/agent-jobs/:id/approve', async (request: any, response: any) => {
+http.post('/api/agent-jobs', async (request: any, response: any) => {
   const resolved = restScope(request, response);
   if (!resolved.scope) {
-    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid job scope' });
+    response.status(resolved.status ?? 400).json({ error: { code: 'INVALID_SCOPE', retryable: false } });
+    return;
+  }
+  const mode = request.body?.mode === 'workspace-write' ? 'workspace-write' : 'read-only';
+  try {
+    const job = await agentService.submit({
+      prompt: normalizeAgentPrompt(request.body?.prompt),
+      mode,
+      scope: resolved.scope,
+    });
+    response.status(201).json({ job });
+  } catch (error) {
+    if (error instanceof AgentCapacityError) {
+      response.set('Cache-Control', 'no-store');
+      response.status(429).json(publicAgentCapacityError(error));
+      return;
+    }
+    if (error instanceof AgentExecutionUnavailableError) {
+      response.status(503).json({ error: publicAgentUnavailableError(error) });
+      return;
+    }
+    if (error instanceof AgentMutationAuthorizationError) {
+      response.status(403).json({ error: { code: error.code, retryable: false } });
+      return;
+    }
+    if (error instanceof Error && 'code' in error && (error as { code?: unknown }).code === 'INVALID_AGENT_PROMPT') {
+      response.status(400).json({ error: { code: 'INVALID_AGENT_PROMPT', retryable: false } });
+      return;
+    }
+    console.error('Agent submission failed', error);
+    response.status(500).json({ error: { code: 'AGENT_SUBMISSION_FAILED', retryable: false } });
+  }
+});
+http.post('/api/agent-jobs/:id/approve', async (request: any, response: any) => {
+  const resolved = restPrincipal(request, response);
+  if (!resolved.principal) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid job principal' });
     return;
   }
   try {
-    const job = await agentService.approve(request.params.id, resolved.scope);
+    const owned = agentJobStore.getForPrincipal(request.params.id, resolved.principal);
+    if (!owned || typeof owned.tenantId !== 'string') {
+      response.status(404).json({ error: 'approval target not found' });
+      return;
+    }
+    const job = await agentService.approve(request.params.id, {
+      requesterId: owned.requesterId,
+      tenantId: owned.tenantId,
+      conversationId: owned.conversationId,
+    });
     if (!job) {
       response.status(404).json({ error: 'approval target not found' });
       return;
@@ -1700,13 +2263,22 @@ http.post('/api/agent-jobs/:id/approve', async (request: any, response: any) => 
   }
 });
 http.post('/api/agent-jobs/:id/cancel', async (request: any, response: any) => {
-  const resolved = restScope(request, response);
-  if (!resolved.scope) {
-    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid job scope' });
+  const resolved = restPrincipal(request, response);
+  if (!resolved.principal) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid job principal' });
     return;
   }
   try {
-    const job = await agentService.cancelStrict(request.params.id, resolved.scope);
+    const owned = agentJobStore.getForPrincipal(request.params.id, resolved.principal);
+    if (!owned || typeof owned.tenantId !== 'string') {
+      response.status(404).json({ error: 'cancellation target not found' });
+      return;
+    }
+    const job = await agentService.cancelStrict(request.params.id, {
+      requesterId: owned.requesterId,
+      tenantId: owned.tenantId,
+      conversationId: owned.conversationId,
+    });
     if (!job) {
       response.status(404).json({ error: 'cancellation target not found' });
       return;
@@ -1734,7 +2306,7 @@ function formatAgentJob(job: AgentJob): string {
     `권한: ${job.mode}`,
   ];
 
-  if (job.threadId) lines.push(`Codex thread: ${job.threadId}`);
+  if (job.threadId) lines.push(`${agentLabel} thread: ${job.threadId}`);
   if (job.commitHash) lines.push(`Git commit: ${job.commitHash}`);
   if (job.commitMessage && !job.commitHash) lines.push(`Git: ${job.commitMessage}`);
   if (job.progress.length > 0) lines.push(`최근 진행: ${job.progress[job.progress.length - 1]}`);
@@ -1871,6 +2443,54 @@ function mutationConflictEnvelope(error: unknown, fallbackId = 'agent-mutation-e
   return genUi.error('작업 상태가 변경되어 요청을 처리하지 못했습니다. 최신 상태를 확인하세요.', fallbackId);
 }
 
+function publicAgentCapacityError(error: AgentCapacityError): {
+  code: string;
+  dimension: string;
+  limit: number;
+  retryable: boolean;
+} {
+  return mapAgentCapacityError(error);
+}
+
+function publicAgentUnavailableError(error: AgentExecutionUnavailableError): {
+  code: string;
+  reason: string;
+  retryable: boolean;
+} {
+  return { code: error.code, reason: error.reason, retryable: false };
+}
+
+function agentCapacityText(error: AgentCapacityError): string {
+  return mapAgentCapacityText(error);
+}
+
+function agentUnavailableText(): string {
+  return `읽기 전용 ${agentLabel}는 신뢰된 격리 경계가 준비된 경우에만 사용할 수 있습니다. 결정형 Core 기능은 계속 사용할 수 있습니다.`;
+}
+
+function agentCapacityEnvelope(error: AgentCapacityError, id: string): GenUiEnvelopeV1 {
+  const details = publicAgentCapacityError(error);
+  const envelope = genUi.error(agentCapacityText(error), id);
+  return {
+    ...envelope,
+    metadata: {
+      ...envelope.metadata,
+      code: details.code,
+      dimension: details.dimension,
+      limit: details.limit,
+      retryable: details.retryable,
+    },
+  };
+}
+
+function agentUnavailableEnvelope(id: string): GenUiEnvelopeV1 {
+  const envelope = genUi.error(agentUnavailableText(), id);
+  return {
+    ...envelope,
+    metadata: { ...envelope.metadata, code: 'UNAVAILABLE', reason: 'trusted-isolation-required', retryable: false },
+  };
+}
+
 async function replayedGenUiAction(action: GenUiCardAction, job: AgentJob | undefined): Promise<GenUiEnvelopeV1> {
   if (!job) return genUi.error('작업을 찾을 수 없습니다.');
   if (action === 'refresh' || action === 'retry') return genUi.jobStatus(job);
@@ -1975,6 +2595,12 @@ async function resolveGenUiAction(activity: any): Promise<GenUiEnvelopeV1> {
     if (error instanceof AgentMutationAuthorizationError) {
       return genUi.error(error.message, `action-${payload.entityId}-forbidden`);
     }
+    if (error instanceof AgentCapacityError) {
+      return agentCapacityEnvelope(error, `action-${payload.entityId}-capacity`);
+    }
+    if (error instanceof AgentExecutionUnavailableError) {
+      return agentUnavailableEnvelope(`action-${payload.entityId}-unavailable`);
+    }
     if (error instanceof AgentJobConflictError) {
       return mutationConflictEnvelope(error);
     }
@@ -2073,6 +2699,14 @@ async function handleBotNaturalLanguage(activity: any, send: BotSend, scope: Age
   } catch (error) {
     if (error instanceof AgentMutationAuthorizationError) {
       await send(error.message, genUi.error(error.message, 'response-engine-forbidden'));
+      return;
+    }
+    if (error instanceof AgentCapacityError) {
+      await send(agentCapacityText(error), agentCapacityEnvelope(error, 'response-engine-capacity'));
+      return;
+    }
+    if (error instanceof AgentExecutionUnavailableError) {
+      await send(agentUnavailableText(), agentUnavailableEnvelope('response-engine-unavailable'));
       return;
     }
     console.error('Teams Bot response engine failed', error);
@@ -2199,13 +2833,24 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
           const envelope = await genUi.approval(job);
           await send(responseText, envelope);
         } else {
-          const responseText = `읽기 전용 Codex 작업 ${job.id}을 시작했습니다.\nstatus ${job.id}로 진행 상태를 확인할 수 있습니다.`;
+          const responseText = `읽기 전용 ${agentLabel} 작업 ${job.id}을 시작했습니다.\nstatus ${job.id}로 진행 상태를 확인할 수 있습니다.`;
           const envelope = genUi.started(job);
           await send(responseText, envelope);
         }
       } catch (error) {
-        if (!(error instanceof AgentMutationAuthorizationError)) throw error;
-        await send(error.message, genUi.error(error.message, `${mode}-forbidden`));
+        if (error instanceof AgentCapacityError) {
+          await send(agentCapacityText(error), agentCapacityEnvelope(error, `${mode}-capacity`));
+          return;
+        }
+        if (error instanceof AgentExecutionUnavailableError) {
+          await send(agentUnavailableText(), agentUnavailableEnvelope(`${mode}-unavailable`));
+          return;
+        }
+        if (error instanceof AgentMutationAuthorizationError) {
+          await send(error.message, genUi.error(error.message, `${mode}-forbidden`));
+          return;
+        }
+        throw error;
       }
       return;
     }
@@ -2251,16 +2896,27 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
     try {
       const job = await agentService.continue(continueMatch[1], promptResult.value!, scope);
       if (job) {
-        const responseText = `작업 ${job.id}이 이전 Codex thread에서 이어집니다.\nstatus ${job.id}`;
+        const responseText = `작업 ${job.id}이 이전 ${agentLabel} thread에서 이어집니다.\nstatus ${job.id}`;
         const envelope = genUi.continued(job);
         await send(responseText, envelope);
       } else {
-        const responseText = '재개할 Codex thread가 있는 작업을 찾을 수 없습니다.';
+        const responseText = `재개할 ${agentLabel} thread가 있는 작업을 찾을 수 없습니다.`;
         await send(responseText, genUi.error(responseText, 'continue-missing'));
       }
     } catch (error) {
-      if (!(error instanceof AgentMutationAuthorizationError)) throw error;
-      await send(error.message, genUi.error(error.message, `continue-${continueMatch[1]}-forbidden`));
+      if (error instanceof AgentCapacityError) {
+        await send(agentCapacityText(error), agentCapacityEnvelope(error, `continue-${continueMatch[1]}-capacity`));
+        return;
+      }
+      if (error instanceof AgentExecutionUnavailableError) {
+        await send(agentUnavailableText(), agentUnavailableEnvelope(`continue-${continueMatch[1]}-unavailable`));
+        return;
+      }
+      if (error instanceof AgentMutationAuthorizationError) {
+        await send(error.message, genUi.error(error.message, `continue-${continueMatch[1]}-forbidden`));
+        return;
+      }
+      throw error;
     }
     return;
   }
@@ -2480,6 +3136,61 @@ if (skipAuth) {
     localOutboxActivities.delete(conversationId);
     response.json({ conversationId, messages, activities });
   });
+
+  if (process.env.TEAMS_ADAPTIVE_CARD_DELIVERY_TEST === 'true') {
+    http.post('/api/debug/adaptive-card-delivery', async (request: any, response: any) => {
+      const scenario = request.body?.scenario;
+      const path = request.body?.path ?? 'envelope';
+      const validScenarios = new Set([
+        'success',
+        'ambiguous',
+        'confirmed',
+        'bare-status',
+        'bare-status-code',
+        'status-timeout',
+        'status-abort',
+        'unknown',
+        'reset',
+        'socket',
+        'confirmed-response',
+        'nested-confirmed-response',
+      ]);
+      if (!validScenarios.has(scenario) || (path !== 'envelope' && path !== 'override')) {
+        response.status(400).json({ error: 'invalid Adaptive Card delivery test scenario' });
+        return;
+      }
+
+      const attempts: unknown[] = [];
+      const deliver = async (activity: unknown): Promise<void> => {
+        attempts.push(activity);
+        if (attempts.length !== 1) return;
+        if (scenario === 'success') return;
+        const errors: Record<string, Error> = {
+          ambiguous: Object.assign(new Error('test transport timeout'), { code: 'ETIMEDOUT' }),
+          confirmed: Object.assign(new Error('test card rejection'), { response: { status: 400 } }),
+          'bare-status': Object.assign(new Error('test status metadata'), { status: 500 }),
+          'bare-status-code': Object.assign(new Error('test statusCode metadata'), { statusCode: 500 }),
+          'status-timeout': Object.assign(new Error('test ambiguous timeout metadata'), { status: 500, code: 'ETIMEDOUT' }),
+          'status-abort': Object.assign(new Error('test ambiguous abort metadata'), { statusCode: 500, name: 'AbortError' }),
+          unknown: new Error('test unknown delivery failure'),
+          reset: Object.assign(new Error('test connection reset'), { code: 'ECONNRESET' }),
+          socket: Object.assign(new Error('test socket failure'), { code: 'UND_ERR_SOCKET' }),
+          'confirmed-response': Object.assign(new Error('test provider rejection'), { response: { status: 400 } }),
+          'nested-confirmed-response': Object.assign(new Error('test nested provider rejection'), { cause: { response: { status: 422 } } }),
+        };
+        throw errors[scenario];
+      };
+
+      const envelope = genUi.answer('Adaptive Card delivery fallback test', 'adaptive-card-delivery-test');
+      const activityOverride = createAdaptiveCardActivity(envelope);
+      await createBotSender(deliver)(
+        'Adaptive Card delivery fallback test',
+        envelope,
+        path === 'override' ? activityOverride : undefined,
+      );
+      response.json({ scenario, attempts });
+    });
+  }
 }
 
 if (skipAuth) {
@@ -2505,6 +3216,79 @@ console.log(`Teams messages: http://localhost:${port}/api/messages`);
 
 function isDeploymentGuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function parseAgentProviders(rawValue: string | undefined, defaultProvider: CliAgentProvider): readonly CliAgentProvider[] {
+  const values = new Set<CliAgentProvider>([defaultProvider]);
+  const raw = rawValue?.trim();
+  if (raw) {
+    for (const entry of raw.split(',')) {
+      const provider = entry.trim();
+      if (provider !== 'codex' && provider !== 'copilot') {
+        throw new Error('TEAMS_A2A_AGENT_PROVIDERS may contain only codex and copilot.');
+      }
+      values.add(provider);
+    }
+  }
+  return [...values];
+}
+
+function a2aAgentId(provider: CliAgentProvider): string {
+  return provider === 'copilot' ? 'teams-core-copilot' : 'teams-core-codex';
+}
+
+function a2aProviderId(provider: CliAgentProvider): string {
+  return provider === 'copilot' ? 'official-copilot-cli' : 'codex-cli';
+}
+
+function cliProviderFromA2AProviderId(providerId: string): CliAgentProvider | undefined {
+  if (providerId === 'codex-cli') return 'codex';
+  if (providerId === 'official-copilot-cli') return 'copilot';
+  return undefined;
+}
+
+async function executeA2AProviderChild(
+  provider: CliAgentProvider,
+  input: A2AProductionChildExecutionInput,
+) {
+  let agentJobId: string | undefined;
+  const cancelChild = (): void => {
+    if (!agentJobId) return;
+    void agentService.cancelStrict(agentJobId, input.scope, {
+      notify: false,
+      provider,
+    }).catch(() => undefined);
+  };
+  input.signal.addEventListener('abort', cancelChild, { once: true });
+  try {
+    const job = await agentService.runForCopilot({
+      provider,
+      prompt: input.prompt,
+      scope: input.scope,
+      notify: false,
+      timeoutMs: Math.max(1, input.deadlineAtMs - Date.now()),
+      onSubmitted: async (submitted) => {
+        agentJobId = submitted.id;
+        await input.bindChild(submitted.id);
+        if (input.signal.aborted) cancelChild();
+      },
+    });
+    if (job.status === 'completed') return { taskId: job.id, status: 'completed' as const, result: job.result };
+    if (job.status === 'cancelled') return { taskId: job.id, status: 'canceled' as const, error: job.error };
+    return { taskId: job.id, status: 'failed' as const, error: job.error ?? `${provider} agent execution failed.` };
+  } finally {
+    input.signal.removeEventListener('abort', cancelChild);
+  }
+}
+
+async function cancelA2AProviderChild(
+  provider: CliAgentProvider,
+  input: A2AProductionChildCancellationInput,
+): Promise<void> {
+  await agentService.cancelStrict(input.agentJobId, input.scope, {
+    notify: false,
+    provider,
+  });
 }
 
 function parseOperatorAllowlist(
@@ -2558,4 +3342,16 @@ function numericEnvGreaterThan(name: string, threshold: number): boolean {
   if (!raw) return false;
   const value = Number(raw);
   return Number.isFinite(value) && value > threshold;
+}
+
+function boundedAgentLimitEnv(name: string, fallback: number, maximum: number): number {
+  const configured = process.env[name];
+  if (configured === undefined) return fallback;
+  const raw = configured.trim();
+  if (!raw) throw new Error(`${name} must be a finite positive safe integer <= ${maximum}`);
+  const value = Number(raw);
+  if (!Number.isFinite(value) || !Number.isSafeInteger(value) || value <= 0 || value > maximum) {
+    throw new Error(`${name} must be a finite positive safe integer <= ${maximum}`);
+  }
+  return value;
 }

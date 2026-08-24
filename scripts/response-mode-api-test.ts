@@ -82,23 +82,6 @@ async function request(
   return { response, body };
 }
 
-async function waitForOutboxCompletion(
-  baseUrl: string,
-  token: string,
-  conversationId: string,
-  expectedText: string,
-): Promise<string[]> {
-  const messages: string[] = [];
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    const result = await request(baseUrl, `/api/debug/agent-outbox/${conversationId}`, token);
-    messages.push(...(result.body.messages ?? []));
-    if (messages.some((message) => message.includes(expectedText))) return messages;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  throw new Error(`proactive completion did not arrive for ${conversationId}`);
-}
-
 function activity(baseUrl: string, text: string, suffix: string, value?: unknown) {
   return {
     type: 'message',
@@ -180,6 +163,8 @@ async function main(): Promise<void> {
       WORK_ITEM_STORE_PATH: join(dataRoot, 'work-items.json'),
       COLLABORATION_STORE_PATH: join(dataRoot, 'collaboration.json'),
       AGENT_JOB_STORE_PATH: join(dataRoot, 'agent-jobs.json'),
+      A2A_STORE_PATH: join(dataRoot, 'a2a.json'),
+      AGENT_ADMISSION_JOURNAL_PATH: join(dataRoot, 'agent-admission.json'),
       GENUI_ACTION_STORE_PATH: join(dataRoot, 'genui-actions.json'),
       RESPONSE_MODE_STORE_PATH: join(dataRoot, 'response-modes.json'),
       AGENT_WORKSPACE: root,
@@ -197,6 +182,7 @@ async function main(): Promise<void> {
       TEAMS_LOCAL_DEV: 'true',
       TEAMS_BIND_HOST: '127.0.0.1',
       TEAMS_LOCAL_ACCESS_TOKEN: token,
+      TEAMS_OPERATOR_REQUESTER_ALLOWLIST: 'response-mode-tenant/response-mode-user',
       // The release gate loads .env.runtime before invoking npm test. Keep
       // public deployment hints out of this intentionally local test process;
       // the server must reject skip-auth when those hints are present.
@@ -296,21 +282,17 @@ async function main(): Promise<void> {
     );
 
     const asyncSuffix = 'natural-agent-async';
-    const asyncConversationId = `response-mode-conversation-${asyncSuffix}`;
     const naturalAgent = await request(baseUrl, '/api/messages', token, {
       method: 'POST',
       body: JSON.stringify(activity(baseUrl, '현재 구현 상태를 분석해줘', asyncSuffix)),
     });
     const immediatePayload = JSON.stringify(naturalAgent.body);
-    const asyncJobId = immediatePayload.match(/task-[\w-]+/)?.[0];
-    assertPass(naturalAgent.response.status === 200 && Boolean(asyncJobId), 'Teams Bot acknowledges a natural Codex job immediately with its job id');
-    assertPass(!immediatePayload.includes('FAKE_CODEX_OK'), 'Teams Bot immediate acknowledgement does not wait for or embed the final Codex result');
-    assertPass(immediatePayload.includes('로딩 중'), 'Teams Bot immediate acknowledgement renders a loading job card');
-    const proactiveMessages = await waitForOutboxCompletion(baseUrl, token, asyncConversationId, 'FAKE_CODEX_OK');
     assertPass(
-      proactiveMessages.some((message) => message.includes(asyncJobId!)),
-      'natural Codex completion is delivered proactively to the same Teams conversation',
+      naturalAgent.response.status === 200
+        && immediatePayload.includes('신뢰된 격리'),
+      `Teams Bot fails closed when a natural Codex job has no trusted isolation provider: ${immediatePayload}`,
     );
+    assertPass(!immediatePayload.includes('FAKE_CODEX_OK'), 'Teams Bot immediate acknowledgement does not wait for or embed the final Codex result');
 
     const storePath = join(dataRoot, 'cross-tenant.json');
     const store = new ResponseModeStore(storePath);

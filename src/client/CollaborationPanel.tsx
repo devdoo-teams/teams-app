@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { apiFetch } from './auth.js';
+import { ApiAuthError, apiFetch } from './auth.js';
 import { preserveBrowserPreview } from './hub-navigation.js';
 
 type TargetType = 'project' | 'goal' | 'topic' | 'work-item';
@@ -115,11 +115,87 @@ function key(prefix: string): string {
 
 type PendingMutation = { fingerprint: string; key: string };
 
+export type CollaborationRetryStore = {
+  set: (slot: string, operation: () => Promise<void>) => void;
+  get: (slot: string) => (() => Promise<void>) | undefined;
+  delete: (slot: string) => void;
+  clear: () => void;
+  dispose: () => void;
+};
+
+export function createCollaborationRetryStore(): CollaborationRetryStore {
+  let disposed = false;
+  const operations = new Map<string, () => Promise<void>>();
+  return {
+    set(slot, operation): void {
+      if (!disposed) operations.set(slot, operation);
+    },
+    get(slot): (() => Promise<void>) | undefined {
+      return disposed ? undefined : operations.get(slot);
+    },
+    delete(slot): void {
+      operations.delete(slot);
+    },
+    clear(): void {
+      operations.clear();
+    },
+    dispose(): void {
+      disposed = true;
+      operations.clear();
+    },
+  };
+}
+
+export type CollaborationMutationBody = {
+  target: { type: TargetType; id: string };
+  delivery?: 'personal' | 'channel';
+  channelId?: string;
+  metadata?: { source: 'teams-tab' };
+  level?: string;
+  digestPeriod?: string;
+};
+
+function cloneCollaborationMutationBody(body: CollaborationMutationBody): CollaborationMutationBody {
+  return {
+    target: { type: body.target.type, id: body.target.id },
+    ...(body.delivery ? { delivery: body.delivery } : {}),
+    ...(body.channelId ? { channelId: body.channelId } : {}),
+    ...(body.metadata?.source ? { metadata: { source: body.metadata.source } } : {}),
+    ...(body.level ? { level: body.level } : {}),
+    ...(body.digestPeriod ? { digestPeriod: body.digestPeriod } : {}),
+  };
+}
+
 async function collaborationFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set('x-conversation-id', CONVERSATION_ID);
   if (init.body && !headers.has('content-type')) headers.set('content-type', 'application/json');
   return apiFetch(input, { ...init, headers });
+}
+
+export type CollaborationMutation = (
+  path: string,
+  body: CollaborationMutationBody,
+  slot: string,
+) => Promise<void>;
+
+export async function bindCollaborationChannel(
+  channelId: string,
+  target: { type: TargetType; id: string },
+  mutate: CollaborationMutation,
+  onValidationMessage: (message: string) => void,
+): Promise<void> {
+  const normalizedChannelId = channelId.trim();
+  if (!normalizedChannelId) {
+    onValidationMessage('채널 ID를 입력하세요.');
+    return;
+  }
+  onValidationMessage('');
+  await mutate(
+    '/api/collaboration/bindings',
+    { target, channelId: normalizedChannelId, metadata: { source: 'teams-tab' } },
+    'bind',
+  );
 }
 
 export async function loadCollaborationActivity(
@@ -154,30 +230,40 @@ export async function loadCollaborationActivity(
   };
 }
 
+function CollaborationActivityStatus({ message, loading }: { message: string; loading: boolean }) {
+  return (
+    <div aria-atomic="true" aria-busy={loading} aria-live="polite" className="collaboration-activity-status" role="status">
+      <p className="empty">{message}</p>
+    </div>
+  );
+}
+
 export function CollaborationActivityState({
   data,
   error,
   loading,
   notice = '',
   onRetry,
+  retrying = false,
 }: {
   data: CollaborationActivityData;
   error: string;
   loading: boolean;
   notice?: string;
   onRetry: () => void;
+  retrying?: boolean;
 }) {
-  if (loading) return <p className="empty" role="status">협업 설정을 불러오는 중입니다…</p>;
+  if (loading) return <CollaborationActivityStatus loading message="협업 설정을 불러오는 중입니다…" />;
   if (error) {
-    return <div className="today-summary-error" role="alert"><p>{error}</p><button className="secondary" onClick={onRetry} type="button">다시 시도</button></div>;
+    return <div className="today-summary-error" role="alert"><p>{error}</p><button className="secondary" disabled={retrying} onClick={onRetry} type="button">{retrying ? '다시 시도 중…' : '다시 시도'}</button></div>;
   }
   return (
     <>
       {notice && <p className="error" role="alert">{notice}</p>}
       <h3 className="collaboration-subheading">최근 알림</h3>
-      {data.notifications.length > 0 ? <div className="collaboration-digest">{data.notifications.slice(0, 5).map((entry) => <a href={preserveBrowserPreview(entry.deepLink.href, typeof window === 'undefined' ? undefined : window.location.search)} key={entry.id}><b>{entry.title}</b><span>{entry.body}</span><small>{entry.occurredAt} · {entry.target.type}:{entry.target.id}</small></a>)}</div> : <p className="empty">최근 알림이 없습니다.</p>}
+      {data.notifications.length > 0 ? <div className="collaboration-digest">{data.notifications.slice(0, 5).map((entry) => <a href={preserveBrowserPreview(entry.deepLink.href, typeof window === 'undefined' ? undefined : window.location.search)} key={entry.id}><b>{entry.title}</b><span>{entry.body}</span><small>{entry.occurredAt} · {entry.target.type}:{entry.target.id}</small></a>)}</div> : <CollaborationActivityStatus loading={false} message="최근 알림이 없습니다." />}
       <h3 className="collaboration-subheading">주간 digest</h3>
-      {data.digest.entries.length > 0 ? <div className="collaboration-digest">{data.digest.entries.slice(0, 5).map((entry) => <a href={preserveBrowserPreview(entry.deepLink.href, typeof window === 'undefined' ? undefined : window.location.search)} key={`${entry.target.type}:${entry.target.id}:${entry.title}`}><b>{entry.title}</b><span>{entry.body}</span><small>{entry.count}건 · {entry.target.type}:{entry.target.id}</small></a>)}</div> : <p className="empty">아직 업데이트 digest가 없습니다.</p>}
+      {data.digest.entries.length > 0 ? <div className="collaboration-digest">{data.digest.entries.slice(0, 5).map((entry) => <a href={preserveBrowserPreview(entry.deepLink.href, typeof window === 'undefined' ? undefined : window.location.search)} key={`${entry.target.type}:${entry.target.id}:${entry.title}`}><b>{entry.title}</b><span>{entry.body}</span><small>{entry.count}건 · {entry.target.type}:{entry.target.id}</small></a>)}</div> : <CollaborationActivityStatus loading={false} message="아직 업데이트 digest가 없습니다." />}
     </>
   );
 }
@@ -198,11 +284,20 @@ export function CollaborationPanel() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [channelError, setChannelError] = useState('');
+  const [retrySlot, setRetrySlot] = useState<string | null>(null);
+  const [authRetrying, setAuthRetrying] = useState(false);
+  const mountedRef = useRef(true);
+  const authRetryingRef = useRef(false);
   const loadControllerRef = useRef(createLatestCollaborationLoadController());
   const pendingMutationsRef = useRef(new Map<string, PendingMutation>());
+  const authRetryOperationsRef = useRef(createCollaborationRetryStore());
   const target = { type: targetType, id: targetId.trim() };
 
   const load = useCallback(async (): Promise<void> => {
+    if (!mountedRef.current) return;
+    authRetryOperationsRef.current.clear();
+    setRetrySlot(null);
     const request = loadControllerRef.current.begin();
     setLoading(true);
     setError('');
@@ -219,32 +314,86 @@ export function CollaborationPanel() {
   }, []);
 
   useEffect(() => {
+    authRetryOperationsRef.current = createCollaborationRetryStore();
+    mountedRef.current = true;
     void load();
-    return () => loadControllerRef.current.dispose();
+    return () => {
+      mountedRef.current = false;
+      loadControllerRef.current.dispose();
+      authRetryOperationsRef.current.dispose();
+      pendingMutationsRef.current.clear();
+      authRetryingRef.current = false;
+    };
   }, [load]);
 
-  async function mutate(path: string, body: Record<string, unknown>, slot: string): Promise<void> {
+  async function mutate(
+    path: string,
+    body: CollaborationMutationBody,
+    slot: string,
+    options: { preserveError?: boolean } = {},
+  ): Promise<void> {
+    if (!mountedRef.current) return;
     if (!target.id) {
       setError('대상 ID를 입력하세요.');
       return;
     }
+    const retryBody = cloneCollaborationMutationBody(body);
+    authRetryOperationsRef.current.delete(slot);
+    setRetrySlot((current) => current === slot ? null : current);
     setBusy(true);
-    setError('');
-    const fingerprint = path + '|' + JSON.stringify(body);
+    if (!options.preserveError) setError('');
+    const fingerprint = path + '|' + JSON.stringify(retryBody);
     const previous = pendingMutationsRef.current.get(slot);
     const mutationKey = previous?.fingerprint === fingerprint ? previous.key : key(slot);
     pendingMutationsRef.current.set(slot, { fingerprint, key: mutationKey });
     try {
-      const response = await collaborationFetch(path, { method: 'POST', body: JSON.stringify({ ...body, mutationKey }) });
+      const response = await collaborationFetch(path, { method: 'POST', body: JSON.stringify({ ...retryBody, mutationKey }) });
+      if (!mountedRef.current) return;
       const result = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(result.error || '협업 설정을 변경하지 못했습니다.');
       pendingMutationsRef.current.delete(slot);
+      authRetryOperationsRef.current.delete(slot);
+      setRetrySlot((current) => current === slot ? null : current);
+      if (!mountedRef.current) return;
       await load();
     } catch (caught) {
+      if (!mountedRef.current) return;
+      if (caught instanceof ApiAuthError && caught.kind === 'auth-expired') {
+        authRetryOperationsRef.current.set(slot, async () => {
+          await mutate(path, retryBody, slot, { preserveError: true });
+        });
+        setRetrySlot(slot);
+      } else {
+        authRetryOperationsRef.current.delete(slot);
+        setRetrySlot((current) => current === slot ? null : current);
+      }
       setError(caught instanceof Error ? caught.message : '협업 설정을 변경하지 못했습니다.');
     } finally {
-      setBusy(false);
+      if (mountedRef.current) setBusy(false);
     }
+  }
+
+  const retryAuthMutation = useCallback(async (): Promise<void> => {
+    if (authRetryingRef.current || !retrySlot) return;
+    const operation = authRetryOperationsRef.current.get(retrySlot);
+    if (!operation) {
+      if (mountedRef.current) setRetrySlot(null);
+      return;
+    }
+    authRetryOperationsRef.current.delete(retrySlot);
+    setRetrySlot(null);
+    authRetryingRef.current = true;
+    setAuthRetrying(true);
+    try {
+      await operation();
+    } finally {
+      authRetryingRef.current = false;
+      if (mountedRef.current) setAuthRetrying(false);
+    }
+  }, [retrySlot]);
+
+  async function bindChannel(): Promise<void> {
+    await bindCollaborationChannel(channelId, target, mutate, setChannelError);
   }
 
   const followed = data.subscriptions.some((entry) => entry.target.type === target.type && entry.target.id === target.id && entry.delivery === 'personal');
@@ -265,14 +414,15 @@ export function CollaborationPanel() {
       <div className="collaboration-form">
         <label>대상 유형<select aria-label="협업 대상 유형" onChange={(event) => setTargetType(event.target.value as TargetType)} value={targetType}>{targetTypes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <label>대상 ID<input aria-label="협업 대상 ID" onChange={(event) => setTargetId(event.target.value)} value={targetId} /></label>
-        <label>채널 ID<input aria-label="채널 ID" onChange={(event) => setChannelId(event.target.value)} value={channelId} /></label>
+        <label>채널 ID<input aria-label="채널 ID" onChange={(event) => { setChannelId(event.target.value); setChannelError(''); }} value={channelId} /></label>
+        {channelError && <p className="error" role="alert">{channelError}</p>}
       </div>
 
       <div className="collaboration-actions">
-        <button className="primary" disabled={busy || followed} onClick={() => void mutate('/api/collaboration/follow', { target, delivery: 'personal' }, 'follow')} type="button">{followed ? '팔로우 중' : '팔로우'}</button>
-        <button className="secondary" disabled={busy || !followed} onClick={() => void mutate('/api/collaboration/unfollow', { target, delivery: 'personal' }, 'unfollow')} type="button">팔로우 해제</button>
-        <button className="secondary" disabled={busy} onClick={() => void mutate('/api/collaboration/bindings', { target, channelId, metadata: { source: 'teams-tab' } }, 'bind')} type="button">채널에 연결</button>
-        <button className="secondary" disabled={busy} onClick={() => void mutate('/api/collaboration/preferences', { target, delivery: 'personal', level, ...(level === 'digest' ? { digestPeriod: 'weekly' } : {}) }, 'preference')} type="button">알림 저장</button>
+        <button className="primary" disabled={loading || busy || followed} onClick={() => void mutate('/api/collaboration/follow', { target, delivery: 'personal' }, 'follow')} type="button">{followed ? '팔로우 중' : '팔로우'}</button>
+        <button className="secondary" disabled={loading || busy || !followed} onClick={() => void mutate('/api/collaboration/unfollow', { target, delivery: 'personal' }, 'unfollow')} type="button">팔로우 해제</button>
+        <button className="secondary" disabled={loading || busy} onClick={() => void bindChannel()} type="button">채널에 연결</button>
+        <button className="secondary" disabled={loading || busy} onClick={() => void mutate('/api/collaboration/preferences', { target, delivery: 'personal', level, ...(level === 'digest' ? { digestPeriod: 'weekly' } : {}) }, 'preference')} type="button">알림 저장</button>
       </div>
 
       <label className="collaboration-level">알림 수준<select aria-label="알림 수준" onChange={(event) => setLevel(event.target.value)} value={level}><option value="all">모든 업데이트</option><option value="mentions">멘션만</option><option value="digest">주간 digest</option><option value="none">끄기</option></select></label>
@@ -283,7 +433,14 @@ export function CollaborationPanel() {
         <span>새 알림 {data.notifications.length}건</span>
         <span>최근 digest {data.digest.totalCount}건</span>
       </div>
-      <CollaborationActivityState data={data} error={error} loading={loading} notice={deepLinkNotice} onRetry={() => void load()} />
+      <CollaborationActivityState
+        data={data}
+        error={error}
+        loading={loading}
+        notice={deepLinkNotice}
+        onRetry={retrySlot || authRetrying ? () => void retryAuthMutation() : () => void load()}
+        retrying={authRetrying}
+      />
     </section>
   );
 }

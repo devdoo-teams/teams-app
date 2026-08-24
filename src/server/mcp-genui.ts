@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import express, { type RequestHandler, type Router } from 'express';
+import express, { type Request, type RequestHandler, type Response, type Router } from 'express';
 import { registerAppResource, registerAppTool } from '@modelcontextprotocol/ext-apps/server';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -41,10 +41,22 @@ type WeatherLookup = (
 ) => Promise<WeatherResponse>;
 
 type ItemStoreReader = Pick<ItemStore, 'list' | 'summary'>;
-// MCP is still an explicitly local-only reader in this slice. Its route is
-// disabled by default in production; the next security slice must remove the
-// unauthenticated opt-in before exposing it publicly.
 type AgentServiceReader = Pick<AgentService, 'getLocalOnly' | 'listLocalOnly' | 'countActiveLocalOnly'>;
+
+/** Validated tenant/requester identity bound to one MCP session. */
+export type McpPrincipal = Readonly<{
+  tenantId: string;
+  requesterId: string;
+}>;
+
+type McpProviderToolRegistrar = {
+  register(server: McpServer): void;
+};
+
+export type McpPrincipalResolver = (
+  request: Request,
+  response: Response,
+) => McpPrincipal | undefined;
 
 export interface McpGenUiDependencies {
   itemStore: ItemStoreReader;
@@ -64,6 +76,14 @@ export interface McpGenUiServerOptions extends McpGenUiDependencies {
   /** Optional server identity override for host diagnostics. */
   serverName?: string;
   serverVersion?: string;
+  /** Optional provider tool registrar. Provider credentials and principal scope stay outside Core/MCP GenUI. */
+  providerTools?: McpProviderToolRegistrar;
+  /** Build provider tools for the validated principal of this request/session. */
+  providerToolsForPrincipal?: (principal: McpPrincipal) => McpProviderToolRegistrar | undefined;
+  /** Exclude local workspace/job readers from an authenticated provider route. */
+  includeWorkspaceTools?: boolean;
+  /** When present, every request must resolve to a validated principal. */
+  resolvePrincipal?: McpPrincipalResolver;
   /** Optional public mode state supplied by an authenticated MCP integration. */
   responseMode?: GenUiResponseMode;
   /** Maximum idle time for a stateful MCP session. Defaults to ten minutes. */
@@ -393,27 +413,29 @@ function validateWidgetHtml(value: string): string {
 
 function registerTools(server: McpServer, options: McpGenUiServerOptions): void {
   const responseMode = normalizeResponseMode(options.responseMode);
-  registerAppTool(
-    server,
-    'get_workspace_snapshot',
-    {
-      title: 'Get workspace snapshot',
-      description: 'Use this when the user asks for the current Teams workspace tasks or active Codex jobs. This is a deterministic read-only data tool; it never invents an LLM answer.',
-      inputSchema: workspaceInputSchema,
-      outputSchema: GenUiEnvelopeV1BaseSchema,
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        openWorldHint: false,
-        idempotentHint: true,
+  if (options.includeWorkspaceTools !== false) {
+    registerAppTool(
+      server,
+      'get_workspace_snapshot',
+      {
+        title: 'Get workspace snapshot',
+        description: 'Use this when the user asks for the current Teams workspace tasks or active Codex jobs. This is a deterministic read-only data tool; it never invents an LLM answer.',
+        inputSchema: workspaceInputSchema,
+        outputSchema: GenUiEnvelopeV1BaseSchema,
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          openWorldHint: false,
+          idempotentHint: true,
+        },
+        _meta: { ui: { visibility: ['model'] } },
       },
-      _meta: { ui: { visibility: ['model'] } },
-    },
-    async ({ limit }) => {
-      const envelope = workspaceEnvelope(options, limit ?? 8, responseMode);
-      return resultForEnvelope(envelope);
-    },
-  );
+      async ({ limit }) => {
+        const envelope = workspaceEnvelope(options, limit ?? 8, responseMode);
+        return resultForEnvelope(envelope);
+      },
+    );
+  }
 
   registerAppTool(
     server,
@@ -443,30 +465,32 @@ function registerTools(server: McpServer, options: McpGenUiServerOptions): void 
     },
   );
 
-  registerAppTool(
-    server,
-    'get_job_status',
-    {
-      title: 'Get Codex job status',
-      description: 'Use this when the user asks for a Codex job status. If jobId is omitted, return a deterministic list of recent jobs.',
-      inputSchema: jobInputSchema,
-      outputSchema: GenUiEnvelopeV1BaseSchema,
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        openWorldHint: false,
-        idempotentHint: true,
+  if (options.includeWorkspaceTools !== false) {
+    registerAppTool(
+      server,
+      'get_job_status',
+      {
+        title: 'Get Codex job status',
+        description: 'Use this when the user asks for a Codex job status. If jobId is omitted, return a deterministic list of recent jobs.',
+        inputSchema: jobInputSchema,
+        outputSchema: GenUiEnvelopeV1BaseSchema,
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          openWorldHint: false,
+          idempotentHint: true,
+        },
+        _meta: { ui: { visibility: ['model'] } },
       },
-      _meta: { ui: { visibility: ['model'] } },
-    },
-    async ({ jobId, limit }) => {
-      const selected = jobId
-        ? options.agentService.getLocalOnly(jobId)
-        : options.agentService.listLocalOnly(limit ?? 8)[0];
-      const envelope = jobEnvelope(selected, limit ?? 8, responseMode);
-      return resultForEnvelope(envelope);
-    },
-  );
+      async ({ jobId, limit }) => {
+        const selected = jobId
+          ? options.agentService.getLocalOnly(jobId)
+          : options.agentService.listLocalOnly(limit ?? 8)[0];
+        const envelope = jobEnvelope(selected, limit ?? 8, responseMode);
+        return resultForEnvelope(envelope);
+      },
+    );
+  }
 
   registerAppTool(
     server,
@@ -516,6 +540,7 @@ export function createMcpGenUiServer(options: McpGenUiServerOptions): McpGenUiSe
   );
 
   registerTools(server, options);
+  options.providerTools?.register(server);
 
   registerAppResource(
     server,
@@ -576,6 +601,7 @@ type Session = McpGenUiServerInstance;
 type SessionEntry = {
   session: Session;
   sessionId?: string;
+  principalKey?: string;
   lastActivity: number;
   inFlight: number;
   initializing: boolean;
@@ -598,6 +624,38 @@ function isInitializeRequestBody(body: unknown): boolean {
     : body;
   if (!message || typeof message !== 'object' || Array.isArray(message)) return false;
   return (message as { method?: unknown }).method === 'initialize';
+}
+
+function normalizedPrincipalKey(principal: McpPrincipal | undefined): string | undefined {
+  if (!principal) return undefined;
+  const tenantId = principal.tenantId.trim();
+  const requesterId = principal.requesterId.trim();
+  if (
+    !tenantId
+    || !requesterId
+    || /[\u0000-\u001f\u007f]/.test(tenantId)
+    || /[\u0000-\u001f\u007f]/.test(requesterId)
+  ) return undefined;
+  return `${tenantId}\u0000${requesterId}`;
+}
+
+function principalBoundServerOptions(
+  options: McpGenUiServerOptions,
+  principal: McpPrincipal | undefined,
+): McpGenUiServerOptions {
+  const providerTools = principal && options.providerToolsForPrincipal
+    ? options.providerToolsForPrincipal(principal)
+    : options.providerTools;
+  return {
+    ...options,
+    providerTools,
+    providerToolsForPrincipal: undefined,
+    resolvePrincipal: undefined,
+  };
+}
+
+function rejectMissingPrincipal(response: Response): void {
+  response.status(401).json({ error: 'validated MCP principal is required' });
 }
 
 export function createMcpGenUiHandler(options: McpGenUiServerOptions): RequestHandler & { close(): Promise<void> } {
@@ -685,6 +743,15 @@ export function createMcpGenUiHandler(options: McpGenUiServerOptions): RequestHa
   };
 
   const handler: RequestHandler = async (request, response) => {
+    const principal = options.resolvePrincipal?.(request, response);
+    const requestPrincipalKey = options.resolvePrincipal
+      ? normalizedPrincipalKey(principal)
+      : undefined;
+    if (options.resolvePrincipal && !requestPrincipalKey) {
+      rejectMissingPrincipal(response);
+      return;
+    }
+
     const sessionId = request.header('mcp-session-id');
     const method = request.method.toUpperCase();
 
@@ -698,7 +765,7 @@ export function createMcpGenUiHandler(options: McpGenUiServerOptions): RequestHa
 
       let session: Session | undefined;
       try {
-        session = createMcpGenUiServer(options);
+        session = createMcpGenUiServer(principalBoundServerOptions(options, principal));
         await session.ready;
         await session.transport.handleRequest(request, response, request.body);
       } catch (error) {
@@ -719,6 +786,10 @@ export function createMcpGenUiHandler(options: McpGenUiServerOptions): RequestHa
         response.status(404).json({ error: 'Unknown MCP session' });
         return;
       }
+      if (entry.principalKey !== requestPrincipalKey) {
+        response.status(403).json({ error: 'MCP session is bound to a different principal' });
+        return;
+      }
     } else if (method === 'POST' && isInitializeRequestBody(request.body)) {
       if (closed) {
         response.status(503).json({ error: 'MCP router is closing' });
@@ -731,7 +802,7 @@ export function createMcpGenUiHandler(options: McpGenUiServerOptions): RequestHa
 
       let created: Session | undefined;
       const serverOptions: McpGenUiServerOptions = {
-        ...options,
+        ...principalBoundServerOptions(options, principal),
         onSessionInitialized: async (initializedId) => {
           if (!entry || entry.closed) throw new Error('MCP session was closed during initialization');
           entry.sessionId = initializedId;
@@ -758,6 +829,7 @@ export function createMcpGenUiHandler(options: McpGenUiServerOptions): RequestHa
         created = createMcpGenUiServer(serverOptions);
         entry = {
           session: created,
+          ...(requestPrincipalKey ? { principalKey: requestPrincipalKey } : {}),
           lastActivity: Date.now(),
           inFlight: 0,
           initializing: true,

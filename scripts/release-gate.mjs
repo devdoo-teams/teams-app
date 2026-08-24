@@ -4,6 +4,13 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  assertCleanTrackedWorktreeForFileProvider,
+  isFullCommitOid,
+  resolvePinnedCommitOid,
+} from './fileprovider-git-clean.mjs';
+import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
+import { parseServerBuildMarker } from './server-build-marker.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const packagePath = path.join(root, 'appPackage', 'build', 'teams-sdk-mvp.zip');
@@ -12,11 +19,51 @@ const defaultTimeouts = {
   typecheck: 60_000,
   build: 300_000,
   test: 300_000,
+  serverDeterminism: 300_000,
   deployment: 30_000,
-  package: 30_000,
+  package: 300_000,
   shell: 30_000,
   public: 15_000,
 };
+
+/**
+ * The package phase is a serial gate: two cheap checks, package creation, and
+ * three bounded package contracts. Keep outer runners longer than that exact
+ * sequence so a healthy FileProvider/build path is not mistaken for a hang.
+ */
+export function packageGateTimeoutMs({
+  checkTimeout = defaultTimeouts.deployment,
+  commandTimeout = defaultTimeouts.package,
+  overheadMs = 60_000,
+} = {}) {
+  return (checkTimeout * 2) + (commandTimeout * 4) + overheadMs;
+}
+
+export function createReleaseSourceEnvironment(
+  env = process.env,
+  {
+    rootDir = root,
+    verifySource = assertCleanTrackedWorktreeForFileProvider,
+    resolveSource = resolvePinnedCommitOid,
+  } = {},
+) {
+  const sourceCommit = env.TEAMS_SOURCE_COMMIT ?? resolveSource(rootDir, { env });
+  assert.equal(isFullCommitOid(sourceCommit), true, 'release source resolver must return a full Git OID');
+  const verification = verifySource(rootDir, {
+    commitOid: sourceCommit,
+    env,
+  });
+  assert.equal(
+    verification?.commitOid,
+    sourceCommit,
+    'release source verification must retain the exact pinned Git OID',
+  );
+  return {
+    sourceCommit,
+    verificationMode: verification.verificationMode,
+    env: { ...env, TEAMS_SOURCE_COMMIT: sourceCommit },
+  };
+}
 
 export function parseDotEnv(text) {
   const values = {};
@@ -173,7 +220,7 @@ export function assertPublicAsset(response, bytes, tabIdentity) {
   return { finalUrl, sha256, buildId: tabIdentity.buildId };
 }
 
-export function assertPublicHealth(health, expectedVersion) {
+export function assertPublicHealth(health, expected) {
   const required = {
     ok: true,
     service: 'teams-sdk-mvp',
@@ -186,7 +233,13 @@ export function assertPublicHealth(health, expectedVersion) {
   for (const [field, expected] of Object.entries(required)) {
     assert.equal(health?.[field], expected, `public health ${field} must be ${expected}`);
   }
-  assert.equal(health.version, expectedVersion, 'public health version must match the packaged version');
+  assert.equal(health.version, expected.version, 'public health version must match the packaged version');
+  assert.equal(health.sourceCommit, expected.sourceCommit, 'public health source commit must match the built server identity');
+  assert.equal(
+    health.serverBundleSha256,
+    expected.serverBundleSha256,
+    'public health server bundle SHA-256 must match the built server identity',
+  );
   return true;
 }
 
@@ -194,16 +247,20 @@ function commandText(command, args) {
   return [command, ...args].join(' ');
 }
 
-function terminateProcessGroup(child) {
-  if (!child.pid) return;
+function terminateProcessGroup(child, { force = false } = {}) {
+  if (!child.pid) return false;
   try {
-    if (process.platform === 'win32') child.kill('SIGTERM');
-    else process.kill(-child.pid, 'SIGTERM');
+    const signal = force ? 'SIGKILL' : 'SIGTERM';
+    if (process.platform === 'win32') child.kill(signal);
+    else process.kill(-child.pid, signal);
+    return true;
   } catch {
     try {
-      child.kill('SIGTERM');
+      child.kill(force ? 'SIGKILL' : 'SIGTERM');
+      return true;
     } catch {
       // The process may have exited between the timeout and cleanup.
+      return false;
     }
   }
 }
@@ -213,8 +270,18 @@ export function runWithTimeout(command, args = [], options = {}) {
     cwd = root,
     env = process.env,
     timeoutMs = defaultTimeouts.shell,
+    terminationGraceMs = 500,
+    reapTimeoutMs = 5_000,
     maxOutputChars = 12_000,
   } = options;
+
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('timeoutMs must be positive');
+  if (!Number.isFinite(terminationGraceMs) || terminationGraceMs < 0) {
+    throw new Error('terminationGraceMs must be non-negative');
+  }
+  if (!Number.isFinite(reapTimeoutMs) || reapTimeoutMs <= 0) {
+    throw new Error('reapTimeoutMs must be positive');
+  }
 
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -225,8 +292,26 @@ export function runWithTimeout(command, args = [], options = {}) {
     });
     let stdout = '';
     let stderr = '';
-    let finished = false;
-    let timer;
+    let settled = false;
+    let closeSeen = false;
+    let timeoutTriggered = false;
+    let timeoutTimer;
+    let graceTimer;
+    let reapTimer;
+    const termination = { sentTerm: false, sentKill: false, reaped: false };
+
+    const clearTimers = () => {
+      clearTimeout(timeoutTimer);
+      clearTimeout(graceTimer);
+      clearTimeout(reapTimer);
+    };
+
+    const finishReject = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimers();
+      reject(error);
+    };
 
     const append = (target, chunk) => `${target}${chunk}`.slice(-maxOutputChars);
     child.stdout.on('data', (chunk) => {
@@ -236,29 +321,49 @@ export function runWithTimeout(command, args = [], options = {}) {
       stderr = append(stderr, chunk.toString());
     });
     child.once('error', (error) => {
-      if (finished) return;
-      finished = true;
-      clearTimeout(timer);
-      reject(error);
+      finishReject(error);
     });
     child.once('close', (code, signal) => {
-      if (finished) return;
-      finished = true;
-      clearTimeout(timer);
+      closeSeen = true;
+      termination.reaped = true;
+      clearTimers();
+      if (settled) return;
+      if (timeoutTriggered) {
+        const error = new Error(`Command timed out after ${timeoutMs}ms: ${commandText(command, args)}`);
+        error.code = 'ETIMEDOUT';
+        error.command = commandText(command, args);
+        error.timeoutMs = timeoutMs;
+        error.stdout = stdout;
+        error.stderr = stderr;
+        error.termination = { ...termination };
+        finishReject(error);
+        return;
+      }
+      settled = true;
       resolve({ code, signal, stdout, stderr, command: commandText(command, args) });
     });
 
-    timer = setTimeout(() => {
-      if (finished) return;
-      finished = true;
-      terminateProcessGroup(child);
-      const error = new Error(`Command timed out after ${timeoutMs}ms: ${commandText(command, args)}`);
-      error.code = 'ETIMEDOUT';
-      error.command = commandText(command, args);
-      error.timeoutMs = timeoutMs;
-      error.stdout = stdout;
-      error.stderr = stderr;
-      reject(error);
+    timeoutTimer = setTimeout(() => {
+      if (settled || closeSeen || timeoutTriggered) return;
+      timeoutTriggered = true;
+      termination.sentTerm = terminateProcessGroup(child);
+      graceTimer = setTimeout(() => {
+        if (closeSeen || settled) return;
+        termination.sentKill = terminateProcessGroup(child, { force: true });
+        reapTimer = setTimeout(() => {
+          if (closeSeen || settled) return;
+          const error = new Error(
+            `Command process did not reap after SIGKILL within ${reapTimeoutMs}ms: ${commandText(command, args)}`,
+          );
+          error.code = 'EPROCESSREAPTIMEOUT';
+          error.command = commandText(command, args);
+          error.timeoutMs = timeoutMs;
+          error.stdout = stdout;
+          error.stderr = stderr;
+          error.termination = { ...termination };
+          finishReject(error);
+        }, reapTimeoutMs);
+      }, terminationGraceMs);
     }, timeoutMs);
   });
 }
@@ -280,15 +385,20 @@ export function resolvePublicUrl(env = process.env) {
   return undefined;
 }
 
-async function readSourceManifest() {
-  return JSON.parse(await fs.readFile(path.join(root, 'appPackage', 'manifest.json'), 'utf8'));
+async function readSourceManifest(sourceCommit, env) {
+  const result = await runCommand('git', ['show', `${sourceCommit}:appPackage/manifest.json`], {
+    timeoutMs: defaultTimeouts.shell,
+    env: { ...env, GIT_OPTIONAL_LOCKS: '0' },
+  });
+  return JSON.parse(result.stdout);
 }
 
-async function expectedDeployment(env) {
-  const sourceManifest = await readSourceManifest();
+async function expectedDeployment(env, sourceCommit) {
+  const sourceManifest = await readSourceManifest(sourceCommit, env);
   const expected = {
     version: sourceManifest.version,
     appId: env.TEAMS_APP_ID,
+    catalogAppId: env.TEAMS_CATALOG_APP_ID,
     tabDomain: env.TAB_DOMAIN,
     clientId: env.CLIENT_ID,
     botClientId: env.BOT_CLIENT_ID,
@@ -348,17 +458,47 @@ async function sha256(filePath) {
   return crypto.createHash('sha256').update(data).digest('hex');
 }
 
+export function assertServerBuildIdentity(marker, entryBytes, expectedSourceCommit) {
+  assert.ok(marker, 'local server build identity marker is missing or invalid');
+  assert.equal(marker.mode, 'core', 'local server build identity must be Core mode');
+  assert.equal(
+    marker.sourceCommit,
+    expectedSourceCommit,
+    'local server build source commit must match the release-pinned Git OID',
+  );
+  const serverBundleSha256 = crypto.createHash('sha256').update(entryBytes).digest('hex');
+  assert.equal(
+    marker.bundleSha256,
+    serverBundleSha256,
+    'local server bundle SHA-256 does not match its build identity marker',
+  );
+  return { sourceCommit: marker.sourceCommit, serverBundleSha256 };
+}
+
+async function readExpectedServerBuildIdentity(expectedSourceCommit) {
+  const serverDir = path.join(resolveRuntimeDistRoot(root), 'server');
+  const entryPath = path.join(serverDir, 'index.js');
+  const markerPath = path.join(serverDir, '.teams-server-build-commit');
+  const [entryBytes, markerRaw] = await Promise.all([
+    fs.readFile(entryPath),
+    fs.readFile(markerPath, 'utf8'),
+  ]);
+  const marker = parseServerBuildMarker(markerRaw);
+  return assertServerBuildIdentity(marker, entryBytes, expectedSourceCommit);
+}
+
 export function createPreflightCommands(timeoutOverride) {
   return [
     ['core-source-check', 'typecheck:core', timeoutOverride ?? defaultTimeouts.typecheck],
     ['core-build', 'build:core', timeoutOverride ?? defaultTimeouts.build],
+    ['server-build-determinism', 'test:server-build-determinism', timeoutOverride ?? defaultTimeouts.serverDeterminism],
     ['core-test', 'test:core', timeoutOverride ?? defaultTimeouts.test],
     ['deployment', 'check:deployment', timeoutOverride ?? defaultTimeouts.deployment],
   ];
 }
 
-async function runPreflight({ timeoutOverride } = {}) {
-  const env = await readRuntimeEnv();
+async function runPreflight({ timeoutOverride, releaseSource } = {}) {
+  const { env, sourceCommit } = releaseSource;
   const commands = createPreflightCommands(timeoutOverride);
   const evidence = [];
   for (const [label, script, timeoutMs] of commands) {
@@ -367,24 +507,28 @@ async function runPreflight({ timeoutOverride } = {}) {
     evidence.push({
       command: label,
       exitCode: result.code,
+      sourceCommit,
       output: `${result.stdout}\n${result.stderr}`.trim().slice(-2_000),
     });
   }
   return { evidence, uiGates: ['DESKTOP_UNVERIFIED', 'MOBILE_UNVERIFIED'] };
 }
 
-async function runPackage({ timeoutOverride } = {}) {
-  const env = await readRuntimeEnv();
-  const expected = await expectedDeployment(env);
+async function runPackage({ timeoutOverride, releaseSource } = {}) {
+  const { env, sourceCommit } = releaseSource;
+  const expected = await expectedDeployment(env, sourceCommit);
   const checkTimeout = timeoutOverride ?? defaultTimeouts.deployment;
   await runNpmScript('check:deployment', checkTimeout, env);
   await runNpmScript('validate:manifest', checkTimeout, env);
   await runNpmScript('package:app', timeoutOverride ?? defaultTimeouts.package, env);
+  await runNpmScript('test:package-determinism', timeoutOverride ?? defaultTimeouts.package, env);
+  await runNpmScript('test:package-atomic', timeoutOverride ?? defaultTimeouts.package, env);
+  await runNpmScript('test:release-timeout', timeoutOverride ?? defaultTimeouts.package, env);
   const manifest = await readZipManifest();
   assertPackagedManifest(manifest, expected);
   return {
     evidence: [
-      { package: packagePath, version: manifest.version, sha256: await sha256(packagePath) },
+      { package: packagePath, version: manifest.version, sha256: await sha256(packagePath), sourceCommit },
       {
         manifest: {
           version: manifest.version,
@@ -428,12 +572,12 @@ export async function validatePublicTabDeployment({
   return { tabResult, tab, asset };
 }
 
-async function runPublic({ url, timeoutOverride } = {}) {
+async function runPublic({ url, timeoutOverride, releaseSource } = {}) {
   assert.ok(url, 'public phase requires --url or TEAMS_PUBLIC_URL');
   const baseUrl = String(url).replace(/\/$/, '');
   const timeoutMs = timeoutOverride ?? defaultTimeouts.public;
-  const env = await readRuntimeEnv();
-  const expected = await expectedDeployment(env);
+  const { env, sourceCommit } = releaseSource;
+  const expected = await expectedDeployment(env, sourceCommit);
   const packageShaBefore = await sha256(packagePath);
   const packageManifest = await readZipManifest();
   assertPackagedManifest(packageManifest, expected);
@@ -447,7 +591,8 @@ async function runPublic({ url, timeoutOverride } = {}) {
   const healthResult = await fetchWithTimeout(`${baseUrl}/api/health`, timeoutMs);
   assert.equal(healthResult.response.status, 200, 'public health endpoint must return HTTP 200');
   const health = JSON.parse(healthResult.text);
-  assertPublicHealth(health, packageManifest.version);
+  const serverBuildIdentity = await readExpectedServerBuildIdentity(sourceCommit);
+  assertPublicHealth(health, { version: packageManifest.version, ...serverBuildIdentity });
 
   const websiteRootResult = await fetchWithTimeout(`${baseUrl}/`, timeoutMs);
   assert.equal(websiteRootResult.response.status, 200, 'public website root must resolve after following its canonical tab redirect');
@@ -466,12 +611,14 @@ async function runPublic({ url, timeoutOverride } = {}) {
   assert.equal(packageShaAfter, packageShaBefore, 'package SHA changed during public validation');
   return {
     evidence: [
-      { package: packagePath, version: packageManifest.version, sha256: packageShaAfter },
+      { package: packagePath, version: packageManifest.version, sha256: packageShaAfter, sourceCommit },
       {
         health: {
           status: healthResult.response.status,
           service: health.service,
           version: health.version,
+          sourceCommit: health.sourceCommit,
+          serverBundleSha256: health.serverBundleSha256,
           auth: health.auth,
           userAuth: health.userAuth,
           bot: health.bot,
@@ -514,18 +661,22 @@ function parseArgs(argv) {
 }
 
 async function runPhase(options) {
-  if (options.phase === 'preflight') return runPreflight(options);
-  if (options.phase === 'package') return runPackage(options);
+  const runtimeEnv = await readRuntimeEnv();
+  const releaseSource = createReleaseSourceEnvironment(runtimeEnv);
+  const phaseOptions = { ...options, releaseSource };
+  if (options.phase === 'preflight') return runPreflight(phaseOptions);
+  if (options.phase === 'package') return runPackage(phaseOptions);
   if (options.phase === 'public') {
-    const env = await readRuntimeEnv();
-    return runPublic({ ...options, url: options.url ?? resolvePublicUrl(env) });
+    return runPublic({ ...phaseOptions, url: options.url ?? resolvePublicUrl(releaseSource.env) });
   }
   if (options.phase === 'all') {
     const phases = [];
-    phases.push({ phase: 'preflight', ...(await runPreflight(options)) });
-    phases.push({ phase: 'package', ...(await runPackage(options)) });
-    const env = await readRuntimeEnv();
-    phases.push({ phase: 'public', ...(await runPublic({ ...options, url: options.url ?? resolvePublicUrl(env) })) });
+    phases.push({ phase: 'preflight', ...(await runPreflight(phaseOptions)) });
+    phases.push({ phase: 'package', ...(await runPackage(phaseOptions)) });
+    phases.push({
+      phase: 'public',
+      ...(await runPublic({ ...phaseOptions, url: options.url ?? resolvePublicUrl(releaseSource.env) })),
+    });
     return { evidence: phases, uiGates: ['PORTAL_UPLOAD_UNVERIFIED', 'INSTALLED_VERSION_UNVERIFIED', 'DESKTOP_UNVERIFIED', 'MOBILE_UNVERIFIED'] };
   }
   throw new Error(`Unknown release gate phase: ${options.phase}`);
@@ -536,7 +687,7 @@ function isMainModule() {
 }
 
 export function formatReleaseFailure(error, phase = 'all') {
-  const status = error.code === 'ETIMEDOUT' || error.code === 'ECOMMAND' ? 'BLOCKED' : 'FAILED';
+  const status = ['ETIMEDOUT', 'EPROCESSREAPTIMEOUT', 'ECOMMAND'].includes(error.code) ? 'BLOCKED' : 'FAILED';
   return {
     status,
     phase,
@@ -548,8 +699,8 @@ export function formatReleaseFailure(error, phase = 'all') {
       timeoutMs: error.timeoutMs ?? null,
       exitCode: error.exitCode ?? null,
     },
-    nextAction: error.code === 'ETIMEDOUT'
-      ? 'Fix or isolate the timed-out command, then rerun the same bounded release phase.'
+    nextAction: error.code === 'ETIMEDOUT' || error.code === 'EPROCESSREAPTIMEOUT'
+      ? 'Fix or isolate the timed-out command/process cleanup, then rerun the same bounded release phase.'
       : 'Inspect the reported command output before continuing.',
   };
 }

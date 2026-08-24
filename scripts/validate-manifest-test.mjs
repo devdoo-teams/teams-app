@@ -10,11 +10,23 @@ assert.equal(
 
 const manifest = JSON.parse(await fs.readFile('appPackage/manifest.json', 'utf8'));
 const packageJson = JSON.parse(await fs.readFile('package.json', 'utf8'));
+const packageLockJson = JSON.parse(await fs.readFile('package-lock.json', 'utf8'));
 const validate = (candidate) => validatorModule.validateManifest(candidate, packageJson, {
   iconExists: () => true,
+  packageLockJson,
 });
 
 assert.equal(validate(structuredClone(manifest)), undefined, 'the checked-in source manifest contract is valid');
+
+{
+  const candidateLock = structuredClone(packageLockJson);
+  candidateLock.version = '1.0.45';
+  assert.match(
+    validatorModule.validateManifest(manifest, packageJson, { iconExists: () => true, packageLockJson: candidateLock }) ?? '',
+    /Package lock version must match/,
+    'manifest validation rejects package-lock version drift',
+  );
+}
 
 {
   const candidate = structuredClone(manifest);

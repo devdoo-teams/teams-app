@@ -1,6 +1,18 @@
 import type { AgentJob, AgentJobMode, AgentJobScope } from './agent-job-store.js';
 import { AgentJobStore } from './agent-job-store.js';
+import {
+  AgentExecutionUnavailableError,
+  AgentExecutionPolicy,
+  type AgentExecutionWorkspace,
+} from './agent-execution-policy.js';
+import {
+  AgentAdmissionController,
+  type AgentAdmissionLease,
+  AgentCapacityError,
+} from './agent-admission-controller.js';
 import { CodexRunner, type CodexRunEvent } from './codex-runner.js';
+import type { CliAgentProvider } from './cli-agent-runner.js';
+import { redactCliDiagnostics } from './cli-diagnostics.js';
 import { GitService, type GitWorkspaceSnapshot } from './git-service.js';
 import { diagnoseRemoteAgentResult, formatRemoteTroubleshooting } from './remote-troubleshooting.js';
 
@@ -25,6 +37,12 @@ export type AgentNotification = {
 
 type Notify = (notification: AgentNotification) => Promise<void>;
 type ProgressListener = (message: string) => Promise<void> | void;
+type ReconciliationState = {
+  jobId: string;
+  attempts: number;
+  durable: boolean;
+  lastFailureCode: string;
+};
 
 export const MAX_AGENT_PROMPT_LENGTH = 2_000;
 
@@ -61,6 +79,33 @@ export class AgentMutationAuthorizationError extends Error {
   }
 }
 
+export class AgentProviderUnavailableError extends Error {
+  readonly code = 'AGENT_PROVIDER_UNAVAILABLE' as const;
+
+  constructor(readonly provider: CliAgentProvider) {
+    super(`에이전트 provider(${provider})가 이 런타임에 명시적으로 구성되지 않았습니다.`);
+    this.name = 'AgentProviderUnavailableError';
+  }
+}
+
+export class AgentProviderConflictError extends Error {
+  readonly code = 'AGENT_PROVIDER_CONFLICT' as const;
+
+  constructor(readonly job: AgentJob, requested: CliAgentProvider) {
+    super(`작업 ${job.id}은 provider(${job.provider ?? 'legacy-default'})로 생성되어 provider(${requested})로 조작할 수 없습니다.`);
+    this.name = 'AgentProviderConflictError';
+  }
+}
+
+export class AgentProviderIdentityError extends Error {
+  readonly code = 'AGENT_PROVIDER_IDENTITY_MISSING' as const;
+
+  constructor(readonly job: AgentJob) {
+    super(`작업 ${job.id}에 생성 당시 provider identity가 없어 안전하게 복구할 수 없습니다.`);
+    this.name = 'AgentProviderIdentityError';
+  }
+}
+
 export function normalizeAgentPrompt(prompt: unknown): string {
   if (typeof prompt !== 'string') {
     throw new AgentPromptValidationError('작업 요청 내용을 입력하세요.');
@@ -86,6 +131,12 @@ type ProgressState = {
 };
 
 export class AgentService {
+  private readonly executionPolicy: AgentExecutionPolicy;
+  private readonly admissionController: AgentAdmissionController;
+  private readonly agentLabel: string;
+  private readonly defaultProvider: CliAgentProvider;
+  private readonly providerRunners: ReadonlyMap<CliAgentProvider, CodexRunner>;
+
   constructor(
     private readonly store: AgentJobStore,
     private readonly runner: CodexRunner,
@@ -94,12 +145,44 @@ export class AgentService {
     private readonly gitService: GitService,
     private readonly options: {
       canMutateScope?: (scope: AgentJobScope) => boolean;
+      canReadScope?: (scope: AgentJobScope) => boolean;
+      admissionController?: AgentAdmissionController;
+      executionPolicy?: AgentExecutionPolicy;
+      admissionJournalPath?: string;
+      agentLabel?: string;
+      defaultProvider?: CliAgentProvider;
+      providerRunners?: Partial<Record<CliAgentProvider, CodexRunner>>;
     } = {},
-  ) {}
+  ) {
+    this.agentLabel = options.agentLabel?.trim() || 'Codex';
+    this.defaultProvider = options.defaultProvider ?? 'codex';
+    const providerRunners = new Map<CliAgentProvider, CodexRunner>([
+      [this.defaultProvider, runner],
+    ]);
+    for (const provider of ['codex', 'copilot'] as const) {
+      const configuredRunner = options.providerRunners?.[provider];
+      if (configuredRunner) providerRunners.set(provider, configuredRunner);
+    }
+    this.providerRunners = providerRunners;
+    this.executionPolicy = options.executionPolicy ?? new AgentExecutionPolicy(workspace, options);
+    this.admissionController = options.admissionController ?? new AgentAdmissionController({
+      globalLimit: 4,
+      perTenantLimit: 2,
+      perRequesterLimit: 1,
+    }, { journalPath: options.admissionJournalPath });
+  }
 
   private readonly progressStates = new Map<string, ProgressState>();
   private readonly progressGenerations = new Map<string, number>();
   private readonly mutationChains = new Map<string, Promise<void>>();
+  private readonly executionWorkspaces = new Map<string, AgentExecutionWorkspace>();
+  private readonly admissionLeases = new Map<string, AgentAdmissionLease>();
+  private readonly executions = new Set<Promise<void>>();
+  private readonly executionByJob = new Map<string, Promise<void>>();
+  private readonly reconciliation = new Map<string, ReconciliationState>();
+  private pendingSubmissions = 0;
+  private readonly submissionDrainWaiters = new Set<() => void>();
+  private closing = false;
   // A workspace-write job's changed-path proof is a before/after observation
   // of the shared checkout. Serialize the whole observation and runner
   // lifetime so another job cannot contaminate that proof or the commit step.
@@ -107,11 +190,27 @@ export class AgentService {
 
   async initialize(): Promise<void> {
     await this.store.initialize();
+    const missingProvider = this.store.listLocalOnly(Number.MAX_SAFE_INTEGER).find((job) => !job.provider);
+    if (missingProvider) throw new AgentProviderIdentityError(missingProvider);
+    await this.admissionController.initialize();
     await this.store.recoverInterruptedJobs();
+    await this.admissionController.reconstruct(
+      this.store.listLocalOnly(Number.MAX_SAFE_INTEGER).flatMap((job) =>
+        typeof job.tenantId === 'string' && job.tenantId
+          ? [{
+              id: job.id,
+              status: job.status,
+              tenantId: job.tenantId,
+              requesterId: job.requesterId,
+            }]
+          : [],
+      ),
+    );
   }
 
   async submit(input: {
     prompt: string;
+    provider?: CliAgentProvider;
     mode: AgentJobMode;
     scope: AgentJobScope;
     parentJobId?: string;
@@ -120,14 +219,44 @@ export class AgentService {
     onProgress?: ProgressListener;
   }): Promise<AgentJob> {
     const prompt = normalizeAgentPrompt(input.prompt);
+    const provider = input.provider ?? this.defaultProvider;
+    this.runnerFor(provider);
     if (input.mode === 'workspace-write') {
       this.assertMutationAllowed(input.scope);
+    } else {
+      this.assertReadAllowed(input.scope);
     }
-    const job = await this.store.create({ ...input, prompt });
-    if (job.mode === 'read-only') {
-      void this.execute(job, input.notify !== false, input.onProgress);
+    const admission = await this.admissionController.tryAcquire(input.scope);
+    if (!admission.ok) throw new AgentCapacityError(admission);
+
+    this.pendingSubmissions += 1;
+    try {
+      let executionWorkspace: AgentExecutionWorkspace | undefined;
+      let job: AgentJob;
+      try {
+        executionWorkspace = await this.executionPolicy.prepareWorkspace(input.mode, input.scope, prompt);
+        job = await this.store.create({ ...input, prompt, provider });
+        await admission.lease.bindJob(job.id);
+        this.admissionLeases.set(job.id, admission.lease);
+        this.executionWorkspaces.set(job.id, executionWorkspace);
+      } catch (error) {
+        let disposed = true;
+        try {
+          await executionWorkspace?.dispose();
+        } catch {
+          disposed = false;
+        }
+        if (disposed) await admission.lease.release();
+        else await admission.lease.markUnresolved('SUBMIT_CLEANUP_FAILED');
+        throw error;
+      }
+      if (job.mode === 'read-only') {
+        this.launchExecution(job, input.notify !== false, input.onProgress);
+      }
+      return job;
+    } finally {
+      this.finishPendingSubmission();
     }
-    return job;
   }
 
   async continue(
@@ -146,6 +275,7 @@ export class AgentService {
       prompt: normalizedPrompt,
       mode: previous.mode,
       scope,
+      provider: this.providerForJob(previous),
       parentJobId: previous.id,
       threadId: previous.threadId,
       notify: options.notify,
@@ -155,17 +285,22 @@ export class AgentService {
 
   async runForCopilot(input: {
     prompt: string;
+    provider?: CliAgentProvider;
     scope: AgentJobScope;
     onProgress?: ProgressListener;
+    notify?: boolean;
+    onSubmitted?: (job: AgentJob) => Promise<void> | void;
     timeoutMs?: number;
   }): Promise<AgentJob> {
     const job = await this.submit({
       prompt: input.prompt,
+      provider: input.provider,
       mode: 'read-only',
       scope: input.scope,
-      notify: true,
+      notify: input.notify,
       onProgress: input.onProgress,
     });
+    await input.onSubmitted?.(job);
 
     return this.waitForTerminal(job.id, input.scope, input.timeoutMs);
   }
@@ -213,17 +348,51 @@ export class AgentService {
       return refreshed;
     });
 
-    if (queued) void this.execute(queued, true);
+    if (queued) this.launchExecution(queued, true);
     return queued;
+  }
+
+  async close(): Promise<void> {
+    this.closing = true;
+    await this.admissionController.close();
+    await this.waitForPendingSubmissions();
+    const closed = new Set<CodexRunner>();
+    for (const runner of this.providerRunners.values()) {
+      if (closed.has(runner)) continue;
+      closed.add(runner);
+      runner.close?.();
+    }
+    await Promise.allSettled([...this.executions]);
+    for (const jobId of [...this.executionWorkspaces.keys()]) {
+      try {
+        await this.releaseExecutionWorkspace(jobId);
+        await this.releaseAdmission(jobId);
+      } catch {
+        await this.admissionController.markUnresolved(jobId, 'SHUTDOWN_CLEANUP_FAILED').catch(() => undefined);
+      }
+    }
+  }
+
+  private finishPendingSubmission(): void {
+    this.pendingSubmissions -= 1;
+    if (this.pendingSubmissions !== 0) return;
+    for (const resolve of this.submissionDrainWaiters) resolve();
+    this.submissionDrainWaiters.clear();
+  }
+
+  private waitForPendingSubmissions(): Promise<void> {
+    if (this.pendingSubmissions === 0) return Promise.resolve();
+    return new Promise((resolve) => this.submissionDrainWaiters.add(resolve));
   }
 
   async cancel(
     id: string,
     scope: AgentJobScope,
-    options: { notify?: boolean; strict?: boolean } = {},
+    options: { notify?: boolean; strict?: boolean; provider?: CliAgentProvider } = {},
   ): Promise<AgentJob | undefined> {
     const existing = this.store.get(id, scope);
     if (existing?.mode === 'workspace-write') this.assertMutationAllowed(scope);
+    let cancelledWasRunning = false;
     const cancelled = await this.withJobMutationLock(id, scope, async () => {
       const job = this.store.get(id, scope);
       if (!job) return undefined;
@@ -235,8 +404,10 @@ export class AgentService {
         return undefined;
       }
 
+      const provider = this.providerForJob(job, options.provider);
       this.invalidateProgressState(job.id);
-      if (job.status === 'running') this.runner.cancel(id);
+      cancelledWasRunning = job.status === 'running';
+      if (cancelledWasRunning) this.runnerFor(provider).cancel(id);
       const refreshed = await this.store.update(id, scope, {
         status: 'cancelled',
         finishedAt: new Date().toISOString(),
@@ -248,6 +419,9 @@ export class AgentService {
       }
       return refreshed;
     });
+
+    if (cancelledWasRunning) await this.executionByJob.get(id);
+    if (cancelled) await this.finalizeAdmission(cancelled, scope);
 
     if (options.notify && cancelled) {
       await this.notifyIfEnabled(cancelled, {
@@ -262,13 +436,36 @@ export class AgentService {
   async cancelStrict(
     id: string,
     scope: AgentJobScope,
-    options: { notify?: boolean } = {},
+    options: { notify?: boolean; provider?: CliAgentProvider } = {},
   ): Promise<AgentJob | undefined> {
     // `cancel()` is also used by internal timeout/teardown cleanup and keeps
     // its idempotent behavior. The user-facing strict routes and card action
     // must always enforce the same operator boundary as approve/commit.
     this.assertMutationAllowed(scope);
     return this.cancel(id, scope, { ...options, strict: true });
+  }
+
+  async reconcileTerminal(id: string, scope: AgentJobScope): Promise<AgentJob | undefined> {
+    this.assertMutationAllowed(scope);
+    const reconciled = await this.withJobMutationLock(id, scope, async () => {
+      const latest = this.store.get(id, scope);
+      if (!latest) return undefined;
+      if (!this.reconciliation.has(id) && latest.status !== 'running') return latest;
+      return this.store.update(id, scope, {
+        status: 'failed',
+        error: 'AGENT_OPERATOR_RECONCILED: 운영자가 미해결 terminal 상태를 실패로 확정했습니다.',
+        finishedAt: new Date().toISOString(),
+      });
+    });
+    if (reconciled) {
+      this.reconciliation.delete(id);
+      try {
+        await this.finalizeAdmission(reconciled, scope);
+      } catch {
+        // The visible durable error and held capacity are the recovery state.
+      }
+    }
+    return reconciled;
   }
 
   async retry(
@@ -287,6 +484,7 @@ export class AgentService {
       prompt: previous.prompt,
       mode: previous.mode,
       scope,
+      provider: this.providerForJob(previous),
       parentJobId: previous.id,
       threadId: previous.threadId,
       notify: options.notify,
@@ -371,9 +569,35 @@ export class AgentService {
   }
 
   private assertMutationAllowed(scope: AgentJobScope): void {
-    if (this.options.canMutateScope?.(scope) !== true) {
+    if (!this.executionPolicy.authorize(scope, 'workspace-write').allowed) {
       throw new AgentMutationAuthorizationError(
         '운영자 권한이 필요합니다. 관리자에게 TEAMS_OPERATOR_REQUESTER_ALLOWLIST 설정을 요청하세요.',
+      );
+    }
+  }
+
+  private providerForJob(job: AgentJob, requested?: CliAgentProvider): CliAgentProvider {
+    if (!job.provider) throw new AgentProviderIdentityError(job);
+    if (requested && job.provider && requested !== job.provider) {
+      throw new AgentProviderConflictError(job, requested);
+    }
+    return job.provider;
+  }
+
+  private runnerFor(provider: CliAgentProvider): CodexRunner {
+    const runner = this.providerRunners.get(provider);
+    if (!runner) throw new AgentProviderUnavailableError(provider);
+    return runner;
+  }
+
+  private assertReadAllowed(scope: AgentJobScope): void {
+    const decision = this.executionPolicy.authorize(scope, 'read-only');
+    if (!decision.allowed && decision.reason === 'isolation-unavailable') {
+      throw new AgentExecutionUnavailableError();
+    }
+    if (!decision.allowed) {
+      throw new AgentMutationAuthorizationError(
+        `${this.agentLabel} 읽기 작업은 허용된 운영자만 실행할 수 있습니다.`,
       );
     }
   }
@@ -384,6 +608,18 @@ export class AgentService {
       return;
     }
     await this.executeUnlocked(job, shouldNotify, onProgress);
+  }
+
+  private launchExecution(job: AgentJob, shouldNotify: boolean, onProgress?: ProgressListener): void {
+    const execution = this.execute(job, shouldNotify, onProgress).catch((error) => {
+      console.error(`Agent execution cleanup failed for ${job.id}`, error);
+    });
+    this.executions.add(execution);
+    this.executionByJob.set(job.id, execution);
+    void execution.then(() => {
+      this.executions.delete(execution);
+      if (this.executionByJob.get(job.id) === execution) this.executionByJob.delete(job.id);
+    });
   }
 
   private async executeUnlocked(job: AgentJob, shouldNotify: boolean, onProgress?: ProgressListener): Promise<void> {
@@ -407,20 +643,36 @@ export class AgentService {
         if (!started) return undefined;
 
         progressState = this.createProgressState(job.id, shouldNotify, onProgress);
-        await this.store.appendProgress(job.id, scope, 'Codex 작업을 시작했습니다.');
+        await this.store.appendProgress(job.id, scope, `${this.agentLabel} 작업을 시작했습니다.`);
         if (started.mode === 'workspace-write') {
           workspaceSnapshot = await this.gitService.captureWorkspaceSnapshot();
+        }
+        const executionWorkspace = this.executionWorkspaces.get(started.id);
+        if (started.mode === 'read-only' && (!executionWorkspace || !executionWorkspace.projected)) {
+          throw new Error(`${this.agentLabel} 읽기 전용 작업공간 투영을 확인할 수 없습니다.`);
+        }
+        if (this.closing) {
+          throw new Error(`${this.agentLabel} 서버가 종료 중이어서 작업 실행을 시작하지 않았습니다.`);
         }
 
         // Start the runner while the mutation lock is held. CodexRunner registers
         // the child process synchronously, so a concurrent cancel can reliably
         // signal it after this lock is released.
-        runPromise = this.runner.run({
+        const runner = this.runnerFor(this.providerForJob(started));
+        runPromise = runner.run({
           jobId: started.id,
           prompt: started.prompt,
-          workspace: this.workspace,
+          workspace: executionWorkspace?.workspace ?? this.workspace,
           mode: started.mode,
           threadId: started.threadId,
+          isolationLease: executionWorkspace?.isolationLease,
+          subject: {
+            tenantId: scope.tenantId,
+            requesterId: scope.requesterId,
+            conversationId: scope.conversationId,
+            jobId: started.id,
+          },
+          environmentOverrides: executionWorkspace?.environmentOverrides,
           onEvent: (event) => this.handleEvent(started, progressState!.generation, event),
         });
         // A cancellation can reject the runner before this execute loop reaches
@@ -449,32 +701,44 @@ export class AgentService {
 
       const diagnostic = diagnoseRemoteAgentResult(result.finalMessage);
       const diagnosticMessage = formatRemoteTroubleshooting(diagnostic);
-      const terminal = await this.withJobMutationLock(job.id, scope, async () => {
-        const latest = this.store.get(job.id, scope);
-        if (!latest || latest.status !== 'running') {
+      let terminal: AgentJob | undefined;
+      try {
+        terminal = await this.withJobMutationLock(job.id, scope, async () => {
+          const latest = this.store.get(job.id, scope);
+          if (!latest || latest.status !== 'running') {
+            this.invalidateProgressState(job.id, progressState?.generation);
+            return undefined;
+          }
           this.invalidateProgressState(job.id, progressState?.generation);
-          return undefined;
-        }
-        this.invalidateProgressState(job.id, progressState?.generation);
-        return diagnosticMessage
-          ? this.store.update(job.id, scope, {
-            status: 'failed',
-            error: diagnosticMessage,
-            ...(changedPaths ? { changedPaths } : {}),
-            finishedAt: new Date().toISOString(),
-          })
-          : this.store.update(job.id, scope, {
-            status: 'completed',
-            threadId: result.threadId,
-            result: result.finalMessage,
-            ...(changedPaths ? { changedPaths } : {}),
-            finishedAt: new Date().toISOString(),
-          });
-      });
+          return diagnosticMessage
+            ? this.store.update(job.id, scope, {
+              status: 'failed',
+              error: diagnosticMessage,
+              ...(changedPaths ? { changedPaths } : {}),
+              finishedAt: new Date().toISOString(),
+            })
+            : this.store.update(job.id, scope, {
+              status: 'completed',
+              threadId: result.threadId,
+              result: result.finalMessage,
+              ...(changedPaths ? { changedPaths } : {}),
+              finishedAt: new Date().toISOString(),
+            });
+        });
+      } catch (error) {
+        await this.markReconciliationRequired(job, scope, error);
+        return;
+      }
       if (!terminal) return;
+      try {
+        await this.finalizeAdmission(terminal, scope);
+      } catch (cleanupError) {
+        await this.markReconciliationRequired(job, scope, cleanupError);
+        return;
+      }
 
       if (diagnosticMessage) {
-        await this.store.appendProgress(job.id, scope, `Codex 작업이 차단되었습니다: ${diagnostic.code}`);
+        await this.store.appendProgress(job.id, scope, `${this.agentLabel} 작업이 차단되었습니다: ${diagnostic.code}`);
         await this.notifyIfEnabled(terminal, {
           kind: 'error',
           phase: 'blocked',
@@ -483,14 +747,18 @@ export class AgentService {
         return;
       }
 
-      await this.store.appendProgress(job.id, scope, `Codex 작업 완료 (${result.eventCount}개 이벤트).`);
+      await this.store.appendProgress(job.id, scope, `${this.agentLabel} 작업 완료 (${result.eventCount}개 이벤트).`);
       await this.notifyIfEnabled(terminal, {
         kind: 'result',
         phase: 'completed',
         message: this.formatCompletion(job.id, result.finalMessage),
       });
     } catch (error: any) {
-      const message = error?.message || '알 수 없는 Codex 실행 오류';
+      const rawMessage = error?.message || `알 수 없는 ${this.agentLabel} 실행 오류`;
+      const message = redactCliDiagnostics(rawMessage, {
+        paths: [this.workspace, process.env.HOME, process.env.USERPROFILE],
+        maxChars: 4_000,
+      }) || `알 수 없는 ${this.agentLabel} 실행 오류`;
       let changedPaths: string[] | undefined;
       if (workspaceSnapshot) {
         try {
@@ -499,23 +767,35 @@ export class AgentService {
           // Preserve the primary runner or Git snapshot error.
         }
       }
-      const failed = await this.withJobMutationLock(job.id, scope, async () => {
-        const latest = this.store.get(job.id, scope);
-        if (!latest || latest.status !== 'running') {
+      let failed: AgentJob | undefined;
+      try {
+        failed = await this.withJobMutationLock(job.id, scope, async () => {
+          const latest = this.store.get(job.id, scope);
+          if (!latest || latest.status !== 'running') {
+            this.invalidateProgressState(job.id, progressState?.generation);
+            return undefined;
+          }
           this.invalidateProgressState(job.id, progressState?.generation);
-          return undefined;
-        }
-        this.invalidateProgressState(job.id, progressState?.generation);
-        return this.store.update(job.id, scope, {
-          status: 'failed',
-          error: message,
-          ...(changedPaths ? { changedPaths } : {}),
-          finishedAt: new Date().toISOString(),
+          return this.store.update(job.id, scope, {
+            status: 'failed',
+            error: message,
+            ...(changedPaths ? { changedPaths } : {}),
+            finishedAt: new Date().toISOString(),
+          });
         });
-      });
+      } catch (persistenceError) {
+        await this.markReconciliationRequired(job, scope, persistenceError);
+        return;
+      }
       if (!failed) return;
+      try {
+        await this.finalizeAdmission(failed, scope);
+      } catch (cleanupError) {
+        await this.markReconciliationRequired(job, scope, cleanupError);
+        return;
+      }
 
-      await this.store.appendProgress(job.id, scope, 'Codex 작업이 실패했습니다.');
+      await this.store.appendProgress(job.id, scope, `${this.agentLabel} 작업이 실패했습니다.`);
       await this.notifyIfEnabled(failed, {
         kind: 'error',
         phase: 'failed',
@@ -523,6 +803,73 @@ export class AgentService {
       });
     } finally {
       this.clearProgressState(job.id, progressState?.generation);
+    }
+  }
+
+  private async releaseExecutionWorkspace(id: string): Promise<void> {
+    const executionWorkspace = this.executionWorkspaces.get(id);
+    if (!executionWorkspace) return;
+    await executionWorkspace.dispose();
+    if (this.executionWorkspaces.get(id) === executionWorkspace) this.executionWorkspaces.delete(id);
+  }
+
+  private async releaseAdmission(id: string): Promise<void> {
+    const lease = this.admissionLeases.get(id);
+    if (lease) {
+      await lease.release();
+      if (this.admissionLeases.get(id) === lease) this.admissionLeases.delete(id);
+      return;
+    }
+    await this.admissionController.releaseJob(id);
+  }
+
+  private async finalizeAdmission(job: AgentJob, scope: AgentJobScope): Promise<void> {
+    try {
+      const lease = this.admissionLeases.get(job.id);
+      if (lease) await lease.markTerminalPending();
+      else await this.admissionController.markTerminalPending(job.id);
+      await this.releaseExecutionWorkspace(job.id);
+      await this.releaseAdmission(job.id);
+    } catch (error) {
+      const failureCode = error instanceof Error && error.name ? error.name : 'CLEANUP_FAILED';
+      const lease = this.admissionLeases.get(job.id);
+      if (lease) await lease.markUnresolved(failureCode).catch(() => undefined);
+      else await this.admissionController.markUnresolved(job.id, failureCode).catch(() => undefined);
+      await this.store.update(job.id, scope, {
+        error: 'AGENT_RECONCILIATION_REQUIRED: 작업 종료 후 정리와 admission release가 완료되지 않았습니다. 운영자 복구가 필요합니다.',
+      }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async markReconciliationRequired(job: AgentJob, scope: AgentJobScope, failure: unknown): Promise<void> {
+    const state: ReconciliationState = {
+      jobId: job.id,
+      attempts: 0,
+      durable: false,
+      lastFailureCode: failure instanceof Error && failure.name ? failure.name : 'PERSISTENCE_FAILURE',
+    };
+    this.reconciliation.set(job.id, state);
+    const lease = this.admissionLeases.get(job.id);
+    if (lease) await lease.markUnresolved(state.lastFailureCode).catch(() => undefined);
+    else await this.admissionController.markUnresolved(job.id, state.lastFailureCode).catch(() => undefined);
+    const visibleError = 'AGENT_RECONCILIATION_REQUIRED: terminal 상태 저장에 실패했습니다. 운영자 reconcile이 필요합니다.';
+    for (let attempt = 0; attempt < 3 && !state.durable; attempt += 1) {
+      state.attempts += 1;
+      try {
+        const persisted = await this.store.update(job.id, scope, { error: visibleError });
+        state.durable = Boolean(persisted);
+      } catch {
+        // Bounded retry only. The lease remains held for operator recovery.
+      }
+    }
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await this.store.appendProgress(job.id, scope, 'AGENT_RECONCILIATION_REQUIRED: 운영자 복구가 필요합니다.');
+        break;
+      } catch {
+        // Keep the durable error as the primary visible reconciliation marker.
+      }
     }
   }
 
@@ -542,13 +889,13 @@ export class AgentService {
     }
 
     if (event.type === 'turn.started') {
-      await this.publishProgress(job, state, 'analysis', 'analysis', 'Codex가 작업을 분석하고 있습니다.', 'Codex 분석을 시작했습니다.');
+      await this.publishProgress(job, state, 'analysis', 'analysis', `${this.agentLabel}가 작업을 분석하고 있습니다.`, `${this.agentLabel} 분석을 시작했습니다.`);
       return;
     }
 
     if (event.type === 'item.started' && event.item?.type === 'command_execution') {
       await this.flushPendingAgentMessage(job, state);
-      await this.publishProgress(job, state, 'tools', 'tools', 'Codex가 필요한 도구를 실행하고 있습니다.', 'Codex가 필요한 도구를 실행하고 있습니다.');
+      await this.publishProgress(job, state, 'tools', 'tools', `${this.agentLabel}가 필요한 도구를 실행하고 있습니다.`, `${this.agentLabel}가 필요한 도구를 실행하고 있습니다.`);
       return;
     }
 
@@ -578,14 +925,14 @@ export class AgentService {
     const scope = scopeForJob(job);
     if (!scope) return;
     if (!this.isCurrentRunningProgress(job, state)) return;
-    await this.store.appendProgress(job.id, scope, `Codex 업데이트: ${compact}`);
+    await this.store.appendProgress(job.id, scope, `${this.agentLabel} 업데이트: ${compact}`);
     if (!this.isCurrentRunningProgress(job, state)) return;
-    await state.onProgress?.(`Codex 업데이트: ${compact}`);
+    await state.onProgress?.(`${this.agentLabel} 업데이트: ${compact}`);
     if (!this.isCurrentRunningProgress(job, state)) return;
     await this.notifyIfEnabled(job, {
       kind: 'progress',
       phase: 'agent-update',
-      message: `작업 ${job.id}: Codex 업데이트\n\n${compact}`,
+      message: `작업 ${job.id}: ${this.agentLabel} 업데이트\n\n${compact}`,
     }, state);
   }
 

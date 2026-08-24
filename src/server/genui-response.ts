@@ -24,7 +24,14 @@ export type GenUiJobAction = 'approve' | 'cancel';
 
 export type GenUiResponseFactoryOptions = {
   openTabUrl?: string;
+  agentLabel?: string;
 };
+
+export type GenUiA2AProviderFact = Readonly<{
+  provider: string;
+  agentId: string;
+  providerId: string;
+}>;
 
 export type GenUiStatusFacts = {
   teamsSdk: boolean;
@@ -32,8 +39,10 @@ export type GenUiStatusFacts = {
   authMode: string;
   storage: string;
   deterministic: boolean;
+  agentProvider?: 'codex' | 'copilot';
   codex: CliCapability;
   ghcp: CliCapability;
+  a2aProviders?: readonly GenUiA2AProviderFact[];
 };
 
 const JOB_STATUSES = ['queued', 'awaiting_approval', 'running', 'completed', 'failed', 'cancelled'] as const;
@@ -120,7 +129,7 @@ function safeJobError(job: AgentJob): string {
   return displayText(fieldOf(job, 'error'), 1_900);
 }
 
-function jobFallback(job: AgentJob): string {
+function jobFallback(job: AgentJob, agentLabel = 'Codex'): string {
   const lines = [
     `작업 ID: ${safeJobId(job)}`,
     `상태: ${safeJobStatus(job)}`,
@@ -133,7 +142,7 @@ function jobFallback(job: AgentJob): string {
   const progress = safeJobProgress(job);
   const error = safeJobError(job);
   const result = safeJobResult(job);
-  if (threadId) lines.push(`Codex thread: ${threadId}`);
+  if (threadId) lines.push(`${agentLabel} thread: ${threadId}`);
   if (commitHash) lines.push(`Git commit: ${commitHash}`);
   if (commitMessage && !commitHash) lines.push(`Git: ${commitMessage}`);
   if (progress.length > 0) lines.push(`최근 진행: ${progress.at(-1)}`);
@@ -204,19 +213,44 @@ function stateForJob(job: AgentJob): GenUiState {
 }
 
 function capabilityDescription(capability: CliCapability): string {
-  if (capability.state === 'available') return '실행 파일과 로그인 상태가 확인되었습니다.';
+  const dimensions = `실행 파일=${capability.executable} · bounded probe=${capability.probe} · 인증=${capability.authentication} · policy/license/entitlement=${capability.entitlement}`;
+  if (capability.state === 'available') return `실행 파일과 bounded capability probe가 확인되었습니다. ${dimensions}`;
   if (capability.state === 'unavailable' && capability.executable === 'absent') {
-    return '실행 파일을 찾지 못했습니다. 실행하지 않습니다.';
+    return `실행 파일을 찾지 못했습니다. 실행하지 않습니다. ${dimensions}`;
   }
-  if (capability.state === 'unavailable' && capability.login === 'not-authenticated') {
-    return '실행 파일은 있지만 로그인이 확인되지 않았습니다. 실행하지 않습니다.';
+  if (capability.state === 'unavailable' && capability.authentication === 'not-authenticated') {
+    return `실행 파일은 있지만 인증이 확인되지 않았습니다. 실행하지 않습니다. ${dimensions}`;
   }
-  if (capability.state === 'unavailable') return '현재 사용할 수 없습니다. 실행하지 않습니다.';
-  return '실행 파일 또는 로그인 상태를 확인하지 못했습니다. 실행하지 않습니다.';
+  if (capability.state === 'unavailable') return `현재 사용할 수 없습니다. 실행하지 않습니다. ${dimensions}`;
+  return `실행 파일 또는 bounded capability probe를 확인하지 못했습니다. 실행하지 않습니다. ${dimensions}`;
+}
+
+function capabilityFacts(label: string, capability: CliCapability): Array<{ label: string; value: string; description?: string }> {
+  return [
+    { label: `${label} CLI`, value: capability.state, description: capabilityDescription(capability) },
+    { label: `${label} executable`, value: capability.executable },
+    { label: `${label} bounded capability probe`, value: capability.probe },
+    { label: `${label} authentication`, value: capability.authentication },
+    { label: `${label} policy/license/entitlement`, value: capability.entitlement },
+  ];
+}
+
+function a2aProviderFacts(providers: readonly GenUiA2AProviderFact[] | undefined): Array<{ label: string; value: string }> {
+  const seen = new Set<string>();
+  return (providers ?? []).slice(0, 8).flatMap((provider) => {
+    const providerName = displayText(provider.provider, 64, 'unknown');
+    const agentId = displayText(provider.agentId, 120, 'unknown-agent');
+    const providerId = displayText(provider.providerId, 120, 'unknown-provider');
+    const key = `${providerName}\u0000${agentId}\u0000${providerId}`;
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [{ label: `A2A worker (${providerName})`, value: `${agentId} · ${providerId}` }];
+  });
 }
 
 export class GenUiResponseFactory {
   private readonly openTabUrl?: string;
+  private readonly agentLabel: string;
 
   constructor(
     private readonly actionStore: GenUiActionStore,
@@ -224,6 +258,7 @@ export class GenUiResponseFactory {
   ) {
     const candidate = options.openTabUrl?.trim();
     this.openTabUrl = candidate && isSafeGenUiUrl(candidate) ? candidate : undefined;
+    this.agentLabel = options.agentLabel?.trim() || 'Codex';
   }
 
   private tabActions(): GenUiAction[] {
@@ -453,8 +488,10 @@ export class GenUiResponseFactory {
       { label: '인증 모드', value: displayText(input.authMode, 120, 'unknown') },
       { label: '저장소', value: displayText(input.storage, 120, 'unknown') },
       { label: '응답 모드', value: input.deterministic ? 'deterministic' : 'unknown' },
-      { label: 'Codex CLI', value: codex.state, description: capabilityDescription(codex) },
-      { label: 'GHCP CLI', value: ghcp.state, description: capabilityDescription(ghcp) },
+      { label: '활성 agent provider', value: input.agentProvider ?? 'codex' },
+      ...a2aProviderFacts(input.a2aProviders),
+      ...capabilityFacts('Codex', codex),
+      ...capabilityFacts('GHCP', ghcp),
     ];
     const text = facts.map((fact) => `${fact.label}: ${fact.value}`).join('\n');
     return this.create({
@@ -478,10 +515,10 @@ export class GenUiResponseFactory {
       kind: 'task-list',
       id: 'workspace-list',
       title: '업무 목록',
-      summary: `${openItems.length}개 업무 · ${recentJobs.length}개 최근 Codex 작업`,
+      summary: `${openItems.length}개 업무 · ${recentJobs.length}개 최근 ${this.agentLabel} 작업`,
       sections: [
         { type: 'list', title: '진행 중인 업무', items: openItems.map((item) => ({ id: safeItemId(item), label: displayText(item.title, 400, '(제목 없음)'), status: 'open' })) },
-        { type: 'list', title: '최근 Codex 작업', items: recentJobs.map((job) => ({ id: safeJobId(job), label: safeJobListLabel(job), status: safeJobStatus(job) })) },
+        { type: 'list', title: `최근 ${this.agentLabel} 작업`, items: recentJobs.map((job) => ({ id: safeJobId(job), label: safeJobListLabel(job), status: safeJobStatus(job) })) },
       ],
       fallbackText: `${itemText}\n\n${jobText}`,
       includeTabAction: true,
@@ -522,14 +559,14 @@ export class GenUiResponseFactory {
       kind: 'job-status',
       id: jobId,
       status: stateForJob(job),
-      title: 'Codex 작업 상태',
+      title: `${this.agentLabel} 작업 상태`,
       summary: text,
       prompt: safeJobPrompt(job),
       sections: [
         { type: 'status', status: jobStatus, description: [error, result, progress.at(-1)].filter(Boolean).join('\n').slice(0, 2_000) },
         { type: 'list', title: '최근 진행 기록', items: progress.map((message, index) => ({ id: `${jobId}-${index}`.slice(0, 120), label: message })) },
       ],
-      fallbackText: jobFallback(job),
+      fallbackText: jobFallback(job, this.agentLabel),
       actions,
       metadata: { source: 'teams-bot', deterministic: true },
     });
@@ -558,7 +595,7 @@ export class GenUiResponseFactory {
       { action: 'approve', label: '승인', entityId: jobId, correlationId, actionToken: approveToken, style: 'positive' },
       { action: 'cancel', label: '취소', entityId: jobId, correlationId, actionToken: cancelToken, style: 'destructive' },
     ];
-    const text = `쓰기 작업 ${jobId}이 승인 대기 중입니다. 승인하면 Codex가 작업을 실행합니다.`;
+    const text = `쓰기 작업 ${jobId}이 승인 대기 중입니다. 승인하면 ${this.agentLabel}가 작업을 실행합니다.`;
     return GenUiEnvelopeV1Schema.parse({
       ...this.create({
         kind: 'approval',
@@ -612,12 +649,12 @@ export class GenUiResponseFactory {
 
   continued(job: AgentJob): GenUiEnvelopeV1 {
     const jobId = safeJobId(job);
-    const text = `작업 ${jobId}이 이전 Codex thread에서 이어집니다.\nstatus ${jobId}`;
+    const text = `작업 ${jobId}이 이전 ${this.agentLabel} thread에서 이어집니다.\nstatus ${jobId}`;
     return this.create({
       kind: 'job-status',
       id: jobId,
       status: 'loading',
-      title: 'Codex 대화 이어서 실행',
+      title: `${this.agentLabel} 대화 이어서 실행`,
       summary: text,
       prompt: safeJobPrompt(job),
       sections: [{ type: 'status', title: '재개 결과', status: safeJobStatus(job), description: safeJobPrompt(job) }],
@@ -633,7 +670,7 @@ export class GenUiResponseFactory {
       kind: 'job-status',
       id: jobId,
       status: 'loading',
-      title: '자연어 Codex 작업 시작',
+      title: `자연어 ${this.agentLabel} 작업 시작`,
       summary: text,
       prompt: safeJobPrompt(job),
       sections: [{ type: 'status', title: '작업 요청', status: safeJobStatus(job), description: safeJobPrompt(job) }],
@@ -670,9 +707,9 @@ export class GenUiResponseFactory {
 
   started(job: AgentJob): GenUiEnvelopeV1 {
     const jobId = safeJobId(job);
-    const text = `${safeJobMode(job) === 'workspace-write' ? '쓰기' : '읽기 전용'} Codex 작업 ${jobId}을 시작했습니다. status ${jobId}로 진행 상태를 확인할 수 있습니다.`;
+    const text = `${safeJobMode(job) === 'workspace-write' ? '쓰기' : '읽기 전용'} ${this.agentLabel} 작업 ${jobId}을 시작했습니다. status ${jobId}로 진행 상태를 확인할 수 있습니다.`;
     return this.create({
-      kind: 'job-status', id: jobId, status: 'loading', title: 'Codex 작업 시작', summary: text,
+      kind: 'job-status', id: jobId, status: 'loading', title: `${this.agentLabel} 작업 시작`, summary: text,
       prompt: safeJobPrompt(job),
       sections: [{ type: 'status', status: safeJobStatus(job), description: safeJobPrompt(job) }], fallbackText: text,
       metadata: { source: 'teams-bot', deterministic: true },
@@ -700,12 +737,12 @@ export class GenUiResponseFactory {
         ? 'cancelled'
         : safeJobStatus(notification.job);
     const title = notification.kind === 'progress'
-      ? 'Codex 작업 진행'
+      ? `${this.agentLabel} 작업 진행`
       : notification.kind === 'cancelled'
-        ? 'Codex 작업 취소'
+        ? `${this.agentLabel} 작업 취소`
         : notification.kind === 'error'
-          ? notification.phase === 'blocked' ? 'Codex 작업 차단' : 'Codex 작업 오류'
-          : notification.phase === 'commit' ? 'Git 커밋 결과' : 'Codex 작업 완료';
+          ? notification.phase === 'blocked' ? `${this.agentLabel} 작업 차단` : `${this.agentLabel} 작업 오류`
+          : notification.phase === 'commit' ? 'Git 커밋 결과' : `${this.agentLabel} 작업 완료`;
     return this.create({
       kind,
       id: jobId,

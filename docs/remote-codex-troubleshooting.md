@@ -43,13 +43,11 @@ curl -fsS https://<현재-portUri>/tabs/home/
 기존 run을 버리거나 새 탭·새 인증 세션을 만들지 말고 상태부터 확인한다.
 
 ```bash
-npm run release:loop -- status
-npm run release:loop -- machine
-npm run release:loop -- package
-npm run release:loop -- public
+npm run release:update -- status
+npm run release:update -- run
 ```
 
-`machine`, `package`, `public`은 성공 결과만 `.release/current.json`에 반영한다. 실패하면 `lastFailure`와 다음 게이트가 남고, 공개 서버·Dev Tunnel은 종료하지 않는다. UI 확인 뒤에는 현재 run의 commit·version·package SHA를 포함한 evidence JSON을 `npm run release:loop -- evidence --file ...`로 등록한다. `complete`가 `BLOCKED`이면 메시지를 보내지 말고 출력된 게이트만 해결한다.
+`machine`, `package`, `public`은 성공 결과만 `.release/update-current.json`에 반영한다. 실패하면 `lastFailure`와 다음 게이트가 남고, 공개 서버·Dev Tunnel은 종료하지 않는다. UI 확인 뒤에는 현재 run의 commit·version·package SHA를 포함한 evidence JSON을 `npm run release:update -- browser --surface <surface> --evidence ...`로 등록한다. `complete`가 `BLOCKED`이면 메시지를 보내지 말고 출력된 게이트만 해결한다. `npm run release:loop` 직접 실행은 두 번째 상태 파일을 만드는 경로이므로 `ERELEASEENTRYPOINT`로 차단된다.
 
 상태 파일에는 증거 요약과 파일 경로만 남으며 bearer token, API key, 비밀번호, Teams 원문 메시지는 넣지 않는다. 설치본이 이전 버전이면 새 모바일 스크린샷이 있어도 `installed` 증거로 등록하지 않는다.
 

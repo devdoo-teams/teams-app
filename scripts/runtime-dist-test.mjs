@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import os from 'node:os';
 import path from 'node:path';
 
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
@@ -11,7 +10,7 @@ assert.equal(
 );
 assert.equal(
   resolveRuntimeDistRoot(root, {}, () => ({ isDirectory: () => true, blocks: 0 })),
-  path.join(os.tmpdir(), 'teams-sdk-mvp-runtime', 'dist'),
+  path.join(root, 'dist'),
 );
 assert.equal(
   resolveRuntimeDistRoot(root, {}, () => ({ isDirectory: () => true, blocks: 16 })),

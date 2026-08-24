@@ -122,6 +122,7 @@ try {
   await observeValidJson(jobFile, () => Promise.all(
     Array.from({ length: 80 }, (_, index) => jobs.create({
       prompt: `atomic job ${index}`,
+      provider: 'codex',
       mode: 'read-only',
       scope,
     })),
@@ -142,13 +143,13 @@ try {
   await fs.symlink(queueTarget, queueFile, 'file');
   const queueTargetMode = (await fs.stat(queueTarget)).mode;
   await assert.rejects(
-    () => queueStore.create({ prompt: 'failing queued write', mode: 'read-only', scope }),
+    () => queueStore.create({ prompt: 'failing queued write', provider: 'codex', mode: 'read-only', scope }),
     /symbolic link/,
   );
   assert.equal(await fs.readFile(queueTarget, 'utf8'), 'queue target must remain unchanged\n');
   assert.equal((await fs.stat(queueTarget)).mode, queueTargetMode, 'failed queued write does not chmod its target');
   await fs.rm(queueFile);
-  await queueStore.create({ prompt: 'recovered queued write', mode: 'read-only', scope });
+  await queueStore.create({ prompt: 'recovered queued write', provider: 'codex', mode: 'read-only', scope });
   const restartedQueueStore = new AgentJobStore(queueFile);
   await restartedQueueStore.initialize();
   assert.equal(

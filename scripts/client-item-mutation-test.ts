@@ -34,8 +34,24 @@ registerHooks({
   },
 });
 
-const { createDeleteConfirmationController, createItemMutationController } = await import('../src/client/App.js');
-const { applyStableMutationKey, getWorkItemAssigneeButtonState } = await import('../src/client/WorkItemPanel.js');
+const workItemModule = await import('../src/client/WorkItemPanel.js');
+const { ApiAuthError } = await import('../src/client/auth.js');
+const { applyStableMutationKey, getWorkItemAssigneeButtonState } = workItemModule;
+const createWorkItemMutationOperation = (workItemModule as typeof workItemModule & {
+  createWorkItemMutationOperation?: (options: {
+    path: string;
+    init: RequestInit;
+    busyKey: string;
+    pending: Map<string, { fingerprint: string; key: string }>;
+    request: (path: string, init: RequestInit) => Promise<Response>;
+    begin: () => void;
+    setBusy: (busy: boolean) => void;
+    onFailure: (caught: unknown, retry: () => Promise<void>) => void;
+    onSuccess: () => void | Promise<void>;
+    reload: () => Promise<void>;
+    fallback: string;
+  }) => () => Promise<boolean>;
+}).createWorkItemMutationOperation;
 
 assert.deepEqual(
   getWorkItemAssigneeButtonState(false),
@@ -69,6 +85,150 @@ assert.deepEqual(
     'a changed payload starts a new logical mutation instead of replaying the old one',
   );
 }
+
+{
+  assert.equal(
+    typeof createWorkItemMutationOperation,
+    'function',
+    'WorkItemPanel exposes the mutation operation used by its UI handlers',
+  );
+  const pending = new Map<string, { fingerprint: string; key: string }>();
+  const mutationKeys: string[] = [];
+  const busyStates: boolean[] = [];
+  let requestAttempts = 0;
+  const retryController = workItemModule.createUserDrivenAuthRetryController();
+  let commentInput = '재시도할 댓글';
+  let reloads = 0;
+  let begins = 0;
+
+  const operation = createWorkItemMutationOperation?.({
+    path: '/api/work-items/item-1/comments',
+    init: { method: 'POST', body: JSON.stringify({ body: commentInput }) },
+    busyKey: 'comment:item-1',
+    pending,
+    request: async (_path, init) => {
+      requestAttempts += 1;
+      const body = JSON.parse(String(init.body)) as { mutationKey?: string };
+      mutationKeys.push(body.mutationKey ?? '');
+      if (requestAttempts === 1) throw new ApiAuthError('auth-expired');
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+    begin: () => {
+      begins += 1;
+    },
+    setBusy: (busy) => {
+      busyStates.push(busy);
+    },
+    onFailure: (caught, retry) => {
+      workItemModule.captureWorkItemRequestFailure(
+        retryController,
+        'comment:item-1',
+        caught,
+        '댓글을 추가하지 못했습니다.',
+        retry,
+      );
+    },
+    onSuccess: () => {
+      commentInput = '';
+    },
+    reload: async () => {
+      reloads += 1;
+    },
+    fallback: '댓글을 추가하지 못했습니다.',
+  });
+  assert.ok(operation);
+
+  assert.equal(await operation(), false, 'an auth failure preserves the whole comment operation for user retry');
+  assert.equal(commentInput, '재시도할 댓글', 'failed comment input remains visible');
+  assert.equal(retryController.hasPending('comment:item-1'), true);
+  assert.equal(await retryController.retry('comment:item-1'), true);
+
+  assert.equal(requestAttempts, 2);
+  assert.equal(mutationKeys[0], mutationKeys[1], 'the user retry preserves the mutation idempotency key');
+  assert.equal(commentInput, '', 'successful replay performs the comment UI cleanup');
+  assert.equal(reloads, 1, 'successful replay refreshes the rendered work-item list');
+  assert.equal(begins, 2, 'each attempt enters the real panel request lifecycle');
+  assert.deepEqual(busyStates, [true, false, true, false]);
+  assert.equal(pending.has('comment:item-1'), false, 'the mutation key is released only after full success');
+}
+
+{
+  let renderedMessage = '';
+  const operation = createWorkItemMutationOperation?.({
+    path: '/api/work-items/item-1/comments',
+    init: { method: 'POST', body: JSON.stringify({ body: '민감 오류 검증' }) },
+    busyKey: 'comment:item-1',
+    pending: new Map(),
+    request: async () => new Response(
+      JSON.stringify({ error: 'CANARY server bearer and stack detail' }),
+      { status: 500, headers: { 'content-type': 'application/json' } },
+    ),
+    begin: () => undefined,
+    setBusy: () => undefined,
+    onFailure: (caught) => {
+      renderedMessage = workItemModule.classifyWorkItemRequestError(
+        caught,
+        '댓글을 추가하지 못했습니다.',
+      ).message;
+    },
+    onSuccess: () => undefined,
+    reload: async () => undefined,
+    fallback: '댓글을 추가하지 못했습니다.',
+  });
+  assert.equal(await operation?.(), false);
+  assert.equal(renderedMessage, '댓글을 추가하지 못했습니다.');
+  assert.doesNotMatch(renderedMessage, /CANARY|bearer|stack/i);
+}
+
+{
+  const pending = new Map<string, { fingerprint: string; key: string }>();
+  const mutationKeys: string[] = [];
+  let requestAttempts = 0;
+  let successCallbacks = 0;
+  let reloadAttempts = 0;
+  let retry: (() => Promise<void>) | undefined;
+
+  const operation = createWorkItemMutationOperation?.({
+    path: '/api/work-items/item-2/comments',
+    init: { method: 'POST', body: JSON.stringify({ body: '단계 재개' }) },
+    busyKey: 'comment:item-2',
+    pending,
+    request: async (_path, init) => {
+      requestAttempts += 1;
+      mutationKeys.push((JSON.parse(String(init.body)) as { mutationKey: string }).mutationKey);
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+    begin: () => undefined,
+    setBusy: () => undefined,
+    onFailure: (_caught, resume) => {
+      retry = resume;
+    },
+    onSuccess: () => {
+      successCallbacks += 1;
+      throw new Error('synthetic callback failure after cleanup began');
+    },
+    reload: async () => {
+      reloadAttempts += 1;
+      if (reloadAttempts === 1) throw new Error('synthetic reload failure');
+    },
+    fallback: '댓글을 추가하지 못했습니다.',
+  });
+  assert.ok(operation);
+
+  assert.equal(await operation(), false, 'a callback failure pauses the operation after server success');
+  assert.ok(retry, 'the failed phase exposes one user-driven resume');
+  await retry!();
+  assert.ok(retry, 'a failed reload exposes a reload-only resume');
+  await retry!();
+
+  assert.equal(requestAttempts, 1, 'a confirmed server mutation is never replayed by later phase failures');
+  assert.equal(successCallbacks, 1, 'input cleanup and success callbacks execute at most once');
+  assert.equal(reloadAttempts, 2, 'only the failed reload phase is retried');
+  assert.equal(new Set(mutationKeys).size, 1, 'the logical mutation retains one idempotency key');
+  assert.equal(pending.has('comment:item-2'), false, 'the key is released only after reload succeeds');
+}
+
+const { createDeleteConfirmationController, createItemMutationController } = await import('../src/client/App.js');
 
 {
   const confirmation = createDeleteConfirmationController();

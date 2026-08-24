@@ -10,7 +10,10 @@ const authStartupTest = fs.readFileSync(new URL('./auth-startup-gate-test.mjs', 
 const operatorAllowlistTest = fs.readFileSync(new URL('./operator-allowlist-runtime-test.mjs', import.meta.url), 'utf8');
 const coreSourceCheck = fs.readFileSync(new URL('./core-source-check.mjs', import.meta.url), 'utf8');
 const coreSourceCheckModule = fs.readFileSync(new URL('./core-source-check-lib.mjs', import.meta.url), 'utf8');
+const coreTestRunner = fs.readFileSync(new URL('./core-test-runner.mjs', import.meta.url), 'utf8');
+const coreBundleBoundary = fs.readFileSync(new URL('./core-bundle-boundary-test.mjs', import.meta.url), 'utf8');
 const esbuildBounded = fs.readFileSync(new URL('./esbuild-bounded.mjs', import.meta.url), 'utf8');
+const PINNED_COMMIT = '0123456789abcdef0123456789abcdef01234567';
 
 assert.match(
   runner,
@@ -29,6 +32,11 @@ assert.match(
 );
 assert.match(
   runner,
+  /resolvePinnedCommitOid|TEAMS_SOURCE_COMMIT\s*=\s*pinnedSourceCommit/,
+  'the default API-free suite must pin one full source OID before running artifact checks',
+);
+assert.match(
+  runner,
   /statSync|blocks/,
   'the API-free runner must detect dataless FileProvider source before spawning child scripts',
 );
@@ -38,10 +46,17 @@ assert.doesNotMatch(
   'the API-free runner must not execute the optional CopilotKit Channels shadow test',
 );
 assert.match(
+  runner,
+  /'test:codex-ghcp-capability'/,
+  'the API-free suite must retain the bounded Codex/GHCP capability contract',
+);
+assert.match(
   clientBuild,
   /os\.tmpdir\(\)/,
   'FileProvider-safe client builds must materialize source in the local system temp directory',
 );
+assert.match(clientBuild, /TEAMS_SOURCE_COMMIT/, 'client builds must accept the release-pinned source OID');
+assert.doesNotMatch(clientBuild, /HEAD:/, 'client builds must not reread HEAD while materializing source');
 assert.match(
   clientBuild,
   /nodePaths:\s*\[runtimeNodeModules\]/,
@@ -52,6 +67,8 @@ assert.match(
   /materializeGitServerSource|os\.tmpdir\(\)/,
   'FileProvider-safe server builds must materialize committed source in the local system temp directory when the bundle is stale',
 );
+assert.match(serverBuild, /TEAMS_SOURCE_COMMIT/, 'server builds must accept the release-pinned source OID');
+assert.doesNotMatch(serverBuild, /(?:rev-parse[^\n]*HEAD|HEAD:)/, 'server builds must not reread HEAD after source pinning');
 assert.match(
   serverBuild,
   /nodePaths:\s*\[fileProviderRuntimeNodeModules \?\? path\.join\(root, 'node_modules'\)\]/,
@@ -137,6 +154,41 @@ assert.doesNotMatch(
   /transformWithBoundedRetry/,
   'core source checks must not use the old transformWithBoundedRetry implementation',
 );
+assert.match(
+  coreTestRunner,
+  /platform = process\.platform/,
+  'Core test process termination must expose a platform seam for Windows verification',
+);
+assert.match(
+  coreTestRunner,
+  /spawnProcess = spawn/,
+  'Core test process execution must expose a spawn seam for deterministic platform tests',
+);
+assert.match(
+  coreTestRunner,
+  /detached: platform !== 'win32'/,
+  'Core test processes must use Node-supported process-group behavior per platform',
+);
+assert.match(
+  coreTestRunner,
+  /if \(platform === 'win32'\) spawnOptions\.windowsHide = true/,
+  'Windows Core test processes must use the supported hidden-console option',
+);
+assert.match(
+  coreTestRunner,
+  /TEAMS_SOURCE_COMMIT:\s*sourceCommit/,
+  'the Core runner must thread one pinned source OID into every child test',
+);
+assert.match(
+  coreBundleBoundary,
+  /TEAMS_SOURCE_COMMIT/,
+  'the built-artifact boundary must consume the runner-pinned source OID',
+);
+assert.doesNotMatch(
+  coreBundleBoundary,
+  /rev-parse|HEAD\^?\{/,
+  'the built-artifact boundary must not reread a movable Git ref',
+);
 {
   const timeoutMatch = coreSourceCheckModule.match(/const CORE_COMPILE_TIMEOUT_MS = ([\d_]+);/);
   assert.ok(timeoutMatch, 'core source checks must declare a finite compile timeout');
@@ -145,8 +197,8 @@ assert.doesNotMatch(
 }
 assert.match(
   coreSourceCheckModule,
-  /git', \['show', `HEAD:\$\{relativePath\}`\]/,
-  'FileProvider fallback must read checked Core sources from git show HEAD:<path>',
+  /git', \['show', `\$\{commitOid\}:\$\{relativePath\}`\]/,
+  'Core source checks must read every checked source from one explicit immutable OID',
 );
 assert.match(
   esbuildBounded,
@@ -193,14 +245,20 @@ assert.match(
 
 function makeCoreSourceAdapters(compileSource) {
   return {
+    resolvePinnedCommitOid() {
+      return PINNED_COMMIT;
+    },
     statFile() {
       return { size: 12, blocks: 8 };
     },
     readWorkspaceFile() {
       return 'export const ok = true;';
     },
-    getTrackedWorktreeStatus() {
-      return '';
+    getTrackedWorktreeStatus(commitOid) {
+      return {
+        verificationMode: 'worktree-index-commit',
+        commitOid: commitOid ?? PINNED_COMMIT,
+      };
     },
     readCommittedSource() {
       return 'export const ok = true;';

@@ -10,6 +10,10 @@ function isTimedOutGitCommand(error) {
   return error?.code === 'ETIMEDOUT';
 }
 
+export function isFullCommitOid(value) {
+  return typeof value === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value);
+}
+
 function dirtyWorktreeError() {
   const error = new Error(
     'FileProvider fallback requires a clean tracked Git worktree. Commit tracked source changes before building or packaging.',
@@ -24,7 +28,45 @@ function runGit(root, args, runCommandSync, timeoutMs, env) {
     encoding: 'utf8',
     env: { ...env, GIT_OPTIONAL_LOCKS: '0' },
     timeout: timeoutMs,
+    killSignal: 'SIGKILL',
   }).trim();
+}
+
+export function resolvePinnedCommitOid(
+  root,
+  {
+    runCommandSync = execFileSync,
+    timeoutMs = DEFAULT_GIT_TIMEOUT_MS,
+    env = process.env,
+  } = {},
+) {
+  let commitOid;
+  try {
+    commitOid = runGit(
+      root,
+      ['rev-parse', '--verify', 'HEAD^{commit}'],
+      runCommandSync,
+      timeoutMs,
+      env,
+    );
+  } catch (error) {
+    throw verificationError('Failed to resolve pinned Git commit before FileProvider fallback', error);
+  }
+
+  if (!isFullCommitOid(commitOid)) {
+    const error = new Error(`Git rev-parse did not return a full commit OID: ${commitOid || '<empty>'}`);
+    error.code = 'EGITPROVENANCE';
+    throw error;
+  }
+
+  return commitOid;
+}
+
+function verificationError(message, error) {
+  const wrapped = new Error(`${message}: ${commandErrorMessage(error)}`, { cause: error });
+  wrapped.code = isTimedOutGitCommand(error) ? 'ETIMEDOUT' : (error?.code ?? 'EGITVERIFY');
+  if (error?.signal) wrapped.signal = error.signal;
+  return wrapped;
 }
 
 export function assertCleanTrackedWorktreeForFileProvider(
@@ -33,46 +75,32 @@ export function assertCleanTrackedWorktreeForFileProvider(
     runCommandSync = execFileSync,
     timeoutMs = DEFAULT_GIT_TIMEOUT_MS,
     env = process.env,
+    commitOid: requestedCommitOid,
   } = {},
 ) {
+  const commitOid = requestedCommitOid;
+  if (!isFullCommitOid(commitOid)) {
+    const error = new Error(`Git clean verification requires a full pinned commit OID: ${commitOid || '<empty>'}`);
+    error.code = 'EGITPROVENANCE';
+    throw error;
+  }
+
   try {
-    const porcelain = runGit(
+    runGit(
       root,
-      ['status', '--porcelain', '--untracked-files=no'],
+      ['diff-index', '--cached', '--quiet', commitOid, '--'],
       runCommandSync,
       timeoutMs,
       env,
     );
-    if (porcelain) throw dirtyWorktreeError();
-    return { verificationMode: 'git-status' };
-  } catch (error) {
-    if (error?.code === 'EWORKTREEDIRTY') throw error;
-    if (!isTimedOutGitCommand(error)) {
-      const wrapped = new Error(
-        `Failed to inspect tracked Git worktree before FileProvider fallback: ${commandErrorMessage(error)}`,
-        { cause: error },
-      );
-      if (error?.code) wrapped.code = error.code;
-      throw wrapped;
-    }
-  }
-
-  let headTree;
-  let indexTree;
-  try {
     runGit(root, ['diff-files', '--quiet', '--'], runCommandSync, timeoutMs, env);
-    headTree = runGit(root, ['rev-parse', 'HEAD^{tree}'], runCommandSync, timeoutMs, env);
-    indexTree = runGit(root, ['write-tree'], runCommandSync, timeoutMs, env);
   } catch (error) {
     if (error?.status === 1 && !error?.signal) throw dirtyWorktreeError();
-    const wrapped = new Error(
-      `Git worktree inspection timed out and the worktree/index/HEAD fallback could not verify a clean tracked worktree: ${commandErrorMessage(error)}`,
-      { cause: error },
+    throw verificationError(
+      'Git worktree/index inspection could not verify a clean tracked worktree against the pinned commit',
+      error,
     );
-    wrapped.code = isTimedOutGitCommand(error) ? 'ETIMEDOUT' : (error?.code ?? 'EGITVERIFY');
-    throw wrapped;
   }
 
-  if (!headTree || headTree !== indexTree) throw dirtyWorktreeError();
-  return { verificationMode: 'worktree-index-head' };
+  return { verificationMode: 'worktree-index-commit', commitOid };
 }

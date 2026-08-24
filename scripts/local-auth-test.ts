@@ -43,6 +43,10 @@ globalThis.fetch = testFetch;
 const auth = await import('../src/client/auth.ts');
 assert.equal(globalThis.fetch, testFetch, 'auth module does not monkey-patch global fetch');
 
+// This fixture models the explicitly selected local preview path. Teams SSO
+// remains the default for production; local mode must opt out before its
+// first API call so the dedicated fragment token can be exercised.
+auth.setAuthRequired(false);
 await auth.apiFetch('/api/health');
 assert.equal(values.get(auth.LOCAL_ACCESS_TOKEN_STORAGE_KEY), undefined, 'query parameters are not accepted as local access tokens');
 assert.equal(requests[0]?.headers.has(auth.LOCAL_ACCESS_TOKEN_HEADER), false, 'query token is not attached to same-origin requests');

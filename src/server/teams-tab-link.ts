@@ -2,7 +2,7 @@ const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 const PUBLIC_HOST_PATTERN = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i;
 
 export type TeamsPersonalTabDeepLinkInput = {
-  appId: string;
+  catalogAppId: string;
   tabDomain: string;
   tenantId?: string;
 };
@@ -22,11 +22,11 @@ function validPublicHost(value: string): boolean {
 export function buildTeamsPersonalTabDeepLink(
   input: TeamsPersonalTabDeepLinkInput,
 ): string | undefined {
-  const appId = input.appId.trim();
+  const catalogAppId = input.catalogAppId.trim();
   const tabDomain = input.tabDomain.trim();
   const tenantId = input.tenantId?.trim();
 
-  if (!validGuid(appId) || !validPublicHost(tabDomain)) return undefined;
+  if (!validGuid(catalogAppId) || !validPublicHost(tabDomain)) return undefined;
   if (tenantId !== undefined && !validGuid(tenantId)) return undefined;
 
   const params = new URLSearchParams({
@@ -35,5 +35,5 @@ export function buildTeamsPersonalTabDeepLink(
   });
   if (tenantId) params.set('tenantId', tenantId);
 
-  return `https://teams.microsoft.com/l/entity/${appId}/home?${params.toString()}`;
+  return `https://teams.microsoft.com/l/entity/${catalogAppId}/home?${params.toString()}`;
 }

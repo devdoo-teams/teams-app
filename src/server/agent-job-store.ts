@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 
 import { atomicWriteJson, readAtomicJsonStore } from './atomic-file.js';
+import type { CliAgentProvider } from './cli-agent-runner.js';
 
 export type AgentJobMode = 'read-only' | 'workspace-write';
 export type AgentJobStatus =
@@ -31,6 +32,7 @@ const AGENT_JOB_STATUSES: readonly AgentJobStatus[] = [
   'cancelled',
 ];
 const AGENT_JOB_MODES: readonly AgentJobMode[] = ['read-only', 'workspace-write'];
+const AGENT_JOB_PROVIDERS: readonly CliAgentProvider[] = ['codex', 'copilot'];
 // Preserve the whitespace characters used by normal multi-line Codex output
 // while rejecting the remaining C0/C1 control range in persisted records.
 const CONTROL_CHARACTERS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
@@ -44,6 +46,8 @@ export interface AgentJobScope {
 export interface AgentJob {
   id: string;
   prompt: string;
+  /** Provider used for this job; legacy records may omit it and use the configured default. */
+  provider?: CliAgentProvider;
   mode: AgentJobMode;
   status: AgentJobStatus;
   conversationId: string;
@@ -67,13 +71,16 @@ export class AgentJobStore {
   private jobs: AgentJob[] = [];
   private writeChain: Promise<void> = Promise.resolve();
 
-  constructor(private readonly filePath: string) {}
+  constructor(
+    private readonly filePath: string,
+    private readonly options: { legacyProvider?: CliAgentProvider } = {},
+  ) {}
 
   async initialize(): Promise<void> {
     try {
       const raw = await readAtomicJsonStore(this.filePath);
       const parsed = JSON.parse(raw) as unknown;
-      const loaded = loadJobs(parsed, this.filePath);
+      const loaded = loadJobs(parsed, this.filePath, this.options.legacyProvider);
       // Do not replace the in-memory state or rewrite the file until every
       // record and cross-record scope relationship has passed validation.
       this.jobs = loaded.jobs;
@@ -86,6 +93,7 @@ export class AgentJobStore {
 
   async create(input: {
     prompt: string;
+    provider: CliAgentProvider;
     mode: AgentJobMode;
     scope: AgentJobScope;
     parentJobId?: string;
@@ -94,6 +102,7 @@ export class AgentJobStore {
     const job: AgentJob = {
       id: `task-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`,
       prompt: input.prompt,
+      ...(input.provider ? { provider: input.provider } : {}),
       mode: input.mode,
       status: input.mode === 'workspace-write' ? 'awaiting_approval' : 'queued',
       conversationId: input.scope.conversationId,
@@ -113,6 +122,23 @@ export class AgentJobStore {
 
   get(id: string, scope: AgentJobScope): AgentJob | undefined {
     const job = this.jobs.find((candidate) => candidate.id === id && matchesScope(candidate, scope));
+    return job ? cloneAgentJob(job) : undefined;
+  }
+
+  /**
+   * Resolve a job for an authenticated REST principal without accepting a
+   * client-selected conversation ID. The caller must still pass the returned
+   * job's stored scope to AgentService for the mutation itself.
+   */
+  getForPrincipal(
+    id: string,
+    principal: Pick<AgentJobScope, 'tenantId' | 'requesterId'>,
+  ): AgentJob | undefined {
+    const job = this.jobs.find((candidate) =>
+      candidate.id === id
+      && candidate.tenantId === principal.tenantId
+      && candidate.requesterId === principal.requesterId,
+    );
     return job ? cloneAgentJob(job) : undefined;
   }
 
@@ -142,6 +168,9 @@ export class AgentJobStore {
       if (index === -1) return undefined;
 
       const updated = { ...this.jobs[index], ...patch } as AgentJob;
+      if ('provider' in patch && patch.provider !== this.jobs[index].provider) {
+        throw new Error('agent job provider identity is immutable');
+      }
       if (updated.status === 'completed' && (!updated.result || !updated.result.trim())) {
         throw new Error('completed jobs must contain a result');
       }
@@ -258,13 +287,17 @@ type LoadedValue<T> = {
   migrated: boolean;
 };
 
-function loadJobs(value: unknown, filePath: string): LoadedJobs {
+function loadJobs(
+  value: unknown,
+  filePath: string,
+  legacyProvider?: CliAgentProvider,
+): LoadedJobs {
   if (!Array.isArray(value)) {
     throw new Error(`Invalid agent job store format: ${filePath}`);
   }
 
   const ids = new Set<string>();
-  const loaded = value.map((record, index) => loadJob(record, index, ids));
+  const loaded = value.map((record, index) => loadJob(record, index, ids, legacyProvider));
   const jobs = loaded.map((entry) => entry.job);
   validateParentScopes(jobs);
 
@@ -274,7 +307,12 @@ function loadJobs(value: unknown, filePath: string): LoadedJobs {
   };
 }
 
-function loadJob(value: unknown, index: number, ids: Set<string>): { job: AgentJob; migrated: boolean } {
+function loadJob(
+  value: unknown,
+  index: number,
+  ids: Set<string>,
+  legacyProvider?: CliAgentProvider,
+): { job: AgentJob; migrated: boolean } {
   if (!isRecord(value)) throw invalidJob(index, 'record must be an object');
 
   // Records created before tenant scoping have no tenantId. They remain
@@ -289,6 +327,10 @@ function loadJob(value: unknown, index: number, ids: Set<string>): { job: AgentJ
   ids.add(id);
 
   const prompt = readRequiredText(value.prompt, 'prompt', MAX_AGENT_PROMPT_LENGTH, index, legacy);
+  const provider = hasOwn(value, 'provider')
+    ? readEnum(value.provider, 'provider', AGENT_JOB_PROVIDERS, index)
+    : legacyProvider;
+  if (!hasOwn(value, 'provider') && legacyProvider) migrated = true;
   const mode = readEnum(value.mode, 'mode', AGENT_JOB_MODES, index);
   let status = readEnum(value.status, 'status', AGENT_JOB_STATUSES, index);
   const conversationId = readRequiredText(
@@ -363,6 +405,7 @@ function loadJob(value: unknown, index: number, ids: Set<string>): { job: AgentJ
   const job: AgentJob = {
     id,
     prompt: prompt.value,
+    ...(provider ? { provider } : {}),
     mode,
     status,
     conversationId: conversationId.value,

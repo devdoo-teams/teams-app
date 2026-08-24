@@ -1,0 +1,171 @@
+name: Teams Core, A2A, and Continuity CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: teams-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: 24.x
+
+jobs:
+  core:
+    name: Core verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run bounded source checks
+        run: |
+          npm run typecheck:core
+          npm run test:typecheck-boundary
+          npm run test:core-source-check
+          npm run test:ci-workflow-contract
+      - name: Run Core tests
+        run: npm run test:core
+      - name: Build Core
+        run: npm run build:core
+      - name: Validate Teams manifest
+        run: npm run validate:manifest
+      - name: Verify deterministic Teams package
+        run: npm run test:package-determinism
+
+  a2a:
+    name: A2A collaboration and remote contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify tracked A2A contracts and orchestration
+        run: |
+          npm run test:a2a-official-contract-audit
+          npm run test:a2a-role-catalog
+          npm run test:a2a-orchestrator
+          npm run test:a2a-execution
+          npm run test:a2a-observability
+          npm run test:a2a-jsonrpc-route
+          npm run test:a2a-v1-list-tasks
+          npm run test:a2a-index-integration
+      - name: Verify durable lifecycle and authorization
+        run: |
+          npm run test:a2a-independent-agent-identity
+          npm run test:a2a-durable-dispatch
+          npm run test:a2a-parent-lifecycle
+          npm run test:a2a-admission-restart
+          npm run test:a2a-deadline-cancellation
+          npm run test:a2a-submission-durability
+          npm run test:a2a-agent-authorization-policy
+          npm run test:a2a-telemetry
+      - name: Verify remote peer contracts
+        run: |
+          npm run test:a2a-remote-client
+          npm run test:a2a-remote-agent-adapter
+
+  continuity:
+    name: Atomic build and runtime continuity
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify atomic and deterministic builds
+        run: |
+          npm run test:build-client-atomic
+          npm run test:server-build-determinism
+      - name: Verify startup isolation
+        run: npm run test:a2a-remote-agent-adapter
+      - name: Build and smoke Core runtime
+        run: |
+          npm run build:core
+          npm run test:runtime-dist
+          npm run test:core-runtime-smoke-isolation
+
+  artifact:
+    name: Immutable release candidate
+    if: github.event_name != 'pull_request'
+    needs: [core, a2a, continuity]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TEAMS_SOURCE_COMMIT: ${{ github.sha }}
+      TEAMS_APP_ID: ${{ vars.TEAMS_APP_ID }}
+      BOT_ID: ${{ vars.BOT_ID }}
+      TAB_DOMAIN: ${{ vars.TAB_DOMAIN }}
+      CLIENT_ID: ${{ vars.CLIENT_ID }}
+      APPLICATION_ID_URI: ${{ vars.APPLICATION_ID_URI }}
+    steps:
+      - name: Check out the verified commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build and verify the exact artifact
+        run: |
+          npm run build:core
+          npm run test:core-runtime-smoke-isolation
+          npm run package:app
+      - name: Record release identity and checksums
+        run: |
+          mkdir -p dist/evidence
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const zip = fs.readFileSync('appPackage/build/teams-sdk-mvp.zip');
+          const identity = {
+            schema: 1,
+            sourceCommit: process.env.GITHUB_SHA,
+            version: pkg.version,
+            teamsPackageSha256: crypto.createHash('sha256').update(zip).digest('hex'),
+          };
+          fs.writeFileSync('dist/evidence/release-identity.json', JSON.stringify(identity, null, 2) + '\n');
+          NODE
+          find dist appPackage/build -type f ! -name SHA256SUMS -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > dist/evidence/SHA256SUMS
+      - name: Upload immutable release candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: teams-core-${{ github.sha }}
+          path: |
+            dist/
+            appPackage/build/teams-sdk-mvp.zip
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

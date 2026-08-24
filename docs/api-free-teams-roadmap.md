@@ -20,7 +20,7 @@ Microsoft 공식 문서 기준으로 개인 탭은 Teams 모바일에서 WebView
 
 Adaptive Cards는 봇과 탭의 UI를 대체하는 별도 기술이 아니라, 봇 메시지 안에서 버튼·입력·링크를 제공하는 메시지 UI다. Teams 모바일은 Adaptive Cards 1.2까지를 기준으로 삼아야 하므로 Core 카드 JSON은 1.2 호환 subset으로 제한한다. 복잡한 화면은 탭에서 제공하고, 채팅 카드는 짧은 요약과 1차 작업만 제공한다.
 
-MCP는 Teams 모바일 화면 표준이 아니다. Microsoft Teams SDK의 MCP client/server는 서버 측 도구 연결 계층으로 사용할 수 있지만, Teams 모바일에 직접 렌더링되는 UI는 여전히 Teams 탭·봇·Adaptive Cards가 담당한다. 따라서 현재는 MCP Apps 위젯을 Core UI로 이식하지 않고, 나중에 구체적인 MCP 서버와 무키 실행 조건이 확인될 때만 별도 adapter로 추가한다.
+MCP는 Teams 모바일 화면 표준이 아니다. Microsoft Teams SDK의 MCP client/server는 서버 측 도구 연결 계층으로 사용할 수 있지만, Teams 모바일에 직접 렌더링되는 UI는 여전히 Teams 탭·봇·Adaptive Cards가 담당한다. 현재 저장소에는 구체적인 Jira/Confluence/Bitbucket REST 계약을 감싼 optional MCP provider registry가 구현되어 있지만, 이는 Teams Core UI나 공개 MCP 인증을 의미하지 않는다. MCP Apps 위젯은 계속 별도 host용으로 유지하고, 공개 provider route는 검증된 connector 자격증명과 principal 경계가 확인될 때만 활성화한다.
 
 ## 2026-08 재검토 결론: API-free Core를 제품 기준으로 고정
 
@@ -30,6 +30,12 @@ MCP는 Teams 모바일 화면 표준이 아니다. Microsoft Teams SDK의 MCP cl
 - Teams 모바일 화면은 개인 웹 탭(TeamsJS + React WebView)으로 만들고, Bot 채팅은 Adaptive Cards 1.2 subset + 텍스트 fallback으로 만든다. Microsoft 공식 문서도 모바일 Adaptive Cards의 기준을 1.2로 안내한다.
 - 카드에는 작은 요약과 실제 서버 action만 넣고, 복잡한 입력·목록·위치·업무 CRUD는 탭으로 보낸다. 모든 카드에는 탭 열기 링크를 제공한다.
 - Codex/GHCP CLI는 모델 provider가 아니라 별도 작업 실행 adapter다. Codex는 `codex login status`와 실제 `codex exec` 최종 `agent_message`를 기준으로 판정한다. GHCP는 공식 GitHub Copilot CLI 실행 파일인 `copilot`을 기본으로 사용하며, `copilot --help`만으로 로그인·라이선스·조직 정책을 성공으로 추정하지 않는다. 공식 CLI는 `copilot login`이라는 대화형 흐름을 제공하므로, 자동 health probe는 브라우저·디바이스 로그인을 시작하지 않고 `unknown`을 유지한다. `gh copilot`은 명시적으로 설정된 레거시 호환 경로에서만 사용한다.
+
+### A2A 다중 실행 경계
+
+A2A 협업은 단일 CLI를 여러 이름으로 호출하는 방식이 아니라, 명시적으로 등록된 trusted agent와 provider runner를 독립적으로 라우팅하는 서버 경계로 관리한다. `TEAMS_A2A_AGENT_PROVIDERS`에 `codex,copilot`을 직접 설정한 경우에만 두 worker를 등록하며, 기본값은 `TEAMS_AGENT_CLI_PROVIDER` 하나다. 작업 레코드에는 선택된 provider를 함께 저장해 재시작·취소·재시도에서도 다른 runner로 조용히 전환되지 않게 한다. provider가 구성되지 않았거나 작업 provider와 취소 요청 provider가 다르면 fail-closed한다.
+
+이 설정은 실행 adapter를 활성화할 뿐이며 Codex 로그인, GitHub Copilot 라이선스, 조직 정책, Teams 관리자 승인을 증명하지 않는다. 실제 CLI 최종 결과와 공개 Teams 런타임 증거가 없으면 `A2A_READY`나 릴리스 완료로 판정하지 않는다. 참고 프로토콜은 [A2A v0.2.6 specification](https://a2a-protocol.org/v0.2.6/specification/)이며, Teams 화면 자체는 여전히 TeamsJS 개인 탭·Bot·Adaptive Cards 계약을 따른다.
 
 벤치마킹 기준은 Microsoft 공식 React 기본 탭 샘플, Teams SDK TypeScript quickstart, Teams Samples의 `tab-ui-templates`, `Device permissions`, `Adaptive Card Actions Bot`, `Sequential workflow adaptive cards`, `Deep Link consuming Subentity ID`로 제한한다. MCP Apps 공식 저장소는 UI가 MCP 서버가 제공하는 리소스로 호환 host의 sandbox iframe에 렌더링된다고 설명하고, 지원 클라이언트가 host마다 다르며 Teams 모바일 host 구현을 제공하지 않는다. 따라서 MCP Apps나 CopilotKit의 UI를 Teams 모바일 호환성의 근거로 사용하지 않고, 나중에 실제 MCP 서버·host·인증 계약이 확인된 경우에만 서버 adapter로 검토한다.
 
@@ -55,7 +61,7 @@ MCP는 Teams 모바일 화면 표준이 아니다. Microsoft Teams SDK의 MCP cl
 5. `Codex 작업`: read-only 실행 → 진행 → 실제 최종 `agent_message` 결과 → 실패/취소. write는 승인 후에만 실행한다.
 6. `Git 경계`: 작업 소유 경로만 commit, 실제 hash 없는 결과는 오류 카드로 표시한다.
 7. `협업`: follow/unfollow, 채널 연결, 알림 저장을 각각 독립된 mutation으로 추가한다.
-8. `선택 provider`: Core와 모바일 전수 검증이 끝난 뒤에만 CopilotKit/OpenAI/MCP adapter를 별도 버전·feature flag로 실험한다. API key, 모델 endpoint 또는 호환 host가 없으면 이 단계는 구현하지 않고 `N/A`로 남긴다.
+8. `선택 provider`: Core와 모바일 전수 검증이 끝난 뒤에만 CopilotKit/OpenAI/MCP adapter를 별도 버전·feature flag로 실험한다. 현재 Jira/Confluence/Bitbucket MCP registry는 optional 코드·테스트·빌드 경계까지 구현되어 있으며, provider credential resolver가 없으면 fail-closed한다. 공개 connector 인증·실제 Teams host 왕복이 없으면 `OPTIONAL_PROVIDER_NOT_CONFIGURED`로 남기고 Core 완료로 섞지 않는다.
 
 현재 구현은 1~6의 서버·탭·카드 계약과 명령어 테스트가 존재하지만, 실제 동일 릴리스의 포털·설치본·데스크톱·모바일 스크린샷 증거가 채워지기 전에는 기능 완성으로 판정하지 않는다. WorkItemPanel·CollaborationPanel·위치 권한·응답 모드의 각 성공/실패/권한 분기는 별도 매트릭스 행으로 추가한다.
 
@@ -124,9 +130,25 @@ MCP는 Teams 모바일 화면 표준이 아니다. Microsoft Teams SDK의 MCP cl
 
 - CopilotKit: API 키/런타임이 있는 별도 실험 build에서만 켠다.
 - OpenAI-compatible: 서버 환경변수로만 설정하고 모바일에 키·endpoint를 노출하지 않는다.
-- MCP: 실제 MCP 서버의 tool schema와 인증·실패·timeout을 확인한 뒤 서버 adapter만 추가한다. MCP Apps UI를 Teams 탭으로 직접 가정하지 않는다.
+- MCP: `src/server/mcp-provider-tools.ts`의 Jira/Confluence/Bitbucket tool registry를 optional 경로에서만 등록한다. local 경로는 고정된 safe principal을 요구하고, 공개 optional 경로는 `TEAMS_MCP_AUTHENTICATED_ENABLED=true`, 별도 MCP Entra resource app/client ID·Application ID URI·accepted audience·delegated scope, `TEAMS_MCP_PROVIDER_TOOLS=true`, 명시된 `MCP_RESOURCE_ORIGIN`/`MCP_AUTHORIZATION_SERVER_URL`, `ATLASSIAN_SITE_URL`, 서버 측 provider credential, Teams Entra delegated bearer 검증을 모두 요구한다. 각 stateful MCP 세션은 검증된 `tid`/`oid` principal에 고정되고, 세션 간 provider registry를 재사용하지 않는다. 토큰은 MCP 입력·출력·로그에 없고, credential이 없으면 fail-closed한다. MCP Apps UI를 Teams 탭으로 직접 가정하지 않는다.
+- 공개 connector를 붙일 때는 `src/server/mcp-provider-auth-boundary.ts`의 principal-scoped broker 계약을 경유한다. 호출자가 Authorization/cookie/token query를 직접 전달할 수 없고, backend가 자격증명을 내부에서 주입하며, 응답은 민감 필드 redaction 후 반환한다. 현재 이 broker는 계약·fixture 테스트로 보호되지만 실제 public connector가 연결됐다는 뜻은 아니다.
 
 선택 provider는 Core 릴리스와 별도 버전·feature flag·테스트·증거를 갖는다. 설정되지 않은 provider가 Core UI를 가리거나 기본 빌드를 지연시키지 않아야 한다.
+
+현재 optional provider 검증 명령은 다음과 같다.
+
+```bash
+npm run test:atlassian-cloud-client
+npm run test:bitbucket-cloud-client
+npm run test:mcp-provider-tools
+npm run test:mcp-provider-auth-boundary
+npm run test:release-identity-consistency
+npm run test:optional
+npm run build:server                 # mode=optional marker 확인
+npm run release:preflight             # Core가 provider graph를 제외하는지 확인
+```
+
+이 명령들은 실제 Jira/Bitbucket 계정에 쓰기를 수행하지 않는 contract/fixture 테스트다. 실제 계정 연결을 `PASS`로 기록하려면 authenticated connector가 반환한 workspace/site/repository identity, 같은 release의 runtime log, 실패·timeout·권한 거부 증거를 별도로 보존해야 한다.
 
 ## 릴리스 게이트
 
