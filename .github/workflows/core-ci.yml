@@ -158,9 +158,10 @@ jobs:
           const packagePath = 'appPackage/build/teams-sdk-mvp.zip';
           const manifest = JSON.parse(execFileSync('unzip', ['-p', packagePath, 'manifest.json'], { encoding: 'utf8' }));
           const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const placeholder = '$' + '{{';
           assert.equal(manifest.version, packageJson.version, 'artifact manifest version must match package version');
           assert.equal(manifest.devicePermissions?.includes('geolocation'), true, 'artifact manifest must declare geolocation');
-          assert.equal(JSON.stringify(manifest).includes('${{'), false, 'artifact manifest contains unresolved placeholders');
+          assert.equal(JSON.stringify(manifest).includes(placeholder), false, 'artifact manifest contains unresolved placeholders');
           console.log(`exact artifact manifest verified: v${manifest.version}, geolocation`);
           NODE
       - name: Record release identity and checksums
