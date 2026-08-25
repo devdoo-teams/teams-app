@@ -55,5 +55,11 @@ assert.match(
   /TEAMS_SOURCE_COMMIT=\$\{\{ github\.sha \}\}/,
   'container build must receive the exact GitHub source commit identity',
 );
+assert.match(containerJob, /load:\s*true/, 'container smoke must load the exact built image into the runner');
+assert.match(containerJob, /docker run --detach/, 'container job must execute the built image, not only build it');
+assert.match(containerJob, /\/api\/health/, 'container smoke must probe the production health endpoint');
+assert.match(containerJob, /\/tabs\/home\//, 'container smoke must probe the Teams tab route');
+assert.match(containerJob, /container source identity mismatch/, 'container smoke must verify the runtime source identity');
+assert.match(containerJob, /hashed main\.js asset/, 'container smoke must verify the tab asset contract');
 
 console.log(`ci-workflow-contract-test: PASS (${referencedScripts.length} npm commands)`);

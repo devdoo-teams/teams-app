@@ -134,9 +134,76 @@ jobs:
           context: .
           file: ./Dockerfile
           push: false
+          load: true
           tags: teams-sdk-mvp:${{ github.sha }}
           build-args: |
             TEAMS_SOURCE_COMMIT=${{ github.sha }}
+      - name: Smoke the exact runtime image
+        env:
+          IMAGE_TAG: teams-sdk-mvp:${{ github.sha }}
+        run: |
+          set -euo pipefail
+          container_id=""
+          cleanup() {
+            if [ -n "$container_id" ]; then
+              docker logs "$container_id" || true
+              docker rm --force "$container_id" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT
+
+          bot_client_id='11111111-2222-4333-8444-555555555555'
+          client_id='66666666-7777-4888-8999-000000000000'
+          tenant_id='99999999-aaaa-4bbb-8ccc-dddddddddddd'
+          tab_domain='runtime-smoke.example.com'
+          application_id_uri="api://${tab_domain}/botid-${bot_client_id}"
+          container_id="$(docker run --detach \
+            --publish 3978:3978 \
+            --env NODE_ENV=production \
+            --env PORT=3978 \
+            --env TEAMS_USE_SDK=true \
+            --env TEAMS_SKIP_OUTBOUND=true \
+            --env TEAMS_APP_ID=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee \
+            --env TEAMS_CATALOG_APP_ID=bbbbbbbb-cccc-4ddd-8eee-ffffffffffff \
+            --env BOT_ID="$bot_client_id" \
+            --env BOT_CLIENT_ID="$bot_client_id" \
+            --env CLIENT_ID="$client_id" \
+            --env CLIENT_SECRET=core-runtime-smoke-secret \
+            --env TENANT_ID="$tenant_id" \
+            --env TAB_DOMAIN="$tab_domain" \
+            --env APPLICATION_ID_URI="$application_id_uri" \
+            --env TEAMS_USER_AUTH_ACCEPTED_AUDIENCES="$application_id_uri" \
+            "$IMAGE_TAG")"
+
+          health_file="$(mktemp)"
+          tab_file="$(mktemp)"
+          asset_file="$(mktemp)"
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error --max-time 2 http://127.0.0.1:3978/api/health >"$health_file"; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              echo 'container did not become healthy within 30 seconds' >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          node --input-type=module -e '
+            import fs from "node:fs";
+            const health = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            if (health.ok !== true) throw new Error("container health did not report ok=true");
+            if (health.environment !== "production") throw new Error("container health is not production");
+            if (health.sourceCommit !== process.env.GITHUB_SHA) throw new Error(`container source identity mismatch: ${health.sourceCommit}`);
+            if (health.auth !== "teams-authenticated" || health.bot !== "teams-sdk") throw new Error("container production auth/bot contract mismatch");
+          ' "$health_file"
+          curl --fail --silent --show-error --max-time 5 http://127.0.0.1:3978/tabs/home/ >"$tab_file"
+          asset_path="$(sed -n 's/.*src="\([^\"]*assets\/main\.js[^\"]*\)".*/\1/p' "$tab_file" | head -n 1)"
+          if [ -z "$asset_path" ]; then
+            echo 'container tab did not expose a hashed main.js asset' >&2
+            exit 1
+          fi
+          curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:3978/tabs/home/${asset_path#./}" >"$asset_file"
+          test -s "$asset_file"
 
   artifact:
     name: Immutable release candidate
