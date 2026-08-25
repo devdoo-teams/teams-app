@@ -38,10 +38,10 @@ jobs:
           npm run test:typecheck-boundary
           npm run test:core-source-check
           npm run test:ci-workflow-contract
-      - name: Run Core tests
-        run: npm run test:core
       - name: Build Core
         run: npm run build:core
+      - name: Run Core tests
+        run: npm run test:core
       - name: Validate Teams manifest
         run: npm run validate:manifest
       - name: Verify deterministic Teams package

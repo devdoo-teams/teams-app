@@ -175,11 +175,13 @@ try {
         import { acquireStoreProcessLease } from ${JSON.stringify(holderModule)};
         let lease;
         let shutdownRequested = false;
+        let keepAlive;
         async function shutdown() {
           shutdownRequested = true;
           if (!lease) return;
           await lease.release();
-          console.log('HOLDER_RELEASED');
+          clearInterval(keepAlive);
+          process.stdout.write('HOLDER_RELEASED\\n');
           process.exit(0);
         }
         process.once('SIGTERM', () => {
@@ -193,7 +195,7 @@ try {
           await shutdown();
         }
         console.log('HOLDER_READY');
-        await new Promise(() => {});
+        keepAlive = setInterval(() => {}, 60_000);
       `],
       {
         cwd: root,
