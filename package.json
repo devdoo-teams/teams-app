@@ -18,6 +18,7 @@
     "test:typecheck-boundary": "node scripts/typecheck-boundary-test.mjs",
     "test:core-source-check": "node scripts/core-source-check-test.mjs",
     "test:ci-workflow-contract": "node scripts/ci-workflow-contract-test.mjs",
+    "test:docker-build-contract": "node scripts/docker-build-contract-test.mjs",
     "typecheck:vendor": "tsc --noEmit -p tsconfig.json",
     "check:types": "npm run typecheck",
     "check:deployment": "node --env-file-if-exists=.env.runtime scripts/validate-deployment-env.mjs",

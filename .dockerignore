@@ -4,6 +4,5 @@ data
 appPackage/build
 .env
 .env.*
-.git
 .gitignore
 *.log

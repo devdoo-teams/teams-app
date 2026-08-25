@@ -41,4 +41,19 @@ assert.match(
   'immutable artifact job must verify geolocation in the packaged manifest',
 );
 
+const containerStart = workflow.indexOf('\n  container:');
+assert.notEqual(containerStart, -1, 'workflow must define a container build job');
+const containerJob = workflow.slice(containerStart, artifactStart);
+assert.match(
+  containerJob,
+  /docker\/build-push-action@[0-9a-f]{40}/,
+  'container job must use a pinned Docker build action',
+);
+assert.match(containerJob, /push:\s*false/, 'CI container verification must not publish before the hosting promotion gate');
+assert.match(
+  containerJob,
+  /TEAMS_SOURCE_COMMIT=\$\{\{ github\.sha \}\}/,
+  'container build must receive the exact GitHub source commit identity',
+);
+
 console.log(`ci-workflow-contract-test: PASS (${referencedScripts.length} npm commands)`);
