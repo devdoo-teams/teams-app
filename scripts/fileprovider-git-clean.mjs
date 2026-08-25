@@ -116,7 +116,11 @@ export function assertCleanTrackedWorktreeForFileProvider(
       timeoutMs,
       env,
     );
-    runGit(root, ['diff-files', '--quiet', ...pathspec], runCommandSync, timeoutMs, env);
+    // Docker COPY and FileProvider materialization can change filesystem stat
+    // metadata without changing file contents. Compare the worktree directly
+    // with the pinned commit so those transport-level mtime changes do not
+    // masquerade as source edits.
+    runGit(root, ['diff', '--quiet', '--no-ext-diff', commitOid, ...pathspec], runCommandSync, timeoutMs, env);
   } catch (error) {
     if (error?.status === 1 && !error?.signal) throw dirtyWorktreeError();
     throw verificationError(

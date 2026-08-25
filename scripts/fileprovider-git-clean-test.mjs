@@ -89,7 +89,7 @@ function gitStorageSnapshot(root) {
   assert.equal(result.commitOid, PINNED_COMMIT);
   assert.deepEqual(runner.calls.map(({ args }) => args), [
     ['diff-index', '--cached', '--quiet', PINNED_COMMIT, '--'],
-    ['diff-files', '--quiet', '--'],
+    ['diff', '--quiet', '--no-ext-diff', PINNED_COMMIT, '--'],
   ]);
   for (const call of runner.calls) {
     assert.equal(
@@ -125,7 +125,16 @@ function gitStorageSnapshot(root) {
       ':(exclude)Dockerfile',
       ':(exclude).dockerignore',
     ],
-    ['diff-files', '--quiet', '--', '.', ':(exclude)Dockerfile', ':(exclude).dockerignore'],
+    [
+      'diff',
+      '--quiet',
+      '--no-ext-diff',
+      PINNED_COMMIT,
+      '--',
+      '.',
+      ':(exclude)Dockerfile',
+      ':(exclude).dockerignore',
+    ],
   ]);
 }
 
@@ -148,7 +157,7 @@ function gitStorageSnapshot(root) {
   assert.equal(result.commitOid, PINNED_COMMIT);
   assert.deepEqual(runner.calls.map(({ args }) => args), [
     ['diff-index', '--cached', '--quiet', PINNED_COMMIT, '--'],
-    ['diff-files', '--quiet', '--'],
+    ['diff', '--quiet', '--no-ext-diff', PINNED_COMMIT, '--'],
   ], 'an explicitly pinned source OID must eliminate every internal HEAD reread');
 }
 
@@ -164,7 +173,7 @@ function gitStorageSnapshot(root) {
 }
 
 {
-  const unstagedDirty = new Error('worktree differs from index');
+  const unstagedDirty = new Error('worktree differs from pinned commit');
   unstagedDirty.status = 1;
   const runner = commandRunner(['', unstagedDirty]);
   assert.throws(
@@ -252,7 +261,7 @@ function gitStorageSnapshot(root) {
     let moved = false;
     const runCommandSync = (command, args, options) => {
       const output = execFileSync(command, args, options);
-      if (!moved && args[0] === 'diff-files') {
+      if (!moved && args[0] === 'diff') {
         moved = true;
         runGit(root, ['commit', '--allow-empty', '-q', '-m', 'move head without changing the tree']);
         movedCommit = runGit(root, ['rev-parse', '--verify', 'HEAD^{commit}']);
@@ -265,6 +274,20 @@ function gitStorageSnapshot(root) {
     });
     assert.notEqual(movedCommit, pinnedCommit, 'fixture must move HEAD after the resolver returns');
     assert.equal(result.commitOid, pinnedCommit, 'the clean gate must retain the first immutable OID');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+{
+  const root = createGitFixture();
+  try {
+    const pinnedCommit = runGit(root, ['rev-parse', '--verify', 'HEAD^{commit}']);
+    const trackedPath = path.join(root, 'tracked.txt');
+    const current = fs.statSync(trackedPath);
+    fs.utimesSync(trackedPath, current.atime, new Date(current.mtimeMs + 60_000));
+    const result = assertCleanTrackedWorktreeForFileProvider(root, { commitOid: pinnedCommit });
+    assert.equal(result.commitOid, pinnedCommit, 'stat-only transport changes must preserve source identity');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
