@@ -4,6 +4,7 @@ WORKDIR /app
 RUN apk add --no-cache git
 ARG TEAMS_SOURCE_COMMIT
 ENV TEAMS_SOURCE_COMMIT=${TEAMS_SOURCE_COMMIT}
+ENV TEAMS_BUILD_CONTEXT=docker
 COPY package*.json ./
 RUN npm ci --ignore-scripts --no-audit --no-fund
 

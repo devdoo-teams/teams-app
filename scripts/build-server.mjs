@@ -22,9 +22,11 @@ const optionalExternalPackages = [
   '@modelcontextprotocol/*',
 ];
 const reuseFileProviderBundle = process.env.TEAMS_FILEPROVIDER_SERVER_REUSE === '1';
+const dockerBuild = process.env.TEAMS_BUILD_CONTEXT === 'docker';
 const sourceCommit = process.env.TEAMS_SOURCE_COMMIT ?? resolvePinnedCommitOid(root);
 const sourceVerification = assertCleanTrackedWorktreeForFileProvider(root, {
   commitOid: sourceCommit,
+  excludedTrackedPaths: dockerBuild ? ['Dockerfile', '.dockerignore'] : [],
 });
 if (sourceVerification.commitOid !== sourceCommit) {
   throw new Error('Server build source verification changed the pinned Git OID');

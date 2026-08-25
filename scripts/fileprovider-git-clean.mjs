@@ -22,6 +22,27 @@ function dirtyWorktreeError() {
   return error;
 }
 
+function trackedPathspec(excludedTrackedPaths) {
+  if (!Array.isArray(excludedTrackedPaths) || excludedTrackedPaths.length === 0) {
+    return ['--'];
+  }
+
+  for (const relativePath of excludedTrackedPaths) {
+    if (
+      typeof relativePath !== 'string' ||
+      relativePath.length === 0 ||
+      relativePath.startsWith('/') ||
+      relativePath.includes('..')
+    ) {
+      const error = new Error(`Invalid excluded tracked path: ${relativePath ?? '<missing>'}`);
+      error.code = 'EGITPROVENANCE';
+      throw error;
+    }
+  }
+
+  return ['--', '.', ...excludedTrackedPaths.map((relativePath) => `:(exclude)${relativePath}`)];
+}
+
 function runGit(root, args, runCommandSync, timeoutMs, env) {
   return runCommandSync('git', args, {
     cwd: root,
@@ -76,6 +97,7 @@ export function assertCleanTrackedWorktreeForFileProvider(
     timeoutMs = DEFAULT_GIT_TIMEOUT_MS,
     env = process.env,
     commitOid: requestedCommitOid,
+    excludedTrackedPaths = [],
   } = {},
 ) {
   const commitOid = requestedCommitOid;
@@ -85,15 +107,16 @@ export function assertCleanTrackedWorktreeForFileProvider(
     throw error;
   }
 
+  const pathspec = trackedPathspec(excludedTrackedPaths);
   try {
     runGit(
       root,
-      ['diff-index', '--cached', '--quiet', commitOid, '--'],
+      ['diff-index', '--cached', '--quiet', commitOid, ...pathspec],
       runCommandSync,
       timeoutMs,
       env,
     );
-    runGit(root, ['diff-files', '--quiet', '--'], runCommandSync, timeoutMs, env);
+    runGit(root, ['diff-files', '--quiet', ...pathspec], runCommandSync, timeoutMs, env);
   } catch (error) {
     if (error?.status === 1 && !error?.signal) throw dirtyWorktreeError();
     throw verificationError(

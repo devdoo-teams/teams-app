@@ -44,6 +44,17 @@ function createGitFixture() {
   return root;
 }
 
+function createDockerContextFixture() {
+  const root = createGitFixture();
+  fs.writeFileSync(path.join(root, 'Dockerfile'), 'FROM node:22-alpine\n');
+  fs.writeFileSync(path.join(root, '.dockerignore'), 'node_modules\n');
+  runGit(root, ['add', '--', 'Dockerfile', '.dockerignore']);
+  runGit(root, ['commit', '-q', '-m', 'docker context metadata']);
+  fs.rmSync(path.join(root, 'Dockerfile'));
+  fs.rmSync(path.join(root, '.dockerignore'));
+  return root;
+}
+
 function gitStorageSnapshot(root) {
   const gitDirectory = path.join(root, '.git');
   const selected = ['HEAD', 'index', 'packed-refs', 'refs', 'objects'];
@@ -93,6 +104,29 @@ function gitStorageSnapshot(root) {
     false,
     'a read-only provenance gate must never create Git objects',
   );
+}
+
+{
+  const runner = commandRunner(['', '']);
+  const result = assertCleanTrackedWorktreeForFileProvider('/repo', {
+    ...runner,
+    commitOid: PINNED_COMMIT,
+    excludedTrackedPaths: ['Dockerfile', '.dockerignore'],
+  });
+  assert.equal(result.verificationMode, 'worktree-index-commit');
+  assert.deepEqual(runner.calls.map(({ args }) => args), [
+    [
+      'diff-index',
+      '--cached',
+      '--quiet',
+      PINNED_COMMIT,
+      '--',
+      '.',
+      ':(exclude)Dockerfile',
+      ':(exclude).dockerignore',
+    ],
+    ['diff-files', '--quiet', '--', '.', ':(exclude)Dockerfile', ':(exclude).dockerignore'],
+  ]);
 }
 
 {
@@ -191,6 +225,20 @@ function gitStorageSnapshot(root) {
     const after = gitStorageSnapshot(root);
     assert.match(result.commitOid, /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/);
     assert.deepEqual(after, before, 'clean verification must not mutate index, refs, or Git objects');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+{
+  const root = createDockerContextFixture();
+  try {
+    const pinnedCommit = runGit(root, ['rev-parse', '--verify', 'HEAD^{commit}']);
+    const result = assertCleanTrackedWorktreeForFileProvider(root, {
+      commitOid: pinnedCommit,
+      excludedTrackedPaths: ['Dockerfile', '.dockerignore'],
+    });
+    assert.equal(result.verificationMode, 'worktree-index-commit');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
