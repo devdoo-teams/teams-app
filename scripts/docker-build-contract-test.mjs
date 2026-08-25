@@ -20,6 +20,9 @@ assert.match(dockerfile, /CMD \["node", "dist\/server\/index\.js"\]/, 'the image
 assert.equal(ignoredEntries.has('.git'), false, 'the build context must retain .git for pinned source verification');
 assert.equal(ignoredEntries.has('.gitignore'), false, 'the build context must retain tracked .gitignore for clean source verification');
 assert.equal(ignoredEntries.has('.env.example'), false, 'the build context must retain the tracked environment contract');
+assert.equal(ignoredEntries.has('data'), false, 'the build context must retain the tracked data directory placeholder');
 assert.match(dockerignore, /^!\.env\.example$/m, 'the tracked environment example must override the secret env pattern');
+assert.match(dockerignore, /^data\/\*$/m, 'runtime data contents must stay ignored without hiding the tracked directory');
+assert.match(dockerignore, /^!data\/\.gitkeep$/m, 'the tracked data directory placeholder must be retained');
 
 console.log('PASS: Docker build context carries the pinned Git source and runtime health contract');
