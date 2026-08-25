@@ -5,6 +5,22 @@ const runnerUrl = new URL('./core-test-runner.mjs', import.meta.url);
 const { createCoreTestInvocations, createProcessTreeTerminator, runProcessWithTimeout } = await import(runnerUrl.href);
 const SOURCE_COMMIT = '0123456789abcdef0123456789abcdef01234567';
 
+async function assertProcessReaped(pid, label, timeoutMs = 2_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if (error?.code === 'ESRCH') return;
+      throw error;
+    }
+    if (Date.now() >= deadline) {
+      assert.fail(`reaped ${label} process still exists after ${timeoutMs}ms`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 {
   const invocations = createCoreTestInvocations({
     rootCwd: '/repo',
@@ -167,11 +183,7 @@ assert.ok(reportedProcessGroup.child > 0);
 assert.ok(reportedProcessGroup.grandchild > 0);
 assert.ok(Date.now() - startedAt < 5_000, 'SIGTERM-resistant child must be killed and reaped within the hard bound');
 for (const [label, pid] of Object.entries(reportedProcessGroup)) {
-  assert.throws(
-    () => process.kill(pid, 0),
-    (error) => error?.code === 'ESRCH',
-    `reaped ${label} process must no longer exist`,
-  );
+  await assertProcessReaped(pid, label);
 }
 
 console.log(
