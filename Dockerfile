@@ -9,6 +9,9 @@ COPY package*.json ./
 RUN npm ci --ignore-scripts --no-audit --no-fund
 
 COPY . .
+RUN echo '--- docker Git cached diff ---' && git diff-index --cached --name-status "$TEAMS_SOURCE_COMMIT" -- . ':(exclude)Dockerfile' ':(exclude).dockerignore' || true && \
+  echo '--- docker Git worktree diff ---' && git diff-files --name-status -- . ':(exclude)Dockerfile' ':(exclude).dockerignore' || true && \
+  echo '--- docker missing tracked files ---' && git ls-files -z | tr '\0' '\n' | while read -r tracked; do [ -e "$tracked" ] || echo "$tracked"; done
 RUN npm run build
 
 FROM node:22-alpine
