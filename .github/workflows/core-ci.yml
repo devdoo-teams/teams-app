@@ -144,7 +144,25 @@ jobs:
         run: |
           npm run build:core
           npm run test:core-runtime-smoke-isolation
+          npm run check:deployment
+          npm run validate:manifest
           npm run package:app
+          npm run test:package-determinism
+          npm run test:package-output-determinism
+          npm run test:package-atomic
+          npm run test:release-timeout
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          const packagePath = 'appPackage/build/teams-sdk-mvp.zip';
+          const manifest = JSON.parse(execFileSync('unzip', ['-p', packagePath, 'manifest.json'], { encoding: 'utf8' }));
+          const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          assert.equal(manifest.version, packageJson.version, 'artifact manifest version must match package version');
+          assert.equal(manifest.devicePermissions?.includes('geolocation'), true, 'artifact manifest must declare geolocation');
+          assert.equal(JSON.stringify(manifest).includes('${{'), false, 'artifact manifest contains unresolved placeholders');
+          console.log(`exact artifact manifest verified: v${manifest.version}, geolocation`);
+          NODE
       - name: Record release identity and checksums
         run: |
           mkdir -p dist/evidence

@@ -17,4 +17,28 @@ assert.deepEqual(
   `GitHub Actions references undefined npm scripts: ${missingScripts.join(', ')}`,
 );
 
+const artifactStart = workflow.indexOf('\n  artifact:');
+assert.notEqual(artifactStart, -1, 'workflow must define an immutable artifact job');
+const artifactJob = workflow.slice(artifactStart);
+for (const script of [
+  'check:deployment',
+  'validate:manifest',
+  'package:app',
+  'test:package-determinism',
+  'test:package-output-determinism',
+  'test:package-atomic',
+  'test:release-timeout',
+]) {
+  assert.match(
+    artifactJob,
+    new RegExp(`npm run ${script.replaceAll(':', '\\:')}`),
+    `immutable artifact job must run ${script} against the artifact source`,
+  );
+}
+assert.match(
+  artifactJob,
+  /devicePermissions[\s\S]*geolocation/,
+  'immutable artifact job must verify geolocation in the packaged manifest',
+);
+
 console.log(`ci-workflow-contract-test: PASS (${referencedScripts.length} npm commands)`);

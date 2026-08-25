@@ -24,6 +24,7 @@
     "test:deployment-env": "node scripts/deployment-env-test.mjs",
     "test:manifest": "node scripts/validate-manifest-test.mjs",
     "test:package-determinism": "node scripts/package-app-determinism-test.mjs",
+    "test:package-output-determinism": "node scripts/package-app-output-determinism-test.mjs",
     "test:package-atomic": "node scripts/package-app-atomic-test.mjs",
     "test:release-timeout": "node scripts/release-gate-timeout-test.mjs",
     "test:core-boundary": "node scripts/core-optional-boundary-test.mjs",
