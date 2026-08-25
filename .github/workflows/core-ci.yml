@@ -64,13 +64,18 @@ jobs:
       - name: Verify tracked A2A contracts and orchestration
         run: |
           npm run test:a2a-official-contract-audit
+          npm run test:a2a-core-contract
           npm run test:a2a-role-catalog
           npm run test:a2a-orchestrator
           npm run test:a2a-execution
           npm run test:a2a-observability
           npm run test:a2a-jsonrpc-route
+          npm run test:a2a-http-scope
           npm run test:a2a-v1-list-tasks
           npm run test:a2a-index-integration
+          npm run test:a2a-route
+          npm run test:a2a-store
+          npm run test:a2a-orchestration-identity
       - name: Verify durable lifecycle and authorization
         run: |
           npm run test:a2a-independent-agent-identity
@@ -104,7 +109,7 @@ jobs:
         run: |
           npm run test:build-client-atomic
           npm run test:server-build-determinism
-      - name: Verify startup isolation
+      - name: Verify tracked remote adapter boundary
         run: npm run test:a2a-remote-agent-adapter
       - name: Build and smoke Core runtime
         run: |

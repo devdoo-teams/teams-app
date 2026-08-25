@@ -1,6 +1,6 @@
 {
   "name": "teams-sdk-mvp",
-  "version": "1.0.89",
+  "version": "1.0.76",
   "private": true,
   "type": "module",
   "scripts": {
@@ -71,11 +71,14 @@
     "test:process-lease-hardening": "tsx scripts/process-lease-hardening-test.ts",
     "test:agent-transitions": "tsx scripts/agent-service-transition-test.ts",
     "test:a2a-orchestrator": "tsx scripts/a2a-orchestrator-test.ts",
+    "test:a2a-core-contract": "tsx scripts/a2a-core-contract-test.ts",
     "test:a2a-role-catalog": "tsx scripts/a2a-role-catalog-test.ts",
     "test:a2a-observability": "tsx scripts/a2a-observability-test.ts",
     "test:a2a-jsonrpc-route": "tsx scripts/a2a-jsonrpc-route-test.ts",
+    "test:a2a-http-scope": "tsx scripts/a2a-http-scope-test.ts",
     "test:a2a-v1-list-tasks": "tsx scripts/a2a-v1-list-tasks-test.ts",
     "test:a2a-route": "tsx scripts/a2a-route-test.ts",
+    "test:a2a-store": "tsx scripts/a2a-store-test.ts",
     "test:a2a-execution": "tsx scripts/a2a-execution-test.ts",
     "test:a2a-parent-lifecycle": "tsx scripts/a2a-parent-lifecycle-test.ts",
     "test:a2a-independent-agent-identity": "tsx scripts/a2a-independent-agent-identity-test.ts",
