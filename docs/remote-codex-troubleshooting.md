@@ -16,6 +16,32 @@ Teams Bot에서 실행되는 Codex CLI 작업이 부모 Codex 앱의 브라우�
 | Developer Portal 업로드 | 로그인된 부모 브라우저 또는 Teams Admin Center 기존 앱 상세 | 부모 세션에서만 가능 |
 | CLI sideload | `teams app ...` | Teams 사용자 정책에 따라 차단될 수 있음 |
 
+### iCloud/FileProvider와 배포 장애를 분리하는 진단 순서
+
+iCloud/FileProvider는 이 Mac의 원본 작업공간을 읽는 경로에 영향을 줄 수 있지만, GitHub Actions의 소스 checkout·Docker build·외부 호스팅 자체의 필수 조건은 아니다. 다음 네 계층을 한 문제로 묶지 않는다.
+
+| 계층 | 확인 대상 | 실패 분류 |
+| --- | --- | --- |
+| 로컬 소스 I/O | dataless placeholder, `blocks=0`, 읽기 지연 | `SOURCE_IO_UNSTABLE` |
+| CI provenance | pinned commit과 컨테이너 파일 내용이 같은지 | `EWORKTREEDIRTY`/CI 실패 |
+| 공개 ingress | 로컬 포트·Dev Tunnel host connection·공개 HTTP | `PUBLIC_INGRESS_UNAVAILABLE` |
+| 운영 호스팅 | 안정 HTTPS, 영속 저장소, replica/worker 정책 | `STABLE_HOST_UNCONFIGURED` |
+
+반복 배포 전에 먼저 CI에서 `Core`, `A2A`, `continuity`, Docker build와 최종 이미지 실행 smoke를 통과시킨다. Docker `COPY`가 파일 mtime/stat만 바꾼 경우를 소스 변경으로 오판하지 않도록 `scripts/fileprovider-git-clean.mjs`는 pinned commit에 대한 내용 비교를 수행하며, 이 경로에는 iCloud 접근이 필요하지 않다. 최종 이미지 smoke는 production 설정으로 기동해 source commit identity, `/api/health`, `/tabs/home/`, 해시된 `main.js`를 확인한다.
+
+공개 장애가 발생하면 프로세스가 살아 있다는 사실만으로 서버 정상으로 판단하지 않는다.
+
+```bash
+curl -fsS --max-time 15 https://<portUri>/api/health
+curl -fsSI --max-time 15 https://<portUri>/tabs/home/
+curl -fsS http://127.0.0.1:<local-port>/api/health
+devtunnel show <tunnel-id> --json
+```
+
+로컬 HTTP가 200이고 공개 HTTP가 timeout이며 `hostConnections=0`이면 소스나 앱 서버가 아니라 stale Dev Tunnel forwarding으로 분류한다. 같은 tunnel ID에 포워더를 재연결하고 공개 두 URL을 다시 확인할 수 있지만, Dev Tunnel은 장기 운영 호스팅이나 가용성 경계로 승격하지 않는다. 안정 호스트를 선택하기 전에는 Teams 패키지·messaging endpoint·완료 메시지를 갱신하지 않는다.
+
+파일 JSON 저장소는 단일 프로세스·영속 디스크가 필요한 MVP 제약이다. stable host는 우선 replica/worker를 1개로 고정하고 persistent volume을 제공해야 한다. A2A를 여러 replica/agent worker로 확장하기 전에는 idempotency, task transition, child dispatch, admission, outbox를 공유 트랜잭션 저장소로 이전하고 별도 queue/worker 경계를 검증한다. Vercel/serverless 또는 임시 Dev Tunnel을 file-json/A2A 운영 호스트로 추측해 선택하지 않는다.
+
 ## 케이스별 대응
 
 ### 공개 탭이 갑자기 404가 되거나 빌드 명령이 멈춤

@@ -68,6 +68,7 @@ Teams 앱 변경 요청에는 별도 예외 승인이 없는 한 다음 순서�
 
 ## 빌드 출처·FileProvider 재발 방지 게이트
 
+- iCloud/FileProvider는 로컬 원본 작업공간의 source I/O 위험일 뿐 배포·GitHub Actions·Docker·안정 호스팅의 필수 조건이 아니다. 로컬 source가 불안정하면 CI의 pinned Git checkout과 컨테이너 내용 검증을 독립적으로 진행하되, 이를 공개 배포 성공의 증거로 혼동하지 않는다.
 - FileProvider/iCloud dataless placeholder가 하나라도 관찰되면 원본 소스를 정상 로컬 파일로 간주하지 않는다. `blocks=0`, 읽기 지연, esbuild `The service was stopped`, 무출력 장기 대기는 모두 `SOURCE_IO_UNSTABLE` 증거로 기록한다.
 - FileProvider fallback 빌드는 Git `HEAD` 소스를 임시 로컬 디렉터리에 materialize하므로, 추적 파일을 수정한 채 실행하면 현재 작업이 아니라 이전 커밋을 빌드할 수 있다. 따라서 fallback build/package 전에 추적 worktree를 clean으로 확인하고, clean 확인이 timeout되면 빌드하지 말고 `SOURCE_IO_UNSTABLE` blocker로 중단한다.
 - 서버 bundle 재사용은 커밋 SHA만 비교하지 않는다. `.teams-server-build-commit`의 schema, full commit, `mode=core|optional`, `worktree=clean`을 모두 현재 명령과 대조한다. 이전 형식 marker나 dirty/불명확 marker는 재사용하지 않는다.
