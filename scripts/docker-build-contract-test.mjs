@@ -18,5 +18,8 @@ assert.match(dockerfile, /EXPOSE 3978/, 'the image must expose the Teams runtime
 assert.match(dockerfile, /HEALTHCHECK[\s\S]*\/api\/health/, 'the image must define an HTTP health check');
 assert.match(dockerfile, /CMD \["node", "dist\/server\/index\.js"\]/, 'the image must start the Core server entrypoint');
 assert.equal(ignoredEntries.has('.git'), false, 'the build context must retain .git for pinned source verification');
+assert.equal(ignoredEntries.has('.gitignore'), false, 'the build context must retain tracked .gitignore for clean source verification');
+assert.equal(ignoredEntries.has('.env.example'), false, 'the build context must retain the tracked environment contract');
+assert.match(dockerignore, /^!\.env\.example$/m, 'the tracked environment example must override the secret env pattern');
 
 console.log('PASS: Docker build context carries the pinned Git source and runtime health contract');
