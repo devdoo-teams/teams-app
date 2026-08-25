@@ -126,7 +126,10 @@ jobs:
     env:
       TEAMS_SOURCE_COMMIT: ${{ github.sha }}
       TEAMS_APP_ID: ${{ vars.TEAMS_APP_ID }}
+      TEAMS_CATALOG_APP_ID: ${{ vars.TEAMS_CATALOG_APP_ID }}
       BOT_ID: ${{ vars.BOT_ID }}
+      BOT_CLIENT_ID: ${{ vars.BOT_CLIENT_ID }}
+      TENANT_ID: ${{ vars.TENANT_ID }}
       TAB_DOMAIN: ${{ vars.TAB_DOMAIN }}
       CLIENT_ID: ${{ vars.CLIENT_ID }}
       APPLICATION_ID_URI: ${{ vars.APPLICATION_ID_URI }}
