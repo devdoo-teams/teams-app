@@ -39,6 +39,7 @@ jobs:
           npm run test:core-source-check
           npm run test:ci-workflow-contract
           npm run test:docker-build-contract
+          npm run test:image-publish-workflow-contract
       - name: Build Core
         run: npm run build:core
       - name: Run Core tests

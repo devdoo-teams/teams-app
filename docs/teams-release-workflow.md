@@ -129,6 +129,19 @@ npm run release:gate
 
 `release:public`은 `--url`을 우선 사용하고, 없으면 `TEAMS_PUBLIC_URL`, `PUBLIC_BASE_URL`, `.env.runtime`의 `TAB_DOMAIN` 순서로 현재 공개 origin을 해석한다. 별도 URL을 매번 복사해 넣지 않아도 되지만, 실제 `portUri`가 바뀌면 `.env.runtime`을 먼저 갱신하고 패키지·업로드 절차를 다시 시작한다. `typecheck:core`는 direct bounded esbuild CLI stdin transform을 사용하고 workspace tsconfig auto-discovery를 끄며 long-lived service mode를 사용하지 않는다. 실제 패키지 선언은 별도 bounded 진단에서만 확인하고, 필요할 때만 `npm run typecheck:vendor`를 사용한다.
 
+### iCloud와 무관한 CI 이미지 승격 및 호스팅 경계
+
+배포를 로컬 작업공간의 iCloud/FileProvider 상태에 의존시키지 않는다. GitHub Actions의 `core-ci.yml`은 GitHub checkout에서 Core 소스·A2A·결정적 빌드·Docker 런타임 smoke를 확인하고, `publish-image.yml`은 사용자가 명시적으로 실행하거나 `vX.Y.Z` 태그를 push했을 때 같은 커밋을 다시 검증한 뒤 GHCR에 커밋 태그 이미지를 publish하고 digest provenance를 attestation한다. 태그 이벤트에서는 `v`를 제거한 값과 `package.json` 버전이 다르면 publish를 차단한다. 이 경로에는 로컬 Finder, iCloud 다운로드, 별도 브라우저, 임의의 호스팅 제공자 URL이 없다.
+
+이미지 publish는 “검증된 불변 산출물을 레지스트리에 보관”하는 단계일 뿐 “공개 HTTPS 서비스가 실행 중”이라는 뜻이 아니다. 실제 서비스 승격은 다음 독립 게이트를 추가로 요구한다.
+
+1. 승인된 호스팅 대상과 자격증명을 확인하고, 이미지 digest를 정확히 지정한다. 현재 저장소에는 특정 호스팅 provider와 배포 자격증명이 고정되어 있지 않으므로 provider를 추측하거나 자동 배포하지 않는다.
+2. `file-json-single-process` 저장소를 유지하는 동안에는 한 replica와 persistent writable volume을 사용한다. 수평 확장·무중단 재시작이 필요하면 transactional shared database와 durable queue/outbox로 바꾼 뒤 별도 Core 검증을 통과한다.
+3. 호스팅된 origin에서 `/api/health`, `/tabs/home/`, 해시 자산을 확인하고 health의 `sourceCommit`·`serverBundleSha256`이 이미지 digest에서 파생된 release identity와 일치하는지 확인한다.
+4. 그 다음에만 Teams Bot `messagingEndpoint`, 매니페스트 `TAB_DOMAIN`, Teams 포털 업데이트, 데스크톱·모바일 설치본을 같은 identity로 검증한다.
+
+Dev Tunnel은 로컬 서비스의 개발·임시 테스트용 공개 경로로 분리한다. 안정 운영 endpoint로 승격하거나 CI 이미지 publish의 성공 증거로 재사용하지 않는다. 이미지 publish가 성공해도 호스팅·Teams 포털·설치본·UI 게이트가 남아 있으면 릴리스는 완료가 아니다.
+
 클라이언트는 `dist/client`를 선삭제하지 않고 임시 디렉터리에서 성공적으로 만든 뒤 교체한다. CopilotKit v2 대형 번들에서 현재 Node 24 + esbuild API의 source map 생성이 무기한 대기하는 회귀가 있으므로 운영 빌드 source map은 끈다. 이 문제를 다시 만나도 제한시간 게이트가 공개 산출물을 비우지 않은 채 중단되어야 한다.
 `release:preflight`는 `npm run test:server-build-determinism`을 포함한다. 이 검사는 동일한 pinned Git commit을 서로 다른 로컬 임시 경로에 두 번 materialize해 서버 `index.js` 바이트·SHA-256·marker가 모두 같은지 확인한다. 결정성이 깨지면 공개 서버의 기존 프로세스나 업로드 탭을 건드리지 않고 `BLOCKED`로 중단한다. 임시 절대 경로를 esbuild entry point로 전달하거나 서버 SHA 검사를 완화해 우회하지 않는다.
 패키지 단계는 `check:deployment`·`validate:manifest`·ZIP 생성·결정성·원자 교체·timeout reaping 검사를 순차 실행하므로 단일 30초/60초 제한으로 감싸지 않는다. `packageGateTimeoutMs()`가 내부 네 단계의 bounded timeout과 정리 여유를 합산하고, 바깥 `release-loop`와 `release:update`가 그 값을 재사용한다. 하위 게이트가 반환한 `ETIMEDOUT`, `EPROCESSREAPTIMEOUT`, `ECOMMAND` 같은 원인 코드는 상위 상태에 그대로 보존한다.

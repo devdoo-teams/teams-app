@@ -120,4 +120,3 @@ report.
 - [Atlassian Rovo MCP getting started](https://developer.atlassian.com/cloud/rovo-mcp/guides/getting-started/)
 - [GitHub Copilot custom agents](https://docs.github.com/en/copilot/how-tos/copilot-sdk/features/custom-agents)
 - [OpenAI Codex CLI](https://help.openai.com/en/articles/11096431)
-

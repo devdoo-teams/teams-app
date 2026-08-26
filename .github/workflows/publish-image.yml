@@ -1,0 +1,96 @@
+name: Publish immutable Teams runtime image
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*.*.*'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish immutable runtime image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - name: Check out the exact source commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.x
+          cache: npm
+
+      - name: Verify the exact source before publishing
+        env:
+          TEAMS_SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            package_version="$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")"
+            tag_version="${GITHUB_REF_NAME#v}"
+            if [[ "$package_version" != "$tag_version" ]]; then
+              echo "version tag $tag_version does not match package.json $package_version" >&2
+              exit 1
+            fi
+          fi
+          npm run typecheck:core
+          npm run build:core
+          npm run test:core
+          npm run test:runtime-dist
+          npm run validate:manifest
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract immutable image metadata
+        id: meta
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7 # v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=long,prefix=sha-
+            type=ref,event=tag
+
+      - name: Build and publish the exact runtime image
+        id: push
+        uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4 # v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            TEAMS_SOURCE_COMMIT=${{ github.sha }}
+
+      - name: Attest image provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Record the immutable image identity
+        run: |
+          printf 'sourceCommit=%s\nimage=%s\ndigest=%s\n' \
+            '${{ github.sha }}' \
+            '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}' \
+            '${{ steps.push.outputs.digest }}'
