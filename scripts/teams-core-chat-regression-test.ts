@@ -39,9 +39,7 @@ try {
     );
   }
 
-  const profilePath = path.join(temporaryRoot, 'read-only.sb');
   const isolatedNodePath = path.join(temporaryRoot, 'node');
-  await fs.writeFile(profilePath, '(version 1)\n(allow default)\n', { mode: 0o600 });
   await fs.copyFile(process.execPath, isolatedNodePath);
   await fs.chmod(isolatedNodePath, 0o700);
   await fs.mkdir(path.join(agentWorkspace, 'scripts'), { recursive: true });
@@ -52,7 +50,7 @@ try {
 
   const serverEnv: NodeJS.ProcessEnv = {
     ...process.env,
-    NODE_ENV: 'development',
+    NODE_ENV: 'test',
     TEAMS_USE_SDK: 'true',
     TEAMS_SKIP_AUTH: 'true',
     TEAMS_SKIP_OUTBOUND: 'true',
@@ -76,8 +74,7 @@ try {
     GENUI_ACTION_STORE_PATH: path.join(temporaryRoot, 'genui-actions.json'),
     RESPONSE_MODE_STORE_PATH: path.join(temporaryRoot, 'response-modes.json'),
     AGENT_WORKSPACE: agentWorkspace,
-    AGENT_ISOLATION_PROFILE: profilePath,
-    AGENT_SANDBOX_EXEC_PATH: '/usr/bin/sandbox-exec',
+    TEAMS_TEST_PROCESS_ISOLATION: 'true',
     CODEX_BIN: isolatedNodePath,
     CODEX_SCRIPT: 'scripts/fake-codex.mjs',
     COPILOTKIT_DETERMINISTIC_MODE: 'true',

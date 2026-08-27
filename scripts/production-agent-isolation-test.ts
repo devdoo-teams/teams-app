@@ -49,6 +49,11 @@ try {
   assert.match(productionIndex, /executionPolicy:\s*agentExecutionPolicy/u);
   assert.match(productionIndex, /AGENT_CODEX_HOME/u, 'production must select one service CODEX_HOME outside the projection');
   assert.match(productionIndex, /CODEX_BIN_SHA256/u, 'production must pin the signed Codex executable digest');
+  assert.match(
+    productionIndex,
+    /safeLocal\s*\n\s*&& process\.env\.NODE_ENV === 'test'\s*\n\s*&& process\.env\.TEAMS_TEST_PROCESS_ISOLATION === 'true'/u,
+    'unsafe process isolation must require loopback safe-local mode, NODE_ENV=test, and an explicit fixture flag',
+  );
   assert.doesNotMatch(productionIndex, /AGENT_CODEX_AUTH_FILE/u, 'production must not copy raw auth files into jobs');
 
   await fs.mkdir(path.join(sourceWorkspace, 'src'), { recursive: true, mode: 0o700 });
@@ -93,6 +98,79 @@ try {
     canReadScope: () => true,
   });
   assert.deepEqual(localConfiguration.authorize(scope, 'read-only'), unavailableDecision);
+
+  const legacyLocalConfiguration = createProductionAgentExecutionPolicy({
+    sourceWorkspace,
+    isProduction: false,
+    platform: 'darwin',
+    allowLegacySeatbeltTestProvider: true,
+    profilePath: codexExecutable,
+    sandboxExecPath: codexExecutable,
+    canReadScope: () => true,
+    spawn: fakeSpawn,
+  });
+  assert.deepEqual(legacyLocalConfiguration.authorize(scope, 'read-only'), { allowed: true });
+
+  const productionCannotEnableLegacyProvider = createProductionAgentExecutionPolicy({
+    sourceWorkspace,
+    isProduction: true,
+    platform: 'darwin',
+    allowLegacySeatbeltTestProvider: true,
+    profilePath: codexExecutable,
+    sandboxExecPath: codexExecutable,
+    canReadScope: () => true,
+    spawn: fakeSpawn,
+  });
+  assert.deepEqual(productionCannotEnableLegacyProvider.authorize(scope, 'read-only'), unavailableDecision);
+
+  const crossPlatformTestConfiguration = createProductionAgentExecutionPolicy({
+    sourceWorkspace,
+    isProduction: false,
+    platform: 'linux',
+    allowUnsafeTestProcessProvider: true,
+    canReadScope: () => true,
+    spawn: fakeSpawn,
+  });
+  assert.deepEqual(crossPlatformTestConfiguration.authorize(scope, 'read-only'), { allowed: true });
+  const crossPlatformPrepared = await crossPlatformTestConfiguration.prepareWorkspace(
+    'read-only',
+    scope,
+    'inspect only the projected workspace',
+  );
+  try {
+    assert.equal(crossPlatformPrepared.projected, true);
+    assert.equal(crossPlatformPrepared.isolationLease?.providerId, 'unsafe-test-process');
+    crossPlatformPrepared.isolationLease?.bindJob('test-job-1');
+    await crossPlatformPrepared.isolationLease?.spawn(
+      { ...scope, jobId: 'test-job-1' },
+      codexExecutable,
+      ['fixture'],
+      {
+        cwd: crossPlatformPrepared.workspace,
+        env: crossPlatformPrepared.environmentOverrides ?? {},
+        detached: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    assert.equal(spawnCalls.length, 1);
+    assert.equal(spawnCalls[0]?.command, codexExecutable);
+  } finally {
+    await crossPlatformPrepared.dispose();
+    spawnCalls.length = 0;
+  }
+
+  const productionCannotEnableTestProcessProvider = createProductionAgentExecutionPolicy({
+    sourceWorkspace,
+    isProduction: true,
+    platform: 'linux',
+    allowUnsafeTestProcessProvider: true,
+    canReadScope: () => true,
+    spawn: fakeSpawn,
+  });
+  assert.deepEqual(
+    productionCannotEnableTestProcessProvider.authorize(scope, 'read-only'),
+    unavailableDecision,
+  );
 
   assert.throws(
     () => createProductionAgentExecutionPolicy({

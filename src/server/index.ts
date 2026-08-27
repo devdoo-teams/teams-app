@@ -252,19 +252,21 @@ const operatorAllowlist = parseOperatorAllowlist(
   process.env.TEAMS_OPERATOR_REQUESTER_ALLOWLIST,
   configuredTenantId,
 );
+const unsafeTestProcessIsolation = safeLocal
+  && process.env.NODE_ENV === 'test'
+  && process.env.TEAMS_TEST_PROCESS_ISOLATION === 'true';
 const agentExecutionPolicy = createProductionAgentExecutionPolicy({
   sourceWorkspace: agentWorkspace,
-  // Safe-local mode is loopback-only and still requires every explicit
-  // production isolation input below. Enabling the same provider here lets
-  // the registered Teams SDK path be exercised end-to-end without weakening
-  // the factory's fail-closed behavior for ordinary development runtimes.
-  isProduction: isProduction || safeLocal,
+  isProduction,
   codexHome: agentProvider === 'codex' && isProduction ? process.env.AGENT_CODEX_HOME : undefined,
   codexExecutable: agentProvider === 'codex' && isProduction ? process.env.CODEX_BIN : undefined,
   codexExecutableSha256: agentProvider === 'codex' && isProduction ? process.env.CODEX_BIN_SHA256 : undefined,
-  allowLegacySeatbeltTestProvider: safeLocal,
-  profilePath: safeLocal ? process.env.AGENT_ISOLATION_PROFILE : undefined,
-  sandboxExecPath: safeLocal ? process.env.AGENT_SANDBOX_EXEC_PATH : undefined,
+  // These providers are reachable only in token-protected, loopback safe-local
+  // mode. The cross-platform process provider additionally requires NODE_ENV=test.
+  allowUnsafeTestProcessProvider: unsafeTestProcessIsolation,
+  allowLegacySeatbeltTestProvider: safeLocal && !unsafeTestProcessIsolation,
+  profilePath: safeLocal && !unsafeTestProcessIsolation ? process.env.AGENT_ISOLATION_PROFILE : undefined,
+  sandboxExecPath: safeLocal && !unsafeTestProcessIsolation ? process.env.AGENT_SANDBOX_EXEC_PATH : undefined,
   canMutateScope: (scope) => isOperator(scope),
   canReadScope: (scope) => isOperator(scope),
 });

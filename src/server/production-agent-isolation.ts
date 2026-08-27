@@ -4,6 +4,8 @@ import type { AgentJobScope } from './agent-job-store.js';
 import {
   AgentExecutionPolicy,
   AgentIsolationProvider,
+  type AgentIsolationAcquireInput,
+  type AgentIsolationLease,
   type AgentIsolationSpawnOptions,
 } from './agent-execution-policy.js';
 import {
@@ -36,6 +38,11 @@ export type ProductionAgentExecutionPolicyOptions = Readonly<{
   nativeExecutableTrustVerifier?: ExecutableTrustVerifier;
   /** Local test-only compatibility seam; never enabled by production composition. */
   allowLegacySeatbeltTestProvider?: boolean;
+  /**
+   * Explicit cross-platform process fixture for loopback integration tests.
+   * It is not an OS security boundary and must remain disabled in production.
+   */
+  allowUnsafeTestProcessProvider?: boolean;
   /** Explicitly trusted, absolute Seatbelt profile for hermetic local fixtures only. */
   profilePath?: string;
   /** Optional explicit absolute sandbox-exec path for hermetic local fixtures only. */
@@ -47,16 +54,37 @@ export type ProductionAgentExecutionPolicyOptions = Readonly<{
 }>;
 
 /**
- * Production is opt-in: without an explicit profile this returns no provider,
- * so AgentExecutionPolicy keeps read-only execution fail-closed. The profile
- * itself is an operator-managed Seatbelt boundary; this function never
- * invents credentials, paths, or permissions.
+ * Production is opt-in: native Codex inputs must be complete and trusted or
+ * AgentExecutionPolicy remains fail-closed. Local providers are explicit test
+ * seams and are rejected whenever isProduction is true.
  */
 export function createProductionAgentIsolationProvider(
   options: ProductionAgentExecutionPolicyOptions,
 ): AgentIsolationProvider | undefined {
-  if (!options.isProduction) return undefined;
   const platform = options.platform ?? process.platform;
+  const spawnChild = options.spawn ?? ((command, args, spawnOptions) => (
+    spawn(command, [...args], spawnOptions as any)
+  ));
+
+  if (!options.isProduction && options.allowUnsafeTestProcessProvider) {
+    return new UnsafeTestProcessIsolationProvider(spawnChild);
+  }
+
+  const profilePath = normalizedOptionalValue(options.profilePath);
+  const sandboxExecPath = normalizedOptionalValue(options.sandboxExecPath);
+  if (sandboxExecPath && !profilePath) {
+    throw new Error('AGENT_SANDBOX_EXEC_PATH requires AGENT_ISOLATION_PROFILE.');
+  }
+  if (!options.isProduction) {
+    if (!options.allowLegacySeatbeltTestProvider || !profilePath || platform !== 'darwin') return undefined;
+    return new MacOSSeatbeltIsolationProvider({
+      profilePath,
+      platform,
+      spawn: spawnChild,
+      ...(sandboxExecPath ? { sandboxExecPath } : {}),
+    });
+  }
+
   const codexHome = normalizedOptionalValue(options.codexHome);
   const codexExecutable = normalizedOptionalValue(options.codexExecutable);
   const codexExecutableSha256 = normalizedOptionalValue(options.codexExecutableSha256)?.toLowerCase();
@@ -79,22 +107,7 @@ export function createProductionAgentIsolationProvider(
     });
   }
 
-  const profilePath = normalizedOptionalValue(options.profilePath);
-  const sandboxExecPath = normalizedOptionalValue(options.sandboxExecPath);
-  if (sandboxExecPath && !profilePath) {
-    throw new Error('AGENT_SANDBOX_EXEC_PATH requires AGENT_ISOLATION_PROFILE.');
-  }
-  if (!options.allowLegacySeatbeltTestProvider || !profilePath || platform !== 'darwin') return undefined;
-
-  const spawnChild = options.spawn ?? ((command, args, spawnOptions) => (
-    spawn(command, [...args], spawnOptions as any)
-  ));
-  return new MacOSSeatbeltIsolationProvider({
-    profilePath,
-    platform,
-    spawn: spawnChild,
-    ...(sandboxExecPath ? { sandboxExecPath } : {}),
-  });
+  return undefined;
 }
 
 export function createProductionAgentExecutionPolicy(
@@ -111,4 +124,27 @@ export function createProductionAgentExecutionPolicy(
 function normalizedOptionalValue(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized || undefined;
+}
+
+class UnsafeTestProcessIsolationProvider extends AgentIsolationProvider {
+  constructor(
+    private readonly spawnChild: (
+      command: string,
+      args: readonly string[],
+      options: AgentIsolationSpawnOptions,
+    ) => ChildProcess,
+  ) {
+    super('unsafe-test-process');
+  }
+
+  override async acquire(input: AgentIsolationAcquireInput): Promise<AgentIsolationLease> {
+    await this.validateRequest(input);
+    return this.issueLease({
+      subject: input.subject,
+      workspace: input.workspace,
+      protectedRoots: input.protectedRoots,
+      environmentOverrides: input.environmentOverrides,
+      spawn: this.spawnChild,
+    });
+  }
 }
