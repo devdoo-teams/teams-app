@@ -59,10 +59,27 @@ try {
   assert.equal(ambiguous.attempts, 1);
   assert.equal(ambiguous.activityId, undefined);
 
+  const rejectedIntent = await store.createOrGetCompletionIntent({
+    parentTaskId: 'task-parent-rejected',
+    scope,
+    payloadSha256: crypto.createHash('sha256').update('rejected-card', 'utf8').digest('hex'),
+  });
+  const rejectedClaim = await store.claim(rejectedIntent.intent.id, scope, 'worker-e', 30_000);
+  assert.ok(rejectedClaim);
+  const rejected = await store.recordConnectorRejected(
+    rejectedIntent.intent.id,
+    scope,
+    rejectedClaim.leaseToken,
+    'connector returned an explicit HTTP rejection',
+  );
+  assert.equal(rejected.status, 'connector-rejected');
+  assert.equal(rejected.attempts, 1);
+
   const reopened = new TeamsA2AOutboundStore(filePath);
   await reopened.initialize();
   assert.equal(reopened.getIntent(first.intent.id, scope)?.status, 'connector-accepted');
   assert.equal(reopened.getIntent(ambiguous.id, scope)?.status, 'ambiguous');
+  assert.equal(reopened.getIntent(rejected.id, scope)?.status, 'connector-rejected');
 
   console.log('teams-a2a-outbound-store-test: PASS');
 } finally {

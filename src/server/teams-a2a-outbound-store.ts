@@ -12,6 +12,7 @@ export type TeamsA2AOutboundStatus =
   | 'queued'
   | 'dispatching'
   | 'connector-accepted'
+  | 'connector-rejected'
   | 'ambiguous';
 
 export type TeamsA2AOutboundIntent = {
@@ -186,6 +187,18 @@ export class TeamsA2AOutboundStore {
     });
   }
 
+  async recordConnectorRejected(
+    intentIdValue: string,
+    scopeValue: A2AScope,
+    leaseTokenValue: string,
+    errorValue: string,
+  ): Promise<TeamsA2AOutboundIntent> {
+    return this.recordOutcome(intentIdValue, scopeValue, leaseTokenValue, {
+      status: 'connector-rejected',
+      error: safeError(errorValue),
+    });
+  }
+
   getIntent(intentIdValue: string, scopeValue: A2AScope): TeamsA2AOutboundIntent | undefined {
     this.assertInitialized();
     const id = safeId(intentIdValue, 'intentId');
@@ -199,7 +212,7 @@ export class TeamsA2AOutboundStore {
     scopeValue: A2AScope,
     leaseTokenValue: string,
     outcome: Readonly<{
-      status: Extract<TeamsA2AOutboundStatus, 'connector-accepted' | 'ambiguous'>;
+      status: Extract<TeamsA2AOutboundStatus, 'connector-accepted' | 'connector-rejected' | 'ambiguous'>;
       activityId?: string;
       error?: string;
     }>,
@@ -270,7 +283,7 @@ function loadIntent(value: unknown): TeamsA2AOutboundIntent {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid Teams A2A outbound intent.');
   const record = value as Record<string, unknown>;
   const status = record.status;
-  if (!['queued', 'dispatching', 'connector-accepted', 'ambiguous'].includes(String(status))) {
+  if (!['queued', 'dispatching', 'connector-accepted', 'connector-rejected', 'ambiguous'].includes(String(status))) {
     throw new Error('Invalid Teams A2A outbound status.');
   }
   if (record.kind !== 'teams-completion' || !Number.isSafeInteger(record.attempts) || Number(record.attempts) < 0) {
