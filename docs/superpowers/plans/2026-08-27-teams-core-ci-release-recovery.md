@@ -12,10 +12,10 @@
 
 ## Execution update — 2026-08-27
 
-- Candidate implementation commit on branch `recovery/teams-core-1.0.89` is `f2e48cf398e6ec16ffa9eca27ab632088102a734`; package and manifest remain `1.0.76` because this run contains CI/test/control-plane changes only. The branch also contains the pre-existing product delta from `main`; the current recovery commits are not being represented as a replacement for that broader historical diff.
-- Draft PR #1 is open against `main` with merge state `CLEAN`. GitHub Actions run `33059749674` passed the preceding candidate `1f111914...` for Core, A2A, Atomic continuity, and Docker Core runtime build/smoke; run `33061805975` passed Core and continuity but exposed a flaky 50ms A2A deadline fixture. The fixture was stabilized in `db54ddd…`; a fresh CI run is required before promotion evidence can be reused.
+- Candidate implementation commit on branch `recovery/teams-core-1.0.89` is `a5057df7cb3bc7b4e1948ccfb0eeef4c3c69d50a`; package and manifest remain `1.0.76` because this run contains CI/test/control-plane changes only. The branch also contains the pre-existing product delta from `main`; the current recovery commits are not being represented as a replacement for that broader historical diff.
+- Draft PR #1 is open against `main` with merge state `CLEAN`. GitHub Actions run `33062557183` passed for this exact HEAD: A2A collaboration/remote contracts, Core verification, atomic build/runtime continuity, and Docker Core runtime build plus exact-image smoke. The prior 50ms A2A deadline fixture failure in `33061805975` was stabilized in `db54ddd…` before this successful run.
 - The preserved public service remains `https://q3kj3s3z-3980.jpe1.devtunnels.ms`, serving `1.0.76` from `944ae3ae2ed90841fd02df8280c895d63d63a822` with production Teams SDK health. It has not been restarted, replaced, or used as evidence for the candidate.
-- Tasks 2–4 and 6 are implemented/verified, including same-digest published-image smoke wiring with runtime identity matching, a credential-free two-server authenticated A2A HTTP round-trip fixture, deterministic deadline timing, and setup cleanup. Task 5 remains pending until an approved `main` merge/tag, real deployment variables, stable host, portal update, and authenticated Teams/A2A UI evidence are available.
+- Tasks 2–4 and 6 are implemented/verified, including same-digest published-image smoke wiring with runtime identity matching, a credential-free two-server authenticated A2A HTTP round-trip fixture, deterministic deadline timing, and setup cleanup. Task 5 remains pending until an approved `main` merge/tag, real deployment variables, stable host, portal update, and authenticated Teams/A2A UI evidence are available. The PR CI run does not publish an immutable release candidate by design.
 
 ## Global Constraints
 
@@ -38,12 +38,12 @@
 - Review: `docs/superpowers/plans/2026-08-11-teams-release-recovery-replan.md`
 
 **Interfaces:**
-- Consumes: current checkout `01052e8f9cbad71767f4536d9773b39f498ca2be`, public health identity `1.0.76`/`944ae3a…`, PR #1, and Jira MP-160.
+- Consumes: current checkout `a5057df7cb3bc7b4e1948ccfb0eeef4c3c69d50a`, public health identity `1.0.76`/`944ae3a…`, PR #1, and Jira MP-160.
 - Produces: a current plan that does not treat stale `1.0.42` artifacts or old screenshots as current evidence.
 
 - [x] **Step 1: Record the current source and runtime facts.**
 
-  The initial candidate at plan creation was `01052e8f9cbad71767f4536d9773b39f498ca2be`; the current candidate is branch `recovery/teams-core-1.0.89` at `9341ea835d484f4090c716e60f348442c7c0d3e5`, with package/manifest `1.0.76`. The preserved public origin is `https://q3kj3s3z-3980.jpe1.devtunnels.ms`, currently serving source commit `944ae3ae2ed90841fd02df8280c895d63d63a822` and server bundle `c1a28900f8b9905877a15d80f491ff3bdce5b016b30b42ca6f2fa5e43da09658`.
+  The initial candidate at plan creation was `01052e8f9cbad71767f4536d9773b39f498ca2be`; the current candidate is branch `recovery/teams-core-1.0.89` at `a5057df7cb3bc7b4e1948ccfb0eeef4c3c69d50a`, with package/manifest `1.0.76`. The preserved public origin is `https://q3kj3s3z-3980.jpe1.devtunnels.ms`, currently serving source commit `944ae3ae2ed90841fd02df8280c895d63d63a822` and server bundle `c1a28900f8b9905877a15d80f491ff3bdce5b016b30b42ca6f2fa5e43da09658`.
 
 - [x] **Step 2: Mark stale plan content as historical.**
 
@@ -183,13 +183,13 @@
 - Consumes: the two CI workflow commits from Tasks 2–3.
 - Produces: bounded evidence that Core/A2A/continuity contracts still pass without using the Documents/FileProvider checkout.
 
-- [x] **Step 1: Verify the tracked worktree and identity.** Candidate implementation commit `f2e48cf…`; clean tracked worktree before this plan refresh; package and manifest both `1.0.76`.
+- [x] **Step 1: Verify the tracked worktree and identity.** Candidate implementation commit `a5057df…`; the tracked worktree is clean; package and manifest both remain `1.0.76`.
 
   Run `git status --short --branch`, `git rev-parse HEAD`, and compare the package/manifest versions. Do not build if tracked source is dirty or FileProvider reads are unstable.
 
-- [x] **Step 2: Run the bounded Core gate.** Local Core gates pass at `db54ddd…`; the image-smoke hardening is covered by focused contracts at `f2e48cf…`. The standalone bundle-boundary fallback remains fixed in `d3b77e7`, and the two previously unregistered admission/process-controller security tests now run through the Core runner.
+- [x] **Step 2: Run the bounded Core gate.** The standalone bundle-boundary fallback remains fixed in `d3b77e7`, image-smoke hardening is covered by focused contracts from `f2e48cf…`, and the two previously unregistered admission/process-controller security tests now run through the Core runner.
 
-  Run `npm run typecheck:core`, `npm run test:ci-workflow-contract`, `npm run test:image-publish-workflow-contract`, `npm run test:docker-build-contract`, `npm run build:core`, `npm run test:core`, `npm run validate:manifest`, and `npm run test:package-determinism` sequentially with bounded timeouts.
+  Local bounded checks pass at current HEAD: `npm run typecheck:core`, workflow/image/docker contract tests, `npm run build:core`, `npm run test:core`, `npm run test:runtime-dist`, `npm run validate:manifest`, and `npm run test:package-determinism`. GitHub Actions run `33062557183` independently passed the Core, A2A, continuity, and Docker image-smoke jobs. The local Docker CLI is unavailable, so the actual Docker image smoke is credited only to the GitHub runner.
 
 - [x] **Step 3: Verify A2A contract coverage separately.** Existing A2A contracts pass, and `db54ddd…` retains the local two-server HTTP fixture covering authenticated Agent Card, SendMessage/GetTask/ListTasks/CancelTask, and wrong-token rejection. This remains fixture evidence, not public live remote or Teams evidence.
 
