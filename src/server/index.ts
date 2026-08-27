@@ -1038,6 +1038,19 @@ function createRuntimeBotSender(
   return createBotSender(undefined, messages, activities);
 }
 
+function createConversationBotSender(conversationId: string): BotSend {
+  if (teamsApp && !skipOutbound) {
+    return createBotSender((activity) => teamsApp.send(conversationId, activity));
+  }
+  if (!safeLocal) return async () => ({ state: 'ambiguous' });
+
+  const messages = localOutbox.get(conversationId) ?? [];
+  localOutbox.set(conversationId, messages);
+  const activities = localOutboxActivities.get(conversationId) ?? [];
+  localOutboxActivities.set(conversationId, activities);
+  return createBotSender(undefined, messages, activities);
+}
+
 if (useTeamsSdk) {
   // The Teams SDK package is CommonJS today. The core server bundle exposes
   // that module through a default namespace, while a direct Node import can
@@ -2086,20 +2099,7 @@ const notifyConversation = async (notification: AgentNotification): Promise<void
   const envelope = genUiMode === 'legacy'
     ? undefined
     : genUi.notification(notification);
-  if (teamsApp && !skipOutbound) {
-    await deliverGenUiActivity(
-      (activity) => teamsApp.send(conversationId, activity),
-      message,
-      envelope,
-    );
-    return;
-  }
-
-  const messages = localOutbox.get(conversationId) ?? [];
-  localOutbox.set(conversationId, messages);
-  const activities = localOutboxActivities.get(conversationId) ?? [];
-  localOutboxActivities.set(conversationId, activities);
-  await createBotSender(undefined, messages, activities)(message, envelope);
+  await createConversationBotSender(conversationId)(message, envelope);
 };
 
 agentService = new AgentService(
@@ -2838,10 +2838,101 @@ function a2aCompletionPresentation(
   };
 }
 
+function a2aAcceptedPresentation(parentTaskId: string): { text: string; envelope: GenUiEnvelopeV1 } {
+  const text = [
+    `A2A 작업 ${parentTaskId}을 접수했습니다.`,
+    '검토 에이전트를 백그라운드에서 실행하고 완료되면 이 대화에 결과를 전송합니다.',
+  ].join('\n');
+  return {
+    text,
+    envelope: genUi.answer(text, `a2a-accepted-${parentTaskId}`),
+  };
+}
+
+function a2aCompletionIntentFingerprint(parentTaskId: string, scope: AgentJobScope): string {
+  return crypto.createHash('sha256').update(JSON.stringify({
+    schemaVersion: 'teams-a2a-completion-intent.v1',
+    parentTaskId,
+    scope,
+  }), 'utf8').digest('hex');
+}
+
+async function dispatchA2ACompletion(
+  completion: Promise<A2AProductionCollaborationResult>,
+  parentTaskId: string,
+  scope: AgentJobScope,
+  outboundIntentId: string,
+): Promise<void> {
+  let presentation: { text: string; envelope: GenUiEnvelopeV1 };
+  try {
+    const collaboration = await completion;
+    presentation = a2aCompletionPresentation(collaboration, scope);
+  } catch (error) {
+    const text = error instanceof AgentCapacityError
+      ? agentCapacityText(error)
+      : error instanceof AgentExecutionUnavailableError
+        ? agentUnavailableText()
+        : `A2A 작업 ${parentTaskId}을 완료하지 못했습니다. 잠시 후 다시 시도하세요.`;
+    presentation = { text, envelope: genUi.error(text, `a2a-completion-${parentTaskId}-failed`) };
+    console.error(
+      'A2A Teams background collaboration failed',
+      error instanceof Error ? error.message : 'unknown error',
+    );
+  }
+
+  const lease = await a2aOutboundStore.claim(
+    outboundIntentId,
+    scope,
+    `worker-${crypto.randomUUID()}`,
+    30_000,
+  );
+  if (!lease) return;
+
+  try {
+    const receipt = await createConversationBotSender(scope.conversationId)(
+      presentation.text,
+      presentation.envelope,
+    );
+    if (receipt.state === 'connector-accepted') {
+      await a2aOutboundStore.recordConnectorAccepted(
+        lease.id,
+        scope,
+        lease.leaseToken!,
+        receipt.activityId,
+      );
+    } else if (receipt.state === 'connector-rejected') {
+      await a2aOutboundStore.recordConnectorRejected(
+        lease.id,
+        scope,
+        lease.leaseToken!,
+        'Teams Connector explicitly rejected the completion activity.',
+      );
+    } else {
+      await a2aOutboundStore.recordAmbiguous(
+        lease.id,
+        scope,
+        lease.leaseToken!,
+        'Teams completion transport outcome is unknown.',
+      );
+    }
+  } catch (deliveryError) {
+    await a2aOutboundStore.recordAmbiguous(
+      lease.id,
+      scope,
+      lease.leaseToken!,
+      'Teams completion dispatch failed before an accepted response was persisted.',
+    );
+    console.error(
+      'A2A Teams completion dispatch could not be confirmed',
+      deliveryError instanceof Error ? deliveryError.message : 'unknown error',
+    );
+  }
+}
+
 async function handleBotNaturalLanguage(activity: any, send: BotSend, scope: AgentJobScope, prompt: string): Promise<void> {
   try {
     if (!a2aProductionRuntime) throw new Error('A2A production runtime is not initialized.');
-    const collaboration = await a2aProductionRuntime.collaborate({
+    const started = await a2aProductionRuntime.startCollaboration({
       scope,
       prompt,
       requestedRoles: ['reviewer'],
@@ -2849,58 +2940,35 @@ async function handleBotNaturalLanguage(activity: any, send: BotSend, scope: Age
       deadlineMs: 60_000,
       parallelism: 1,
     });
-    const presentation = a2aCompletionPresentation(collaboration, scope);
-    if (!collaboration.parentTask) {
+    if (!started.parentTask) {
+      const presentation = a2aCompletionPresentation(await started.completion, scope);
       await send(presentation.text, presentation.envelope);
       return;
     }
 
-    const payloadSha256 = crypto.createHash('sha256').update(JSON.stringify(presentation), 'utf8').digest('hex');
     const durable = await a2aOutboundStore.createOrGetCompletionIntent({
-      parentTaskId: collaboration.parentTask.id,
+      parentTaskId: started.parentTask.id,
       scope,
-      payloadSha256,
+      payloadSha256: a2aCompletionIntentFingerprint(started.parentTask.id, scope),
     });
-    const lease = await a2aOutboundStore.claim(
-      durable.intent.id,
-      scope,
-      `worker-${crypto.randomUUID()}`,
-      30_000,
-    );
-    if (!lease) return;
 
-    try {
-      const receipt = await send(presentation.text, presentation.envelope);
-      if (receipt.state === 'connector-accepted') {
-        await a2aOutboundStore.recordConnectorAccepted(
-          lease.id,
-          scope,
-          lease.leaseToken!,
-          receipt.activityId,
-        );
-      } else if (receipt.state === 'connector-rejected') {
-        await a2aOutboundStore.recordConnectorRejected(
-          lease.id,
-          scope,
-          lease.leaseToken!,
-          'Teams Connector explicitly rejected the completion activity.',
-        );
-      } else {
-        await a2aOutboundStore.recordAmbiguous(
-          lease.id,
-          scope,
-          lease.leaseToken!,
-          'Teams completion transport outcome is unknown.',
-        );
-      }
-    } catch (deliveryError) {
-      await a2aOutboundStore.recordAmbiguous(
-        lease.id,
+    const ownsDispatch = started.created || durable.created;
+    if (started.created) {
+      const accepted = a2aAcceptedPresentation(started.parentTask.id);
+      await send(accepted.text, accepted.envelope);
+    }
+    if (ownsDispatch) {
+      void dispatchA2ACompletion(
+        started.completion,
+        started.parentTask.id,
         scope,
-        lease.leaseToken!,
-        'Teams completion dispatch failed before an accepted response was persisted.',
-      );
-      console.error('A2A Teams completion dispatch could not be confirmed', deliveryError instanceof Error ? deliveryError.message : 'unknown error');
+        durable.intent.id,
+      ).catch((error) => {
+        console.error(
+          'A2A Teams background completion worker failed',
+          error instanceof Error ? error.message : 'unknown error',
+        );
+      });
     }
   } catch (error) {
     if (error instanceof AgentMutationAuthorizationError) {

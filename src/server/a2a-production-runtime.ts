@@ -182,6 +182,14 @@ export type A2AProductionCollaborationResult = Readonly<{
   orchestration?: A2AOrchestrationResult;
 }>;
 
+export type A2AProductionCollaborationStart = Readonly<{
+  status: 'accepted' | 'blocked';
+  plan: A2ACollaborationPlanResult;
+  parentTask?: A2ATask;
+  created: boolean;
+  completion: Promise<A2AProductionCollaborationResult>;
+}>;
+
 export type A2AProductionRuntimeOptions = Readonly<{
   publicOrigin: string;
   appVersion: string;
@@ -208,6 +216,7 @@ export type A2AProductionRuntime = Readonly<{
   officialAgentCard: A2AOfficialAgentCard;
   telemetry?: A2ATelemetryCollector;
   dispatchChildren: (input: A2AProductionChildDispatch) => Promise<A2AOrchestrationResult>;
+  startCollaboration: (input: A2AProductionCollaborationInput) => Promise<A2AProductionCollaborationStart>;
   collaborate: (input: A2AProductionCollaborationInput) => Promise<A2AProductionCollaborationResult>;
   cancelDispatch: (input: { task: A2ATask; authenticatedScope: A2AScope }) => Promise<A2ATask | undefined>;
   recoverChild: (input: A2AProductionChildRecoveryInput) => Promise<A2AOrchestratorChildExecutionResult | undefined>;
@@ -788,15 +797,18 @@ export function createA2AProductionRuntime(options: A2AProductionRuntimeOptions)
     })
   );
 
-  const collaborate = async (
+  const startCollaboration = async (
     input: A2AProductionCollaborationInput,
-  ): Promise<A2AProductionCollaborationResult> => {
+  ): Promise<A2AProductionCollaborationStart> => {
     const plan = createA2ACollaborationPlan({
       prompt: input.prompt,
       requestedRoles: input.requestedRoles,
       workers: collaborationWorkers(input.scope),
     });
-    if (plan.strategy === 'blocked') return { status: 'blocked', plan };
+    if (plan.strategy === 'blocked') {
+      const blocked = Promise.resolve<A2AProductionCollaborationResult>({ status: 'blocked', plan });
+      return { status: 'blocked', plan, created: false, completion: blocked };
+    }
     validateCollaborationDispatchLimits(input);
 
     const parentFingerprint = sha256(JSON.stringify({
@@ -819,11 +831,25 @@ export function createA2AProductionRuntime(options: A2AProductionRuntimeOptions)
     const parentTask = parent.task;
     const collaborationKey = dispatchKey(parentTask);
     const inFlight = activeCollaborations.get(collaborationKey);
-    if (inFlight) return inFlight;
+    if (inFlight) {
+      return {
+        status: 'accepted',
+        plan,
+        parentTask,
+        created: parent.created,
+        completion: inFlight,
+      };
+    }
 
     const persisted = options.store.getDispatchIntent(parentTask.id, input.scope);
     if (persisted) {
-      return collaborationSnapshot(plan, parentTask, persisted);
+      return {
+        status: 'accepted',
+        plan,
+        parentTask,
+        created: parent.created,
+        completion: Promise.resolve(collaborationSnapshot(plan, parentTask, persisted)),
+      };
     }
     if (!parent.created && (parentTask.status === 'completed' || parentTask.status === 'failed' || parentTask.status === 'canceled')) {
       throw new A2AContractError('TerminalStateImmutableError', 'A2A collaboration parent is already terminal.');
@@ -856,13 +882,29 @@ export function createA2AProductionRuntime(options: A2AProductionRuntimeOptions)
       };
     })();
     activeCollaborations.set(collaborationKey, operation);
-    try {
-      return await operation;
-    } finally {
+    void operation.then(() => {
       if (activeCollaborations.get(collaborationKey) === operation) {
         activeCollaborations.delete(collaborationKey);
       }
-    }
+    }, () => {
+      if (activeCollaborations.get(collaborationKey) === operation) {
+        activeCollaborations.delete(collaborationKey);
+      }
+    });
+    return {
+      status: 'accepted',
+      plan,
+      parentTask,
+      created: parent.created,
+      completion: operation,
+    };
+  };
+
+  const collaborate = async (
+    input: A2AProductionCollaborationInput,
+  ): Promise<A2AProductionCollaborationResult> => {
+    const started = await startCollaboration(input);
+    return started.completion;
   };
 
   const orchestrationRouter = createA2AOrchestrationRouter({
@@ -883,6 +925,7 @@ export function createA2AProductionRuntime(options: A2AProductionRuntimeOptions)
     officialAgentCard,
     ...(options.telemetry ? { telemetry: options.telemetry } : {}),
     dispatchChildren,
+    startCollaboration,
     collaborate,
     cancelDispatch,
     recoverChild: recoverTrustedChild,

@@ -214,6 +214,10 @@ try {
     const serialized = JSON.stringify(adaptiveCard(value));
     return serialized.includes('completed') && /완료|completed/u.test(serialized);
   });
+  const acceptedCardActivities = cardActivities.filter((value) => {
+    const serialized = JSON.stringify(adaptiveCard(value));
+    return serialized.includes('접수했습니다') && serialized.includes('백그라운드');
+  });
   const parentIds = parents
     .map((candidate) => candidate.id)
     .filter((value): value is string => typeof value === 'string' && value.length > 0);
@@ -282,6 +286,11 @@ try {
     if (!parentIds.some((parentId) => serialized.includes(parentId))) {
       failures.push('terminal Teams completion card must identify the durable A2A parent');
     }
+  }
+  if (acceptedCardActivities.length !== 1) {
+    failures.push(`duplicate Activity must emit one immediate accepted card; observed ${acceptedCardActivities.length}`);
+  } else if ('text' in (acceptedCardActivities[0] as Record<string, unknown>)) {
+    failures.push('immediate accepted card must be attachment-only without top-level text');
   }
 
   assert.equal(
