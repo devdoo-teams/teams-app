@@ -45,6 +45,10 @@ const unavailableDecision = {
 
 try {
   const productionIndex = await fs.readFile(path.resolve(process.cwd(), 'src/server/index.ts'), 'utf8');
+  const productionIsolation = await fs.readFile(
+    path.resolve(process.cwd(), 'src/server/production-agent-isolation.ts'),
+    'utf8',
+  );
   assert.match(productionIndex, /createProductionAgentExecutionPolicy\(/u);
   assert.match(productionIndex, /executionPolicy:\s*agentExecutionPolicy/u);
   assert.match(productionIndex, /AGENT_CODEX_HOME/u, 'production must select one service CODEX_HOME outside the projection');
@@ -53,6 +57,11 @@ try {
     productionIndex,
     /safeLocal\s*\n\s*&& process\.env\.NODE_ENV === 'test'\s*\n\s*&& process\.env\.TEAMS_TEST_PROCESS_ISOLATION === 'true'/u,
     'unsafe process isolation must require loopback safe-local mode, NODE_ENV=test, and an explicit fixture flag',
+  );
+  assert.doesNotMatch(
+    productionIsolation,
+    /allowUnsafeTestProcessProvider|UnsafeTestProcessIsolationProvider/u,
+    'the general production policy factory must not expose the unsafe test process provider',
   );
   assert.doesNotMatch(productionIndex, /AGENT_CODEX_AUTH_FILE/u, 'production must not copy raw auth files into jobs');
 
@@ -122,55 +131,6 @@ try {
     spawn: fakeSpawn,
   });
   assert.deepEqual(productionCannotEnableLegacyProvider.authorize(scope, 'read-only'), unavailableDecision);
-
-  const crossPlatformTestConfiguration = createProductionAgentExecutionPolicy({
-    sourceWorkspace,
-    isProduction: false,
-    platform: 'linux',
-    allowUnsafeTestProcessProvider: true,
-    canReadScope: () => true,
-    spawn: fakeSpawn,
-  });
-  assert.deepEqual(crossPlatformTestConfiguration.authorize(scope, 'read-only'), { allowed: true });
-  const crossPlatformPrepared = await crossPlatformTestConfiguration.prepareWorkspace(
-    'read-only',
-    scope,
-    'inspect only the projected workspace',
-  );
-  try {
-    assert.equal(crossPlatformPrepared.projected, true);
-    assert.equal(crossPlatformPrepared.isolationLease?.providerId, 'unsafe-test-process');
-    crossPlatformPrepared.isolationLease?.bindJob('test-job-1');
-    await crossPlatformPrepared.isolationLease?.spawn(
-      { ...scope, jobId: 'test-job-1' },
-      codexExecutable,
-      ['fixture'],
-      {
-        cwd: crossPlatformPrepared.workspace,
-        env: crossPlatformPrepared.environmentOverrides ?? {},
-        detached: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      },
-    );
-    assert.equal(spawnCalls.length, 1);
-    assert.equal(spawnCalls[0]?.command, codexExecutable);
-  } finally {
-    await crossPlatformPrepared.dispose();
-    spawnCalls.length = 0;
-  }
-
-  const productionCannotEnableTestProcessProvider = createProductionAgentExecutionPolicy({
-    sourceWorkspace,
-    isProduction: true,
-    platform: 'linux',
-    allowUnsafeTestProcessProvider: true,
-    canReadScope: () => true,
-    spawn: fakeSpawn,
-  });
-  assert.deepEqual(
-    productionCannotEnableTestProcessProvider.authorize(scope, 'read-only'),
-    unavailableDecision,
-  );
 
   assert.throws(
     () => createProductionAgentExecutionPolicy({

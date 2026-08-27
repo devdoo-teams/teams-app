@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import crypto from 'node:crypto';
@@ -21,7 +22,13 @@ import {
   normalizeAgentPrompt,
   type AgentNotification,
 } from './agent-service.js';
-import { AgentExecutionUnavailableError } from './agent-execution-policy.js';
+import {
+  AgentExecutionPolicy,
+  AgentExecutionUnavailableError,
+  AgentIsolationProvider,
+  type AgentIsolationAcquireInput,
+  type AgentIsolationLease,
+} from './agent-execution-policy.js';
 import { createProductionAgentExecutionPolicy } from './production-agent-isolation.js';
 import { ProviderNeutralAgentRunner } from './provider-neutral-agent-runner.js';
 import type { CliAgentProvider } from './cli-agent-runner.js';
@@ -122,6 +129,28 @@ import {
   type McpAuthConfig,
 } from './mcp-auth-config.js';
 import { mountMcpAuthenticatedBoundary } from './mcp-authenticated-route.js';
+
+/**
+ * Same-UID process fixture for token-protected loopback integration tests.
+ * It is intentionally private to this composition root and is never exported
+ * through the general production isolation factory.
+ */
+class UnsafeLoopbackTestIsolationProvider extends AgentIsolationProvider {
+  constructor() {
+    super('unsafe-test-process');
+  }
+
+  override async acquire(input: AgentIsolationAcquireInput): Promise<AgentIsolationLease> {
+    await this.validateRequest(input);
+    return this.issueLease({
+      subject: input.subject,
+      workspace: input.workspace,
+      protectedRoots: input.protectedRoots,
+      environmentOverrides: input.environmentOverrides,
+      spawn: (command, args, options) => spawn(command, [...args], options as any),
+    });
+  }
+}
 
 const port = Number(process.env.PORT ?? 3978);
 const isProduction = process.env.NODE_ENV === 'production';
@@ -255,21 +284,24 @@ const operatorAllowlist = parseOperatorAllowlist(
 const unsafeTestProcessIsolation = safeLocal
   && process.env.NODE_ENV === 'test'
   && process.env.TEAMS_TEST_PROCESS_ISOLATION === 'true';
-const agentExecutionPolicy = createProductionAgentExecutionPolicy({
-  sourceWorkspace: agentWorkspace,
-  isProduction,
-  codexHome: agentProvider === 'codex' && isProduction ? process.env.AGENT_CODEX_HOME : undefined,
-  codexExecutable: agentProvider === 'codex' && isProduction ? process.env.CODEX_BIN : undefined,
-  codexExecutableSha256: agentProvider === 'codex' && isProduction ? process.env.CODEX_BIN_SHA256 : undefined,
-  // These providers are reachable only in token-protected, loopback safe-local
-  // mode. The cross-platform process provider additionally requires NODE_ENV=test.
-  allowUnsafeTestProcessProvider: unsafeTestProcessIsolation,
-  allowLegacySeatbeltTestProvider: safeLocal && !unsafeTestProcessIsolation,
-  profilePath: safeLocal && !unsafeTestProcessIsolation ? process.env.AGENT_ISOLATION_PROFILE : undefined,
-  sandboxExecPath: safeLocal && !unsafeTestProcessIsolation ? process.env.AGENT_SANDBOX_EXEC_PATH : undefined,
-  canMutateScope: (scope) => isOperator(scope),
-  canReadScope: (scope) => isOperator(scope),
-});
+const agentExecutionPolicy = unsafeTestProcessIsolation
+  ? new AgentExecutionPolicy(agentWorkspace, {
+      isolationProvider: new UnsafeLoopbackTestIsolationProvider(),
+      canMutateScope: (scope) => isOperator(scope),
+      canReadScope: (scope) => isOperator(scope),
+    })
+  : createProductionAgentExecutionPolicy({
+      sourceWorkspace: agentWorkspace,
+      isProduction,
+      codexHome: agentProvider === 'codex' && isProduction ? process.env.AGENT_CODEX_HOME : undefined,
+      codexExecutable: agentProvider === 'codex' && isProduction ? process.env.CODEX_BIN : undefined,
+      codexExecutableSha256: agentProvider === 'codex' && isProduction ? process.env.CODEX_BIN_SHA256 : undefined,
+      allowLegacySeatbeltTestProvider: safeLocal,
+      profilePath: safeLocal ? process.env.AGENT_ISOLATION_PROFILE : undefined,
+      sandboxExecPath: safeLocal ? process.env.AGENT_SANDBOX_EXEC_PATH : undefined,
+      canMutateScope: (scope) => isOperator(scope),
+      canReadScope: (scope) => isOperator(scope),
+    });
 const appVersion = (() => {
   const configured = process.env.APP_VERSION?.trim();
   if (configured) return configured;
