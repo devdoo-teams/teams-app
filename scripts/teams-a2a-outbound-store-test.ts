@@ -62,7 +62,7 @@ try {
   const reopened = new TeamsA2AOutboundStore(filePath);
   await reopened.initialize();
   assert.equal(reopened.getIntent(first.intent.id, scope)?.status, 'connector-accepted');
-  assert.equal(reopened.getIntent(ambiguous.intent.id, scope)?.status, 'ambiguous');
+  assert.equal(reopened.getIntent(ambiguous.id, scope)?.status, 'ambiguous');
 
   console.log('teams-a2a-outbound-store-test: PASS');
 } finally {
