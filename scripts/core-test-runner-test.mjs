@@ -30,9 +30,12 @@ async function assertProcessReaped(pid, label, timeoutMs = 2_000) {
   });
   assert.ok(invocations.length > 2);
   const workspaceContract = invocations.find(({ args }) => args.includes('scripts/core-test-workspace-test.mjs'));
+  const runtimeContract = invocations.find(({ args }) => args.includes('scripts/teams-core-chat-regression-test.ts'));
   const sourceContract = invocations.find(({ args }) => args.includes('scripts/client-item-mutation-test.ts'));
   const renderContract = invocations.find(({ args }) => args.includes('scripts/client-work-item-render-test.ts'));
   assert.equal(workspaceContract.cwd, '/repo', 'plain runner contract tests execute against the orchestrator root');
+  assert.equal(runtimeContract.kind, 'runtime', 'compiled runtime tests have an explicit invocation kind');
+  assert.equal(runtimeContract.cwd, '/repo', 'compiled runtime tests execute beside the commit-bound dist output');
   assert.equal(sourceContract.cwd, '/tmp/pinned-source', 'TypeScript behavior tests execute the pinned source tree');
   assert.equal(renderContract.cwd, '/tmp/pinned-source', 'client render tests execute the pinned source tree');
   assert.equal(

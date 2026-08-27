@@ -29,6 +29,9 @@ const plainTests = [
   'scripts/core-bundle-boundary-test.mjs',
   'scripts/client-build-jsx-runtime-test.mjs',
 ];
+const runtimeTests = [
+  'scripts/teams-core-chat-regression-test.ts',
+];
 const tsTests = [
   'scripts/status-card-test.ts',
   'scripts/genui-contract-test.ts',
@@ -39,7 +42,6 @@ const tsTests = [
   'scripts/ghcp-cli-adapter-test.ts',
   'scripts/provider-neutral-agent-runner-test.ts',
   'scripts/production-agent-isolation-test.ts',
-  'scripts/teams-core-chat-regression-test.ts',
   'scripts/agent-job-store-hardening-test.ts',
   'scripts/agent-admission-control-test.ts',
   'scripts/agent-process-controller-security-test.ts',
@@ -309,6 +311,13 @@ export function createCoreTestInvocations({
       kind: 'contract',
       command: process.execPath,
       args: [moduleRunner, script],
+      cwd: rootCwd,
+      env: childEnv,
+    })),
+    ...runtimeTests.map((script) => ({
+      kind: 'runtime',
+      command: process.execPath,
+      args: ['--import', 'tsx/esm', moduleRunner, script],
       cwd: rootCwd,
       env: childEnv,
     })),

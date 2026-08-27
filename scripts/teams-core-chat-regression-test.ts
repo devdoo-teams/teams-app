@@ -9,7 +9,8 @@ import path from 'node:path';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 
 const root = process.cwd();
-const entry = path.join(resolveRuntimeDistRoot(root), 'server', 'index.js');
+const runtimeDistRoot = resolveRuntimeDistRoot(root);
+const entry = path.join(runtimeDistRoot, 'server', 'index.js');
 const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-core-chat-regression-'));
 const accessToken = crypto.randomBytes(32).toString('base64url');
 const tenantId = 'runtime-tenant';
@@ -21,6 +22,21 @@ let child: ChildProcess | undefined;
 let output = '';
 
 try {
+  const marker = JSON.parse(await fs.readFile(
+    path.join(runtimeDistRoot, 'server', '.teams-server-build-commit'),
+    'utf8',
+  )) as { commit?: unknown; mode?: unknown; worktree?: unknown };
+  assert.equal(marker.mode, 'core', 'Teams chat regression must use a Core server bundle');
+  assert.equal(marker.worktree, 'clean', 'Teams chat regression must use a clean-worktree server bundle');
+  const expectedCommit = process.env.TEAMS_SOURCE_COMMIT?.trim();
+  if (expectedCommit) {
+    assert.equal(
+      marker.commit,
+      expectedCommit,
+      'Teams chat regression server bundle must match the Core runner pinned source commit',
+    );
+  }
+
   const profilePath = path.join(temporaryRoot, 'read-only.sb');
   const authPath = path.join(temporaryRoot, 'codex-auth.json');
   const isolatedNodePath = path.join(temporaryRoot, 'node');
