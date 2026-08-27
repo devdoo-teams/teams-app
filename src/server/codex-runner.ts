@@ -21,7 +21,7 @@ import { REMOTE_AGENT_GUIDANCE } from './remote-agent-guidance.js';
 import { diagnoseRemoteTroubleshooting, formatRemoteTroubleshooting } from './remote-troubleshooting.js';
 import { redactCliDiagnostics } from './cli-diagnostics.js';
 import { CODEX_READ_ONLY_PERMISSION_ARGS } from './codex-permission-profile-isolation-provider.js';
-import { redactSensitiveText } from './sensitive-text.js';
+import { redactSensitiveText, redactSensitiveValue } from './sensitive-text.js';
 
 export interface CodexRunEvent {
   type?: string;
@@ -148,14 +148,27 @@ function isFailureType(type: string): boolean {
   return type === 'error' || type === 'turn.failed' || type === 'turn.cancelled' || type === 'turn.aborted';
 }
 
-function sanitizeRunEvent(event: CodexRunEvent): CodexRunEvent {
-  if (!event.item) return event;
-  const item = { ...event.item };
-  for (const key of ['text', 'message', 'command'] as const) {
-    const value = item[key];
-    if (typeof value === 'string') item[key] = redactSensitiveText(value);
+function sanitizeRunEvent(value: Record<string, unknown>): CodexRunEvent {
+  const event: CodexRunEvent = {};
+  if (typeof value.type === 'string') event.type = value.type;
+  if (typeof value.thread_id === 'string') event.thread_id = value.thread_id;
+
+  if (isRecord(value.item)) {
+    const item: NonNullable<CodexRunEvent['item']> = {};
+    if (typeof value.item.type === 'string') item.type = value.item.type;
+    if (typeof value.item.text === 'string') item.text = value.item.text;
+    if (typeof value.item.command === 'string') item.command = value.item.command;
+    if (typeof value.item.message === 'string') item.message = value.item.message;
+    if (Object.keys(item).length > 0) event.item = item;
   }
-  return { ...event, item };
+
+  if (typeof value.error === 'string') {
+    event.error = value.error;
+  } else if (isRecord(value.error) && typeof value.error.message === 'string') {
+    event.error = { message: value.error.message };
+  }
+
+  return redactSensitiveValue(event) as CodexRunEvent;
 }
 
 type ProtocolState = 'thread' | 'turn' | 'items' | 'message' | 'completed';
@@ -400,7 +413,7 @@ export class CodexRunner {
         return;
       }
       eventCount += 1;
-      const event = sanitizeRunEvent(parsed as CodexRunEvent);
+      const event = sanitizeRunEvent(parsed);
       observeEvent(event);
       if (terminationError) return;
       queueEvent(event);
@@ -464,7 +477,7 @@ export class CodexRunner {
       await Promise.race([eventQueue, terminationPromise.then((error) => { throw error; })]);
       if (terminationError) throw terminationError;
       if (exitResult.signal || exitResult.code !== 0) {
-        const reason = redactCliDiagnostics(stderr.trim().split('\n').slice(-3).join('\n'), {
+        const reason = redactCliDiagnostics(redactSensitiveText(stderr.trim().split('\n').slice(-3).join('\n')), {
           paths: [options.workspace, process.env.HOME, process.env.USERPROFILE],
         }) || `Codex exited with code ${exitResult.code ?? 'signal'}`;
         const diagnostic = formatRemoteTroubleshooting(diagnoseRemoteTroubleshooting(reason));
