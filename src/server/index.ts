@@ -92,6 +92,7 @@ import {
 import { CollaborationStore } from './collaboration-store.js';
 import type { CollaborationScope } from '../shared/collaboration.js';
 import { A2AStore } from './a2a-store.js';
+import type { A2ATask } from './a2a-contract.js';
 import { TeamsA2AOutboundStore } from './teams-a2a-outbound-store.js';
 import { createA2AExecutionAdapter } from './a2a-execution.js';
 import { serializeA2ADispatchAudit } from './a2a-observability.js';
@@ -2801,6 +2802,13 @@ function a2aCompletionPresentation(
     return { text, envelope: genUi.error(text, 'a2a-collaboration-blocked') };
   }
 
+  return a2aParentCompletionPresentation(parent, scope);
+}
+
+function a2aParentCompletionPresentation(
+  parent: A2ATask,
+  scope: AgentJobScope,
+): { text: string; envelope: GenUiEnvelopeV1 } {
   const dispatch = a2aStore.getDispatchIntent(parent.id, scope);
   const childJobId = dispatch?.children.find((child) => child.role === 'reviewer')?.agentJobId;
   const childJob = childJobId ? agentService.get(childJobId, scope) : undefined;
@@ -2880,6 +2888,14 @@ async function dispatchA2ACompletion(
     );
   }
 
+  await dispatchA2ACompletionPresentation(presentation, scope, outboundIntentId);
+}
+
+async function dispatchA2ACompletionPresentation(
+  presentation: { text: string; envelope: GenUiEnvelopeV1 },
+  scope: AgentJobScope,
+  outboundIntentId: string,
+): Promise<void> {
   const lease = await a2aOutboundStore.claim(
     outboundIntentId,
     scope,
@@ -2925,6 +2941,25 @@ async function dispatchA2ACompletion(
     console.error(
       'A2A Teams completion dispatch could not be confirmed',
       deliveryError instanceof Error ? deliveryError.message : 'unknown error',
+    );
+  }
+}
+
+async function recoverQueuedA2ACompletions(): Promise<void> {
+  const terminalStatuses = new Set<A2ATask['status']>(['completed', 'failed', 'canceled']);
+  for (const intent of a2aOutboundStore.listQueued(100)) {
+    const parent = a2aStore.getTask(intent.parentTaskId, intent.scope);
+    if (!parent || !terminalStatuses.has(parent.status)) continue;
+
+    if (intent.payloadSha256 !== a2aCompletionIntentFingerprint(parent.id, intent.scope)) {
+      console.error('A2A Teams completion recovery skipped an intent with an invalid payload fingerprint', intent.id);
+      continue;
+    }
+
+    await dispatchA2ACompletionPresentation(
+      a2aParentCompletionPresentation(parent, intent.scope),
+      intent.scope,
+      intent.id,
     );
   }
 }
@@ -3476,6 +3511,13 @@ if (teamsApp) {
     http.listen(port, () => resolve());
   });
 }
+
+void recoverQueuedA2ACompletions().catch((error) => {
+  console.error(
+    'A2A Teams queued completion recovery failed',
+    error instanceof Error ? error.message : 'unknown error',
+  );
+});
 
 console.log(`Tab URL: http://localhost:${port}/tabs/home`);
 console.log(`Teams messages: http://localhost:${port}/api/messages`);
