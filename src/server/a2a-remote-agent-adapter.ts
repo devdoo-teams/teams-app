@@ -97,13 +97,20 @@ function directMessageResult(
   };
 }
 
-function taskState(task: A2ARemoteTask): 'working' | 'completed' | 'failed' | 'canceled' {
+type RemoteTaskState = 'working' | 'completed' | 'failed' | 'canceled' | 'input-required' | 'auth-required';
+
+function taskState(task: A2ARemoteTask): RemoteTaskState {
   const status = task.status;
   const raw = status && typeof status === 'object' ? (status as { state?: unknown }).state : undefined;
-  const normalized = String(raw ?? '').toLowerCase().replace(/^task_state_/, '');
+  const normalized = String(raw ?? '')
+    .toLowerCase()
+    .replace(/^task_state_/, '')
+    .replace(/_/g, '-');
   if (normalized === 'completed') return 'completed';
   if (normalized === 'failed' || normalized === 'rejected') return 'failed';
   if (normalized === 'canceled' || normalized === 'cancelled') return 'canceled';
+  if (normalized === 'input-required') return 'input-required';
+  if (normalized === 'auth-required') return 'auth-required';
   return 'working';
 }
 
@@ -175,6 +182,20 @@ function terminalResult(task: A2ARemoteTask, remoteTaskId: string): A2AOrchestra
     return { taskId: remoteTaskId, status: 'failed', error: taskError(task) ?? 'Remote A2A task failed.' };
   }
   if (state === 'canceled') return { taskId: remoteTaskId, status: 'canceled' };
+  if (state === 'input-required') {
+    return {
+      taskId: remoteTaskId,
+      status: 'failed',
+      error: 'Remote A2A task requires additional input (TASK_STATE_INPUT_REQUIRED).',
+    };
+  }
+  if (state === 'auth-required') {
+    return {
+      taskId: remoteTaskId,
+      status: 'failed',
+      error: 'Remote A2A task requires authentication (TASK_STATE_AUTH_REQUIRED).',
+    };
+  }
   return undefined;
 }
 

@@ -83,6 +83,44 @@ assert.deepEqual(completed, { taskId: 'remote-task-1', status: 'completed', resu
 assert.equal(boundId, 'remote-task-1');
 assert.deepEqual(calls.slice(0, 2), ['send', 'get']);
 
+async function runInterruptedRemoteState(
+  taskId: string,
+  state: 'TASK_STATE_INPUT_REQUIRED' | 'TASK_STATE_AUTH_REQUIRED',
+) {
+  calls.length = 0;
+  current = { id: taskId, status: { state } };
+  return agent.executeChild({
+    scope,
+    parentTaskId: `parent-${taskId}`,
+    childKey: 'review',
+    childIdempotencyKey: `child-${taskId}`,
+    role: 'reviewer',
+    prompt: 'Run the remote task.',
+    capabilities: ['source.read'],
+    agentId: 'remote-agent',
+    providerId: 'remote-provider',
+    deadlineAtMs: Date.now() + 1_000,
+    signal: new AbortController().signal,
+    bindChild: async () => undefined,
+  });
+}
+
+const inputRequired = await runInterruptedRemoteState('remote-task-input-required', 'TASK_STATE_INPUT_REQUIRED');
+assert.deepEqual(inputRequired, {
+  taskId: 'remote-task-input-required',
+  status: 'failed',
+  error: 'Remote A2A task requires additional input (TASK_STATE_INPUT_REQUIRED).',
+});
+assert.deepEqual(calls, ['send'], 'input-required must stop polling without canceling the remote task');
+
+const authRequired = await runInterruptedRemoteState('remote-task-auth-required', 'TASK_STATE_AUTH_REQUIRED');
+assert.deepEqual(authRequired, {
+  taskId: 'remote-task-auth-required',
+  status: 'failed',
+  error: 'Remote A2A task requires authentication (TASK_STATE_AUTH_REQUIRED).',
+});
+assert.deepEqual(calls, ['send'], 'auth-required must stop polling without canceling the remote task');
+
 calls.length = 0;
 current = { id: 'remote-task-2', status: { state: 'TASK_STATE_WORKING' } };
 const controller = new AbortController();
