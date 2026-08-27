@@ -99,7 +99,11 @@ function safeJobPrompt(job: AgentJob): string {
 }
 
 function safeJobListLabel(job: AgentJob): string {
-  return displayText(fieldOf(job, 'prompt'), 400, '(작업 설명 없음)');
+  const jobId = safeJobId(job);
+  const separator = ' · ';
+  const promptLength = Math.max(1, 400 - jobId.length - separator.length);
+  const prompt = displayText(fieldOf(job, 'prompt'), promptLength, '(작업 설명 없음)');
+  return `${jobId}${separator}${prompt}`;
 }
 
 function safeJobStatus(job: AgentJob): SafeJobStatus | 'unknown' {
