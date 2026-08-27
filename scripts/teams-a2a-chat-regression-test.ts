@@ -79,6 +79,8 @@ const requesterId = 'teams-a2a-chat-requester';
 const conversationId = 'teams-a2a-chat-conversation';
 const activityId = 'teams-a2a-chat-duplicate-activity';
 const prompt = '현재 저장소의 핵심 위험을 검토하고 한 문장으로 요약해줘';
+const fakeCodexDelayMs = 1_500;
+const inboundResponseDeadlineMs = 750;
 const a2aStorePath = path.join(temporaryRoot, 'a2a.json');
 const a2aOutboundStorePath = path.join(temporaryRoot, 'a2a-outbound.json');
 const agentJobStorePath = path.join(temporaryRoot, 'agent-jobs.json');
@@ -148,6 +150,7 @@ try {
       AGENT_SANDBOX_EXEC_PATH: '/usr/bin/sandbox-exec',
       CODEX_BIN: isolatedNodePath,
       CODEX_SCRIPT: 'scripts/fake-codex.mjs',
+      FAKE_CODEX_DELAY_MS: String(fakeCodexDelayMs),
       TEAMS_AGENT_CLI_PROVIDER: 'codex',
       TEAMS_A2A_AGENT_PROVIDERS: 'codex',
       TEAMS_AGENT_GLOBAL_LIMIT: '4',
@@ -167,6 +170,7 @@ try {
   assert.equal(health.bot, 'teams-sdk', 'test setup must exercise the registered Teams SDK message handler');
 
   const duplicateActivity = activity(baseUrl);
+  const inboundStartedAt = Date.now();
   const accepted = await Promise.all([
     request(baseUrl, '/api/messages', {
       method: 'POST',
@@ -177,6 +181,7 @@ try {
       body: JSON.stringify(duplicateActivity),
     }),
   ]);
+  const inboundElapsedMs = Date.now() - inboundStartedAt;
   accepted.forEach((result, index) => {
     assert.ok(
       result.response.ok,
@@ -215,6 +220,12 @@ try {
     .filter((value): value is string => typeof value === 'string' && value.length > 0);
 
   const failures: string[] = [];
+  if (inboundElapsedMs >= inboundResponseDeadlineMs) {
+    failures.push(
+      `Teams inbound handler must return before delayed A2A completion; observed ${inboundElapsedMs}ms `
+      + `(deadline ${inboundResponseDeadlineMs}ms, child delay ${fakeCodexDelayMs}ms)`,
+    );
+  }
   if (parents.length !== 1) {
     failures.push(`expected one durable A2A parent for the Teams conversation; observed ${parents.length}`);
   }

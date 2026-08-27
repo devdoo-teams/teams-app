@@ -1,6 +1,11 @@
 import fs from 'node:fs/promises';
 
 const prompt = process.argv.at(-1) ?? '';
+const configuredDelayMs = Number(process.env.FAKE_CODEX_DELAY_MS ?? 0);
+
+if (Number.isFinite(configuredDelayMs) && configuredDelayMs > 0) {
+  await new Promise((resolve) => setTimeout(resolve, Math.min(configuredDelayMs, 10_000)));
+}
 
 if (prompt.includes('MUTATE')) {
   await fs.writeFile('runtime-agent-change.txt', 'created by runtime fake codex\n', 'utf8');
