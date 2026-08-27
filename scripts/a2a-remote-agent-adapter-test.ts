@@ -122,6 +122,70 @@ assert.deepEqual(authRequired, {
 assert.deepEqual(calls, ['send'], 'auth-required must stop polling without canceling the remote task');
 
 calls.length = 0;
+current = {
+  id: 'remote-task-input-bind-failure',
+  status: { state: 'TASK_STATE_INPUT_REQUIRED' },
+};
+await assert.rejects(
+  () => agent.executeChild({
+    scope,
+    parentTaskId: 'parent-input-bind-failure',
+    childKey: 'review',
+    childIdempotencyKey: 'child-input-bind-failure',
+    role: 'reviewer',
+    prompt: 'Run the remote task.',
+    capabilities: ['source.read'],
+    agentId: 'remote-agent',
+    providerId: 'remote-provider',
+    deadlineAtMs: Date.now() + 1_000,
+    signal: new AbortController().signal,
+    bindChild: async () => { throw new Error('durable binding failed'); },
+  }),
+  /durable binding failed/,
+);
+assert.deepEqual(calls, ['send'], 'an interrupted task must not be canceled when durable binding fails');
+
+async function recoverInterruptedRemoteState(
+  taskId: string,
+  state: 'TASK_STATE_INPUT_REQUIRED' | 'TASK_STATE_AUTH_REQUIRED',
+) {
+  calls.length = 0;
+  current = { id: taskId, status: { state } };
+  return agent.recoverChild({
+    scope,
+    parentTaskId: `parent-${taskId}`,
+    childKey: 'review',
+    agentId: 'remote-agent',
+    providerId: 'remote-provider',
+    agentJobId: taskId,
+    deadlineAtMs: Date.now() + 1_000,
+    signal: new AbortController().signal,
+  });
+}
+
+const recoveredInputRequired = await recoverInterruptedRemoteState(
+  'remote-task-recovery-input-required',
+  'TASK_STATE_INPUT_REQUIRED',
+);
+assert.deepEqual(recoveredInputRequired, {
+  taskId: 'remote-task-recovery-input-required',
+  status: 'failed',
+  error: 'Remote A2A task requires additional input (TASK_STATE_INPUT_REQUIRED).',
+});
+assert.deepEqual(calls, ['get'], 'recovery of input-required must not poll or cancel the remote task');
+
+const recoveredAuthRequired = await recoverInterruptedRemoteState(
+  'remote-task-recovery-auth-required',
+  'TASK_STATE_AUTH_REQUIRED',
+);
+assert.deepEqual(recoveredAuthRequired, {
+  taskId: 'remote-task-recovery-auth-required',
+  status: 'failed',
+  error: 'Remote A2A task requires authentication (TASK_STATE_AUTH_REQUIRED).',
+});
+assert.deepEqual(calls, ['get'], 'recovery of auth-required must not poll or cancel the remote task');
+
+calls.length = 0;
 current = { id: 'remote-task-2', status: { state: 'TASK_STATE_WORKING' } };
 const controller = new AbortController();
 const canceledPromise = agent.executeChild({

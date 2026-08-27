@@ -114,6 +114,10 @@ function taskState(task: A2ARemoteTask): RemoteTaskState {
   return 'working';
 }
 
+function isInterruptedState(state: RemoteTaskState): state is 'input-required' | 'auth-required' {
+  return state === 'input-required' || state === 'auth-required';
+}
+
 function taskText(task: A2ARemoteTask): string | undefined {
   const artifacts = Array.isArray(task.artifacts) ? task.artifacts : [];
   const text = artifacts.flatMap((artifact) => {
@@ -274,10 +278,13 @@ export function createA2ARemoteAgent(options: A2ARemoteAgentAdapterOptions): A2A
       }
       const task = response;
       const remoteTaskId = taskId(task);
+      const initialState = taskState(task);
       try {
         await input.bindChild(remoteTaskId);
       } catch (error) {
-        await options.client.cancelTask(remoteTaskId).catch(() => undefined);
+        if (!isInterruptedState(initialState)) {
+          await options.client.cancelTask(remoteTaskId).catch(() => undefined);
+        }
         recordTelemetry(options.telemetry, input, 'failed', 'failure');
         throw error;
       }
