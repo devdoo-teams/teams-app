@@ -78,6 +78,8 @@ if (caseName === 'malformed') {
 } else if (caseName === 'timeout') {
   prefix();
   await new Promise(() => setInterval(() => {}, 1_000));
+} else if (caseName === 'secret-result') {
+  prefix(); message('access_token=codex-runner-secret-fixture'); completed();
 } else {
   prefix(); message('SECURITY_FAKE_OK'); completed();
 }
@@ -176,6 +178,10 @@ try {
   assert.equal(result.finalMessage, 'SECURITY_FAKE_OK');
   assert.deepEqual(events, ['thread.started', 'turn.started', 'item.completed', 'turn.completed'], 'callbacks preserve FSM order');
   assert.equal(result.eventCount, 4);
+
+  const redactedResult = await runCase('secret-result');
+  assert.equal(redactedResult.finalMessage.includes('codex-runner-secret-fixture'), false, 'credential-shaped success output must not enter durable result sinks');
+  assert.match(redactedResult.finalMessage, /REDACTED/u);
 
   for (const [caseName, expected, timeoutMs] of negativeCases) {
     await assert.rejects(() => runCase(caseName, undefined, timeoutMs), expected, `${caseName} must be rejected`);
