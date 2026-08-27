@@ -9,6 +9,7 @@ import {
   AgentIsolationProvider,
   type AgentIsolationAcquireInput,
 } from '../src/server/agent-execution-policy.js';
+import { CODEX_READ_ONLY_PERMISSION_ARGS } from '../src/server/codex-permission-profile-isolation-provider.js';
 import { CodexRunner, type CodexRunEvent } from '../src/server/codex-runner.js';
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-codex-runner-security-'));
@@ -29,7 +30,13 @@ class TestIsolationProvider extends AgentIsolationProvider {
       workspace: input.workspace,
       protectedRoots: input.protectedRoots,
       environmentOverrides: input.environmentOverrides,
-      spawn: (command, args, options) => spawnChild(command, [...args], options as any),
+      spawn: (command, args, options) => {
+        assert.equal(args.includes('--sandbox'), false, 'CodexRunner must not select the legacy sandbox path');
+        for (const required of CODEX_READ_ONLY_PERMISSION_ARGS) {
+          assert.ok(args.includes(required), `CodexRunner omitted native permission argument: ${required}`);
+        }
+        return spawnChild(command, [...args], options as any);
+      },
     });
   }
 }
