@@ -152,6 +152,7 @@
     "test:cli-agent-runner": "tsx scripts/cli-agent-runner-test.ts",
     "test:local-auth": "tsx scripts/local-auth-test.ts",
     "test:production-agent-isolation": "tsx scripts/production-agent-isolation-test.ts",
+    "test:teams-core-chat-regression": "tsx scripts/teams-core-chat-regression-test.ts",
     "test:weather-service": "tsx scripts/weather-service-test.ts",
     "test:optional:copilotkit": "npm run test:copilot-item-seeding-failure",
     "test:optional:runtime": "node scripts/runtime-test.mjs",

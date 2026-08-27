@@ -14,6 +14,7 @@ const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-production-agent-iso
 const sourceWorkspace = path.join(root, 'source');
 const profilePath = path.join(root, 'read-only.sb');
 const sandboxExecPath = path.join(root, 'sandbox-exec');
+const codexAuthFile = path.join(root, 'codex-auth.json');
 const scope = {
   tenantId: 'tenant-a',
   requesterId: 'requester-a',
@@ -60,6 +61,11 @@ try {
     /AGENT_ISOLATION_PROFILE/u,
     'production composition must use an explicit isolation profile configuration',
   );
+  assert.match(
+    productionIndex,
+    /AGENT_CODEX_AUTH_FILE/u,
+    'production composition must use an explicit Codex credential source instead of the user home at runtime',
+  );
 
   await fs.mkdir(sourceWorkspace, { recursive: true, mode: 0o700 });
   await fs.mkdir(path.join(sourceWorkspace, 'src'), { recursive: true, mode: 0o700 });
@@ -67,6 +73,7 @@ try {
   await fs.writeFile(path.join(sourceWorkspace, 'src', 'readme.txt'), 'read-only fixture\n', { mode: 0o600 });
   await fs.writeFile(profilePath, '(version 1)\n(deny default)\n', { mode: 0o600 });
   await fs.writeFile(sandboxExecPath, 'test-only executable placeholder\n', { mode: 0o700 });
+  await fs.writeFile(codexAuthFile, '{"auth_mode":"test-fixture"}\n', { mode: 0o600 });
 
   const missingConfiguration = createProductionAgentExecutionPolicy({
     sourceWorkspace,
@@ -130,6 +137,7 @@ try {
     platform: 'darwin',
     profilePath,
     sandboxExecPath,
+    codexAuthFile,
     canReadScope: () => true,
     canMutateScope: () => false,
     spawn: fakeSpawn,
@@ -149,6 +157,14 @@ try {
   try {
     assert.equal(prepared.projected, true);
     assert.equal(prepared.isolationLease?.providerId, 'macos-seatbelt');
+    const stagedAuthFile = path.join(prepared.environmentOverrides?.CODEX_HOME ?? '', 'auth.json');
+    assert.equal(
+      await fs.readFile(stagedAuthFile, 'utf8'),
+      '{"auth_mode":"test-fixture"}\n',
+      'the explicit Codex auth file is copied into the disposable isolated CODEX_HOME',
+    );
+    const stagedAuthStat = await fs.stat(stagedAuthFile);
+    assert.equal(stagedAuthStat.mode & 0o777, 0o600, 'the staged auth file is owner-only');
     prepared.isolationLease?.bindJob('job-1');
     await prepared.isolationLease?.spawn(
       { ...scope, jobId: 'job-1' },

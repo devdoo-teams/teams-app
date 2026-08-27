@@ -38,6 +38,8 @@ const tsTests = [
   'scripts/cli-agent-runner-test.ts',
   'scripts/ghcp-cli-adapter-test.ts',
   'scripts/provider-neutral-agent-runner-test.ts',
+  'scripts/production-agent-isolation-test.ts',
+  'scripts/teams-core-chat-regression-test.ts',
   'scripts/agent-job-store-hardening-test.ts',
   'scripts/agent-admission-control-test.ts',
   'scripts/agent-process-controller-security-test.ts',
