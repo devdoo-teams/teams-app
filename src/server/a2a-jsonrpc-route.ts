@@ -79,6 +79,13 @@ export function adaptA2AV026Execution(execution: A2AExistingExecutionAdapter): A
 
 type JsonRpcId = string | number | null;
 
+const UNSUPPORTED_STREAMING_METHODS = new Set([
+  'SendStreamingMessage',
+  'SubscribeToTask',
+  'message/stream',
+  'tasks/resubscribe',
+]);
+
 type JsonRpcRequest = {
   jsonrpc: '2.0';
   id: JsonRpcId;
@@ -205,6 +212,9 @@ export function createA2AV026JsonRpcRouter(options: A2AV026JsonRpcRouteOptions):
         return;
       }
 
+      if (UNSUPPORTED_STREAMING_METHODS.has(rpc.method)) {
+        throw new A2AContractError('UnsupportedOperationError', 'Streaming operations are not supported.');
+      }
       if (rpc.method !== 'message/send') throw new JsonRpcFault(-32601, 'Method not found');
       const params = requireRecord(rpc.params, 'params');
       assertExactKeys(params, ['message', 'configuration', 'metadata'], 'params');
@@ -276,7 +286,8 @@ export function createA2AV026JsonRpcRouter(options: A2AV026JsonRpcRouteOptions):
         fingerprint: sha256(JSON.stringify(canonicalize(sendRequest))),
       });
       if (result.created) await options.execution.submit({ task: result.task, request: sendRequest, scope });
-      sendJsonRpcResult(response, rpc, await mapTask(result.task, options));
+      const current = options.store.getTaskForOwner(result.task.id, authenticatedScope) ?? result.task;
+      sendJsonRpcResult(response, rpc, await mapTask(current, options));
     } catch (error) {
       if (!response.headersSent) {
         if (notification) response.status(204).end();
@@ -373,8 +384,13 @@ export function createA2AV1JsonRpcRouter(options: A2AV026JsonRpcRouteOptions): e
           fingerprint: sha256(JSON.stringify(canonicalize(sendRequest))),
         });
         if (result.created) await options.execution.submit({ task: result.task, request: sendRequest, scope });
-        sendJsonRpcResult(response, rpc, { task: mapA2AV1Task(result.task) });
+        const current = options.store.getTaskForOwner(result.task.id, authenticatedScope) ?? result.task;
+        sendJsonRpcResult(response, rpc, { task: mapA2AV1Task(current) });
         return;
+      }
+
+      if (UNSUPPORTED_STREAMING_METHODS.has(rpc.method)) {
+        throw new A2AContractError('UnsupportedOperationError', 'Streaming operations are not supported.');
       }
 
       if (rpc.method === 'GetTask') {
