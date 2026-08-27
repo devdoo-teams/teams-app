@@ -63,10 +63,13 @@ const runtimeB = createA2AProductionRuntime({
 });
 runtimeB.mount(appB);
 
-const bServer = await listen(appB);
-const bAddress = bServer.address();
-assert.ok(bAddress && typeof bAddress === 'object');
-const bPort = bAddress.port;
+let bServer: http.Server | undefined;
+let aServer: http.Server | undefined;
+try {
+  bServer = await listen(appB);
+  const bAddress = bServer.address();
+  assert.ok(bAddress && typeof bAddress === 'object');
+  const bPort = bAddress.port;
 
 const mappedFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const requested = new URL(String(input));
@@ -122,11 +125,10 @@ appA.get('/probe', async (_request, response) => {
   }
 });
 
-const aServer = await listen(appA);
-const aAddress = aServer.address();
+  aServer = await listen(appA);
+  const aAddress = aServer.address();
 assert.ok(aAddress && typeof aAddress === 'object');
 
-try {
   const probe = await getJson(`http://127.0.0.1:${aAddress.port}/probe`);
   assert.equal(probe.status, 200, probe.body);
   const body = JSON.parse(probe.body) as Record<string, any>;
@@ -152,8 +154,8 @@ try {
 
   console.log('PASS: two independent HTTP A2A servers complete authenticated Agent Card, Send/Get/List/Cancel, and rejection round trips');
 } finally {
-  await close(aServer);
-  await close(bServer);
+  if (aServer) await close(aServer);
+  if (bServer) await close(bServer);
   await fs.rm(root, { recursive: true, force: true });
 }
 

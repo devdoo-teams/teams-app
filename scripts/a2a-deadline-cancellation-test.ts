@@ -76,7 +76,12 @@ async function testDeadlineCancellationPersistsIntentBeforeFinalization(): Promi
       prompt: 'Review the bounded change.',
       agentId: 'codex-deadline-agent',
     }],
-    deadlineMs: 50,
+    // The deadline intentionally remains bounded, but must leave enough room
+    // for the first durable JSON mutation on a fresh CI runner. A 50ms
+    // deadline made this regression test depend on filesystem scheduling and
+    // could exit through Node's unsettled top-level-await path before the
+    // child was admitted.
+    deadlineMs: 1_000,
     parallelism: 1,
   });
   await started;
