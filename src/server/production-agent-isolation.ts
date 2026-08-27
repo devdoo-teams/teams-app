@@ -7,6 +7,7 @@ import {
   type AgentIsolationSpawnOptions,
 } from './agent-execution-policy.js';
 import {
+  CODEX_EXTERNAL_TOOL_SURFACE_POLICY,
   CodexPermissionProfileIsolationProvider,
   type ExecutableTrustVerifier,
 } from './codex-permission-profile-isolation-provider.js';
@@ -24,7 +25,13 @@ export type ProductionAgentExecutionPolicyOptions = Readonly<{
   /** Operator-pinned SHA-256 of the signed Codex executable. */
   codexExecutableSha256?: string;
   /** Test seam for the native permission-profile enforcement probe. */
-  nativePreflight?: (input: { codexExecutable: string; codexHome: string; workspace: string }) => Promise<void>;
+  nativePreflight?: (input: {
+    codexExecutable: string;
+    codexHome: string;
+    workspace: string;
+    environment: Readonly<NodeJS.ProcessEnv>;
+    toolSurfacePolicy: typeof CODEX_EXTERNAL_TOOL_SURFACE_POLICY;
+  }) => Promise<void>;
   /** Test seam only; production uses the OpenAI Developer ID requirement. */
   nativeExecutableTrustVerifier?: ExecutableTrustVerifier;
   /** Local test-only compatibility seam; never enabled by production composition. */

@@ -47,6 +47,25 @@ const DISABLED_CODEX_FEATURES = Object.freeze([
   'view_image',
 ] as const);
 
+export const CODEX_EXTERNAL_TOOL_SURFACE_POLICY = Object.freeze({
+  apps: false,
+  connectors: false,
+  browser: false,
+  inAppBrowser: false,
+  computerUse: false,
+  plugins: false,
+  mcp: false,
+  mcpElicitations: false,
+  multiAgent: false,
+  webSearch: false,
+  imageTools: false,
+  hooks: false,
+  skillInstall: false,
+  skillSearch: false,
+  requireEmptyMcpInventory: true,
+  requireEmptyPluginInventory: true,
+} as const);
+
 const DEFAULT_PERMISSION_VALUE = `default_permissions="${PROFILE_NAME}"`;
 const PERMISSION_PROFILE_VALUE = `permissions.${PROFILE_NAME}={description="Teams Core read only",filesystem={":minimal"="read",":workspace_roots"={"."="read"}},network={enabled=false}}`;
 
@@ -100,6 +119,7 @@ export type CodexPermissionProfileIsolationProviderOptions = Readonly<{
     codexHome: string;
     workspace: string;
     environment: Readonly<NodeJS.ProcessEnv>;
+    toolSurfacePolicy: typeof CODEX_EXTERNAL_TOOL_SURFACE_POLICY;
   }) => Promise<void>;
   /** Test seam only. Production verifies the OpenAI Developer ID requirement with codesign. */
   executableTrustVerifier?: ExecutableTrustVerifier;
@@ -189,6 +209,7 @@ export class CodexPermissionProfileIsolationProvider extends AgentIsolationProvi
         codexHome: codexHome.path,
         workspace,
         environment: environmentOverrides,
+        toolSurfacePolicy: CODEX_EXTERNAL_TOOL_SURFACE_POLICY,
       });
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -285,7 +306,9 @@ async function runNativePermissionPreflight(input: {
   codexHome: string;
   workspace: string;
   environment: Readonly<NodeJS.ProcessEnv>;
+  toolSurfacePolicy: typeof CODEX_EXTERNAL_TOOL_SURFACE_POLICY;
 }): Promise<void> {
+  void input.toolSurfacePolicy;
   const environment = { ...input.environment };
   const version = await execFileAsync(input.codexExecutable, ['--version'], {
     env: environment,

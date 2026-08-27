@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import type { ChildProcess } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,7 +9,10 @@ import {
   AgentExecutionUnavailableError,
   type AgentIsolationSpawnOptions,
 } from '../src/server/agent-execution-policy.js';
-import { CODEX_READ_ONLY_PERMISSION_ARGS } from '../src/server/codex-permission-profile-isolation-provider.js';
+import {
+  CODEX_EXTERNAL_TOOL_SURFACE_POLICY,
+  CODEX_READ_ONLY_PERMISSION_ARGS,
+} from '../src/server/codex-permission-profile-isolation-provider.js';
 import { createProductionAgentExecutionPolicy } from '../src/server/production-agent-isolation.js';
 
 type EffectiveToolInventory = Readonly<{
@@ -62,16 +66,28 @@ const expectedToolSurfacePolicy: ToolSurfacePolicy = Object.freeze({
   requireEmptyPluginInventory: true,
 });
 
-// These are documented config.toml controls that can be pinned on `codex exec`.
-// Host-only surfaces still require the effective-inventory gate above.
-const requiredLaunchConfig = Object.freeze([
-  'features.apps=false',
-  'apps._default.enabled=false',
-  'features.hooks=false',
-  'features.multi_agent=false',
-  'agents.enabled=false',
-  'tools.web_search=false',
-  'tools.view_image=false',
+const requiredDisabledFeatures = Object.freeze([
+  'apps',
+  'auth_elicitation',
+  'browser_use',
+  'browser_use_external',
+  'browser_use_full_cdp_access',
+  'code_mode_host',
+  'computer_use',
+  'goals',
+  'hooks',
+  'image_generation',
+  'in_app_browser',
+  'in_app_updates',
+  'multi_agent',
+  'plugin_sharing',
+  'plugins',
+  'remote_plugin',
+  'skill_mcp_dependency_install',
+  'skill_search',
+  'tool_call_mcp_elicitation',
+  'tool_suggest',
+  'view_image',
 ] as const);
 
 const emptyInventory: EffectiveToolInventory = Object.freeze({
@@ -98,6 +114,7 @@ const scope = {
 };
 const fakeChild = {} as ChildProcess;
 const findings: string[] = [];
+let codexExecutableSha256 = '';
 
 try {
   await fs.mkdir(path.join(sourceWorkspace, 'src'), { recursive: true, mode: 0o700 });
@@ -107,6 +124,7 @@ try {
   // Fixture credentials only. The test never reads this file after creating it.
   await fs.writeFile(path.join(serviceCodexHome, 'auth.json'), '{"fixture":"not-a-real-credential"}\n', { mode: 0o600 });
   await fs.writeFile(codexExecutable, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+  codexExecutableSha256 = await sha256(codexExecutable);
 
   await productionLaunchPinsEveryToolSurface();
   await nonEmptyEffectiveInventoryFailsClosed();
@@ -136,6 +154,7 @@ async function productionLaunchPinsEveryToolSurface(): Promise<void> {
     platform: 'darwin',
     codexHome: serviceCodexHome,
     codexExecutable,
+    codexExecutableSha256,
     canReadScope: () => true,
     canMutateScope: () => false,
     nativePreflight: async (input) => {
@@ -146,6 +165,7 @@ async function productionLaunchPinsEveryToolSurface(): Promise<void> {
       spawnCalls.push({ command, args: [...args], options });
       return fakeChild;
     },
+    nativeExecutableTrustVerifier: () => undefined,
   });
 
   const prepared = await policy.prepareWorkspace('read-only', scope, 'inspect only');
@@ -176,8 +196,9 @@ async function productionLaunchPinsEveryToolSurface(): Promise<void> {
 
     const launchedArgs = spawnCalls[0]?.args ?? [];
     const configValues = launchedArgs.flatMap((value, index) => value === '-c' ? [launchedArgs[index + 1] ?? ''] : []);
-    for (const value of requiredLaunchConfig) {
-      if (!configValues.includes(value)) findings.push(`launch omitted explicit deny config ${value}`);
+    const disabledFeatures = launchedArgs.flatMap((value, index) => value === '--disable' ? [launchedArgs[index + 1] ?? ''] : []);
+    for (const value of requiredDisabledFeatures) {
+      if (!disabledFeatures.includes(value)) findings.push(`launch omitted explicit disabled feature ${value}`);
     }
     if (!configValues.includes('approval_policy="never"')) {
       findings.push('launch did not auto-reject MCP/tool/skill approval or elicitation prompts');
@@ -198,21 +219,19 @@ async function productionLaunchPinsEveryToolSurface(): Promise<void> {
 }
 
 async function nonEmptyEffectiveInventoryFailsClosed(): Promise<void> {
-  const nonEmptyInventory: EffectiveToolInventory = {
-    ...emptyInventory,
-    mcpServers: ['fixture-untrusted-mcp'],
-    plugins: ['fixture-untrusted-plugin'],
-  };
+  await writeInventoryCodexExecutable();
+  codexExecutableSha256 = await sha256(codexExecutable);
   const policy = createProductionAgentExecutionPolicy({
     sourceWorkspace,
     isProduction: true,
     platform: 'darwin',
     codexHome: serviceCodexHome,
     codexExecutable,
+    codexExecutableSha256,
     canReadScope: () => true,
     canMutateScope: () => false,
-    nativePreflight: async () => ({ effectiveToolInventory: nonEmptyInventory }) as never,
     spawn: () => fakeChild,
+    nativeExecutableTrustVerifier: () => undefined,
   });
 
   let prepared: Awaited<ReturnType<typeof policy.prepareWorkspace>> | undefined;
@@ -228,3 +247,22 @@ async function nonEmptyEffectiveInventoryFailsClosed(): Promise<void> {
     await prepared?.dispose();
   }
 }
+
+async function writeInventoryCodexExecutable(): Promise<void> {
+  const source = [
+    `#!${process.execPath}`,
+    "const args = process.argv.slice(2);",
+    'if (args[0] === "--version") { console.log("codex-cli 0.148.0"); process.exit(0); }',
+    'if (args[0] === "mcp") { console.log(JSON.stringify([{ name: "fixture-untrusted-mcp" }])); process.exit(0); }',
+    'if (args[0] === "plugin") { console.log(JSON.stringify({ installed: [{ name: "fixture-untrusted-plugin" }], available: [] })); process.exit(0); }',
+    'process.exit(0);',
+    '',
+  ].join('\n');
+  await fs.writeFile(codexExecutable, source, { mode: 0o700 });
+}
+
+async function sha256(file: string): Promise<string> {
+  return crypto.createHash('sha256').update(await fs.readFile(file)).digest('hex');
+}
+
+assert.deepEqual(CODEX_EXTERNAL_TOOL_SURFACE_POLICY, expectedToolSurfacePolicy);
