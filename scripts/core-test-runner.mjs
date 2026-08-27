@@ -75,6 +75,8 @@ const tsTests = [
   'scripts/a2a-health-provider-roster-test.ts',
   'scripts/a2a-telemetry-test.ts',
   'scripts/a2a-orchestration-identity-test.ts',
+  'scripts/a2a-cancel-idempotency-test.ts',
+  'scripts/a2a-task-state-interoperability-test.ts',
   'scripts/rest-scope-security-test.mjs',
   'scripts/security-headers-test.ts',
 ];

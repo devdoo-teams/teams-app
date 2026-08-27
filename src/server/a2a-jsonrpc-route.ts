@@ -191,8 +191,12 @@ export function createA2AV026JsonRpcRouter(options: A2AV026JsonRpcRouteOptions):
         assertUnsupportedMetadata(params.metadata, 'params.metadata');
         const task = options.store.getTaskForOwner(requireOpaqueId(params.id, 'params.id'), authenticatedScope);
         if (!task) throw new JsonRpcFault(-32001, 'Task not found');
-        if (task.status === 'completed' || task.status === 'failed' || task.status === 'canceled') {
+        if (task.status === 'completed' || task.status === 'failed' || task.status === 'rejected') {
           throw new JsonRpcFault(-32002, 'Task cannot be canceled');
+        }
+        if (task.status === 'canceled') {
+          sendJsonRpcResult(response, rpc, await mapTask(task, options));
+          return;
         }
         const cancelled = await options.execution.cancel({ task, authenticatedScope });
         const current = cancelled ?? options.store.getTaskForOwner(task.id, authenticatedScope);
@@ -228,7 +232,12 @@ export function createA2AV026JsonRpcRouter(options: A2AV026JsonRpcRouteOptions):
       if (requestedTaskId !== undefined && !continuationTask) {
         throw new JsonRpcFault(-32001, 'Task not found');
       }
-      if (continuationTask && (continuationTask.status === 'completed' || continuationTask.status === 'failed' || continuationTask.status === 'canceled')) {
+      if (continuationTask && (
+        continuationTask.status === 'completed'
+        || continuationTask.status === 'failed'
+        || continuationTask.status === 'canceled'
+        || continuationTask.status === 'rejected'
+      )) {
         throw new JsonRpcFault(-32002, 'Task cannot be restarted');
       }
       if (continuationTask && message.contextId !== undefined && message.contextId !== continuationTask.contextId) {
@@ -331,7 +340,12 @@ export function createA2AV1JsonRpcRouter(options: A2AV026JsonRpcRouteOptions): e
         if (requestedTaskId !== undefined && !continuationTask) {
           throw new JsonRpcFault(-32001, 'Task not found');
         }
-        if (continuationTask && (continuationTask.status === 'completed' || continuationTask.status === 'failed' || continuationTask.status === 'canceled')) {
+        if (continuationTask && (
+          continuationTask.status === 'completed'
+          || continuationTask.status === 'failed'
+          || continuationTask.status === 'canceled'
+          || continuationTask.status === 'rejected'
+        )) {
           throw new JsonRpcFault(-32002, 'Task cannot be restarted');
         }
         if (continuationTask && normalized.message.contextId !== undefined && normalized.message.contextId !== continuationTask.contextId) {
@@ -405,8 +419,12 @@ export function createA2AV1JsonRpcRouter(options: A2AV026JsonRpcRouteOptions): e
         assertUnsupportedTenant(params.tenant);
         const task = options.store.getTaskForOwner(requireOpaqueId(params.id, 'params.id'), authenticatedScope);
         if (!task) throw new JsonRpcFault(-32001, 'Task not found');
-        if (task.status === 'completed' || task.status === 'failed' || task.status === 'canceled') {
+        if (task.status === 'completed' || task.status === 'failed' || task.status === 'rejected') {
           throw new JsonRpcFault(-32002, 'Task cannot be canceled');
+        }
+        if (task.status === 'canceled') {
+          sendJsonRpcResult(response, rpc, mapA2AV1Task(task));
+          return;
         }
         const cancelled = await options.execution.cancel({ task, authenticatedScope });
         const current = cancelled ?? options.store.getTaskForOwner(task.id, authenticatedScope);
@@ -537,9 +555,11 @@ function mapA2AV1TaskState(value: unknown): A2ATask['status'] {
     TASK_STATE_SUBMITTED: 'submitted',
     TASK_STATE_WORKING: 'working',
     TASK_STATE_INPUT_REQUIRED: 'input-required',
+    TASK_STATE_AUTH_REQUIRED: 'auth-required',
     TASK_STATE_COMPLETED: 'completed',
     TASK_STATE_FAILED: 'failed',
     TASK_STATE_CANCELED: 'canceled',
+    TASK_STATE_REJECTED: 'rejected',
   };
   if (typeof value !== 'string' || !mapping[value]) {
     throw new A2AContractError('InvalidRequestError', 'params.status is invalid.');
@@ -551,7 +571,15 @@ function mapA2AV1Task(task: A2ATask, includeArtifacts = true): Record<string, un
   return {
     id: task.id,
     contextId: task.contextId,
-    status: { state: `TASK_STATE_${task.status.replace('-', '_').toUpperCase()}` },
+    status: {
+      state: `TASK_STATE_${task.status.replace('-', '_').toUpperCase()}`,
+      ...(task.error === undefined ? {} : {
+        message: {
+          role: 'ROLE_AGENT',
+          parts: [{ text: task.error, mediaType: 'text/plain' }],
+        },
+      }),
+    },
     ...(!includeArtifacts || task.artifacts.length === 0 ? {} : {
       artifacts: task.artifacts.map((artifact) => ({
         artifactId: artifact.artifactId,

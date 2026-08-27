@@ -186,9 +186,11 @@ export type A2ATaskStatus =
   | 'submitted'
   | 'working'
   | 'input-required'
+  | 'auth-required'
   | 'completed'
   | 'failed'
-  | 'canceled';
+  | 'canceled'
+  | 'rejected';
 
 export type A2ATask = {
   id: string;
@@ -681,7 +683,16 @@ export function validateTask(value: unknown): A2ATask {
   const task = asRecord(value, 'InvalidTaskError');
   assertAllowedKeys(task, ['id', 'contextId', 'status', 'scope', 'artifacts', 'error'], 'InvalidTaskError');
   const status = task.status;
-  const allowedStatuses: readonly A2ATaskStatus[] = ['submitted', 'working', 'input-required', 'completed', 'failed', 'canceled'];
+  const allowedStatuses: readonly A2ATaskStatus[] = [
+    'submitted',
+    'working',
+    'input-required',
+    'auth-required',
+    'completed',
+    'failed',
+    'canceled',
+    'rejected',
+  ];
   if (!allowedStatuses.includes(status as A2ATaskStatus)) fail('InvalidTaskError', 'task.status is invalid.');
   const artifacts = task.artifacts;
   if (!Array.isArray(artifacts)) fail('InvalidTaskError', 'task.artifacts must be an array.');
@@ -725,7 +736,7 @@ export function assertTaskTransition(previous: A2ATask, next: A2ATask): void {
     || before.scope.conversationId !== after.scope.conversationId) {
     fail('InvalidTaskError', 'task identity and scope are immutable.');
   }
-  const terminal: readonly A2ATaskStatus[] = ['completed', 'failed', 'canceled'];
+  const terminal: readonly A2ATaskStatus[] = ['completed', 'failed', 'canceled', 'rejected'];
   if (terminal.includes(before.status) && before.status !== after.status) fail('TerminalStateImmutableError', 'terminal task state is immutable.');
   if (terminal.includes(before.status) && normalizedTaskSnapshot(before) !== normalizedTaskSnapshot(after)) {
     fail('TerminalStateImmutableError', 'terminal task payload is immutable.');

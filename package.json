@@ -100,6 +100,8 @@
     "test:a2a-official-contract-audit": "tsx scripts/a2a-official-contract-audit-test.ts",
     "test:a2a-index-integration": "tsx scripts/a2a-index-integration-test.mjs",
     "test:a2a-orchestration-identity": "tsx scripts/a2a-orchestration-identity-test.ts",
+    "test:a2a-cancel-idempotency": "tsx scripts/a2a-cancel-idempotency-test.ts",
+    "test:a2a-task-state-interoperability": "tsx scripts/a2a-task-state-interoperability-test.ts",
     "test:provider-neutral-agent-runner": "tsx scripts/provider-neutral-agent-runner-test.ts",
     "test:agent-workspace-lock": "tsx scripts/agent-service-workspace-lock-test.ts",
     "test:rest-scope-security": "node --import tsx/esm scripts/rest-scope-security-test.mjs",

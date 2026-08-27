@@ -644,7 +644,12 @@ export class A2AStore {
   listRecoverableTasks(limit = MAX_RECOVERY_TASKS): A2ARecoverableTask[] {
     this.assertInitialized();
     validateRecoveryLimit(limit, 'task');
-    const recoverableStatuses = new Set<A2ATaskStatus>(['submitted', 'working', 'input-required']);
+    const recoverableStatuses = new Set<A2ATaskStatus>([
+      'submitted',
+      'working',
+      'input-required',
+      'auth-required',
+    ]);
     return Object.values(this.state.tasks)
       .filter((task) => recoverableStatuses.has(task.status) && !this.state.dispatchIntents[task.id])
       .slice(0, limit)
@@ -1196,7 +1201,7 @@ function isTerminalDispatchStatus(status: A2ADispatchStatus): boolean {
 }
 
 function isTerminalTaskStatus(status: A2ATaskStatus): boolean {
-  return status === 'completed' || status === 'failed' || status === 'canceled';
+  return status === 'completed' || status === 'failed' || status === 'canceled' || status === 'rejected';
 }
 
 function transitionStoredTask(
@@ -1218,7 +1223,16 @@ function normalizeTransition(next: A2ATaskTransition, scope: A2AScope): { status
   if (typeof next === 'string') return { status: next as A2ATaskStatus };
   if (!isRecord(next)) throw new A2AContractError('InvalidTaskError', 'task transition must be a status or task patch.');
   assertExactKeys(next, ['status', 'artifacts', 'error'], 'InvalidTaskError');
-  const statuses: readonly A2ATaskStatus[] = ['submitted', 'working', 'input-required', 'completed', 'failed', 'canceled'];
+  const statuses: readonly A2ATaskStatus[] = [
+    'submitted',
+    'working',
+    'input-required',
+    'auth-required',
+    'completed',
+    'failed',
+    'canceled',
+    'rejected',
+  ];
   if (!statuses.includes(next.status as A2ATaskStatus)) {
     throw new A2AContractError('InvalidTaskError', 'task transition status is invalid.');
   }
@@ -1235,12 +1249,14 @@ function normalizeTransition(next: A2ATaskTransition, scope: A2AScope): { status
 
 function assertAllowedTransition(previous: A2ATaskStatus, next: A2ATaskStatus): void {
   const allowed: Record<A2ATaskStatus, readonly A2ATaskStatus[]> = {
-    submitted: ['submitted', 'working', 'input-required', 'failed', 'canceled'],
-    working: ['working', 'input-required', 'completed', 'failed', 'canceled'],
-    'input-required': ['input-required', 'working', 'failed', 'canceled'],
+    submitted: ['submitted', 'working', 'input-required', 'auth-required', 'failed', 'canceled', 'rejected'],
+    working: ['working', 'input-required', 'auth-required', 'completed', 'failed', 'canceled', 'rejected'],
+    'input-required': ['input-required', 'working', 'auth-required', 'failed', 'canceled', 'rejected'],
+    'auth-required': ['auth-required', 'input-required', 'working', 'failed', 'canceled', 'rejected'],
     completed: ['completed'],
     failed: ['failed'],
     canceled: ['canceled'],
+    rejected: ['rejected'],
   };
   if (!allowed[previous].includes(next)) {
     throw new A2AContractError('InvalidTaskError', `Invalid A2A task transition: ${previous} -> ${next}.`);
