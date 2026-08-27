@@ -98,7 +98,17 @@ import { createA2AExecutionAdapter } from './a2a-execution.js';
 import { serializeA2ADispatchAudit } from './a2a-observability.js';
 import { createA2AAgentAuthorizationPolicy } from './a2a-agent-authorization.js';
 import { A2ATelemetryCollector } from './a2a-telemetry.js';
-import { createConfiguredA2ARemoteAgent } from './a2a-remote-agent-adapter.js';
+import {
+  createConfiguredA2ARemoteAgent,
+  createConfiguredA2ARemoteAgents,
+  type A2AConfiguredRemoteAgentFailure,
+} from './a2a-remote-agent-adapter.js';
+import {
+  parseA2ARemotePeerRoster,
+  resolveA2ARemotePeerCredentials,
+  type A2ARemotePeerCredential,
+} from './a2a-remote-roster.js';
+import { A2A_CAPABILITIES, A2A_ROLE_CATALOG } from './a2a-role-catalog.js';
 import {
   mountA2AProductionRuntime,
   type A2AProductionChildCancellationInput,
@@ -1127,6 +1137,10 @@ const remoteA2ABearerToken = process.env.TEAMS_A2A_REMOTE_AGENT_BEARER_TOKEN?.tr
 if (Boolean(remoteA2AEndpoint) !== Boolean(remoteA2ABearerToken)) {
   throw new Error('TEAMS_A2A_REMOTE_AGENT_ENDPOINT and TEAMS_A2A_REMOTE_AGENT_BEARER_TOKEN must be configured together.');
 }
+const remoteA2ARoster = parseA2ARemotePeerRoster(process.env.TEAMS_A2A_REMOTE_AGENTS);
+if ((remoteA2AEndpoint || remoteA2ABearerToken) && remoteA2ARoster.length > 0) {
+  throw new Error('Use either the legacy single A2A remote configuration or TEAMS_A2A_REMOTE_AGENTS, not both.');
+}
 const remoteA2AAgentId = process.env.TEAMS_A2A_REMOTE_AGENT_ID?.trim() || 'teams-core-remote';
 const remoteA2AProviderId = process.env.TEAMS_A2A_REMOTE_PROVIDER_ID?.trim() || 'remote-a2a';
 const configuredRemoteA2AAgent = remoteA2AEndpoint && remoteA2ABearerToken
@@ -1135,21 +1149,50 @@ const configuredRemoteA2AAgent = remoteA2AEndpoint && remoteA2ABearerToken
     bearerToken: remoteA2ABearerToken,
     agentId: remoteA2AAgentId,
     providerId: remoteA2AProviderId,
-    authorizationPolicy: createA2AAgentAuthorizationPolicy({
-      authorize: (input) => (
-        input.agentId === remoteA2AAgentId
-        && Boolean(input.scope.tenantId && input.scope.requesterId && input.scope.conversationId)
-        && (!configuredTenantId || input.scope.tenantId === configuredTenantId)
-        && isOperator(input.scope)
-        && Boolean(input.role && input.capabilities?.length)
-      ),
-    }),
+    authorizationPolicy: createA2ARemoteAuthorizationPolicy(remoteA2AAgentId),
     telemetry: a2aTelemetry,
   })
   : undefined;
+const remoteA2ARosterCredentials: A2ARemotePeerCredential[] = [];
+const remoteA2ARosterFailures: A2AConfiguredRemoteAgentFailure[] = [];
+for (const peer of remoteA2ARoster) {
+  try {
+    const credential = resolveA2ARemotePeerCredentials([peer], process.env)[0];
+    if (!credential) throw new Error('A2A remote peer credential was not resolved.');
+    remoteA2ARosterCredentials.push(credential);
+  } catch {
+    // Keep startup available for healthy peers and expose only safe labels in health.
+    remoteA2ARosterFailures.push({
+      agentId: peer.agentId,
+      providerId: peer.providerId,
+      kind: peer.kind,
+      code: 'CONFIGURATION_ERROR',
+    });
+  }
+}
+const configuredRemoteA2ABatch = await createConfiguredA2ARemoteAgents(
+  remoteA2ARosterCredentials.map((peer) => ({
+    endpoint: peer.endpoint,
+    bearerToken: peer.bearerToken,
+    agentId: peer.agentId,
+    providerId: peer.providerId,
+    kind: peer.kind,
+    executionIdentity: peer.executionIdentity,
+    executionBoundaryId: peer.executionBoundaryId,
+    roles: peer.roles,
+    capabilities: peer.capabilities,
+    authorizationPolicy: createA2ARemoteAuthorizationPolicy(peer.agentId),
+    telemetry: a2aTelemetry,
+  })),
+);
+const a2aRemoteInitializationFailures: readonly A2AConfiguredRemoteAgentFailure[] = Object.freeze([
+  ...remoteA2ARosterFailures,
+  ...configuredRemoteA2ABatch.failures,
+]);
+const coreA2ARoles = Object.freeze(A2A_ROLE_CATALOG.map((role) => role.id));
 
 function a2aProviderFacts(): A2AProviderFact[] {
-  return createA2AProviderFacts(
+  const facts = createA2AProviderFacts(
     a2aAgentProviders.map((provider) => ({
       provider,
       agentId: a2aAgentId(provider),
@@ -1162,6 +1205,13 @@ function a2aProviderFacts(): A2AProviderFact[] {
       providerId: configuredRemoteA2AAgent.providerId,
     } : undefined,
   );
+  facts.push(...configuredRemoteA2ABatch.agents.map((agent) => ({
+    provider: 'remote',
+    agentId: agent.agentId,
+    providerId: agent.providerId,
+    configured: true,
+  })));
+  return facts;
 }
 
 const a2aAgents = [
@@ -1170,6 +1220,11 @@ const a2aAgents = [
   return {
     agentId,
     providerId: a2aProviderId(provider),
+    kind: 'cli',
+    executionIdentity: `teams-core-${provider}`,
+    executionBoundaryId: `teams-core-${provider}-runner`,
+    roles: coreA2ARoles,
+    capabilities: A2A_CAPABILITIES,
     authorize: ({ scope }: { scope: AgentJobScope }) => isOperator(scope),
     authorizationPolicy: createA2AAgentAuthorizationPolicy({
       authorize: (input) => (
@@ -1185,6 +1240,7 @@ const a2aAgents = [
   };
   }),
   ...(configuredRemoteA2AAgent ? [configuredRemoteA2AAgent] : []),
+  ...configuredRemoteA2ABatch.agents,
 ];
 a2aProductionRuntime = mountA2AProductionRuntime(http, {
   publicOrigin: a2aPublicOrigin,
@@ -1290,6 +1346,7 @@ http.get('/api/health', async (_request: any, response: any) => {
       }
       : { enabled: false, reason: authenticatedMcpConfig.reason },
     a2aProviders: a2aProviderFacts(),
+    a2aRemoteFailures: a2aRemoteInitializationFailures,
     a2aTelemetry: (() => {
       const snapshot = a2aTelemetry.snapshot();
       return {
@@ -3244,6 +3301,18 @@ function a2aAgentId(provider: CliAgentProvider): string {
 
 function a2aProviderId(provider: CliAgentProvider): string {
   return provider === 'copilot' ? 'official-copilot-cli' : 'codex-cli';
+}
+
+function createA2ARemoteAuthorizationPolicy(agentId: string) {
+  return createA2AAgentAuthorizationPolicy({
+    authorize: (input) => (
+      input.agentId === agentId
+      && Boolean(input.scope.tenantId && input.scope.requesterId && input.scope.conversationId)
+      && (!configuredTenantId || input.scope.tenantId === configuredTenantId)
+      && isOperator(input.scope)
+      && Boolean(input.role && input.capabilities?.length)
+    ),
+  });
 }
 
 function cliProviderFromA2AProviderId(providerId: string): CliAgentProvider | undefined {

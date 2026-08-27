@@ -4,6 +4,7 @@ import { createA2AAgentAuthorizationPolicy } from '../src/server/a2a-agent-autho
 import { A2ATelemetryCollector } from '../src/server/a2a-telemetry.js';
 import {
   createA2ARemoteAgent,
+  createConfiguredA2ARemoteAgents,
   createConfiguredA2ARemoteAgent,
 } from '../src/server/a2a-remote-agent-adapter.js';
 import type {
@@ -347,6 +348,42 @@ assert.equal(configuredBoundId, 'configured-remote-task');
 assert.deepEqual(configuredTelemetry.snapshot().metrics.providers, [
   { providerId: 'remote-provider', count: 2, latencySamples: 2, totalLatencyMs: 0, maxLatencyMs: 0 },
 ]);
+
+const batch = await createConfiguredA2ARemoteAgents([
+  {
+    endpoint: 'https://unavailable.example.test',
+    bearerToken: 'unavailable-token',
+    agentId: 'unavailable-remote',
+    providerId: 'unavailable-provider',
+    authorizationPolicy,
+    fetch: async () => new Response('{}', { status: 503 }),
+  },
+  {
+    endpoint: 'https://remote.example.test',
+    bearerToken: 'configured-remote-token',
+    agentId: 'batch-ready-remote',
+    providerId: 'batch-ready-provider',
+    kind: 'grok-hermes',
+    executionIdentity: 'batch-ready-profile',
+    executionBoundaryId: 'batch-ready-boundary',
+    roles: ['reviewer'],
+    capabilities: ['source.read', 'review.report'],
+    authorizationPolicy,
+    fetch: configuredFetch,
+  },
+]);
+assert.equal(batch.agents.length, 1, 'one unavailable peer must not discard a ready peer');
+assert.equal(batch.agents[0]?.agentId, 'batch-ready-remote');
+assert.equal(batch.agents[0]?.executionIdentity, 'batch-ready-profile');
+assert.equal(batch.agents[0]?.executionBoundaryId, 'batch-ready-boundary');
+assert.equal(batch.agents[0]?.kind, 'grok-hermes');
+assert.deepEqual(batch.failures, [{
+  agentId: 'unavailable-remote',
+  providerId: 'unavailable-provider',
+  code: 'HTTP_ERROR',
+}]);
+assert.equal(JSON.stringify(batch.failures).includes('unavailable-token'), false);
+assert.equal(JSON.stringify(batch.failures).includes('https://'), false);
 
 assert.equal(agent.authorize({ scope, role: 'reviewer', capabilities: ['source.read'] }), false,
   'legacy callback remains fail-closed unless a server-owned callback is supplied');

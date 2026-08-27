@@ -153,14 +153,22 @@ function validateCard(value: unknown): A2ARemoteAgentCard {
     })) as Record<string, readonly string[]>);
   });
   const capabilities = asRecord(card.capabilities);
-  if (capabilities.streaming !== false || capabilities.pushNotifications !== false || capabilities.extendedAgentCard !== false) fail('INVALID_AGENT_CARD');
+  if (
+    typeof capabilities.streaming !== 'boolean'
+    || typeof capabilities.pushNotifications !== 'boolean'
+    || typeof capabilities.extendedAgentCard !== 'boolean'
+  ) fail('INVALID_AGENT_CARD');
   if (!Array.isArray(card.defaultInputModes) || !Array.isArray(card.defaultOutputModes) || !Array.isArray(card.skills)) fail('INVALID_AGENT_CARD');
   return Object.freeze({
     name: card.name,
     description: card.description,
     version: card.version,
     supportedInterfaces: Object.freeze(supportedInterfaces),
-    capabilities: Object.freeze({ streaming: false, pushNotifications: false, extendedAgentCard: false }),
+    capabilities: Object.freeze({
+      streaming: capabilities.streaming,
+      pushNotifications: capabilities.pushNotifications,
+      extendedAgentCard: capabilities.extendedAgentCard,
+    }),
     securitySchemes,
     securityRequirements: Object.freeze(securityRequirements),
     defaultInputModes: Object.freeze([...card.defaultInputModes] as string[]),

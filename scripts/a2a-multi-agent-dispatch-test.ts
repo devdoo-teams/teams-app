@@ -21,6 +21,7 @@ const scope: A2AScope = {
 try {
   await testParallelIndependentAgentsPersistIdentity();
   await testCrossRequesterCancellationIsRejected();
+  await testExecutionBoundaryMismatchDoesNotCancel();
   console.log('a2a-multi-agent-dispatch-test: PASS');
 } finally {
   await fs.rm(root, { recursive: true, force: true });
@@ -139,6 +140,48 @@ async function testCrossRequesterCancellationIsRejected(): Promise<void> {
     undefined,
     'rejected cross-conversation cancellation must leave the durable intent unchanged',
   );
+}
+
+async function testExecutionBoundaryMismatchDoesNotCancel(): Promise<void> {
+  const store = new A2AStore(path.join(root, 'execution-boundary-mismatch.json'));
+  await store.initialize();
+  const parent = await createParent(store, 'execution-boundary-mismatch');
+  await store.createOrGetDispatchIntent({
+    parentTaskId: parent.id,
+    scope,
+    requestFingerprint: 'execution-boundary-mismatch',
+    deadlineAt: new Date(Date.now() + 60_000).toISOString(),
+    children: [{
+      childKey: 'review',
+      childIdempotencyKey: deriveChildIdempotencyKey(parent.id, 'review'),
+      role: 'reviewer',
+      agentId: 'codex-reviewer',
+      providerId: 'codex-cli',
+      executionIdentity: 'persisted-profile',
+      executionBoundaryId: 'persisted-boundary',
+      requestSha256: 'b'.repeat(64),
+    }],
+  });
+  await store.markDispatchChildStarted(parent.id, scope, 'review');
+  await store.bindDispatchChild(parent.id, scope, 'review', 'job-persisted');
+  let cancelCalls = 0;
+  const runtime = createRuntime(store, [{
+    agentId: 'codex-reviewer',
+    providerId: 'codex-cli',
+    executionIdentity: 'current-profile',
+    executionBoundaryId: 'current-boundary',
+    authorize: () => true,
+    executeChild: async () => ({ taskId: 'unused', status: 'failed', error: 'unused' }),
+    cancelChild: async () => { cancelCalls += 1; },
+  }]);
+
+  const canceled = await runtime.cancelDispatch({ task: parent, authenticatedScope: scope });
+  assert.equal(canceled?.status, 'working', 'a stale execution boundary must leave the parent recoverable');
+  assert.equal(cancelCalls, 0, 'a changed execution boundary must not receive cancellation');
+  const dispatch = store.getDispatchIntent(parent.id, scope);
+  assert.equal(dispatch?.status, 'canceling');
+  assert.equal(dispatch?.children[0]?.status, 'working');
+  assert.equal(dispatch?.children[0]?.cancelAcknowledgedAt, undefined);
 }
 
 function createRuntime(store: A2AStore, agents: readonly A2AProductionAgent[]) {

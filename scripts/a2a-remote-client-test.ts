@@ -67,6 +67,7 @@ const mockFetch: A2ARemoteFetch = async (input, init = {}) => {
 };
 
 await testHappyPath();
+await testAdvertisedCapabilitiesDoNotBlockBaseRpc();
 await testDirectMessageResponse();
 await testMissingAuthenticationProvider();
 await testAuthenticationFailureIsSafe();
@@ -142,6 +143,40 @@ async function testHappyPath(): Promise<void> {
     nextPageToken: '',
   });
   assert.deepEqual(await client.cancelTask('task-1'), completedTask);
+}
+
+async function testAdvertisedCapabilitiesDoNotBlockBaseRpc(): Promise<void> {
+  calls.length = 0;
+  nextResponse = (url, init) => {
+    if (url.pathname === '/.well-known/agent-card.json') {
+      return jsonResponse({
+        ...validCard,
+        capabilities: {
+          streaming: true,
+          pushNotifications: true,
+          extendedAgentCard: true,
+        },
+      });
+    }
+    const request = JSON.parse(String(init.body)) as { id: string; method: string };
+    assert.equal(request.method, 'GetTask');
+    return jsonResponse({
+      jsonrpc: '2.0',
+      id: request.id,
+      result: completedTask,
+    });
+  };
+
+  const client = await createA2ARemoteClient('https://agent.example.test', {
+    fetch: mockFetch,
+    bearerTokenProvider: () => 'test-token',
+  });
+  assert.deepEqual(client.card.capabilities, {
+    streaming: true,
+    pushNotifications: true,
+    extendedAgentCard: true,
+  });
+  assert.deepEqual(await client.getTask('task-1'), completedTask);
 }
 
 async function testMissingAuthenticationProvider(): Promise<void> {

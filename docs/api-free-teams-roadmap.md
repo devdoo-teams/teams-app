@@ -35,6 +35,8 @@ MCP는 Teams 모바일 화면 표준이 아니다. Microsoft Teams SDK의 MCP cl
 
 A2A 협업은 단일 CLI를 여러 이름으로 호출하는 방식이 아니라, 명시적으로 등록된 trusted agent와 provider runner를 독립적으로 라우팅하는 서버 경계로 관리한다. `TEAMS_A2A_AGENT_PROVIDERS`에 `codex,copilot`을 직접 설정한 경우에만 두 worker를 등록하며, 기본값은 `TEAMS_AGENT_CLI_PROVIDER` 하나다. 작업 레코드에는 선택된 provider를 함께 저장해 재시작·취소·재시도에서도 다른 runner로 조용히 전환되지 않게 한다. provider가 구성되지 않았거나 작업 provider와 취소 요청 provider가 다르면 fail-closed한다.
 
+원격 협업 peer는 `TEAMS_A2A_REMOTE_AGENTS` JSON roster로 하나씩 등록할 수 있다. 각 peer는 HTTPS endpoint, `tokenEnv`, 독립적인 `executionIdentity`와 `executionBoundaryId`, Core role/capability 계약을 가져야 한다. 서버는 자격 증명을 환경에서 peer별로 해석하고, 한 peer의 카드 조회 실패나 누락된 token이 정상 peer의 시작을 막지 않도록 `a2aRemoteFailures` health 진단에 안전한 식별자와 오류 코드만 남긴다. 레거시 단일 remote 설정과 roster는 함께 사용하지 않는다. 실제 원격 왕복과 Teams UI 증거가 없으면 등록 자체를 협업 성공으로 판정하지 않는다.
+
 이 설정은 실행 adapter를 활성화할 뿐이며 Codex 로그인, GitHub Copilot 라이선스, 조직 정책, Teams 관리자 승인을 증명하지 않는다. 실제 CLI 최종 결과와 공개 Teams 런타임 증거가 없으면 `A2A_READY`나 릴리스 완료로 판정하지 않는다. 참고 프로토콜은 [A2A v0.2.6 specification](https://a2a-protocol.org/v0.2.6/specification/)이며, Teams 화면 자체는 여전히 TeamsJS 개인 탭·Bot·Adaptive Cards 계약을 따른다.
 
 벤치마킹 기준은 Microsoft 공식 React 기본 탭 샘플, Teams SDK TypeScript quickstart, Teams Samples의 `tab-ui-templates`, `Device permissions`, `Adaptive Card Actions Bot`, `Sequential workflow adaptive cards`, `Deep Link consuming Subentity ID`로 제한한다. MCP Apps 공식 저장소는 UI가 MCP 서버가 제공하는 리소스로 호환 host의 sandbox iframe에 렌더링된다고 설명하고, 지원 클라이언트가 host마다 다르며 Teams 모바일 host 구현을 제공하지 않는다. 따라서 MCP Apps나 CopilotKit의 UI를 Teams 모바일 호환성의 근거로 사용하지 않고, 나중에 실제 MCP 서버·host·인증 계약이 확인된 경우에만 서버 adapter로 검토한다.

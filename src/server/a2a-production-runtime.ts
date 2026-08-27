@@ -53,6 +53,15 @@ import {
   type A2AAgentAuthorizationPolicy,
 } from './a2a-agent-authorization.js';
 import { A2ATelemetryCollector } from './a2a-telemetry.js';
+import {
+  createA2ACollaborationPlan,
+  summarizeA2ACollaborationResults,
+  type A2ACollaborationChildResult,
+  type A2ACollaborationPlanResult,
+  type A2ACollaborationSummary,
+  type A2ACollaborationWorker,
+} from './a2a-collaboration-plan.js';
+import { A2A_ROLE_CATALOG } from './a2a-role-catalog.js';
 
 type LegacySubmit = NonNullable<A2ARouteOptions['onTaskSubmitted']>;
 type LegacyCancel = NonNullable<A2ARouteOptions['onTaskCancel']>;
@@ -99,10 +108,15 @@ export type A2AProductionAgentAuthorizationInput = Pick<
 export type A2AProductionAgent = Readonly<{
   agentId: string;
   providerId: string;
+  /** Optional provider kind used for diagnostics and collaboration roster display. */
+  kind?: string;
   /** Stable identity of the provider session owned by this registered agent. */
   executionIdentity?: string;
   /** Stable execution boundary (workspace/config/runner) owned by this agent. */
   executionBoundaryId?: string;
+  /** Explicit Core collaboration contract; omitted agents remain dispatch-only. */
+  roles?: readonly string[];
+  capabilities?: readonly string[];
   /** Every independently registered agent must declare its scope policy. */
   authorize: (input: A2AProductionAgentAuthorizationInput) => boolean;
   /** Explicit tenant/requester/conversation/capability policy for production agents. */
@@ -138,6 +152,8 @@ type A2AOrchestrationRouteRequest = Readonly<{
 
 const DEFAULT_CANCELLATION_TIMEOUT_MS = 5_000;
 const MAX_CANCELLATION_TIMEOUT_MS = 60_000;
+const MAX_COLLABORATION_DEADLINE_MS = 60_000;
+const MAX_COLLABORATION_PARALLELISM = 8;
 
 export type A2AProductionChildDispatch = Readonly<{
   parentTask: A2ATask;
@@ -147,6 +163,23 @@ export type A2AProductionChildDispatch = Readonly<{
   parallelism: number;
   depth?: number;
   fanOutIndex?: number;
+}>;
+
+export type A2AProductionCollaborationInput = Readonly<{
+  scope: A2AScope;
+  prompt: string;
+  requestedRoles?: readonly string[];
+  idempotencyKey: string;
+  deadlineMs: number;
+  parallelism: number;
+}>;
+
+export type A2AProductionCollaborationResult = Readonly<{
+  status: A2ACollaborationSummary['status'] | 'blocked';
+  plan: A2ACollaborationPlanResult;
+  parentTask?: A2ATask;
+  summary?: A2ACollaborationSummary;
+  orchestration?: A2AOrchestrationResult;
 }>;
 
 export type A2AProductionRuntimeOptions = Readonly<{
@@ -175,6 +208,7 @@ export type A2AProductionRuntime = Readonly<{
   officialAgentCard: A2AOfficialAgentCard;
   telemetry?: A2ATelemetryCollector;
   dispatchChildren: (input: A2AProductionChildDispatch) => Promise<A2AOrchestrationResult>;
+  collaborate: (input: A2AProductionCollaborationInput) => Promise<A2AProductionCollaborationResult>;
   cancelDispatch: (input: { task: A2ATask; authenticatedScope: A2AScope }) => Promise<A2ATask | undefined>;
   recoverChild: (input: A2AProductionChildRecoveryInput) => Promise<A2AOrchestratorChildExecutionResult | undefined>;
   mount: (http: Pick<Application, 'get' | 'use'>) => void;
@@ -202,7 +236,7 @@ function createAgentRegistry(coreA2A: A2AProductionCoreA2A): Readonly<{
   agents: ReadonlyMap<string, A2AProductionAgent>;
   defaultAgentId?: string;
 }> {
-  if (!('agents' in coreA2A)) {
+  if (!('agents' in coreA2A) || coreA2A.agents === undefined) {
     return {
       agents: new Map([[
         LEGACY_A2A_AGENT_ID,
@@ -221,7 +255,8 @@ function createAgentRegistry(coreA2A: A2AProductionCoreA2A): Readonly<{
   const agents = new Map<string, A2AProductionAgent>();
   const executionIdentities = new Set<string>();
   const executionBoundaries = new Set<string>();
-  for (const agent of coreA2A.agents) {
+  const registeredAgents = coreA2A.agents;
+  for (const agent of registeredAgents) {
     if (agents.has(agent.agentId)) {
       throw new A2AContractError('InvalidRequestError', 'A2A trusted agent registry contains duplicate agent IDs.');
     }
@@ -252,8 +287,9 @@ export function createA2AProductionRuntime(options: A2AProductionRuntimeOptions)
   const tenant = options.configuredTenantId?.trim() || 'common';
   const orchestrator = createCoreA2AOrchestrator();
   const agentRegistry = createAgentRegistry(options.coreA2A);
-  if (options.requireScopedAgentAuthorization && 'agents' in options.coreA2A) {
-    for (const agent of options.coreA2A.agents) {
+  const registeredAgents = 'agents' in options.coreA2A ? options.coreA2A.agents : undefined;
+  if (options.requireScopedAgentAuthorization && registeredAgents) {
+    for (const agent of registeredAgents) {
       if (!agent.authorizationPolicy) {
         throw new A2AContractError(
           'UnsupportedOperationError',
@@ -371,7 +407,9 @@ export function createA2AProductionRuntime(options: A2AProductionRuntimeOptions)
 
   const cancelTrustedChild = async (input: A2ADispatchChildCancellationInput): Promise<void> => {
     const agent = agentRegistry.agents.get(input.agentId);
-    if (!agent || agent.providerId !== input.providerId || !agent.cancelChild) {
+    if (!agent || agent.providerId !== input.providerId || !agent.cancelChild
+      || agent.executionIdentity !== input.executionIdentity
+      || agent.executionBoundaryId !== input.executionBoundaryId) {
       throw new Error(`A2A trusted cancellation provider is unavailable for ${input.agentId}/${input.providerId}.`);
     }
     await withCancellationDeadline(agent.cancelChild({
@@ -384,7 +422,9 @@ export function createA2AProductionRuntime(options: A2AProductionRuntimeOptions)
     input: A2AProductionChildRecoveryInput,
   ): Promise<A2AOrchestratorChildExecutionResult | undefined> => {
     const agent = agentRegistry.agents.get(input.agentId);
-    if (!agent || agent.providerId !== input.providerId || !agent.recoverChild) return undefined;
+    if (!agent || agent.providerId !== input.providerId || !agent.recoverChild
+      || agent.executionIdentity !== input.executionIdentity
+      || agent.executionBoundaryId !== input.executionBoundaryId) return undefined;
     return agent.recoverChild({ ...input, scope: { ...input.scope } });
   };
   options.store.setDispatchChildCancellationHandler(cancelTrustedChild);
@@ -435,6 +475,8 @@ export function createA2AProductionRuntime(options: A2AProductionRuntimeOptions)
           childIdempotencyKey: currentChild.childIdempotencyKey,
           agentId: currentChild.agentId,
           providerId: currentChild.providerId,
+          ...(currentChild.executionIdentity === undefined ? {} : { executionIdentity: currentChild.executionIdentity }),
+          ...(currentChild.executionBoundaryId === undefined ? {} : { executionBoundaryId: currentChild.executionBoundaryId }),
           agentJobId: currentChild.agentJobId,
           cancelRequestedAt: dispatch.cancelRequestedAt!,
         });
@@ -717,11 +759,107 @@ export function createA2AProductionRuntime(options: A2AProductionRuntimeOptions)
     }
   };
 
+  const collaborationWorkers = (scope: A2AScope): readonly A2ACollaborationWorker[] => (
+    [...agentRegistry.agents.values()].flatMap((agent) => {
+      if (!agent.executionIdentity || !agent.executionBoundaryId || !agent.roles || !agent.capabilities) return [];
+      const roles = agent.roles.filter((role) => {
+        const definition = A2A_ROLE_CATALOG.find((candidate) => candidate.id === role);
+        if (!definition) return false;
+        const authorizationInput = {
+          agentId: agent.agentId,
+          scope: { ...scope },
+          role,
+          capabilities: definition.capabilities,
+        };
+        return agent.authorizationPolicy
+          ? evaluateA2AAgentAuthorization(agent.authorizationPolicy, authorizationInput).allowed
+          : agent.authorize(authorizationInput);
+      });
+      if (roles.length === 0) return [];
+      return [{
+        agentId: agent.agentId,
+        providerId: agent.providerId,
+        executionIdentity: agent.executionIdentity,
+        executionBoundaryId: agent.executionBoundaryId,
+        roles,
+        capabilities: [...agent.capabilities],
+      }];
+    })
+  );
+
+  const collaborate = async (
+    input: A2AProductionCollaborationInput,
+  ): Promise<A2AProductionCollaborationResult> => {
+    const plan = createA2ACollaborationPlan({
+      prompt: input.prompt,
+      requestedRoles: input.requestedRoles,
+      workers: collaborationWorkers(input.scope),
+    });
+    if (plan.strategy === 'blocked') return { status: 'blocked', plan };
+    validateCollaborationDispatchLimits(input);
+
+    const parentFingerprint = sha256(JSON.stringify({
+      schemaVersion: 'a2a-core-collaboration-request.v1',
+      planFingerprint: plan.planFingerprint,
+      deadlineMs: input.deadlineMs,
+      parallelism: input.parallelism,
+    }));
+    const parent = await options.store.createOrGetTaskResult({
+      scope: input.scope,
+      contextId: collaborationContextId(input.scope, input.idempotencyKey),
+      idempotencyKey: input.idempotencyKey,
+      fingerprint: parentFingerprint,
+      message: {
+        messageId: collaborationMessageId(input.scope, input.idempotencyKey),
+        role: 'user',
+        parts: [{ text: redactAndBoundText(input.prompt.trim(), 1_200) }],
+      },
+    });
+    const parentTask = parent.task;
+    const persisted = options.store.getDispatchIntent(parentTask.id, input.scope);
+    if (persisted) {
+      return collaborationSnapshot(plan, parentTask, persisted);
+    }
+    if (!parent.created && (parentTask.status === 'completed' || parentTask.status === 'failed' || parentTask.status === 'canceled')) {
+      throw new A2AContractError('TerminalStateImmutableError', 'A2A collaboration parent is already terminal.');
+    }
+
+    const orchestration = await dispatchChildren({
+      parentTask,
+      scope: input.scope,
+      requests: plan.requests.map((request) => ({
+        key: request.key,
+        role: request.role,
+        prompt: request.prompt,
+        capabilities: request.capabilities,
+        agentId: request.agentId,
+      })),
+      deadlineMs: input.deadlineMs,
+      parallelism: input.parallelism,
+    });
+    const latestParent = options.store.getTask(parentTask.id, input.scope) ?? parentTask;
+    const latestDispatch = options.store.getDispatchIntent(parentTask.id, input.scope);
+    if (!latestDispatch) throw new A2AContractError('InvalidTaskError', 'A2A collaboration dispatch was not persisted.');
+    const summary = summarizeA2ACollaborationResults(collaborationChildResults(plan, latestParent, latestDispatch, orchestration));
+    return {
+      status: summary.status,
+      plan,
+      parentTask: latestParent,
+      summary,
+      orchestration,
+    };
+  };
+
   const orchestrationRouter = createA2AOrchestrationRouter({
     store: options.store,
     authenticate: options.authenticate,
     resolveScope: options.resolveScope,
     dispatchChildren,
+  });
+  const collaborationRouter = createA2ACollaborationRouter({
+    authenticate: options.authenticate,
+    resolveScope: options.resolveScope,
+    collaborate,
   });
 
   return {
@@ -730,6 +868,7 @@ export function createA2AProductionRuntime(options: A2AProductionRuntimeOptions)
     officialAgentCard,
     ...(options.telemetry ? { telemetry: options.telemetry } : {}),
     dispatchChildren,
+    collaborate,
     cancelDispatch,
     recoverChild: recoverTrustedChild,
     mount: (http) => {
@@ -750,6 +889,7 @@ export function createA2AProductionRuntime(options: A2AProductionRuntimeOptions)
       // the older REST-compatible route.
       http.use('/a2a/v026', v026Router);
       http.use('/a2a/v1', v1Router);
+      http.use('/a2a/collaborate', collaborationRouter);
       http.use('/a2a/orchestrate', orchestrationRouter);
       http.use('/a2a', legacyRouter);
     },
@@ -758,6 +898,87 @@ export function createA2AProductionRuntime(options: A2AProductionRuntimeOptions)
 
 function dispatchKey(task: Pick<A2ATask, 'id' | 'scope'>): string {
   return JSON.stringify([task.scope.tenantId, task.scope.requesterId, task.scope.conversationId, task.id]);
+}
+
+function validateCollaborationDispatchLimits(input: A2AProductionCollaborationInput): void {
+  if (!Number.isSafeInteger(input.deadlineMs) || input.deadlineMs < 1 || input.deadlineMs > MAX_COLLABORATION_DEADLINE_MS) {
+    throw new A2AContractError('InvalidRequestError', 'A2A collaboration deadlineMs is outside the Core bound.');
+  }
+  if (!Number.isSafeInteger(input.parallelism) || input.parallelism < 1 || input.parallelism > MAX_COLLABORATION_PARALLELISM) {
+    throw new A2AContractError('InvalidRequestError', 'A2A collaboration parallelism is outside the Core bound.');
+  }
+}
+
+function collaborationContextId(scope: A2AScope, idempotencyKey: string): string {
+  return `collab-context-${sha256(JSON.stringify([
+    scope.tenantId,
+    scope.requesterId,
+    scope.conversationId,
+    idempotencyKey,
+  ])).slice(0, 40)}`;
+}
+
+function collaborationMessageId(scope: A2AScope, idempotencyKey: string): string {
+  return `collab-message-${sha256(JSON.stringify([
+    scope.tenantId,
+    scope.requesterId,
+    scope.conversationId,
+    idempotencyKey,
+  ])).slice(0, 40)}`;
+}
+
+function collaborationSnapshot(
+  plan: A2ACollaborationPlanResult,
+  parentTask: A2ATask,
+  dispatch: A2ADispatchIntent,
+): A2AProductionCollaborationResult {
+  const summary = summarizeA2ACollaborationResults(collaborationChildResults(plan, parentTask, dispatch));
+  return {
+    status: summary.status,
+    plan,
+    parentTask,
+    summary,
+  };
+}
+
+function collaborationChildResults(
+  plan: A2ACollaborationPlanResult,
+  parentTask: A2ATask,
+  dispatch: A2ADispatchIntent,
+  orchestration?: A2AOrchestrationResult,
+): A2ACollaborationChildResult[] {
+  const liveResults = new Map(orchestration?.childResults.map((child) => [child.childKey, child]) ?? []);
+  return plan.requests.map((request) => {
+    const persisted = dispatch.children.find((child) => child.childKey === request.key);
+    const live = liveResults.get(request.key);
+    const status = live?.status ?? collaborationChildStatus(persisted?.status);
+    const artifact = parentTask.artifacts.find((candidate) => (
+      candidate.metadata?.childKey === request.key
+    ));
+    const result = live?.result ?? artifact?.content?.text;
+    return {
+      key: request.key,
+      role: request.role,
+      agentId: request.agentId,
+      providerId: request.providerId,
+      executionIdentity: request.executionIdentity,
+      executionBoundaryId: request.executionBoundaryId,
+      status,
+      ...(result === undefined ? {} : { result }),
+      ...(live?.error === undefined && status !== 'failed' ? {} : {
+        error: live?.error ?? (status === 'failed' ? parentTask.error : undefined),
+      }),
+    };
+  });
+}
+
+function collaborationChildStatus(
+  status: A2ADispatchIntent['children'][number]['status'] | undefined,
+): A2ACollaborationChildResult['status'] {
+  if (status === 'completed' || status === 'failed' || status === 'canceled' || status === 'working' || status === 'pending') {
+    return status;
+  }
+  return 'pending';
 }
 
 function fingerprintPreparedDispatch(
@@ -937,6 +1158,66 @@ function artifactForChild(
   };
 }
 
+function createA2ACollaborationRouter(options: Readonly<{
+  authenticate: RequestHandler;
+  resolveScope: (request: Request) => A2AScope | undefined;
+  collaborate: (input: A2AProductionCollaborationInput) => Promise<A2AProductionCollaborationResult>;
+}>): express.Router {
+  const router = express.Router();
+  router.use(options.authenticate);
+  router.use(express.json({ limit: '64kb', strict: true }));
+  router.post('/', asyncHandler(async (request, response) => {
+    const authenticatedScope = options.resolveScope(request);
+    if (!authenticatedScope) throw new A2AOrchestrationUnauthorizedError();
+    const input = validateCollaborationRouteRequest(request.body);
+    const result = await options.collaborate({ ...input, scope: authenticatedScope });
+    response.status(200).json(serializeCollaborationResult(result));
+  }));
+  router.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
+    sendOrchestrationError(response, error);
+  });
+  return router;
+}
+
+function validateCollaborationRouteRequest(value: unknown): Omit<A2AProductionCollaborationInput, 'scope'> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new A2AContractError('InvalidRequestError', 'A2A collaboration request must be a JSON object.');
+  }
+  const record = value as Record<string, unknown>;
+  const allowed = new Set(['prompt', 'requestedRoles', 'idempotencyKey', 'deadlineMs', 'parallelism']);
+  if (Object.keys(record).some((key) => !allowed.has(key))) {
+    throw new A2AContractError('InvalidRequestError', 'A2A collaboration request contains unsupported fields.');
+  }
+  if (typeof record.prompt !== 'string' || typeof record.idempotencyKey !== 'string') {
+    throw new A2AContractError('InvalidRequestError', 'A2A collaboration prompt and idempotencyKey are required.');
+  }
+  if (!Number.isSafeInteger(record.deadlineMs) || !Number.isSafeInteger(record.parallelism)) {
+    throw new A2AContractError('InvalidRequestError', 'A2A collaboration deadlineMs and parallelism are required integers.');
+  }
+  if (record.requestedRoles !== undefined && (
+    !Array.isArray(record.requestedRoles)
+    || record.requestedRoles.some((role) => typeof role !== 'string')
+  )) {
+    throw new A2AContractError('InvalidRequestError', 'A2A collaboration requestedRoles must be an array of strings.');
+  }
+  return {
+    prompt: record.prompt,
+    ...(record.requestedRoles === undefined ? {} : { requestedRoles: record.requestedRoles as string[] }),
+    idempotencyKey: record.idempotencyKey,
+    deadlineMs: record.deadlineMs as number,
+    parallelism: record.parallelism as number,
+  };
+}
+
+function serializeCollaborationResult(result: A2AProductionCollaborationResult): Record<string, unknown> {
+  return {
+    status: result.status,
+    plan: result.plan,
+    ...(result.parentTask === undefined ? {} : { parentTask: result.parentTask }),
+    ...(result.summary === undefined ? {} : { summary: result.summary }),
+  };
+}
+
 function createA2AOrchestrationRouter(options: Readonly<{
   store: A2AStore;
   authenticate: RequestHandler;
@@ -1077,6 +1358,10 @@ function asyncHandler(handler: (request: Request, response: Response) => Promise
   return (request, response, next) => {
     void handler(request, response).catch(next);
   };
+}
+
+function sha256(value: string): string {
+  return crypto.createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
 export function mountA2AProductionRuntime(

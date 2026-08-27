@@ -7,8 +7,10 @@ import type {
 import type { A2AProductionChildCancellationInput } from './a2a-production-runtime.js';
 import type { A2ATelemetryCollector } from './a2a-telemetry.js';
 import {
+  A2ARemoteClientError,
   createA2ARemoteClient,
   type A2ARemoteClient,
+  type A2ARemoteClientErrorCode,
   type A2ARemoteFetch,
   type A2ARemoteMessage,
   type A2ARemoteTask,
@@ -27,6 +29,11 @@ type RemoteAgentAuthorizationInput = Readonly<{
 export type A2ARemoteAgentAdapterOptions = Readonly<{
   agentId: string;
   providerId: string;
+  kind?: string;
+  executionIdentity?: string;
+  executionBoundaryId?: string;
+  roles?: readonly string[];
+  capabilities?: readonly string[];
   client: A2ARemoteClient;
   authorizationPolicy: A2AAgentAuthorizationPolicy;
   authorize?: (input: RemoteAgentAuthorizationInput) => boolean;
@@ -59,6 +66,11 @@ export type A2ARemoteAgentRecoveryInput = Readonly<{
 export type A2ARemoteProductionAgent = Readonly<{
   agentId: string;
   providerId: string;
+  kind?: string;
+  executionIdentity?: string;
+  executionBoundaryId?: string;
+  roles?: readonly string[];
+  capabilities?: readonly string[];
   authorize: (input: RemoteAgentAuthorizationInput) => boolean;
   authorizationPolicy: A2AAgentAuthorizationPolicy;
   executeChild: (input: A2AOrchestratorChildExecutionInput & {
@@ -66,6 +78,18 @@ export type A2ARemoteProductionAgent = Readonly<{
   }) => Promise<A2AOrchestratorChildExecutionResult>;
   cancelChild: (input: A2AProductionChildCancellationInput) => Promise<void>;
   recoverChild: (input: A2ARemoteAgentRecoveryInput) => Promise<A2AOrchestratorChildExecutionResult>;
+}>;
+
+export type A2AConfiguredRemoteAgentFailure = Readonly<{
+  agentId: string;
+  providerId: string;
+  kind?: string;
+  code: A2ARemoteClientErrorCode | 'CONFIGURATION_ERROR';
+}>;
+
+export type A2AConfiguredRemoteAgentBatchResult = Readonly<{
+  agents: readonly A2ARemoteProductionAgent[];
+  failures: readonly A2AConfiguredRemoteAgentFailure[];
 }>;
 
 function boundedPoll(value: number | undefined, fallback: number, max: number): number {
@@ -250,6 +274,11 @@ export function createA2ARemoteAgent(options: A2ARemoteAgentAdapterOptions): A2A
   return {
     agentId: options.agentId,
     providerId: options.providerId,
+    ...(options.kind === undefined ? {} : { kind: options.kind }),
+    ...(options.executionIdentity === undefined ? {} : { executionIdentity: options.executionIdentity }),
+    ...(options.executionBoundaryId === undefined ? {} : { executionBoundaryId: options.executionBoundaryId }),
+    ...(options.roles === undefined ? {} : { roles: Object.freeze([...options.roles]) }),
+    ...(options.capabilities === undefined ? {} : { capabilities: Object.freeze([...options.capabilities]) }),
     authorize,
     authorizationPolicy: options.authorizationPolicy,
     async executeChild(input) {
@@ -365,4 +394,50 @@ export async function createConfiguredA2ARemoteAgent(
     ...adapterOptions
   } = options;
   return createA2ARemoteAgent({ ...adapterOptions, client });
+}
+
+/**
+ * Initialize configured peers independently. A single unavailable remote must
+ * remain an observable startup diagnostic without preventing healthy peers from
+ * entering the trusted registry.
+ */
+export async function createConfiguredA2ARemoteAgents(
+  options: readonly A2AConfiguredRemoteAgentOptions[],
+): Promise<A2AConfiguredRemoteAgentBatchResult> {
+  const outcomes = await Promise.all(options.map(async (entry) => {
+    try {
+      return { agent: await createConfiguredA2ARemoteAgent(entry) } as const;
+    } catch (error) {
+      const failure: A2AConfiguredRemoteAgentFailure = {
+        agentId: safeFailureLabel(entry.agentId),
+        providerId: safeFailureLabel(entry.providerId),
+        ...(entry.kind === undefined ? {} : { kind: safeFailureLabel(entry.kind) }),
+        code: remoteInitializationErrorCode(error),
+      };
+      return { failure } as const;
+    }
+  }));
+
+  const agents: A2ARemoteProductionAgent[] = [];
+  const failures: A2AConfiguredRemoteAgentFailure[] = [];
+  for (const outcome of outcomes) {
+    if ('agent' in outcome) {
+      agents.push(outcome.agent);
+    } else {
+      failures.push(outcome.failure);
+    }
+  }
+  return Object.freeze({
+    agents: Object.freeze(agents),
+    failures: Object.freeze(failures),
+  });
+}
+
+function remoteInitializationErrorCode(error: unknown): A2ARemoteClientErrorCode | 'CONFIGURATION_ERROR' {
+  return error instanceof A2ARemoteClientError ? error.code : 'CONFIGURATION_ERROR';
+}
+
+function safeFailureLabel(value: string): string {
+  const normalized = value.trim();
+  return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(normalized) ? normalized : '[invalid]';
 }
