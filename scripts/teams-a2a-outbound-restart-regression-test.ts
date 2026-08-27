@@ -20,6 +20,14 @@ const scope = {
   requesterId: 'outbound-restart-requester',
   conversationId: 'outbound-restart-conversation',
 };
+const repairedScope = {
+  ...scope,
+  conversationId: 'outbound-restart-missing-intent-conversation',
+};
+const nonTeamsScope = {
+  ...scope,
+  conversationId: 'outbound-restart-non-teams-conversation',
+};
 const a2aStorePath = path.join(temporaryRoot, 'a2a.json');
 const a2aOutboundStorePath = path.join(temporaryRoot, 'a2a-outbound.json');
 const agentWorkspace = path.join(temporaryRoot, 'agent-workspace');
@@ -77,6 +85,18 @@ try {
     payloadSha256: completionIntentFingerprint(parent.id, scope),
   });
   assert.equal(outbound.intent.status, 'queued');
+  const missingIntentParent = await createCompletedTask(
+    a2aStore,
+    repairedScope,
+    'teams-activity:outbound-restart-missing-intent',
+    'Recovered a missing Teams completion intent after restart.',
+  );
+  await createCompletedTask(
+    a2aStore,
+    nonTeamsScope,
+    'non-teams-outbound-restart-task',
+    'This non-Teams A2A result must not be sent to a Teams conversation.',
+  );
 
   const profilePath = path.join(temporaryRoot, 'read-only.sb');
   const isolatedNodePath = path.join(temporaryRoot, 'node');
@@ -140,21 +160,46 @@ try {
   child.stderr?.on('data', (chunk) => { serverOutput += chunk.toString(); });
 
   await waitForHealth(baseUrl, child);
-  const activities = await waitForRecoveredCompletion(baseUrl, 4_000);
+  const activities = await waitForRecoveredCompletion(baseUrl, scope.conversationId, 4_000);
   assert.equal(activities.length, 1, 'one queued completion intent must recover exactly once');
   const serialized = JSON.stringify(activities[0]);
   assert.match(serialized, /Recovered A2A completion after restart/u);
   assert.match(serialized, /completed/u);
+  const repairedActivities = await waitForRecoveredCompletion(
+    baseUrl,
+    repairedScope.conversationId,
+    4_000,
+  );
+  assert.equal(repairedActivities.length, 1, 'one missing Teams completion intent must be repaired exactly once');
+  assert.match(
+    JSON.stringify(repairedActivities[0]),
+    /Recovered a missing Teams completion intent after restart/u,
+  );
 
   const persisted = new TeamsA2AOutboundStore(a2aOutboundStorePath);
   await persisted.initialize();
   const recovered = persisted.getIntent(outbound.intent.id, scope);
   assert.equal(recovered?.status, 'connector-accepted');
   assert.equal(recovered?.attempts, 1);
+  const repairedIntent = await persisted.createOrGetCompletionIntent({
+    parentTaskId: missingIntentParent.id,
+    scope: repairedScope,
+    payloadSha256: completionIntentFingerprint(missingIntentParent.id, repairedScope),
+  });
+  assert.equal(repairedIntent.created, false, 'startup recovery must persist the repaired intent before delivery');
+  assert.equal(repairedIntent.intent.status, 'connector-accepted');
+  assert.equal(repairedIntent.intent.attempts, 1);
 
   await delay(250);
   const duplicate = await requestJson(baseUrl, `/api/debug/agent-outbox/${scope.conversationId}`);
   assert.deepEqual(duplicate.activities, [], 'startup recovery must not send a second completion activity');
+  const repairedDuplicate = await requestJson(
+    baseUrl,
+    `/api/debug/agent-outbox/${repairedScope.conversationId}`,
+  );
+  assert.deepEqual(repairedDuplicate.activities, [], 'a repaired intent must not send a second completion activity');
+  const nonTeamsOutbox = await requestJson(baseUrl, `/api/debug/agent-outbox/${nonTeamsScope.conversationId}`);
+  assert.deepEqual(nonTeamsOutbox.activities, [], 'non-Teams A2A tasks must not create Teams outbound activity');
 
   console.log('teams-a2a-outbound-restart-regression-test: PASS');
 } finally {
@@ -168,6 +213,43 @@ function completionIntentFingerprint(parentTaskId: string, intentScope: typeof s
     parentTaskId,
     scope: intentScope,
   }), 'utf8').digest('hex');
+}
+
+async function createCompletedTask(
+  store: A2AStore,
+  taskScope: typeof scope,
+  idempotencyKey: string,
+  resultText: string,
+) {
+  const suffix = crypto.createHash('sha256').update(idempotencyKey, 'utf8').digest('hex').slice(0, 16);
+  const task = await store.createOrGetTask({
+    scope: taskScope,
+    contextId: `outbound-restart-${suffix}`,
+    idempotencyKey,
+    fingerprint: `outbound-restart-${suffix}`,
+    message: {
+      messageId: `outbound-restart-${suffix}`,
+      role: 'user',
+      parts: [{ text: resultText }],
+    },
+  });
+  await store.transitionTask(task.id, taskScope, 'working');
+  await store.transitionTask(task.id, taskScope, {
+    status: 'completed',
+    error: undefined,
+    artifacts: [{
+      artifactId: `outbound-restart-${suffix}`,
+      taskId: task.id,
+      sourceTaskId: task.id,
+      sha256: crypto.createHash('sha256').update(resultText, 'utf8').digest('hex'),
+      byteSize: Buffer.byteLength(resultText, 'utf8'),
+      mediaType: 'text/plain',
+      name: 'result.txt',
+      scope: taskScope,
+      content: { mediaType: 'text/plain', text: resultText },
+    }],
+  });
+  return task;
 }
 
 async function freePort(): Promise<number> {
@@ -195,16 +277,20 @@ async function waitForHealth(baseUrl: string, process: ChildProcess): Promise<vo
   assert.fail(`server did not become healthy: ${serverOutput.slice(-4_000)}`);
 }
 
-async function waitForRecoveredCompletion(baseUrl: string, timeoutMs: number): Promise<unknown[]> {
+async function waitForRecoveredCompletion(
+  baseUrl: string,
+  conversationId: string,
+  timeoutMs: number,
+): Promise<unknown[]> {
   const deadline = Date.now() + timeoutMs;
   const observed: unknown[] = [];
   while (Date.now() < deadline) {
-    const outbox = await requestJson(baseUrl, `/api/debug/agent-outbox/${scope.conversationId}`);
+    const outbox = await requestJson(baseUrl, `/api/debug/agent-outbox/${conversationId}`);
     observed.push(...outbox.activities);
     if (observed.length > 0) return observed;
     await delay(50);
   }
-  assert.fail(`queued completion was not recovered after restart: ${serverOutput.slice(-4_000)}`);
+  assert.fail(`completion for ${conversationId} was not recovered after restart: ${serverOutput.slice(-4_000)}`);
 }
 
 async function request(baseUrl: string, pathname: string): Promise<Response> {
