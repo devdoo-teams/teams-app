@@ -91,6 +91,7 @@ jobs:
       - name: Verify remote peer contracts
         run: |
           npm run test:a2a-remote-client
+          npm run test:a2a-remote-http-roundtrip
           npm run test:a2a-remote-agent-adapter
 
   continuity:

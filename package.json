@@ -93,6 +93,7 @@
     "test:a2a-submission-durability": "tsx scripts/a2a-submission-durability-test.ts",
     "test:a2a-agent-authorization-policy": "tsx scripts/a2a-agent-authorization-policy-test.ts",
     "test:a2a-remote-client": "tsx scripts/a2a-remote-client-test.ts",
+    "test:a2a-remote-http-roundtrip": "tsx scripts/a2a-remote-http-roundtrip-test.ts",
     "test:a2a-remote-agent-adapter": "tsx scripts/a2a-remote-agent-adapter-test.ts",
     "test:a2a-telemetry": "tsx scripts/a2a-telemetry-test.ts",
     "test:a2a-official-contract-audit": "tsx scripts/a2a-official-contract-audit-test.ts",
