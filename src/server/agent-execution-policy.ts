@@ -28,6 +28,7 @@ const DEFAULT_ALLOWED_FILES = new Set([
 const MAX_PROJECTED_FILES = 10_000;
 const MAX_PROJECTED_FILE_BYTES = 4 * 1024 * 1024;
 const MAX_PROJECTED_TOTAL_BYTES = 64 * 1024 * 1024;
+const MAX_CODEX_AUTH_FILE_BYTES = 1024 * 1024;
 const DEFAULT_LEASE_TTL_MS = 15 * 60 * 1000;
 const PROVIDER_BRAND = Symbol('agent-isolation-provider');
 const LEASE_BRAND = Symbol('agent-isolation-lease');
@@ -270,6 +271,8 @@ export class AgentExecutionPolicy {
       canMutateScope?: (scope: AgentJobScope) => boolean;
       allowedDirectories?: readonly string[];
       isolationProvider?: AgentIsolationProvider;
+      /** Explicit operator-selected Codex auth file staged only into the disposable projection. */
+      codexAuthFile?: string;
       projectionHooks?: { afterCopy?: () => Promise<void> | void };
     } = {},
   ) {}
@@ -335,6 +338,9 @@ export class AgentExecutionPolicy {
       await this.options.projectionHooks?.afterCopy?.();
       await verifyProjectionSnapshot(sourceRoot, allowedDirectories, before);
       await verifyProjectionContents(projectionRoot, sourceRoot, allowedDirectories, before);
+      if (this.options.codexAuthFile) {
+        await stageCodexAuthFile(this.options.codexAuthFile, sourceRoot, isolatedCodexHome);
+      }
       await fs.chmod(projectionRoot, 0o500);
       lease = await provider.acquire({
         subject: scope,
@@ -374,6 +380,120 @@ export class AgentExecutionPolicy {
       const detail = error instanceof Error ? error.message : String(error);
       throw new AgentWorkspaceProjectionError(`Codex 읽기 전용 작업공간을 안전하게 준비하지 못했습니다: ${detail}`);
     }
+  }
+}
+
+async function stageCodexAuthFile(
+  candidate: string,
+  sourceWorkspace: string,
+  isolatedCodexHome: string,
+): Promise<void> {
+  if (!path.isAbsolute(candidate) || candidate.includes('\u0000')) {
+    throw new AgentExecutionUnavailableError(
+      'provider-rejected-request',
+      'Codex 인증 원본은 명시적인 absolute path여야 합니다.',
+    );
+  }
+
+  const providedPath = path.normalize(candidate);
+  let provided: Awaited<ReturnType<typeof fs.lstat>>;
+  try {
+    provided = await fs.lstat(providedPath);
+  } catch {
+    throw new AgentExecutionUnavailableError(
+      'trusted-isolation-required',
+      '명시된 Codex 인증 원본을 읽을 수 없습니다.',
+    );
+  }
+  assertSafeCodexAuthStat(provided);
+
+  const authPath = await canonicalPathOrUnavailable(providedPath);
+  const before = await fs.lstat(authPath);
+  assertSafeCodexAuthStat(before);
+  if (provided.dev !== before.dev || provided.ino !== before.ino) {
+    throw new AgentExecutionUnavailableError(
+      'canonicalization-failed',
+      'Codex 인증 원본의 canonical identity를 검증하지 못했습니다.',
+    );
+  }
+  if (isSameOrDescendant(authPath, sourceWorkspace)) {
+    throw new AgentExecutionUnavailableError(
+      'provider-rejected-request',
+      'Codex 인증 원본을 소스 작업공간 안에서 읽지 않습니다.',
+    );
+  }
+
+  const handle = await fs.open(authPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  let contents: Buffer;
+  try {
+    const opened = await handle.stat();
+    assertSafeCodexAuthStat(opened);
+    if (
+      opened.dev !== before.dev
+      || opened.ino !== before.ino
+      || opened.size !== before.size
+      || opened.mtimeMs !== before.mtimeMs
+      || opened.ctimeMs !== before.ctimeMs
+    ) {
+      throw new AgentExecutionUnavailableError(
+        'canonicalization-failed',
+        'Codex 인증 원본이 검증 중 변경되어 staging을 중단했습니다.',
+      );
+    }
+    contents = await handle.readFile();
+    const after = await handle.stat();
+    if (
+      after.dev !== opened.dev
+      || after.ino !== opened.ino
+      || after.size !== opened.size
+      || after.mtimeMs !== opened.mtimeMs
+      || after.ctimeMs !== opened.ctimeMs
+    ) {
+      throw new AgentExecutionUnavailableError(
+        'canonicalization-failed',
+        'Codex 인증 원본이 읽는 동안 변경되어 staging을 중단했습니다.',
+      );
+    }
+  } finally {
+    await handle.close();
+  }
+
+  try {
+    const parsed = JSON.parse(contents.toString('utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
+  } catch {
+    throw new AgentExecutionUnavailableError(
+      'provider-rejected-request',
+      'Codex 인증 원본이 유효한 JSON object가 아닙니다.',
+    );
+  }
+
+  const destination = path.join(isolatedCodexHome, 'auth.json');
+  await fs.writeFile(destination, contents, { flag: 'wx', mode: 0o600 });
+  const staged = await fs.lstat(destination);
+  if (!staged.isFile() || staged.isSymbolicLink() || staged.nlink !== 1 || (staged.mode & 0o777) !== 0o600) {
+    throw new AgentExecutionUnavailableError(
+      'canonicalization-failed',
+      '격리 CODEX_HOME의 인증 파일 권한을 검증하지 못했습니다.',
+    );
+  }
+}
+
+function assertSafeCodexAuthStat(stat: Awaited<ReturnType<typeof fs.lstat>>): void {
+  const currentUserId = typeof process.getuid === 'function' ? process.getuid() : undefined;
+  if (
+    !stat.isFile()
+    || stat.isSymbolicLink()
+    || stat.nlink !== 1
+    || stat.size <= 0
+    || stat.size > MAX_CODEX_AUTH_FILE_BYTES
+    || (stat.mode & 0o077) !== 0
+    || (currentUserId !== undefined && stat.uid !== currentUserId)
+  ) {
+    throw new AgentExecutionUnavailableError(
+      'provider-rejected-request',
+      'Codex 인증 원본은 현재 사용자가 소유한 owner-only regular file이어야 합니다.',
+    );
   }
 }
 
@@ -580,6 +700,11 @@ function samePath(left: string, right: string): boolean {
   const a = path.normalize(left);
   const b = path.normalize(right);
   return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+function isSameOrDescendant(candidate: string, root: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
 function containsProtectedPath(value: string, roots: readonly string[]): boolean {

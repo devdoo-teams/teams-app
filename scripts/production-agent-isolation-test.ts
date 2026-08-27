@@ -131,6 +131,64 @@ try {
     'production rejects a guessed or relative isolation profile path',
   );
 
+  const insecureAuthFile = path.join(root, 'insecure-codex-auth.json');
+  await fs.writeFile(insecureAuthFile, '{"fixture":"insecure"}\n', { mode: 0o600 });
+  await fs.chmod(insecureAuthFile, 0o644);
+  const insecureAuthPolicy = createProductionAgentExecutionPolicy({
+    sourceWorkspace,
+    isProduction: true,
+    platform: 'darwin',
+    profilePath,
+    sandboxExecPath,
+    codexAuthFile: insecureAuthFile,
+    canReadScope: () => true,
+    spawn: fakeSpawn,
+  });
+  await assert.rejects(
+    () => insecureAuthPolicy.prepareWorkspace('read-only', scope, 'inspect only'),
+    (error: unknown) => error instanceof AgentExecutionUnavailableError
+      && error.reason === 'provider-rejected-request',
+    'group/world-readable Codex credentials must never be staged',
+  );
+
+  const invalidAuthFile = path.join(root, 'invalid-codex-auth.json');
+  await fs.writeFile(invalidAuthFile, 'not-json\n', { mode: 0o600 });
+  const invalidAuthPolicy = createProductionAgentExecutionPolicy({
+    sourceWorkspace,
+    isProduction: true,
+    platform: 'darwin',
+    profilePath,
+    sandboxExecPath,
+    codexAuthFile: invalidAuthFile,
+    canReadScope: () => true,
+    spawn: fakeSpawn,
+  });
+  await assert.rejects(
+    () => invalidAuthPolicy.prepareWorkspace('read-only', scope, 'inspect only'),
+    (error: unknown) => error instanceof AgentExecutionUnavailableError
+      && error.reason === 'provider-rejected-request',
+    'malformed Codex credentials must never be staged',
+  );
+
+  const workspaceAuthFile = path.join(sourceWorkspace, 'codex-auth.json');
+  await fs.writeFile(workspaceAuthFile, '{"fixture":"source-workspace"}\n', { mode: 0o600 });
+  const workspaceAuthPolicy = createProductionAgentExecutionPolicy({
+    sourceWorkspace,
+    isProduction: true,
+    platform: 'darwin',
+    profilePath,
+    sandboxExecPath,
+    codexAuthFile: workspaceAuthFile,
+    canReadScope: () => true,
+    spawn: fakeSpawn,
+  });
+  await assert.rejects(
+    () => workspaceAuthPolicy.prepareWorkspace('read-only', scope, 'inspect only'),
+    (error: unknown) => error instanceof AgentExecutionUnavailableError
+      && error.reason === 'provider-rejected-request',
+    'credentials stored inside the source workspace must never be staged',
+  );
+
   const configured = createProductionAgentExecutionPolicy({
     sourceWorkspace,
     isProduction: true,

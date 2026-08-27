@@ -17,6 +17,8 @@ export type ProductionAgentExecutionPolicyOptions = Readonly<{
   profilePath?: string;
   /** Optional explicit absolute sandbox-exec path. */
   sandboxExecPath?: string;
+  /** Explicit owner-only Codex auth file copied into each disposable projection. */
+  codexAuthFile?: string;
   /** Test seam for the platform-gated provider. */
   platform?: NodeJS.Platform;
   /** Test seam; production defaults to node:child_process spawn. */
@@ -61,6 +63,7 @@ export function createProductionAgentExecutionPolicy(
     ...(options.canReadScope ? { canReadScope: options.canReadScope } : {}),
     ...(options.canMutateScope ? { canMutateScope: options.canMutateScope } : {}),
     ...(isolationProvider ? { isolationProvider } : {}),
+    ...(options.codexAuthFile ? { codexAuthFile: options.codexAuthFile } : {}),
   });
 }
 

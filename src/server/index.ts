@@ -251,9 +251,14 @@ const operatorAllowlist = parseOperatorAllowlist(
 );
 const agentExecutionPolicy = createProductionAgentExecutionPolicy({
   sourceWorkspace: agentWorkspace,
-  isProduction,
+  // Safe-local mode is loopback-only and still requires every explicit
+  // production isolation input below. Enabling the same provider here lets
+  // the registered Teams SDK path be exercised end-to-end without weakening
+  // the factory's fail-closed behavior for ordinary development runtimes.
+  isProduction: isProduction || safeLocal,
   profilePath: process.env.AGENT_ISOLATION_PROFILE,
   sandboxExecPath: process.env.AGENT_SANDBOX_EXEC_PATH,
+  codexAuthFile: agentProvider === 'codex' ? process.env.AGENT_CODEX_AUTH_FILE : undefined,
   canMutateScope: (scope) => isOperator(scope),
   canReadScope: (scope) => isOperator(scope),
 });
@@ -985,6 +990,25 @@ function createBotSender(
 
     await deliverGenUiActivity(deliver, text, normalized);
   };
+}
+
+function createRuntimeBotSender(
+  activity: any,
+  deliver?: (activity: unknown) => Promise<unknown>,
+): BotSend {
+  if (!skipOutbound) return createBotSender(deliver);
+  if (!safeLocal) return async () => {};
+
+  const conversationId = typeof activity?.conversation?.id === 'string'
+    ? activity.conversation.id.trim()
+    : '';
+  if (!conversationId) return async () => {};
+
+  const messages = localOutbox.get(conversationId) ?? [];
+  localOutbox.set(conversationId, messages);
+  const activities = localOutboxActivities.get(conversationId) ?? [];
+  localOutboxActivities.set(conversationId, activities);
+  return createBotSender(undefined, messages, activities);
 }
 
 if (useTeamsSdk) {
@@ -3099,24 +3123,18 @@ http.get('/tabs/home', (request: any, response: any, next: any) => {
 if (teamsApp) {
   teamsApp.tab('home', clientDist);
   teamsApp.on('install.add', async ({ activity, send }: any) => {
-    const runtimeSend: BotSend = process.env.TEAMS_SKIP_OUTBOUND === 'true'
-      ? async () => {}
-      : createBotSender(send);
+    const runtimeSend = createRuntimeBotSender(activity, send);
     await handleInstall(activity, runtimeSend);
   });
   teamsApp.on('message', async ({ activity, send }: any) => {
     if (activity?.type === 'message' && isResponseModeCardAction(activity.value)) {
-      const runtimeSend: BotSend = process.env.TEAMS_SKIP_OUTBOUND === 'true'
-        ? async () => {}
-        : createBotSender(send);
+      const runtimeSend = createRuntimeBotSender(activity, send);
       await handleResponseModeSubmit(activity, runtimeSend);
       return;
     }
 
     if (activity?.type === 'message' && hasGenUiActionValue(activity)) {
-      const runtimeSend: BotSend = process.env.TEAMS_SKIP_OUTBOUND === 'true'
-        ? async () => {}
-        : createBotSender(send);
+      const runtimeSend = createRuntimeBotSender(activity, send);
       await handleGenUiSubmit(activity, runtimeSend);
       return;
     }
@@ -3125,9 +3143,7 @@ if (teamsApp) {
       return handleGenUiAction(activity);
     }
 
-    const runtimeSend: BotSend = process.env.TEAMS_SKIP_OUTBOUND === 'true'
-      ? async () => {}
-      : createBotSender(send);
+    const runtimeSend = createRuntimeBotSender(activity, send);
     await handleMessage(activity, runtimeSend);
   });
 
