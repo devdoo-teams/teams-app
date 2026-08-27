@@ -87,16 +87,14 @@ try {
   }
 
   const profilePath = path.join(temporaryRoot, 'read-only.sb');
-  const authPath = path.join(temporaryRoot, 'codex-auth.json');
   const isolatedNodePath = path.join(temporaryRoot, 'node');
   await fs.writeFile(profilePath, '(version 1)\n(allow default)\n', { mode: 0o600 });
-  await fs.writeFile(authPath, `${JSON.stringify({ fixture: 'teams-core-chat' })}\n`, { mode: 0o600 });
   await fs.copyFile(process.execPath, isolatedNodePath);
   await fs.chmod(isolatedNodePath, 0o700);
   await fs.mkdir(path.join(agentWorkspace, 'scripts'), { recursive: true });
   await fs.copyFile(
-    path.join(root, 'scripts', 'fake-codex-auth-required.mjs'),
-    path.join(agentWorkspace, 'scripts', 'fake-codex-auth-required.mjs'),
+    path.join(root, 'scripts', 'fake-codex.mjs'),
+    path.join(agentWorkspace, 'scripts', 'fake-codex.mjs'),
   );
 
   const port = await freePort();
@@ -131,9 +129,8 @@ try {
       AGENT_WORKSPACE: agentWorkspace,
       AGENT_ISOLATION_PROFILE: profilePath,
       AGENT_SANDBOX_EXEC_PATH: '/usr/bin/sandbox-exec',
-      AGENT_CODEX_AUTH_FILE: authPath,
       CODEX_BIN: isolatedNodePath,
-      CODEX_SCRIPT: 'scripts/fake-codex-auth-required.mjs',
+      CODEX_SCRIPT: 'scripts/fake-codex.mjs',
       TEAMS_AGENT_CLI_PROVIDER: 'codex',
       TEAMS_A2A_AGENT_PROVIDERS: 'codex',
       TEAMS_AGENT_GLOBAL_LIMIT: '4',
