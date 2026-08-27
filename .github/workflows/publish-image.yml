@@ -95,20 +95,28 @@ jobs:
           const packageBytes = fs.readFileSync(packagePath);
           const manifestBytes = execFileSync('unzip', ['-p', packagePath, 'manifest.json']);
           const manifest = JSON.parse(manifestBytes.toString('utf8'));
+          const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
           const marker = JSON.parse(fs.readFileSync('dist/server/.teams-server-build-commit', 'utf8'));
-          if (marker.commit !== sourceCommit || marker.mode !== 'core' || marker.worktree !== 'clean') {
+          const serverBundleBytes = fs.readFileSync('dist/server/index.js');
+          const bundleSha256 = sha256(serverBundleBytes);
+          if (
+            marker.schemaVersion !== 3
+            || marker.commit !== sourceCommit
+            || marker.mode !== 'core'
+            || marker.worktree !== 'clean'
+            || marker.bundleSha256 !== bundleSha256
+          ) {
             throw new Error('server build marker does not prove the exact clean Core source commit');
           }
           if (manifest.version !== packageJson.version || manifest.devicePermissions?.includes('geolocation') !== true) {
             throw new Error('packaged manifest version or geolocation permission is invalid');
           }
-          const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
           const identity = {
             schema: 2,
             sourceCommit,
             version: packageJson.version,
             teamsPackageSha256: sha256(packageBytes),
-            serverBundleSha256: marker.bundleSha256,
+            serverBundleSha256: bundleSha256,
             manifestSha256: sha256(manifestBytes),
             imageDigest: null,
           };

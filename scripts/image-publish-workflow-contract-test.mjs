@@ -27,6 +27,8 @@ requireText(/push:\s*true/, 'the promotion workflow must publish the image');
 requireText(/Smoke the exact pushed image by immutable digest/, 'promotion must smoke the exact pushed image before attestation');
 requireText(/IMAGE_REF:\s*\$\{\{ env\.REGISTRY \}\}\/\$\{\{ env\.IMAGE_NAME \}\}@\$\{\{ steps\.push\.outputs\.digest \}\}/, 'promotion smoke must use the pushed immutable digest');
 requireText(/scripts\/docker-runtime-image-smoke\.mjs/, 'promotion must use the shared runtime smoke script');
+requireText(/marker\.schemaVersion !== 3/, 'promotion must validate the server build marker schema');
+requireText(/bundleSha256.*serverBundleBytes|serverBundleBytes.*bundleSha256/s, 'promotion must hash the server bundle instead of trusting an unverified marker digest');
 requireText(/TEAMS_SOURCE_COMMIT=\$\{\{ github\.sha \}\}/, 'image build must carry the exact source commit');
 requireText(/actions\/attest@[0-9a-f]{40}/, 'attestation action must be pinned to a commit');
 requireText(/subject-digest:\s*\$\{\{ steps\.push\.outputs\.digest \}\}/, 'attestation must use the pushed image digest');
