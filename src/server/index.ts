@@ -367,6 +367,9 @@ const optionalRuntimeEnabled = process.env.TEAMS_CORE_BUILD !== 'true'
 const genUiMode = process.env.TEAMS_GENUI_MODE === 'legacy' || process.env.TEAMS_GENUI_MODE === 'channels-shadow'
   ? process.env.TEAMS_GENUI_MODE
   : 'hybrid';
+const openAiConfigured = process.env.TEAMS_CORE_BUILD !== 'true'
+  && optionalRuntimeEnabled
+  && Boolean(process.env.OPENAI_API_KEY?.trim());
 let optionalResponseEngines: Array<import('./response-engine.js').ResponseEngine> = [];
 let localModelConfigured = false;
 if (process.env.TEAMS_CORE_BUILD !== 'true' && optionalRuntimeEnabled) {
@@ -377,8 +380,8 @@ if (process.env.TEAMS_CORE_BUILD !== 'true' && optionalRuntimeEnabled) {
   ]);
   localModelConfigured = isLocalModelBaseUrlConfigured(process.env.LOCAL_MODEL_BASE_URL);
   optionalResponseEngines = [
-    new LocalCompatibleResponseEngine(),
-    new OpenAIResponseEngine(),
+    ...(localModelConfigured ? [new LocalCompatibleResponseEngine()] : []),
+    ...(openAiConfigured ? [new OpenAIResponseEngine()] : []),
   ];
 }
 type ChannelsShadowRenderer = typeof import('./copilot-channels-shadow.js')['renderChannelsShadow'];
@@ -399,9 +402,6 @@ const genUi = new GenUiResponseFactory(genUiActionStore, {
   agentLabel,
 });
 const channelsShadowMonitor = new ChannelsShadowMonitor();
-const openAiConfigured = process.env.TEAMS_CORE_BUILD !== 'true'
-  && optionalRuntimeEnabled
-  && Boolean(process.env.OPENAI_API_KEY?.trim());
 const openAiModel = process.env.TEAMS_CORE_BUILD === 'true'
   ? 'deterministic'
   : process.env.OPENAI_MODEL?.trim() || 'gpt-4o-mini';
