@@ -39,6 +39,8 @@ const tsTests = [
   'scripts/ghcp-cli-adapter-test.ts',
   'scripts/provider-neutral-agent-runner-test.ts',
   'scripts/agent-job-store-hardening-test.ts',
+  'scripts/agent-admission-control-test.ts',
+  'scripts/agent-process-controller-security-test.ts',
   'scripts/agent-service-transition-test.ts',
   'scripts/agent-service-workspace-lock-test.ts',
   'scripts/genui-action-store-test.ts',

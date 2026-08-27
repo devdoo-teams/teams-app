@@ -63,6 +63,8 @@
     "test:troubleshooting": "tsx scripts/remote-troubleshooting-test.ts",
     "test:atomic-stores": "tsx scripts/atomic-json-store-test.ts",
     "test:agent-job-hardening": "tsx scripts/agent-job-store-hardening-test.ts",
+    "test:agent-admission-control": "tsx scripts/agent-admission-control-test.ts",
+    "test:agent-process-controller-security": "tsx scripts/agent-process-controller-security-test.ts",
     "test:agent-authorization": "tsx scripts/agent-service-authorization-test.ts",
     "test:codex-runner-security": "tsx scripts/codex-runner-security-test.ts",
     "test:genui-action-hardening": "tsx scripts/genui-action-store-hardening-test.ts",
