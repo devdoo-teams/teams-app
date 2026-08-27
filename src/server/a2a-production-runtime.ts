@@ -817,6 +817,10 @@ export function createA2AProductionRuntime(options: A2AProductionRuntimeOptions)
       },
     });
     const parentTask = parent.task;
+    const collaborationKey = dispatchKey(parentTask);
+    const inFlight = activeCollaborations.get(collaborationKey);
+    if (inFlight) return inFlight;
+
     const persisted = options.store.getDispatchIntent(parentTask.id, input.scope);
     if (persisted) {
       return collaborationSnapshot(plan, parentTask, persisted);
@@ -824,10 +828,6 @@ export function createA2AProductionRuntime(options: A2AProductionRuntimeOptions)
     if (!parent.created && (parentTask.status === 'completed' || parentTask.status === 'failed' || parentTask.status === 'canceled')) {
       throw new A2AContractError('TerminalStateImmutableError', 'A2A collaboration parent is already terminal.');
     }
-
-    const collaborationKey = dispatchKey(parentTask);
-    const inFlight = activeCollaborations.get(collaborationKey);
-    if (inFlight) return inFlight;
 
     const operation = (async (): Promise<A2AProductionCollaborationResult> => {
       const orchestration = await dispatchChildren({
