@@ -67,13 +67,19 @@ export interface AgentJob {
   finishedAt?: string;
 }
 
+export type AgentJobStoreOptions = Readonly<{
+  legacyProvider?: CliAgentProvider;
+  /** Test seam for proving that readers observe only durably committed snapshots. */
+  writeAtomicJson?: typeof atomicWriteJson;
+}>;
+
 export class AgentJobStore {
   private jobs: AgentJob[] = [];
   private writeChain: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly filePath: string,
-    private readonly options: { legacyProvider?: CliAgentProvider } = {},
+    private readonly options: AgentJobStoreOptions = {},
   ) {}
 
   async initialize(): Promise<void> {
@@ -236,7 +242,7 @@ export class AgentJobStore {
 
   private async persist(): Promise<void> {
     const snapshot = this.jobs.map(cloneAgentJob);
-    const nextWrite = this.writeChain.then(() => atomicWriteJson(this.filePath, snapshot));
+    const nextWrite = this.writeChain.then(() => this.writeAtomicJson(this.filePath, snapshot));
     this.writeChain = nextWrite.catch(() => undefined);
     await nextWrite;
   }
@@ -244,17 +250,34 @@ export class AgentJobStore {
   private enqueueMutation<T>(mutate: () => T): Promise<T> {
     const operation = this.writeChain.then(async () => {
       const previousJobs = this.jobs;
+      let result: T;
+      let nextJobs: AgentJob[];
       try {
-        const result = mutate();
-        await atomicWriteJson(this.filePath, this.jobs.map(cloneAgentJob));
-        return result;
+        // Mutations stage against a private clone. Synchronous readers keep
+        // seeing the last durable snapshot until the atomic write commits.
+        this.jobs = previousJobs.map(cloneAgentJob);
+        result = mutate();
+        nextJobs = this.jobs.map(cloneAgentJob);
       } catch (error) {
         this.jobs = previousJobs;
         throw error;
       }
+      this.jobs = previousJobs;
+      try {
+        await this.writeAtomicJson(this.filePath, nextJobs);
+      } catch (error) {
+        this.jobs = previousJobs;
+        throw error;
+      }
+      this.jobs = nextJobs;
+      return result;
     });
     this.writeChain = operation.then(() => undefined, () => undefined);
     return operation;
+  }
+
+  private writeAtomicJson(filePath: string, value: unknown): Promise<void> {
+    return (this.options.writeAtomicJson ?? atomicWriteJson)(filePath, value);
   }
 }
 

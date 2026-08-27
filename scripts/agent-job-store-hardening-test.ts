@@ -24,6 +24,26 @@ const scope: AgentJobScope = {
   tenantId: 'owner-tenant',
 };
 
+function deferredSignal(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settle) => { resolve = settle; });
+  return { promise, resolve };
+}
+
+async function waitForSignal(signal: Promise<void>, label: string): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      signal,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} was not observed`)), 500);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function currentJob(overrides: Partial<AgentJob> = {}): AgentJob {
   return {
     id: 'task-current-1',
@@ -173,6 +193,101 @@ try {
     'provider identity cannot be changed after job creation',
   );
 
+  const durableVisibilityPath = path.join(storeDirectory, 'durable-visibility.json');
+  const createWriteStarted = deferredSignal();
+  const releaseCreateWrite = deferredSignal();
+  const secondCreateWriteStarted = deferredSignal();
+  const releaseSecondCreateWrite = deferredSignal();
+  const updateWriteStarted = deferredSignal();
+  const releaseUpdateWrite = deferredSignal();
+  const failedWriteStarted = deferredSignal();
+  const releaseFailedWrite = deferredSignal();
+  const writeGates = [
+    { started: createWriteStarted, release: releaseCreateWrite, fail: false },
+    { started: secondCreateWriteStarted, release: releaseSecondCreateWrite, fail: false },
+    { started: updateWriteStarted, release: releaseUpdateWrite, fail: false },
+    { started: failedWriteStarted, release: releaseFailedWrite, fail: true },
+  ];
+  let writeAttempt = 0;
+  const durableVisibilityStore = new AgentJobStore(durableVisibilityPath, {
+    writeAtomicJson: async (targetPath: string, value: unknown) => {
+      const gate = writeGates[writeAttempt++];
+      assert.ok(gate, 'unexpected durable visibility write attempt');
+      gate.started.resolve();
+      await gate.release.promise;
+      if (gate.fail) throw new Error('synthetic deferred atomic write failure');
+      await fs.writeFile(targetPath, `${JSON.stringify(value)}\n`, 'utf8');
+    },
+  });
+  const createPending = durableVisibilityStore.create({
+    prompt: 'durable visibility create',
+    provider: 'codex',
+    mode: 'read-only',
+    scope,
+  });
+  const secondCreatePending = durableVisibilityStore.create({
+    prompt: 'serialized durable visibility create',
+    provider: 'codex',
+    mode: 'read-only',
+    scope,
+  });
+  await waitForSignal(createWriteStarted.promise, 'deferred create write');
+  assert.equal(writeAttempt, 1, 'a second mutation must wait behind the first atomic write');
+  assert.deepEqual(
+    durableVisibilityStore.listLocalOnly(),
+    [],
+    'a created job must not be visible before its atomic write commits',
+  );
+  releaseCreateWrite.resolve();
+  const durablyCreated = await createPending;
+  assert.equal(durableVisibilityStore.get(durablyCreated.id, scope)?.status, 'queued');
+  await waitForSignal(secondCreateWriteStarted.promise, 'serialized second create write');
+  assert.deepEqual(
+    durableVisibilityStore.listLocalOnly().map((job) => job.id),
+    [durablyCreated.id],
+    'a queued mutation must stage behind the last durably published snapshot',
+  );
+  releaseSecondCreateWrite.resolve();
+  const secondDurablyCreated = await secondCreatePending;
+  assert.deepEqual(
+    new Set(durableVisibilityStore.listLocalOnly().map((job) => job.id)),
+    new Set([durablyCreated.id, secondDurablyCreated.id]),
+  );
+
+  const updatePending = durableVisibilityStore.update(durablyCreated.id, scope, {
+    status: 'completed',
+    result: 'durably completed',
+    finishedAt: new Date().toISOString(),
+  });
+  await waitForSignal(updateWriteStarted.promise, 'deferred terminal write');
+  assert.equal(
+    durableVisibilityStore.get(durablyCreated.id, scope)?.status,
+    'queued',
+    'terminal state must not be visible before its atomic write commits',
+  );
+  releaseUpdateWrite.resolve();
+  assert.equal((await updatePending)?.status, 'completed');
+  assert.equal(durableVisibilityStore.get(durablyCreated.id, scope)?.status, 'completed');
+
+  const failedUpdatePending = durableVisibilityStore.update(durablyCreated.id, scope, {
+    status: 'failed',
+    error: 'must remain invisible',
+    finishedAt: new Date().toISOString(),
+  });
+  await waitForSignal(failedWriteStarted.promise, 'deferred failed write');
+  assert.equal(
+    durableVisibilityStore.get(durablyCreated.id, scope)?.status,
+    'completed',
+    'a failed staged update must remain invisible while persistence is pending',
+  );
+  releaseFailedWrite.resolve();
+  await assert.rejects(() => failedUpdatePending, /synthetic deferred atomic write failure/);
+  assert.equal(
+    durableVisibilityStore.get(durablyCreated.id, scope)?.status,
+    'completed',
+    'a failed atomic write must preserve the prior durable in-memory snapshot',
+  );
+
   const legacyPath = path.join(storeDirectory, 'legacy.json');
   const legacyRecord = {
     id: 'task-legacy-1',
@@ -238,7 +353,7 @@ try {
   assert.equal(persistedLegacy[0].createdAt, '2026-08-07T01:02:03.000Z');
   assert.equal(persistedLegacy[0].finishedAt, '2026-08-07T01:02:04.000Z');
 
-  console.log('PASS: AgentJobStore rejects malformed current records unchanged, preserves ACL scope, and atomically migrates legacy jobs without tenant invention');
+  console.log('PASS: AgentJobStore rejects malformed records, preserves ACL scope, and publishes mutations only after atomic persistence');
 } finally {
   await fs.rm(root, { recursive: true, force: true });
 }
