@@ -352,6 +352,8 @@ async function observeContract(baseUrl: string, timeoutMs: number): Promise<Obse
     const scopedChildren = scopedDispatches.flatMap((dispatch) => (
       Array.isArray(dispatch.children) ? dispatch.children as PersistedDispatchChild[] : []
     ));
+    const scopedOutboundIntents = Object.values(outbound.intents ?? {})
+      .filter((intent) => sameScope(intent.scope));
     const terminalCards = activities.filter((value) => {
       const card = adaptiveCard(value);
       return card !== undefined && JSON.stringify(card).includes('completed');
@@ -361,6 +363,8 @@ async function observeContract(baseUrl: string, timeoutMs: number): Promise<Obse
       && scopedParents[0].status === 'completed'
       && scopedChildren.length === 1
       && scopedChildren[0].status === 'completed'
+      && scopedOutboundIntents.length === 1
+      && !['queued', 'dispatching'].includes(String(scopedOutboundIntents[0].status))
       && terminalCards.length >= 1
     ) {
       return { a2a, outbound, jobs, activities };
