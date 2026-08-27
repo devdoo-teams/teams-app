@@ -75,6 +75,7 @@
     "test:copilot-item-seeding-failure": "node scripts/copilot-item-seeding-failure-test.mjs",
     "test:process-lease-hardening": "tsx scripts/process-lease-hardening-test.ts",
     "test:agent-transitions": "tsx scripts/agent-service-transition-test.ts",
+    "test:agent-notify-false": "tsx scripts/agent-service-notify-false-regression-test.ts",
     "test:a2a-orchestrator": "tsx scripts/a2a-orchestrator-test.ts",
     "test:a2a-core-contract": "tsx scripts/a2a-core-contract-test.ts",
     "test:a2a-role-catalog": "tsx scripts/a2a-role-catalog-test.ts",

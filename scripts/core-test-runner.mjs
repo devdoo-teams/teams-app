@@ -44,6 +44,7 @@ const tsTests = [
   'scripts/agent-admission-control-test.ts',
   'scripts/agent-process-controller-security-test.ts',
   'scripts/agent-service-transition-test.ts',
+  'scripts/agent-service-notify-false-regression-test.ts',
   'scripts/agent-service-workspace-lock-test.ts',
   'scripts/genui-action-store-test.ts',
   'scripts/item-store-hardening-test.ts',
