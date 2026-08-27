@@ -34,8 +34,7 @@ import {
 } from './agent-admission-controller.js';
 import { probeCliCapabilities, unknownCliCapabilities, type CliCapabilities } from './codex-capability.js';
 import { GitService } from './git-service.js';
-import { DeterministicResponseEngine } from './response-engine-deterministic.js';
-import { ResponseEngineRouter, configureResponseEngineRouter } from './response-engine.js';
+import { configureResponseEngineRouter } from './response-engine.js';
 import { ResponseModeStore } from './response-mode-store.js';
 import {
   createResponseModeCardActivity,
@@ -92,8 +91,8 @@ import {
 } from './collaboration-service.js';
 import { CollaborationStore } from './collaboration-store.js';
 import type { CollaborationScope } from '../shared/collaboration.js';
-import type { RunAgentInput } from '@ag-ui/core';
 import { A2AStore } from './a2a-store.js';
+import { TeamsA2AOutboundStore } from './teams-a2a-outbound-store.js';
 import { createA2AExecutionAdapter } from './a2a-execution.js';
 import { serializeA2ADispatchAudit } from './a2a-observability.js';
 import { createA2AAgentAuthorizationPolicy } from './a2a-agent-authorization.js';
@@ -111,6 +110,7 @@ import {
 import { A2A_CAPABILITIES, A2A_ROLE_CATALOG } from './a2a-role-catalog.js';
 import {
   mountA2AProductionRuntime,
+  type A2AProductionCollaborationResult,
   type A2AProductionChildCancellationInput,
   type A2AProductionChildExecutionInput,
 } from './a2a-production-runtime.js';
@@ -146,6 +146,7 @@ const workItemStorePath = process.env.WORK_ITEM_STORE_PATH ?? path.resolve(proce
 const collaborationStorePath = process.env.COLLABORATION_STORE_PATH ?? path.resolve(process.cwd(), 'data/collaboration.json');
 const agentJobStorePath = process.env.AGENT_JOB_STORE_PATH ?? path.resolve(process.cwd(), 'data/agent-jobs.json');
 const a2aStorePath = process.env.A2A_STORE_PATH ?? path.resolve(process.cwd(), 'data/a2a.json');
+const a2aOutboundStorePath = process.env.A2A_OUTBOUND_STORE_PATH ?? path.resolve(process.cwd(), 'data/a2a-outbound.json');
 const agentAdmissionJournalPath = process.env.AGENT_ADMISSION_JOURNAL_PATH ?? path.resolve(process.cwd(), 'data/agent-admission.json');
 const genUiActionStorePath = process.env.GENUI_ACTION_STORE_PATH ?? path.resolve(process.cwd(), 'data/genui-actions.json');
 const responseModeStorePath = process.env.RESPONSE_MODE_STORE_PATH ?? path.resolve(process.cwd(), 'data/response-modes.json');
@@ -210,6 +211,7 @@ const agentJobStore = new AgentJobStore(
   { legacyProvider: agentProvider },
 );
 const a2aStore = new A2AStore(a2aStorePath);
+const a2aOutboundStore = new TeamsA2AOutboundStore(a2aOutboundStorePath);
 const codexRunner = new ProviderNeutralAgentRunner({ provider: agentProvider });
 const a2aAgentProviders = parseAgentProviders(
   process.env.TEAMS_A2A_AGENT_PROVIDERS,
@@ -474,6 +476,7 @@ storeProcessLease = await acquireStoreProcessLease([
   collaborationStorePath,
   agentJobStorePath,
   a2aStorePath,
+  a2aOutboundStorePath,
   agentAdmissionJournalPath,
   genUiActionStorePath,
   responseModeStorePath,
@@ -484,6 +487,7 @@ await itemStore.initialize();
 await workItemService.initialize();
 await collaborationService.initialize();
 await a2aStore.initialize();
+await a2aOutboundStore.initialize();
 await genUiActionStore.initialize();
 await responseModeStore.initialize();
 
@@ -501,13 +505,6 @@ configureResponseEngineRouter({
   },
 });
 
-// Bot messages and CopilotKit runs must use the same server-owned resolver.
-// The router constructor also includes the globally configured local engine.
-const botResponseEngineRouter = new ResponseEngineRouter([
-  new DeterministicResponseEngine(),
-  ...optionalResponseEngines,
-]);
-
 let http: any;
 let teamsApp: any;
 let userAuthValidator: any;
@@ -516,7 +513,15 @@ let a2aExecutionAdapter: ReturnType<typeof createA2AExecutionAdapter> | undefine
 const localOutbox = new Map<string, string[]>();
 const localOutboxActivities = new Map<string, unknown[]>();
 
-type BotSend = (text: string, envelope?: GenUiEnvelopeV1, activityOverride?: unknown) => Promise<void>;
+type BotDeliveryReceipt = Readonly<{
+  state: 'connector-accepted' | 'connector-rejected' | 'ambiguous';
+  activityId?: string;
+}>;
+type BotSend = (
+  text: string,
+  envelope?: GenUiEnvelopeV1,
+  activityOverride?: unknown,
+) => Promise<BotDeliveryReceipt>;
 type GenUiCardAction = Extract<GenUiActionName, 'approve' | 'cancel' | 'refresh' | 'retry' | 'feedback'> | 'command';
 type GenUiActionPayload = {
   schemaVersion: typeof GENUI_SCHEMA_VERSION;
@@ -934,15 +939,23 @@ async function deliverAdaptiveCardWithFallback(
   deliver: (activity: unknown) => Promise<unknown>,
   activity: unknown,
   fallback: unknown,
-): Promise<void> {
+): Promise<BotDeliveryReceipt> {
   try {
-    await deliver(activity);
+    return connectorAcceptedReceipt(await deliver(activity));
   } catch (error) {
     // A timeout/reset leaves delivery ambiguous: the remote service may have
     // accepted the card before the transport failed. Only an explicit HTTP
     // rejection is safe to follow with one user-visible text fallback.
-    if (adaptiveCardDeliveryErrorClassification(error) !== 'confirmed-rejection') return;
-    await deliver(fallback);
+    if (adaptiveCardDeliveryErrorClassification(error) !== 'confirmed-rejection') {
+      return { state: 'ambiguous' };
+    }
+    try {
+      return connectorAcceptedReceipt(await deliver(fallback));
+    } catch (fallbackError) {
+      return adaptiveCardDeliveryErrorClassification(fallbackError) === 'confirmed-rejection'
+        ? { state: 'connector-rejected' }
+        : { state: 'ambiguous' };
+    }
   }
 }
 
@@ -950,8 +963,8 @@ async function deliverGenUiActivity(
   deliver: ((activity: unknown) => Promise<unknown>) | undefined,
   text: string,
   envelope?: GenUiEnvelopeV1,
-): Promise<void> {
-  if (!deliver) return;
+): Promise<BotDeliveryReceipt> {
+  if (!deliver) return { state: 'ambiguous' };
 
   const normalized = envelope ? GenUiEnvelopeV1Schema.parse(envelope) : undefined;
   const activity = normalized && genUiMode !== 'legacy'
@@ -960,10 +973,22 @@ async function deliverGenUiActivity(
 
   if (normalized) recordChannelsShadowComparison(normalized, activity);
   if (!normalized) {
-    await deliver(activity);
-    return;
+    try {
+      return connectorAcceptedReceipt(await deliver(activity));
+    } catch (error) {
+      return adaptiveCardDeliveryErrorClassification(error) === 'confirmed-rejection'
+        ? { state: 'connector-rejected' }
+        : { state: 'ambiguous' };
+    }
   }
-  await deliverAdaptiveCardWithFallback(deliver, activity, createTextFallbackActivity(normalized));
+  return deliverAdaptiveCardWithFallback(deliver, activity, createTextFallbackActivity(normalized));
+}
+
+function connectorAcceptedReceipt(value: unknown): BotDeliveryReceipt {
+  const activityId = nonEmptyString(asRecord(value)?.id, 200);
+  return activityId
+    ? { state: 'connector-accepted', activityId }
+    : { state: 'connector-accepted' };
 }
 
 function createBotSender(
@@ -982,16 +1007,15 @@ function createBotSender(
       if (normalized) recordChannelsShadowComparison(normalized, activity);
       messages.push(text);
       activities?.push(activity);
-      return;
+      return { state: 'connector-accepted' };
     }
 
     if (effectiveOverride) {
-      if (!deliver) return;
-      await deliverAdaptiveCardWithFallback(deliver, effectiveOverride, { type: 'message', text });
-      return;
+      if (!deliver) return { state: 'ambiguous' };
+      return deliverAdaptiveCardWithFallback(deliver, effectiveOverride, { type: 'message', text });
     }
 
-    await deliverGenUiActivity(deliver, text, normalized);
+    return deliverGenUiActivity(deliver, text, normalized);
   };
 }
 
@@ -1000,12 +1024,12 @@ function createRuntimeBotSender(
   deliver?: (activity: unknown) => Promise<unknown>,
 ): BotSend {
   if (!skipOutbound) return createBotSender(deliver);
-  if (!safeLocal) return async () => {};
+  if (!safeLocal) return async () => ({ state: 'ambiguous' });
 
   const conversationId = typeof activity?.conversation?.id === 'string'
     ? activity.conversation.id.trim()
     : '';
-  if (!conversationId) return async () => {};
+  if (!conversationId) return async () => ({ state: 'ambiguous' });
 
   const messages = localOutbox.get(conversationId) ?? [];
   localOutbox.set(conversationId, messages);
@@ -2751,40 +2775,133 @@ async function handleResponseModeSubmit(activity: any, send: BotSend): Promise<v
   await send(text, undefined, createResponseModeCardActivity(parsed.mode, publicResponseModeAvailability(), text, personalTabDeepLink));
 }
 
-function botResponseRequest(activity: any, prompt: string, scope: AgentJobScope): RunAgentInput {
+function teamsA2AIdempotencyKey(activity: any, scope: AgentJobScope, prompt: string): string {
+  const sourceActivityId = nonEmptyString(activity?.id, 200);
+  const fallbackIdentity = {
+    timestamp: nonEmptyString(activity?.timestamp, 80) ?? '',
+    prompt,
+  };
+  const digest = crypto.createHash('sha256').update(JSON.stringify({
+    scope,
+    activityId: sourceActivityId ?? fallbackIdentity,
+  }), 'utf8').digest('hex');
+  return `teams-activity:${digest}`;
+}
+
+function a2aCompletionPresentation(
+  result: A2AProductionCollaborationResult,
+  scope: AgentJobScope,
+): { text: string; envelope: GenUiEnvelopeV1 } {
+  const parent = result.parentTask;
+  if (!parent) {
+    const reason = result.plan.strategy === 'blocked'
+      ? result.plan.reason
+      : 'A2A parent task was not created.';
+    const text = `A2A 협업을 시작하지 못했습니다. ${reason ?? '등록된 reviewer를 확인하세요.'}`;
+    return { text, envelope: genUi.error(text, 'a2a-collaboration-blocked') };
+  }
+
+  const dispatch = a2aStore.getDispatchIntent(parent.id, scope);
+  const childJobId = dispatch?.children.find((child) => child.role === 'reviewer')?.agentJobId;
+  const childJob = childJobId ? agentService.get(childJobId, scope) : undefined;
+  const childResult = typeof childJob?.result === 'string' && childJob.result.trim()
+    ? childJob.result.trim()
+    : parent.artifacts.find((artifact) => artifact.content?.mediaType === 'text/plain')?.content?.text;
+  const terminalLabel = parent.status === 'completed' ? 'completed' : parent.status;
+  const text = [
+    `A2A 작업 ${parent.id} ${terminalLabel}.`,
+    childJob ? `Codex 작업 ${childJob.id}: ${childJob.status}` : undefined,
+    childResult,
+    parent.error,
+  ].filter((value): value is string => typeof value === 'string' && value.length > 0).join('\n\n');
+
+  if (childJob) {
+    const kind: AgentNotification['kind'] = parent.status === 'completed' ? 'result' : 'error';
+    const phase: AgentNotification['phase'] = parent.status === 'completed' ? 'completed' : 'failed';
+    return {
+      text,
+      envelope: genUi.notification({
+        conversationId: scope.conversationId,
+        job: childJob,
+        kind,
+        phase,
+        message: text,
+      }),
+    };
+  }
+
   return {
-    threadId: scope.conversationId,
-    runId: `teams-bot-${crypto.randomUUID()}`,
-    state: {},
-    messages: [{ id: `teams-bot-message-${crypto.randomUUID()}`, role: 'user', content: prompt }],
-    tools: [],
-    context: [],
-    forwardedProps: {
-      channelId: nonEmptyString(activity?.channelId) ?? 'msteams',
-      conversationType: nonEmptyString(activity?.conversation?.conversationType) ?? 'personal',
-    },
+    text,
+    envelope: parent.status === 'completed'
+      ? genUi.answer(text, parent.id)
+      : genUi.error(text, parent.id),
   };
 }
 
 async function handleBotNaturalLanguage(activity: any, send: BotSend, scope: AgentJobScope, prompt: string): Promise<void> {
   try {
-    await itemStore.ensureScope();
-    const output = await botResponseEngineRouter.run({
-      // The server-owned resolver replaces this fallback with the persisted
-      // tenant/requester selection. The deterministic fallback is also the
-      // safe behavior for local test mode.
-      mode: 'deterministic',
-      prompt,
-      request: botResponseRequest(activity, prompt, scope),
+    if (!a2aProductionRuntime) throw new Error('A2A production runtime is not initialized.');
+    const collaboration = await a2aProductionRuntime.collaborate({
       scope,
-      itemStore,
-      agentService,
-      setActiveJobId: () => undefined,
-      isCancelled: () => false,
-      deferAgentCompletion: true,
-      approvalEnvelope: (job) => genUi.approval(job),
+      prompt,
+      requestedRoles: ['reviewer'],
+      idempotencyKey: teamsA2AIdempotencyKey(activity, scope, prompt),
+      deadlineMs: 60_000,
+      parallelism: 1,
     });
-    await send(output.text, output.envelope);
+    const presentation = a2aCompletionPresentation(collaboration, scope);
+    if (!collaboration.parentTask) {
+      await send(presentation.text, presentation.envelope);
+      return;
+    }
+
+    const payloadSha256 = crypto.createHash('sha256').update(JSON.stringify(presentation), 'utf8').digest('hex');
+    const durable = await a2aOutboundStore.createOrGetCompletionIntent({
+      parentTaskId: collaboration.parentTask.id,
+      scope,
+      payloadSha256,
+    });
+    const lease = await a2aOutboundStore.claim(
+      durable.intent.id,
+      scope,
+      `worker-${crypto.randomUUID()}`,
+      30_000,
+    );
+    if (!lease) return;
+
+    try {
+      const receipt = await send(presentation.text, presentation.envelope);
+      if (receipt.state === 'connector-accepted') {
+        await a2aOutboundStore.recordConnectorAccepted(
+          lease.id,
+          scope,
+          lease.leaseToken!,
+          receipt.activityId,
+        );
+      } else if (receipt.state === 'connector-rejected') {
+        await a2aOutboundStore.recordConnectorRejected(
+          lease.id,
+          scope,
+          lease.leaseToken!,
+          'Teams Connector explicitly rejected the completion activity.',
+        );
+      } else {
+        await a2aOutboundStore.recordAmbiguous(
+          lease.id,
+          scope,
+          lease.leaseToken!,
+          'Teams completion transport outcome is unknown.',
+        );
+      }
+    } catch (deliveryError) {
+      await a2aOutboundStore.recordAmbiguous(
+        lease.id,
+        scope,
+        lease.leaseToken!,
+        'Teams completion dispatch failed before an accepted response was persisted.',
+      );
+      console.error('A2A Teams completion dispatch could not be confirmed', deliveryError instanceof Error ? deliveryError.message : 'unknown error');
+    }
   } catch (error) {
     if (error instanceof AgentMutationAuthorizationError) {
       await send(error.message, genUi.error(error.message, 'response-engine-forbidden'));

@@ -303,6 +303,7 @@ export function createA2AProductionRuntime(options: A2AProductionRuntimeOptions)
     MAX_CANCELLATION_TIMEOUT_MS,
   );
   const activeDispatches = new Map<string, AbortController>();
+  const activeCollaborations = new Map<string, Promise<A2AProductionCollaborationResult>>();
   const agentCard = createCoreAgentCard({
     agentId: 'teams-core',
     name: 'Teams Core Agent',
@@ -824,30 +825,44 @@ export function createA2AProductionRuntime(options: A2AProductionRuntimeOptions)
       throw new A2AContractError('TerminalStateImmutableError', 'A2A collaboration parent is already terminal.');
     }
 
-    const orchestration = await dispatchChildren({
-      parentTask,
-      scope: input.scope,
-      requests: plan.requests.map((request) => ({
-        key: request.key,
-        role: request.role,
-        prompt: request.prompt,
-        capabilities: request.capabilities,
-        agentId: request.agentId,
-      })),
-      deadlineMs: input.deadlineMs,
-      parallelism: input.parallelism,
-    });
-    const latestParent = options.store.getTask(parentTask.id, input.scope) ?? parentTask;
-    const latestDispatch = options.store.getDispatchIntent(parentTask.id, input.scope);
-    if (!latestDispatch) throw new A2AContractError('InvalidTaskError', 'A2A collaboration dispatch was not persisted.');
-    const summary = summarizeA2ACollaborationResults(collaborationChildResults(plan, latestParent, latestDispatch, orchestration));
-    return {
-      status: summary.status,
-      plan,
-      parentTask: latestParent,
-      summary,
-      orchestration,
-    };
+    const collaborationKey = dispatchKey(parentTask);
+    const inFlight = activeCollaborations.get(collaborationKey);
+    if (inFlight) return inFlight;
+
+    const operation = (async (): Promise<A2AProductionCollaborationResult> => {
+      const orchestration = await dispatchChildren({
+        parentTask,
+        scope: input.scope,
+        requests: plan.requests.map((request) => ({
+          key: request.key,
+          role: request.role,
+          prompt: request.prompt,
+          capabilities: request.capabilities,
+          agentId: request.agentId,
+        })),
+        deadlineMs: input.deadlineMs,
+        parallelism: input.parallelism,
+      });
+      const latestParent = options.store.getTask(parentTask.id, input.scope) ?? parentTask;
+      const latestDispatch = options.store.getDispatchIntent(parentTask.id, input.scope);
+      if (!latestDispatch) throw new A2AContractError('InvalidTaskError', 'A2A collaboration dispatch was not persisted.');
+      const summary = summarizeA2ACollaborationResults(collaborationChildResults(plan, latestParent, latestDispatch, orchestration));
+      return {
+        status: summary.status,
+        plan,
+        parentTask: latestParent,
+        summary,
+        orchestration,
+      };
+    })();
+    activeCollaborations.set(collaborationKey, operation);
+    try {
+      return await operation;
+    } finally {
+      if (activeCollaborations.get(collaborationKey) === operation) {
+        activeCollaborations.delete(collaborationKey);
+      }
+    }
   };
 
   const orchestrationRouter = createA2AOrchestrationRouter({
