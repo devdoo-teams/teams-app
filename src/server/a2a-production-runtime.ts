@@ -67,6 +67,8 @@ export type A2AProductionChildCancellationInput = Readonly<{
   childIdempotencyKey: string;
   agentId: string;
   providerId: string;
+  executionIdentity?: string;
+  executionBoundaryId?: string;
   agentJobId: string;
   cancelRequestedAt: string;
 }>;
@@ -78,6 +80,8 @@ export type A2AProductionChildRecoveryInput = Readonly<{
   childIdempotencyKey?: string;
   agentId: string;
   providerId: string;
+  executionIdentity?: string;
+  executionBoundaryId?: string;
   agentJobId: string;
   deadlineAtMs: number;
   signal: AbortSignal;
@@ -95,6 +99,10 @@ export type A2AProductionAgentAuthorizationInput = Pick<
 export type A2AProductionAgent = Readonly<{
   agentId: string;
   providerId: string;
+  /** Stable identity of the provider session owned by this registered agent. */
+  executionIdentity?: string;
+  /** Stable execution boundary (workspace/config/runner) owned by this agent. */
+  executionBoundaryId?: string;
   /** Every independently registered agent must declare its scope policy. */
   authorize: (input: A2AProductionAgentAuthorizationInput) => boolean;
   /** Explicit tenant/requester/conversation/capability policy for production agents. */
@@ -211,9 +219,27 @@ function createAgentRegistry(coreA2A: A2AProductionCoreA2A): Readonly<{
   }
 
   const agents = new Map<string, A2AProductionAgent>();
+  const executionIdentities = new Set<string>();
+  const executionBoundaries = new Set<string>();
   for (const agent of coreA2A.agents) {
     if (agents.has(agent.agentId)) {
       throw new A2AContractError('InvalidRequestError', 'A2A trusted agent registry contains duplicate agent IDs.');
+    }
+    if ((agent.executionIdentity === undefined) !== (agent.executionBoundaryId === undefined)) {
+      throw new A2AContractError(
+        'InvalidRequestError',
+        'A2A trusted agents must provide executionIdentity and executionBoundaryId together.',
+      );
+    }
+    if (agent.executionIdentity !== undefined) {
+      if (!agent.executionIdentity.trim() || executionIdentities.has(agent.executionIdentity)) {
+        throw new A2AContractError('InvalidRequestError', 'A2A trusted agent execution identities must be unique.');
+      }
+      if (!agent.executionBoundaryId!.trim() || executionBoundaries.has(agent.executionBoundaryId!)) {
+        throw new A2AContractError('InvalidRequestError', 'A2A trusted agent execution boundaries must be unique.');
+      }
+      executionIdentities.add(agent.executionIdentity);
+      executionBoundaries.add(agent.executionBoundaryId!);
     }
     agents.set(agent.agentId, agent);
   }
@@ -534,7 +560,12 @@ export function createA2AProductionRuntime(options: A2AProductionRuntimeOptions)
             );
           }
           selectedAgents.set(selection.childKey, agent);
-          return { agentId: agent.agentId, providerId: agent.providerId };
+          return {
+            agentId: agent.agentId,
+            providerId: agent.providerId,
+            ...(agent.executionIdentity === undefined ? {} : { executionIdentity: agent.executionIdentity }),
+            ...(agent.executionBoundaryId === undefined ? {} : { executionBoundaryId: agent.executionBoundaryId }),
+          };
         },
         onDispatchPrepared: async (prepared) => {
           await options.store.createOrGetDispatchIntent({
@@ -547,7 +578,9 @@ export function createA2AProductionRuntime(options: A2AProductionRuntimeOptions)
         },
         executeChild: async (child) => {
           const agent = selectedAgents.get(child.childKey);
-          if (!agent || agent.agentId !== child.agentId || agent.providerId !== child.providerId) {
+          if (!agent || agent.agentId !== child.agentId || agent.providerId !== child.providerId
+            || agent.executionIdentity !== child.executionIdentity
+            || agent.executionBoundaryId !== child.executionBoundaryId) {
             throw new A2AContractError('InvalidTaskError', 'A2A child agent selection is not available for execution.');
           }
           await options.store.markDispatchChildStarted(parent.id, input.scope, child.childKey);
@@ -562,6 +595,8 @@ export function createA2AProductionRuntime(options: A2AProductionRuntimeOptions)
               childIdempotencyKey: child.childIdempotencyKey,
               agentId: agent.agentId,
               providerId: agent.providerId,
+              ...(agent.executionIdentity === undefined ? {} : { executionIdentity: agent.executionIdentity }),
+              ...(agent.executionBoundaryId === undefined ? {} : { executionBoundaryId: agent.executionBoundaryId }),
               agentJobId,
               cancelRequestedAt: bound.cancelRequestedAt,
             });
@@ -834,6 +869,8 @@ function cancellationFailureInput(
     childIdempotencyKey: child.childIdempotencyKey,
     agentId: child.agentId,
     providerId: child.providerId,
+    ...(child.executionIdentity === undefined ? {} : { executionIdentity: child.executionIdentity }),
+    ...(child.executionBoundaryId === undefined ? {} : { executionBoundaryId: child.executionBoundaryId }),
     ...(child.agentJobId ? { agentJobId: child.agentJobId } : {}),
     ...(dispatch.cancelRequestedAt ? { cancelRequestedAt: dispatch.cancelRequestedAt } : {}),
   };

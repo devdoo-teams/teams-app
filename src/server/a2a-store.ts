@@ -80,6 +80,10 @@ export type A2ADispatchChildPlan = Readonly<{
   role: string;
   agentId: string;
   providerId: string;
+  /** Stable identity of the independently owned provider session, when configured. */
+  executionIdentity?: string;
+  /** Stable server-trusted boundary containing the provider session, when configured. */
+  executionBoundaryId?: string;
   requestSha256: string;
 }>;
 
@@ -116,6 +120,8 @@ export type A2ADispatchChildCancellationInput = Readonly<{
   childIdempotencyKey: string;
   agentId: string;
   providerId: string;
+  executionIdentity?: string;
+  executionBoundaryId?: string;
   agentJobId: string;
   cancelRequestedAt: string;
 }>;
@@ -863,15 +869,21 @@ function loadDispatchChild(value: unknown, filePath: string): A2ADispatchChildIn
   assertObjectKeys(
     value,
     ['childKey', 'childIdempotencyKey', 'role', 'agentId', 'providerId', 'requestSha256', 'status'],
-    ['agentJobId', 'boundAt', 'settledAt', 'cancelAcknowledgedAt'],
+    ['executionIdentity', 'executionBoundaryId', 'agentJobId', 'boundAt', 'settledAt', 'cancelAcknowledgedAt'],
     `Invalid A2A dispatch child: ${filePath}`,
   );
-  return {
+  const child: A2ADispatchChildIntent = {
     childKey: validateTaskIdForPersistence(value.childKey, 'dispatch.childKey'),
     childIdempotencyKey: validateTaskIdForPersistence(value.childIdempotencyKey, 'dispatch.childIdempotencyKey'),
     role: validateDispatchText(value.role, 'dispatch.role', MAX_DISPATCH_ROLE_LENGTH),
     agentId: validateTaskIdForPersistence(value.agentId, 'dispatch.agentId'),
     providerId: validateTaskIdForPersistence(value.providerId, 'dispatch.providerId'),
+    ...(value.executionIdentity === undefined
+      ? {}
+      : { executionIdentity: validateTaskIdForPersistence(value.executionIdentity, 'dispatch.executionIdentity') }),
+    ...(value.executionBoundaryId === undefined
+      ? {}
+      : { executionBoundaryId: validateTaskIdForPersistence(value.executionBoundaryId, 'dispatch.executionBoundaryId') }),
     requestSha256: validateSha256(value.requestSha256, 'dispatch.requestSha256'),
     status: validateDispatchChildStatus(value.status),
     ...(value.agentJobId === undefined
@@ -883,6 +895,10 @@ function loadDispatchChild(value: unknown, filePath: string): A2ADispatchChildIn
       ? {}
       : { cancelAcknowledgedAt: validateTimestamp(value.cancelAcknowledgedAt, 'dispatch.cancelAcknowledgedAt') }),
   };
+  if (Boolean(child.executionIdentity) !== Boolean(child.executionBoundaryId)) {
+    throw new Error(`Invalid A2A dispatch child execution identity: ${filePath}`);
+  }
+  return child;
 }
 
 function loadMessageInfo(value: unknown): A2AStoredMessageInfo {
@@ -984,9 +1000,10 @@ function normalizeDispatchPlanChildren(value: readonly A2ADispatchChildPlan[]): 
   const idempotencyKeys = new Set<string>();
   return value.map((child) => {
     if (!isRecord(child)) throw new A2AContractError('InvalidRequestError', 'A2A dispatch child plan is invalid.');
-    assertExactKeys(
+    assertObjectKeys(
       child,
       ['childKey', 'childIdempotencyKey', 'role', 'agentId', 'providerId', 'requestSha256'],
+      ['executionIdentity', 'executionBoundaryId'],
       'Invalid A2A dispatch child plan.',
     );
     const normalized: A2ADispatchChildPlan = {
@@ -995,8 +1012,20 @@ function normalizeDispatchPlanChildren(value: readonly A2ADispatchChildPlan[]): 
       role: validateDispatchText(child.role, 'dispatch.role', MAX_DISPATCH_ROLE_LENGTH),
       agentId: validateTaskIdForPersistence(child.agentId, 'dispatch.agentId'),
       providerId: validateTaskIdForPersistence(child.providerId, 'dispatch.providerId'),
+      ...(child.executionIdentity === undefined
+        ? {}
+        : { executionIdentity: validateTaskIdForPersistence(child.executionIdentity, 'dispatch.executionIdentity') }),
+      ...(child.executionBoundaryId === undefined
+        ? {}
+        : { executionBoundaryId: validateTaskIdForPersistence(child.executionBoundaryId, 'dispatch.executionBoundaryId') }),
       requestSha256: validateSha256(child.requestSha256, 'dispatch.requestSha256'),
     };
+    if (Boolean(normalized.executionIdentity) !== Boolean(normalized.executionBoundaryId)) {
+      throw new A2AContractError(
+        'InvalidRequestError',
+        'A2A dispatch child execution identity and boundary must be provided together.',
+      );
+    }
     if (childKeys.has(normalized.childKey) || idempotencyKeys.has(normalized.childIdempotencyKey)) {
       throw new A2AContractError('InvalidRequestError', 'A2A dispatch child identities must be unique.');
     }
@@ -1046,6 +1075,8 @@ function sameDispatchPlan(left: readonly A2ADispatchChildIntent[], right: readon
       && child.role === candidate.role
       && child.agentId === candidate.agentId
       && child.providerId === candidate.providerId
+      && child.executionIdentity === candidate.executionIdentity
+      && child.executionBoundaryId === candidate.executionBoundaryId
       && child.requestSha256 === candidate.requestSha256);
   });
 }
@@ -1121,6 +1152,11 @@ function validateDispatchIntent(dispatch: A2ADispatchIntent, filePath: string): 
     validateDispatchText(child.role, 'dispatch.role', MAX_DISPATCH_ROLE_LENGTH);
     validateTaskIdForPersistence(child.agentId, 'dispatch.agentId');
     validateTaskIdForPersistence(child.providerId, 'dispatch.providerId');
+    if (Boolean(child.executionIdentity) !== Boolean(child.executionBoundaryId)) {
+      throw new Error(`Invalid A2A dispatch child execution identity: ${filePath}`);
+    }
+    if (child.executionIdentity) validateTaskIdForPersistence(child.executionIdentity, 'dispatch.executionIdentity');
+    if (child.executionBoundaryId) validateTaskIdForPersistence(child.executionBoundaryId, 'dispatch.executionBoundaryId');
     validateSha256(child.requestSha256, 'dispatch.requestSha256');
     validateDispatchChildStatus(child.status);
     if (childKeys.has(child.childKey) || idempotencyKeys.has(child.childIdempotencyKey)) {

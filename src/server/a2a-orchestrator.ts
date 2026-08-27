@@ -50,6 +50,10 @@ export type A2AOrchestratorChildRequest = Readonly<{
 export type A2AOrchestratorAgentIdentity = Readonly<{
   agentId: string;
   providerId: string;
+  /** Stable identity of the independently owned provider session. */
+  executionIdentity?: string;
+  /** Stable server-trusted boundary containing this execution. */
+  executionBoundaryId?: string;
 }>;
 
 export type A2AOrchestratorAgentSelectionInput = Readonly<{
@@ -72,6 +76,8 @@ export type A2AOrchestratorChildExecutionInput = Readonly<{
   capabilities?: readonly A2ACapability[];
   agentId: string;
   providerId: string;
+  executionIdentity?: string;
+  executionBoundaryId?: string;
   deadlineAtMs: number;
   signal: AbortSignal;
 }>;
@@ -89,6 +95,8 @@ export type A2AOrchestratorPreparedChild = Readonly<{
   role: string;
   agentId: string;
   providerId: string;
+  executionIdentity?: string;
+  executionBoundaryId?: string;
   requestSha256: string;
 }>;
 
@@ -104,6 +112,8 @@ export type A2AOrchestratorChildResult = Readonly<{
   childIdempotencyKey: string;
   agentId: string;
   providerId: string;
+  executionIdentity?: string;
+  executionBoundaryId?: string;
   taskId?: string;
   status: A2AOrchestratorChildStatus;
   result?: string;
@@ -169,6 +179,8 @@ type PreparedChild = {
   capabilities?: readonly A2ACapability[];
   agentId: string;
   providerId: string;
+  executionIdentity?: string;
+  executionBoundaryId?: string;
   idempotencyKey: string;
   fingerprint: string;
   duplicated: boolean;
@@ -179,6 +191,8 @@ type SettledChild = {
   childIdempotencyKey: string;
   agentId: string;
   providerId: string;
+  executionIdentity?: string;
+  executionBoundaryId?: string;
   taskId?: string;
   status: A2AOrchestratorChildStatus;
   result?: string;
@@ -250,6 +264,8 @@ export function createA2AOrchestrator(options: A2AOrchestratorOptions = {}): A2A
             role: descriptor.role,
             agentId: descriptor.agentId,
             providerId: descriptor.providerId,
+            ...(descriptor.executionIdentity ? { executionIdentity: descriptor.executionIdentity } : {}),
+            ...(descriptor.executionBoundaryId ? { executionBoundaryId: descriptor.executionBoundaryId } : {}),
             requestSha256: descriptor.fingerprint,
           }))),
         });
@@ -428,9 +444,29 @@ function prepareChildren(
     };
     const agentId = validateOpaqueId(identity.agentId, 'child.agentId');
     const providerId = validateOpaqueId(identity.providerId, 'child.providerId');
+    const executionIdentity = identity.executionIdentity === undefined
+      ? undefined
+      : validateOpaqueId(identity.executionIdentity, 'child.executionIdentity');
+    const executionBoundaryId = identity.executionBoundaryId === undefined
+      ? undefined
+      : validateOpaqueId(identity.executionBoundaryId, 'child.executionBoundaryId');
+    if (Boolean(executionIdentity) !== Boolean(executionBoundaryId)) {
+      throw new A2AContractError(
+        'InvalidRequestError',
+        'child.executionIdentity and child.executionBoundaryId must be provided together.',
+      );
+    }
 
     const idempotencyKey = deriveChildIdempotencyKey(input.parentTaskId, request.key);
-    const fingerprint = sha256(JSON.stringify([role, prompt, capabilities ?? null, agentId, providerId]));
+    const fingerprint = sha256(JSON.stringify([
+      role,
+      prompt,
+      capabilities ?? null,
+      agentId,
+      providerId,
+      executionIdentity ?? null,
+      executionBoundaryId ?? null,
+    ]));
     const previous = seen.get(idempotencyKey);
     if (previous && previous.fingerprint !== fingerprint) {
       throw new A2AContractError('InvalidRequestError', 'duplicate child idempotency keys must reference the same role and prompt.');
@@ -443,6 +479,8 @@ function prepareChildren(
       ...(capabilities ? { capabilities } : {}),
       agentId,
       providerId,
+      ...(executionIdentity ? { executionIdentity } : {}),
+      ...(executionBoundaryId ? { executionBoundaryId } : {}),
       idempotencyKey,
       fingerprint,
       duplicated: Boolean(previous),
@@ -518,6 +556,8 @@ function startExecution(
       ...(descriptor.capabilities ? { capabilities: descriptor.capabilities } : {}),
       agentId: descriptor.agentId,
       providerId: descriptor.providerId,
+      ...(descriptor.executionIdentity ? { executionIdentity: descriptor.executionIdentity } : {}),
+      ...(descriptor.executionBoundaryId ? { executionBoundaryId: descriptor.executionBoundaryId } : {}),
       deadlineAtMs,
       signal,
     }));
@@ -617,6 +657,8 @@ function normalizeExecutionResult(
       childIdempotencyKey: descriptor.idempotencyKey,
       agentId: descriptor.agentId,
       providerId: descriptor.providerId,
+      ...(descriptor.executionIdentity ? { executionIdentity: descriptor.executionIdentity } : {}),
+      ...(descriptor.executionBoundaryId ? { executionBoundaryId: descriptor.executionBoundaryId } : {}),
       taskId: result.taskId,
       status: 'completed',
       result: resultText,
@@ -647,7 +689,7 @@ function normalizeExecutionResult(
 }
 
 function canceledChild(
-  descriptor: Pick<PreparedChild, 'key' | 'idempotencyKey' | 'agentId' | 'providerId'>,
+  descriptor: Pick<PreparedChild, 'key' | 'idempotencyKey' | 'agentId' | 'providerId' | 'executionIdentity' | 'executionBoundaryId'>,
   error: string,
 ): SettledChild {
   return {
@@ -655,13 +697,15 @@ function canceledChild(
     childIdempotencyKey: descriptor.idempotencyKey,
     agentId: descriptor.agentId,
     providerId: descriptor.providerId,
+    ...(descriptor.executionIdentity ? { executionIdentity: descriptor.executionIdentity } : {}),
+    ...(descriptor.executionBoundaryId ? { executionBoundaryId: descriptor.executionBoundaryId } : {}),
     status: 'canceled',
     error: sanitizeErrorText(error),
   };
 }
 
 function failedChild(
-  descriptor: Pick<PreparedChild, 'key' | 'idempotencyKey' | 'agentId' | 'providerId'>,
+  descriptor: Pick<PreparedChild, 'key' | 'idempotencyKey' | 'agentId' | 'providerId' | 'executionIdentity' | 'executionBoundaryId'>,
   taskId: string | undefined,
   error: string,
 ): SettledChild {
@@ -670,6 +714,8 @@ function failedChild(
     childIdempotencyKey: descriptor.idempotencyKey,
     agentId: descriptor.agentId,
     providerId: descriptor.providerId,
+    ...(descriptor.executionIdentity ? { executionIdentity: descriptor.executionIdentity } : {}),
+    ...(descriptor.executionBoundaryId ? { executionBoundaryId: descriptor.executionBoundaryId } : {}),
     ...(taskId ? { taskId } : {}),
     status: 'failed',
     error: sanitizeErrorText(error),

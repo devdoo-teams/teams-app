@@ -104,6 +104,7 @@
     "test:a2a-task-state-interoperability": "tsx scripts/a2a-task-state-interoperability-test.ts",
     "test:a2a-streaming-unsupported": "tsx scripts/a2a-streaming-unsupported-test.ts",
     "test:a2a-send-state-response": "tsx scripts/a2a-send-state-response-test.ts",
+    "test:a2a-multi-agent-dispatch": "tsx scripts/a2a-multi-agent-dispatch-test.ts",
     "test:provider-neutral-agent-runner": "tsx scripts/provider-neutral-agent-runner-test.ts",
     "test:agent-workspace-lock": "tsx scripts/agent-service-workspace-lock-test.ts",
     "test:rest-scope-security": "node --import tsx/esm scripts/rest-scope-security-test.mjs",

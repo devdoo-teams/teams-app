@@ -602,6 +602,8 @@ async function recoverChildJob(
           childIdempotencyKey: child.childIdempotencyKey,
           agentId: child.agentId,
           providerId: child.providerId,
+          ...(child.executionIdentity === undefined ? {} : { executionIdentity: child.executionIdentity }),
+          ...(child.executionBoundaryId === undefined ? {} : { executionBoundaryId: child.executionBoundaryId }),
           agentJobId: child.agentJobId,
           deadlineAtMs: Number.isFinite(deadlineAtMs) ? deadlineAtMs : Date.now() + recoveryTimeoutMs,
           signal: controller.signal,
@@ -710,6 +712,8 @@ function cancellationInput(
     childIdempotencyKey: child.childIdempotencyKey,
     agentId: child.agentId,
     providerId: child.providerId,
+    ...(child.executionIdentity === undefined ? {} : { executionIdentity: child.executionIdentity }),
+    ...(child.executionBoundaryId === undefined ? {} : { executionBoundaryId: child.executionBoundaryId }),
     agentJobId: child.agentJobId,
     cancelRequestedAt: dispatch.cancelRequestedAt,
   };
@@ -726,6 +730,8 @@ function reconciliationFailureInput(
     childIdempotencyKey: child.childIdempotencyKey,
     agentId: child.agentId,
     providerId: child.providerId,
+    ...(child.executionIdentity === undefined ? {} : { executionIdentity: child.executionIdentity }),
+    ...(child.executionBoundaryId === undefined ? {} : { executionBoundaryId: child.executionBoundaryId }),
     ...(child.agentJobId ? { agentJobId: child.agentJobId } : {}),
     ...(dispatch.cancelRequestedAt ? { cancelRequestedAt: dispatch.cancelRequestedAt } : {}),
   };

@@ -79,6 +79,7 @@ const tsTests = [
   'scripts/a2a-task-state-interoperability-test.ts',
   'scripts/a2a-streaming-unsupported-test.ts',
   'scripts/a2a-send-state-response-test.ts',
+  'scripts/a2a-multi-agent-dispatch-test.ts',
   'scripts/rest-scope-security-test.mjs',
   'scripts/security-headers-test.ts',
 ];
