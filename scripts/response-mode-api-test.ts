@@ -15,6 +15,7 @@ const execFileAsync = promisify(execFile);
 const root = process.cwd();
 const runtimeDistRoot = resolveRuntimeDistRoot(root);
 const ACCESS_TOKEN_HEADER = 'x-teams-local-access-token';
+const optionalRuntimeUnconfigured = process.argv.includes('--optional-runtime-unconfigured');
 
 function assertPass(condition: unknown, message: string): asserts condition {
   assert.ok(condition, `FAIL: ${message}`);
@@ -154,10 +155,18 @@ async function main(): Promise<void> {
       'utf8',
     )) as { commit?: unknown; mode?: unknown; worktree?: unknown };
     assert.equal(marker.commit, expectedCommit, 'response-mode runtime bundle matches the Core runner source commit');
-    assert.equal(marker.mode, 'core', 'response-mode Core gate uses the Core server bundle');
+    assert.equal(
+      marker.mode,
+      optionalRuntimeUnconfigured ? 'optional' : 'core',
+      'response-mode runtime test uses the requested server bundle mode',
+    );
     assert.equal(marker.worktree, 'clean', 'response-mode Core gate uses a clean-worktree server bundle');
   } else {
-    await execFileAsync(process.execPath, ['scripts/build-server.mjs', '--core'], { cwd: root });
+    await execFileAsync(
+      process.execPath,
+      ['scripts/build-server.mjs', ...(optionalRuntimeUnconfigured ? [] : ['--core'])],
+      { cwd: root },
+    );
   }
 
   const dataRoot = await mkdtemp(join(tmpdir(), 'response-mode-api-test-'));
@@ -185,6 +194,7 @@ async function main(): Promise<void> {
       OPENAI_MODEL: '',
       LOCAL_MODEL_BASE_URL: '',
       LOCAL_MODEL_NAME: '',
+      TEAMS_OPTIONAL_RUNTIME: optionalRuntimeUnconfigured ? 'true' : '',
       TEAMS_USE_SDK: 'false',
       TEAMS_SKIP_OUTBOUND: 'true',
       TEAMS_SKIP_AUTH: 'true',
