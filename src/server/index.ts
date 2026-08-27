@@ -43,6 +43,7 @@ import { probeCliCapabilities, unknownCliCapabilities, type CliCapabilities } fr
 import { GitService } from './git-service.js';
 import {
   configureResponseEngineRouter,
+  ResponseEngineNotConfiguredError,
   ResponseEngineRouter,
   type ResponseEngineInput,
 } from './response-engine.js';
@@ -3106,6 +3107,16 @@ async function handleBotResponseEngine(
     });
     await send(output.text, genUi.withTabAction(output.envelope));
   } catch (error) {
+    if (error instanceof ResponseEngineNotConfiguredError) {
+      const availability = publicResponseModeAvailability();
+      const text = `${responseModeLabel(error.mode)} 응답 모드는 현재 서버에서 사용할 수 없습니다. 결정형 또는 사용 가능한 모드를 선택하세요.`;
+      await send(
+        text,
+        undefined,
+        createResponseModeCardActivity(error.mode, availability, text, personalTabDeepLink),
+      );
+      return;
+    }
     if (error instanceof AgentMutationAuthorizationError) {
       await send(error.message, genUi.error(error.message, 'response-engine-forbidden'));
       return;
