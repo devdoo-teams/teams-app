@@ -74,6 +74,8 @@ export type AgentJobStoreOptions = Readonly<{
 export class AgentJobStore {
   private jobs: AgentJob[] = [];
   private writeChain: Promise<void> = Promise.resolve();
+  private initialized = false;
+  private initialization?: Promise<void>;
   private testOnlyWriteAtomicJson?: typeof atomicWriteJson;
 
   constructor(
@@ -100,6 +102,9 @@ export class AgentJobStore {
   }
 
   async initialize(): Promise<void> {
+    if (this.initialized) return;
+    if (this.initialization) return this.initialization;
+
     const operation = this.writeChain.then(async () => {
       const previousJobs = this.jobs;
       try {
@@ -124,13 +129,20 @@ export class AgentJobStore {
           await this.writeAtomicJson(this.filePath, nextJobs.map(cloneAgentJob));
         }
         this.jobs = nextJobs;
+        this.initialized = true;
       } catch (error) {
         this.jobs = previousJobs;
+        this.initialized = false;
         throw error;
       }
     });
+    this.initialization = operation;
     this.writeChain = operation.then(() => undefined, () => undefined);
-    await operation;
+    try {
+      await operation;
+    } finally {
+      if (this.initialization === operation) this.initialization = undefined;
+    }
   }
 
   async create(input: {
@@ -277,6 +289,9 @@ export class AgentJobStore {
   }
 
   private enqueueMutation<T>(mutate: () => T): Promise<T> {
+    if (!this.initialized) {
+      throw new Error('AgentJobStore.initialize() must complete before mutation.');
+    }
     const operation = this.writeChain.then(async () => {
       const previousJobs = this.jobs;
       let result: T;
