@@ -13,6 +13,7 @@ const runtimeDistRoot = resolveRuntimeDistRoot(root);
 const entry = path.join(runtimeDistRoot, 'server', 'index.js');
 const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-core-chat-regression-'));
 const accessToken = crypto.randomBytes(32).toString('base64url');
+const authCanary = `teams-core-auth-canary-${crypto.randomBytes(24).toString('hex')}`;
 const tenantId = 'runtime-tenant';
 const requesterId = 'runtime-user';
 const naturalConversationId = 'runtime-conversation-sdk-natural';
@@ -41,57 +42,68 @@ try {
   const authPath = path.join(temporaryRoot, 'codex-auth.json');
   const isolatedNodePath = path.join(temporaryRoot, 'node');
   await fs.writeFile(profilePath, '(version 1)\n(allow default)\n', { mode: 0o600 });
-  await fs.writeFile(authPath, '{"fixture":"teams-core-chat"}\n', { mode: 0o600 });
+  await fs.writeFile(
+    authPath,
+    `${JSON.stringify({ fixture: 'teams-core-chat', canary: authCanary })}\n`,
+    { mode: 0o600 },
+  );
   await fs.copyFile(process.execPath, isolatedNodePath);
   await fs.chmod(isolatedNodePath, 0o700);
 
-  const port = await freePort();
-  const baseUrl = `http://127.0.0.1:${port}`;
-  child = spawn(process.execPath, [entry], {
-    cwd: root,
-    env: {
-      ...process.env,
-      NODE_ENV: 'development',
-      PORT: String(port),
-      TEAMS_USE_SDK: 'true',
-      TEAMS_SKIP_AUTH: 'true',
-      TEAMS_SKIP_OUTBOUND: 'true',
-      TEAMS_LOCAL_DEV: 'true',
-      TEAMS_LOCAL_ACCESS_TOKEN: accessToken,
-      PUBLIC_BASE_URL: '',
-      TAB_DOMAIN: '',
-      BOT_DOMAIN: '',
-      DEV_TUNNEL_ID: '',
-      BOT_CLIENT_ID: '00000000-0000-4000-8000-000000000001',
-      CLIENT_ID: '00000000-0000-4000-8000-000000000002',
-      CLIENT_SECRET: 'teams-core-chat-fixture-secret',
-      TENANT_ID: '00000000-0000-4000-8000-000000000003',
-      ITEM_STORE_PATH: path.join(temporaryRoot, 'items.json'),
-      WORK_ITEM_STORE_PATH: path.join(temporaryRoot, 'work-items.json'),
-      COLLABORATION_STORE_PATH: path.join(temporaryRoot, 'collaboration.json'),
-      AGENT_JOB_STORE_PATH: jobStorePath,
-      A2A_STORE_PATH: path.join(temporaryRoot, 'a2a.json'),
-      AGENT_ADMISSION_JOURNAL_PATH: path.join(temporaryRoot, 'agent-admission.json'),
-      GENUI_ACTION_STORE_PATH: path.join(temporaryRoot, 'genui-actions.json'),
-      RESPONSE_MODE_STORE_PATH: path.join(temporaryRoot, 'response-modes.json'),
-      AGENT_WORKSPACE: root,
-      AGENT_ISOLATION_PROFILE: profilePath,
-      AGENT_SANDBOX_EXEC_PATH: '/usr/bin/sandbox-exec',
-      AGENT_CODEX_AUTH_FILE: authPath,
-      CODEX_BIN: isolatedNodePath,
-      CODEX_SCRIPT: 'scripts/fake-codex-auth-required.mjs',
-      COPILOTKIT_DETERMINISTIC_MODE: 'true',
-      WEATHER_MODE: 'demo',
-      TEAMS_OPERATOR_REQUESTER_ALLOWLIST: `${tenantId}/${requesterId}`,
-      MCP_PUBLIC_ENABLED: '',
-      TEAMS_OPTIONAL_RUNTIME: '',
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  child.stdout?.on('data', (chunk) => { output += chunk.toString(); });
-  child.stderr?.on('data', (chunk) => { output += chunk.toString(); });
+  const serverEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    NODE_ENV: 'development',
+    TEAMS_USE_SDK: 'true',
+    TEAMS_SKIP_AUTH: 'true',
+    TEAMS_SKIP_OUTBOUND: 'true',
+    TEAMS_LOCAL_DEV: 'true',
+    TEAMS_LOCAL_ACCESS_TOKEN: accessToken,
+    PUBLIC_BASE_URL: '',
+    TAB_DOMAIN: '',
+    BOT_DOMAIN: '',
+    DEV_TUNNEL_ID: '',
+    BOT_CLIENT_ID: '00000000-0000-4000-8000-000000000001',
+    CLIENT_ID: '00000000-0000-4000-8000-000000000002',
+    CLIENT_SECRET: 'teams-core-chat-fixture-secret',
+    TENANT_ID: '00000000-0000-4000-8000-000000000003',
+    ITEM_STORE_PATH: path.join(temporaryRoot, 'items.json'),
+    WORK_ITEM_STORE_PATH: path.join(temporaryRoot, 'work-items.json'),
+    COLLABORATION_STORE_PATH: path.join(temporaryRoot, 'collaboration.json'),
+    AGENT_JOB_STORE_PATH: jobStorePath,
+    A2A_STORE_PATH: path.join(temporaryRoot, 'a2a.json'),
+    AGENT_ADMISSION_JOURNAL_PATH: path.join(temporaryRoot, 'agent-admission.json'),
+    GENUI_ACTION_STORE_PATH: path.join(temporaryRoot, 'genui-actions.json'),
+    RESPONSE_MODE_STORE_PATH: path.join(temporaryRoot, 'response-modes.json'),
+    AGENT_WORKSPACE: root,
+    AGENT_ISOLATION_PROFILE: profilePath,
+    AGENT_SANDBOX_EXEC_PATH: '/usr/bin/sandbox-exec',
+    AGENT_CODEX_AUTH_FILE: authPath,
+    CODEX_BIN: isolatedNodePath,
+    CODEX_SCRIPT: 'scripts/fake-codex-auth-required.mjs',
+    COPILOTKIT_DETERMINISTIC_MODE: 'true',
+    WEATHER_MODE: 'demo',
+    TEAMS_OPERATOR_REQUESTER_ALLOWLIST: `${tenantId}/${requesterId}`,
+    MCP_PUBLIC_ENABLED: '',
+    TEAMS_OPTIONAL_RUNTIME: '',
+  };
+  const startBuiltServer = async (): Promise<{ baseUrl: string; health: any }> => {
+    const port = await freePort();
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const serverProcess = spawn(process.execPath, [entry], {
+      cwd: root,
+      env: { ...serverEnv, PORT: String(port) },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    child = serverProcess;
+    serverProcess.stdout?.on('data', (chunk) => { output += chunk.toString(); });
+    serverProcess.stderr?.on('data', (chunk) => { output += chunk.toString(); });
+    const health = await waitForHealth(baseUrl, serverProcess, () => output);
+    return { baseUrl, health };
+  };
 
-  await waitForHealth(baseUrl, child, () => output);
+  let runtime = await startBuiltServer();
+  let baseUrl = runtime.baseUrl;
+  assert.equal(runtime.health.bot, 'teams-sdk', 'chat regression must exercise the registered Teams SDK bot');
 
   const naturalResponse = await request(baseUrl, '/api/messages', {
     method: 'POST',
@@ -131,18 +143,33 @@ try {
   assert.match(JSON.stringify(completionCard), new RegExp(job.id));
   assert.match(JSON.stringify(completionCard), /completed/);
 
-  for (const [command, suffix] of [['Status', 'status'], ['List', 'list']] as const) {
-    const conversationId = `runtime-conversation-sdk-${suffix}`;
+  const drainedCompletionOutbox = await requestJson(
+    baseUrl,
+    `/api/debug/agent-outbox/${naturalConversationId}`,
+  );
+  assert.equal(drainedCompletionOutbox.messages.length, 0, 'terminal completion must be drained before Status/List');
+  assert.equal(drainedCompletionOutbox.activities.length, 0, 'terminal completion activities must be drained before Status/List');
+
+  const cardContractFailures: string[] = [];
+  for (const [command, suffix] of [[`Status ${job.id}`, 'status'], ['List', 'list']] as const) {
     const response = await request(baseUrl, '/api/messages', {
       method: 'POST',
-      body: JSON.stringify(activity(baseUrl, command, suffix, conversationId)),
+      body: JSON.stringify(activity(baseUrl, command, suffix, naturalConversationId)),
     });
     assert.ok(response.response.ok, `${command} must remain accepted by the registered Teams SDK handler`);
-    const outbox = await waitForOutboxActivity(baseUrl, conversationId, 3_000);
+    const outbox = await waitForOutboxActivity(baseUrl, naturalConversationId, 3_000);
     assert.equal(outbox.messages.length, 1, `${command} must produce exactly one logical response`);
     assert.equal(outbox.activities.length, 1, `${command} must produce exactly one card activity`);
     assert.equal('text' in outbox.activities[0], false, `${command} card must be attachment-only`);
-    assert.ok(adaptiveCard(outbox.activities[0]), `${command} must remain an Adaptive Card`);
+    const card = adaptiveCard(outbox.activities[0]);
+    assert.ok(card, `${command} must remain an Adaptive Card`);
+    const serializedCard = JSON.stringify(card);
+    if (!serializedCard.includes(job.id)) {
+      cardContractFailures.push(`${command} card omitted job ${job.id}: ${serializedCard}`);
+    }
+    if (!serializedCard.includes('completed')) {
+      cardContractFailures.push(`${command} card omitted completed status: ${serializedCard}`);
+    }
   }
 
   const jobsAfterCoreCommands = await requestJson(baseUrl, '/api/debug/agent-jobs');
@@ -157,7 +184,39 @@ try {
 
   const persistedText = JSON.stringify(persisted);
   assert.equal(persistedText.includes('teams-core-chat-fixture-secret'), false, 'Bot credentials must not enter the durable job store');
-  assert.equal(persistedText.includes('"fixture":"teams-core-chat"'), false, 'Codex auth contents must not enter the durable job store');
+  assert.equal(persistedText.includes(authCanary), false, 'The unique Codex auth canary must not enter the durable job store');
+  assert.equal(persistedText.includes(authPath), false, 'The Codex auth source path must not enter the durable job store');
+
+  runtime = await startBuiltServer();
+  baseUrl = runtime.baseUrl;
+  assert.equal(runtime.health.bot, 'teams-sdk', 'restarted chat regression must still exercise the registered Teams SDK bot');
+
+  const jobsAfterRestart = await requestJson(baseUrl, '/api/debug/agent-jobs');
+  const reloadedJob = jobsAfterRestart.jobs.find((candidate: any) => candidate.id === job.id);
+  assert.equal(reloadedJob?.status, 'completed', 'the restarted server must reload the completed job from the same physical store');
+  assert.match(String(reloadedJob?.result ?? ''), /FAKE_CODEX_OK/);
+
+  const restartStatusResponse = await request(baseUrl, '/api/messages', {
+    method: 'POST',
+    body: JSON.stringify(activity(baseUrl, `Status ${job.id}`, 'restart-status', naturalConversationId)),
+  });
+  assert.ok(restartStatusResponse.response.ok, 'the completed job must remain queryable after server restart');
+  const restartOutbox = await waitForOutboxActivity(baseUrl, naturalConversationId, 3_000);
+  assert.equal(restartOutbox.activities.length, 1, 'restart Status must produce exactly one card activity');
+  const restartCard = adaptiveCard(restartOutbox.activities[0]);
+  assert.ok(restartCard, 'restart Status must return an Adaptive Card');
+  const serializedRestartCard = JSON.stringify(restartCard);
+  assert.ok(serializedRestartCard.includes(job.id), 'restart Status card must identify the persisted job');
+  assert.ok(serializedRestartCard.includes('completed'), 'restart Status card must report the persisted completed status');
+
+  await stop(child);
+  child = undefined;
+
+  assert.equal(
+    cardContractFailures.length,
+    0,
+    `Status/List card contract failures:\n${cardContractFailures.join('\n')}`,
+  );
 
   console.log('teams-core-chat-regression-test: PASS');
 } finally {
@@ -209,13 +268,13 @@ async function requestJson(baseUrl: string, pathname: string): Promise<any> {
   return result.body;
 }
 
-async function waitForHealth(baseUrl: string, process: ChildProcess, diagnostics: () => string): Promise<void> {
+async function waitForHealth(baseUrl: string, process: ChildProcess, diagnostics: () => string): Promise<any> {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     if (process.exitCode !== null) throw new Error(`server exited before health: ${diagnostics().slice(-4_000)}`);
     try {
       const health = await request(baseUrl, '/api/health');
-      if (health.response.ok) return;
+      if (health.response.ok) return health.body;
     } catch { /* startup in progress */ }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
