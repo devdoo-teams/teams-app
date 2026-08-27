@@ -10,7 +10,7 @@ const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-genui-actions-'
 const dataFile = path.join(directory, 'actions.json');
 
 try {
-  const store = new GenUiActionStore(dataFile, 100);
+  const store = new GenUiActionStore(dataFile);
   await store.initialize();
   const grant = {
     action: 'approve' as const,
@@ -26,7 +26,7 @@ try {
   assert.equal((await store.consume({ ...grant, token })).ok, true);
   assert.deepEqual(await store.consume({ ...grant, token }), { ok: false, reason: 'consumed' });
 
-  const restarted = new GenUiActionStore(dataFile, 100);
+  const restarted = new GenUiActionStore(dataFile);
   await restarted.initialize();
   assert.deepEqual(await restarted.consume({ ...grant, token }), { ok: false, reason: 'consumed' });
 
