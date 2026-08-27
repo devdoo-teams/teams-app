@@ -743,7 +743,7 @@ export class AgentService {
           kind: 'error',
           phase: 'blocked',
           message: `작업 ${job.id}이 차단되었습니다.\n\n${diagnosticMessage}`,
-        });
+        }, undefined, shouldNotify);
         return;
       }
 
@@ -752,7 +752,7 @@ export class AgentService {
         kind: 'result',
         phase: 'completed',
         message: this.formatCompletion(job.id, result.finalMessage),
-      });
+      }, undefined, shouldNotify);
     } catch (error: any) {
       const rawMessage = error?.message || `알 수 없는 ${this.agentLabel} 실행 오류`;
       const message = redactCliDiagnostics(rawMessage, {
@@ -800,7 +800,7 @@ export class AgentService {
         kind: 'error',
         phase: 'failed',
         message: `작업 ${job.id}이 실패했습니다.\n\n${message}`,
-      });
+      }, undefined, shouldNotify);
     } finally {
       this.clearProgressState(job.id, progressState?.generation);
     }
@@ -965,9 +965,10 @@ export class AgentService {
     job: AgentJob,
     event: Omit<AgentNotification, 'conversationId' | 'job'>,
     progressState?: ProgressState,
+    notificationIntent?: boolean,
   ): Promise<void> {
     const state = this.progressStates.get(job.id);
-    if (state?.notify === false) return;
+    if ((notificationIntent ?? progressState?.notify ?? state?.notify ?? true) === false) return;
 
     const scope = scopeForJob(job);
     if (!scope) return;
