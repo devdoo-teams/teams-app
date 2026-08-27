@@ -34,6 +34,7 @@ async function assertProcessReaped(pid, label, timeoutMs = 2_000) {
   const runtimeSmoke = invocations.find(({ args }) => args.includes('scripts/core-runtime-smoke.mjs'));
   const workspaceContract = invocations.find(({ args }) => args.includes('scripts/core-test-workspace-test.mjs'));
   const runtimeContract = invocations.find(({ args }) => args.includes('scripts/teams-core-chat-regression-test.ts'));
+  const responseModeContract = invocations.find(({ args }) => args.includes('scripts/response-mode-api-test.ts'));
   const a2aRuntimeContract = invocations.find(({ args }) => args.includes('scripts/teams-a2a-chat-regression-test.ts'));
   const outboundStoreContract = invocations.find(({ args }) => args.includes('scripts/teams-a2a-outbound-store-test.ts'));
   const sourceContract = invocations.find(({ args }) => args.includes('scripts/client-item-mutation-test.ts'));
@@ -52,6 +53,8 @@ async function assertProcessReaped(pid, label, timeoutMs = 2_000) {
   assert.equal(workspaceContract.cwd, '/repo', 'plain runner contract tests execute against the orchestrator root');
   assert.equal(runtimeContract.kind, 'runtime', 'compiled runtime tests have an explicit invocation kind');
   assert.equal(runtimeContract.cwd, '/repo', 'compiled runtime tests execute beside the commit-bound dist output');
+  assert.equal(responseModeContract.kind, 'runtime', 'response-mode routing must be part of the Core runtime gate');
+  assert.equal(responseModeContract.cwd, '/repo', 'response-mode routing executes beside the commit-bound dist output');
   assert.equal(a2aRuntimeContract.kind, 'runtime', 'Teams A2A chat regression must execute against the compiled release bundle');
   assert.equal(a2aRuntimeContract.cwd, '/repo', 'Teams A2A chat regression executes beside the commit-bound dist output');
   assert.equal(outboundStoreContract.cwd, '/tmp/pinned-source', 'Teams A2A outbound store test executes the pinned source tree');

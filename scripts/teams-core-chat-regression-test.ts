@@ -6,6 +6,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
+import { ResponseModeStore } from '../src/server/response-mode-store.js';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 
 const root = process.cwd();
@@ -16,9 +17,12 @@ const accessToken = crypto.randomBytes(32).toString('base64url');
 const tenantId = 'runtime-tenant';
 const requesterId = 'runtime-user';
 const naturalConversationId = 'runtime-conversation-sdk-natural';
+const taskListConversationId = 'runtime-conversation-sdk-task-list';
 const naturalPrompt = '저장소의 현재 상태를 분석하고 핵심 리스크를 한 줄로 요약해줘';
 const jobStorePath = path.join(temporaryRoot, 'agent-jobs.json');
+const a2aStorePath = path.join(temporaryRoot, 'a2a.json');
 const a2aOutboundStorePath = path.join(temporaryRoot, 'a2a-outbound.json');
+const responseModeStorePath = path.join(temporaryRoot, 'response-modes.json');
 const agentWorkspace = path.join(temporaryRoot, 'agent-workspace');
 let child: ChildProcess | undefined;
 let output = '';
@@ -48,6 +52,11 @@ try {
     path.join(agentWorkspace, 'scripts', 'fake-codex.mjs'),
   );
 
+  const responseModes = new ResponseModeStore(responseModeStorePath);
+  await responseModes.set({ tenantId, requesterId }, 'deterministic');
+  await responseModes.set({ tenantId, requesterId: 'untrusted-transport-user' }, 'openai');
+  await responseModes.set({ tenantId: 'untrusted-transport-tenant', requesterId }, 'local');
+
   const serverEnv: NodeJS.ProcessEnv = {
     ...process.env,
     NODE_ENV: 'test',
@@ -68,16 +77,16 @@ try {
     WORK_ITEM_STORE_PATH: path.join(temporaryRoot, 'work-items.json'),
     COLLABORATION_STORE_PATH: path.join(temporaryRoot, 'collaboration.json'),
     AGENT_JOB_STORE_PATH: jobStorePath,
-    A2A_STORE_PATH: path.join(temporaryRoot, 'a2a.json'),
+    A2A_STORE_PATH: a2aStorePath,
     A2A_OUTBOUND_STORE_PATH: a2aOutboundStorePath,
     AGENT_ADMISSION_JOURNAL_PATH: path.join(temporaryRoot, 'agent-admission.json'),
     GENUI_ACTION_STORE_PATH: path.join(temporaryRoot, 'genui-actions.json'),
-    RESPONSE_MODE_STORE_PATH: path.join(temporaryRoot, 'response-modes.json'),
+    RESPONSE_MODE_STORE_PATH: responseModeStorePath,
     AGENT_WORKSPACE: agentWorkspace,
     TEAMS_TEST_PROCESS_ISOLATION: 'true',
     CODEX_BIN: isolatedNodePath,
     CODEX_SCRIPT: 'scripts/fake-codex.mjs',
-    COPILOTKIT_DETERMINISTIC_MODE: 'true',
+    COPILOTKIT_DETERMINISTIC_MODE: '',
     WEATHER_MODE: 'demo',
     TEAMS_OPERATOR_REQUESTER_ALLOWLIST: `${tenantId}/${requesterId}`,
     MCP_PUBLIC_ENABLED: '',
@@ -101,6 +110,27 @@ try {
   let runtime = await startBuiltServer();
   let baseUrl = runtime.baseUrl;
   assert.equal(runtime.health.bot, 'teams-sdk', 'chat regression must exercise the registered Teams SDK bot');
+
+  const taskListActivity = activity(baseUrl, '현재 업무 목록 보여줘', 'task-list', taskListConversationId);
+  taskListActivity.from.id = 'untrusted-transport-user';
+  taskListActivity.channelData.tenant.id = 'untrusted-transport-tenant';
+  const taskListResponse = await request(baseUrl, '/api/messages', {
+    method: 'POST',
+    body: JSON.stringify(taskListActivity),
+  });
+  assert.ok(taskListResponse.response.ok, `registered Teams SDK handler rejected the task-list Activity: ${taskListResponse.response.status} ${taskListResponse.text}`);
+  const taskListOutbox = await waitForOutboxActivity(baseUrl, taskListConversationId, 3_000);
+  assert.equal(taskListOutbox.activities.length, 1, 'task-list intent must produce one SDK card activity');
+  assert.equal('text' in taskListOutbox.activities[0], false, 'task-list response must be attachment-only');
+  const taskListCard = adaptiveCard(taskListOutbox.activities[0]);
+  assert.ok(taskListCard, 'task-list intent must return an Adaptive Card');
+  const taskListCardJson = JSON.stringify(taskListCard);
+  assert.match(taskListCardJson, /업무 목록/);
+  assert.doesNotMatch(taskListCardJson, /A2A|협업.*접수|신뢰된 격리/);
+  const jobsAfterTaskList = await requestJson(baseUrl, '/api/debug/agent-jobs');
+  assert.equal(jobsAfterTaskList.jobs.length, 0, 'task-list intent must not create a Codex job');
+  const a2aAfterTaskList = JSON.parse(await fs.readFile(a2aStorePath, 'utf8')) as { tasks?: Record<string, unknown> };
+  assert.equal(Object.keys(a2aAfterTaskList.tasks ?? {}).length, 0, 'task-list intent must not create an A2A parent task');
 
   const naturalResponse = await request(baseUrl, '/api/messages', {
     method: 'POST',

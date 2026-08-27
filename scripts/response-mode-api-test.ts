@@ -147,15 +147,24 @@ async function testProductionMiddlewareRejectsUnauthenticated(): Promise<void> {
 
 async function main(): Promise<void> {
   await testProductionMiddlewareRejectsUnauthenticated();
-  await execFileAsync(process.execPath, ['scripts/build-server.mjs'], { cwd: root });
+  const expectedCommit = process.env.TEAMS_SOURCE_COMMIT?.trim();
+  if (expectedCommit) {
+    const marker = JSON.parse(await readFile(
+      join(runtimeDistRoot, 'server', '.teams-server-build-commit'),
+      'utf8',
+    )) as { commit?: unknown; mode?: unknown; worktree?: unknown };
+    assert.equal(marker.commit, expectedCommit, 'response-mode runtime bundle matches the Core runner source commit');
+    assert.equal(marker.mode, 'core', 'response-mode Core gate uses the Core server bundle');
+    assert.equal(marker.worktree, 'clean', 'response-mode Core gate uses a clean-worktree server bundle');
+  } else {
+    await execFileAsync(process.execPath, ['scripts/build-server.mjs', '--core'], { cwd: root });
+  }
 
   const dataRoot = await mkdtemp(join(tmpdir(), 'response-mode-api-test-'));
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const token = 'response-mode-local-test-token-0123456789';
-  const child = spawn(process.execPath, [join(runtimeDistRoot, 'server', 'index.js')], {
-    cwd: root,
-    env: {
+  const serverEnv = {
       ...process.env,
       NODE_ENV: 'development',
       PORT: String(port),
@@ -191,12 +200,19 @@ async function main(): Promise<void> {
       BOT_DOMAIN: '',
       DEV_TUNNEL_ID: '',
       MCP_PUBLIC_ENABLED: '',
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  };
   let output = '';
-  child.stdout?.on('data', (chunk) => { output += chunk.toString(); });
-  child.stderr?.on('data', (chunk) => { output += chunk.toString(); });
+  const startServer = (): ChildProcess => {
+    const server = spawn(process.execPath, [join(runtimeDistRoot, 'server', 'index.js')], {
+      cwd: root,
+      env: serverEnv,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    server.stdout?.on('data', (chunk) => { output += chunk.toString(); });
+    server.stderr?.on('data', (chunk) => { output += chunk.toString(); });
+    return server;
+  };
+  let child = startServer();
 
   try {
     await waitForHealth(baseUrl, token, () => ({ exitCode: child.exitCode, output }));
@@ -319,6 +335,45 @@ async function main(): Promise<void> {
     await store.set(scopeA, 'openai');
     assert.equal(await store.get(scopeB), 'deterministic');
     assertPass(await store.get(scopeB) === 'deterministic', 'response mode preferences cannot leak across tenants');
+
+    await stop(child);
+    const persistedBotMode = new ResponseModeStore(join(dataRoot, 'response-modes.json'));
+    await persistedBotMode.set({
+      tenantId: 'response-mode-tenant',
+      requesterId: 'response-mode-user',
+    }, 'openai');
+    output = '';
+    child = startServer();
+    await waitForHealth(baseUrl, token, () => ({ exitCode: child.exitCode, output }));
+
+    const unavailablePersistedMode = await request(baseUrl, '/api/messages', token, {
+      method: 'POST',
+      body: JSON.stringify(activity(baseUrl, '현재 업무 목록 보여줘', 'persisted-unavailable-mode')),
+    });
+    assert.equal(unavailablePersistedMode.response.status, 200, JSON.stringify(unavailablePersistedMode.body));
+    assert.equal(unavailablePersistedMode.body.activities?.length, 1);
+    const unavailableModeActivity = unavailablePersistedMode.body.activities[0];
+    const unavailableModeCard = unavailableModeActivity?.attachments?.find(
+      (attachment: any) => attachment.contentType === 'application/vnd.microsoft.card.adaptive',
+    )?.content;
+    const unavailableModeJson = JSON.stringify(unavailableModeCard ?? {});
+    assertPass(
+      !('text' in (unavailableModeActivity ?? {}))
+        && unavailableModeCard?.type === 'AdaptiveCard'
+        && unavailableModeJson.includes('응답 모드')
+        && unavailableModeJson.includes('OpenAI')
+        && unavailableModeJson.includes('서버')
+        && unavailableModeCard.actions?.some((action: any) => action.data?.mode === 'deterministic')
+        && !unavailableModeCard.actions?.some((action: any) => action.data?.mode === 'openai'),
+      `a persisted unavailable provider returns an actionable attachment-only mode card without silent fallback: ${unavailableModeJson}`,
+    );
+    const unavailableModeA2a = JSON.parse(await readFile(join(dataRoot, 'a2a.json'), 'utf8')) as {
+      tasks?: Record<string, unknown>;
+    };
+    assertPass(
+      Object.keys(unavailableModeA2a.tasks ?? {}).length === 0,
+      'an unavailable persisted response mode does not create an A2A parent task',
+    );
 
     console.log('PASS: response-mode API, card selection, scoped persistence, and safe provider status');
   } finally {
