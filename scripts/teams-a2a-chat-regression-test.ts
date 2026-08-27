@@ -325,7 +325,7 @@ try {
     failures.length,
     0,
     [
-      'Teams SDK natural-language A2A bridge contract is missing:',
+      'Teams SDK explicit A2A collaboration bridge contract is missing:',
       ...failures.map((failure) => `- ${failure}`),
       `Observed scoped AgentJobs: ${scopedJobs.length}`,
       `Observed Adaptive Cards: ${cardActivities.length}`,
@@ -353,7 +353,7 @@ function activity(baseUrl: string): Record<string, unknown> {
     conversation: { id: conversationId, conversationType: 'personal', tenantId },
     channelData: { tenant: { id: tenantId } },
     recipient: { id: 'runtime-bot', name: 'Teams SDK MVP' },
-    text: prompt,
+    text: `a2a ${prompt}`,
   };
 }
 

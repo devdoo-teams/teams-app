@@ -110,7 +110,6 @@ try {
 
   const job = await waitForSingleJob(baseUrl, naturalConversationId, 4_000);
   assert.match(job.prompt, new RegExp(naturalPrompt));
-  assert.match(job.prompt, /reviewer/i);
   assert.equal(job.provider, 'codex');
   assert.equal(job.mode, 'read-only');
   assert.equal(job.requesterId, requesterId);
