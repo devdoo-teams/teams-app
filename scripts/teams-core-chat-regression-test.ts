@@ -23,8 +23,11 @@ let output = '';
 try {
   const profilePath = path.join(temporaryRoot, 'read-only.sb');
   const authPath = path.join(temporaryRoot, 'codex-auth.json');
+  const isolatedNodePath = path.join(temporaryRoot, 'node');
   await fs.writeFile(profilePath, '(version 1)\n(allow default)\n', { mode: 0o600 });
   await fs.writeFile(authPath, '{"fixture":"teams-core-chat"}\n', { mode: 0o600 });
+  await fs.copyFile(process.execPath, isolatedNodePath);
+  await fs.chmod(isolatedNodePath, 0o700);
 
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -59,7 +62,7 @@ try {
       AGENT_ISOLATION_PROFILE: profilePath,
       AGENT_SANDBOX_EXEC_PATH: '/usr/bin/sandbox-exec',
       AGENT_CODEX_AUTH_FILE: authPath,
-      CODEX_BIN: process.execPath,
+      CODEX_BIN: isolatedNodePath,
       CODEX_SCRIPT: 'scripts/fake-codex-auth-required.mjs',
       COPILOTKIT_DETERMINISTIC_MODE: 'true',
       WEATHER_MODE: 'demo',
@@ -89,20 +92,26 @@ try {
   assert.equal(job.conversationId, naturalConversationId);
 
   const completed = await waitForCompletedJob(baseUrl, job.id, 10_000);
-  assert.equal(completed.status, 'completed');
+  assert.equal(
+    completed.status,
+    'completed',
+    `natural-language Codex job failed: ${completed.error ?? 'no persisted error'}\n${output.slice(-4_000)}`,
+  );
   assert.match(completed.result ?? '', /FAKE_CODEX_OK/);
   assert.equal(completed.threadId, '00000000-0000-4000-8000-0000000000ac');
   assert.ok(completed.finishedAt, 'completed job must persist finishedAt');
 
-  const completionOutbox = await requestJson(baseUrl, `/api/debug/agent-outbox/${naturalConversationId}`);
-  const completionActivities = completionOutbox.activities.filter((value: unknown) => adaptiveCard(value));
-  assert.ok(completionActivities.length >= 1, 'natural-language completion must emit an Adaptive Card to the same conversation');
-  const completionActivity = completionActivities.at(-1) as Record<string, unknown>;
+  const completionActivity = await waitForTerminalOutboxActivity(
+    baseUrl,
+    naturalConversationId,
+    job.id,
+    3_000,
+  );
   assert.equal('text' in completionActivity, false, 'completion card activity must not duplicate content as top-level text');
   const completionCard = adaptiveCard(completionActivity)!;
   assert.equal(completionCard.type, 'AdaptiveCard');
   assert.equal(completionCard.version, '1.2');
-  assert.match(JSON.stringify(completionCard), /Codex 작업 완료/);
+  assert.match(JSON.stringify(completionCard), /Codex(?: CLI)? 작업 완료/);
   assert.match(JSON.stringify(completionCard), new RegExp(job.id));
   assert.match(JSON.stringify(completionCard), /completed/);
 
@@ -229,6 +238,30 @@ async function waitForOutboxActivity(baseUrl: string, conversationId: string, ti
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   assert.fail(`conversation ${conversationId} did not receive a captured SDK activity`);
+}
+
+async function waitForTerminalOutboxActivity(
+  baseUrl: string,
+  conversationId: string,
+  jobId: string,
+  timeoutMs: number,
+): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + timeoutMs;
+  const observed: unknown[] = [];
+  while (Date.now() < deadline) {
+    const outbox = await requestJson(baseUrl, `/api/debug/agent-outbox/${conversationId}`);
+    observed.push(...outbox.activities);
+    const terminal = outbox.activities.find((value: unknown) => {
+      const card = adaptiveCard(value);
+      const serialized = card ? JSON.stringify(card) : '';
+      return serialized.includes(jobId)
+        && serialized.includes('completed')
+        && /Codex(?: CLI)? 작업 완료/u.test(serialized);
+    });
+    if (terminal && typeof terminal === 'object') return terminal as Record<string, unknown>;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.fail(`conversation ${conversationId} did not receive the terminal card for ${jobId}: ${JSON.stringify(observed)}`);
 }
 
 function adaptiveCard(activityValue: unknown): Record<string, any> | undefined {
