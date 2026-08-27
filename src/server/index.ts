@@ -2786,8 +2786,10 @@ function teamsA2AIdempotencyKey(activity: any, scope: AgentJobScope, prompt: str
     scope,
     activityId: sourceActivityId ?? fallbackIdentity,
   }), 'utf8').digest('hex');
-  return `teams-activity:${digest}`;
+  return `${TEAMS_A2A_ASYNC_IDEMPOTENCY_PREFIX}${digest}`;
 }
+
+const TEAMS_A2A_ASYNC_IDEMPOTENCY_PREFIX = 'teams-activity-async-v1:';
 
 function a2aCompletionPresentation(
   result: A2AProductionCollaborationResult,
@@ -2947,6 +2949,15 @@ async function dispatchA2ACompletionPresentation(
 
 async function recoverQueuedA2ACompletions(): Promise<void> {
   const terminalStatuses = new Set<A2ATask['status']>(['completed', 'failed', 'canceled']);
+  for (const record of a2aStore.listTasksByIdempotencyPrefix(TEAMS_A2A_ASYNC_IDEMPOTENCY_PREFIX, 1_000)) {
+    if (!terminalStatuses.has(record.task.status)) continue;
+    await a2aOutboundStore.createOrGetCompletionIntent({
+      parentTaskId: record.task.id,
+      scope: record.task.scope,
+      payloadSha256: a2aCompletionIntentFingerprint(record.task.id, record.task.scope),
+    });
+  }
+
   for (const intent of a2aOutboundStore.listQueued(100)) {
     const parent = a2aStore.getTask(intent.parentTaskId, intent.scope);
     if (!parent || !terminalStatuses.has(parent.status)) continue;

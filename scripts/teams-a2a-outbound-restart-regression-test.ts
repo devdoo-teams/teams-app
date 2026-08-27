@@ -88,7 +88,7 @@ try {
   const missingIntentParent = await createCompletedTask(
     a2aStore,
     repairedScope,
-    'teams-activity:outbound-restart-missing-intent',
+    'teams-activity-async-v1:outbound-restart-missing-intent',
     'Recovered a missing Teams completion intent after restart.',
   );
   await createCompletedTask(

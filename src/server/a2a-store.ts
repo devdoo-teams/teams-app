@@ -70,6 +70,12 @@ export type A2ARecoverableTask = {
   agentJobId?: string;
 };
 
+export type A2AIdempotentTaskRecord = Readonly<{
+  task: A2ATask;
+  idempotencyKey: string;
+  createdAt: string;
+}>;
+
 export type A2ADispatchChildStatus = 'pending' | 'working' | 'completed' | 'failed' | 'canceled';
 
 export type A2ADispatchStatus = 'pending' | 'working' | 'canceling' | 'completed' | 'failed' | 'canceled';
@@ -663,6 +669,31 @@ export class A2AStore {
         task: cloneTask(task),
         ...(this.state.jobBindings[task.id] ? { agentJobId: this.state.jobBindings[task.id].agentJobId } : {}),
       }));
+  }
+
+  listTasksByIdempotencyPrefix(
+    prefixValue: string,
+    limit = MAX_RECOVERY_TASKS,
+  ): A2AIdempotentTaskRecord[] {
+    this.assertInitialized();
+    const prefix = validateIdempotencyKey(prefixValue);
+    validateRecoveryLimit(limit, 'idempotent task');
+    return Object.values(this.state.records)
+      .filter((record) => record.idempotencyKey.startsWith(prefix))
+      .sort((left, right) => (
+        right.createdAt.localeCompare(left.createdAt)
+        || right.taskId.localeCompare(left.taskId)
+      ))
+      .slice(0, limit)
+      .map((record) => {
+        const task = this.state.tasks[record.taskId];
+        if (!task) throw new Error('A2A idempotency record references a missing task.');
+        return {
+          task: cloneTask(task),
+          idempotencyKey: record.idempotencyKey,
+          createdAt: record.createdAt,
+        };
+      });
   }
 
   getMessageByIdempotency(scope: A2AScope, key: string): A2AStoredMessageInfo | undefined {
