@@ -209,7 +209,7 @@ jobs:
   artifact:
     name: Immutable release candidate
     if: github.event_name != 'pull_request'
-    needs: [core, a2a, continuity]
+    needs: [core, a2a, continuity, container]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:

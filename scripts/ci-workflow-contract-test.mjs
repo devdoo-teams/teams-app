@@ -20,6 +20,14 @@ assert.deepEqual(
 const artifactStart = workflow.indexOf('\n  artifact:');
 assert.notEqual(artifactStart, -1, 'workflow must define an immutable artifact job');
 const artifactJob = workflow.slice(artifactStart);
+const artifactStepsStart = artifactJob.indexOf('\n    steps:');
+assert.notEqual(artifactStepsStart, -1, 'immutable artifact job must define its steps');
+const artifactHeader = artifactJob.slice(0, artifactStepsStart);
+assert.match(
+  artifactHeader,
+  /needs:\s*\[\s*core\s*,\s*a2a\s*,\s*continuity\s*,\s*container\s*\]/,
+  'immutable artifact job must wait for Core, A2A, continuity, and Docker runtime verification',
+);
 for (const script of [
   'check:deployment',
   'validate:manifest',
