@@ -1281,7 +1281,7 @@ const a2aAgents = [
       authorize: (input) => (
         input.agentId === agentId
         && Boolean(input.scope.tenantId && input.scope.requesterId && input.scope.conversationId)
-        && (!configuredTenantId || input.scope.tenantId === configuredTenantId)
+        && (skipAuth || !configuredTenantId || input.scope.tenantId === configuredTenantId)
         && isOperator(input.scope)
         && Boolean(input.role && input.capabilities?.length)
       ),
@@ -2795,7 +2795,7 @@ function a2aCompletionPresentation(
   const parent = result.parentTask;
   if (!parent) {
     const reason = result.plan.strategy === 'blocked'
-      ? result.plan.reason
+      ? result.plan.blockedReason
       : 'A2A parent task was not created.';
     const text = `A2A 협업을 시작하지 못했습니다. ${reason ?? '등록된 reviewer를 확인하세요.'}`;
     return { text, envelope: genUi.error(text, 'a2a-collaboration-blocked') };
@@ -3444,7 +3444,7 @@ function createA2ARemoteAuthorizationPolicy(agentId: string) {
     authorize: (input) => (
       input.agentId === agentId
       && Boolean(input.scope.tenantId && input.scope.requesterId && input.scope.conversationId)
-      && (!configuredTenantId || input.scope.tenantId === configuredTenantId)
+      && (skipAuth || !configuredTenantId || input.scope.tenantId === configuredTenantId)
       && isOperator(input.scope)
       && Boolean(input.role && input.capabilities?.length)
     ),

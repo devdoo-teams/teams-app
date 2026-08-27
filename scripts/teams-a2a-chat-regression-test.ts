@@ -284,6 +284,7 @@ try {
       `Observed Adaptive Cards: ${cardActivities.length}`,
       `A2A schema: ${String(observed.a2a.schemaVersion ?? 'missing')}`,
       `A2A outbound schema: ${String(observed.outbound.schemaVersion ?? 'missing')}`,
+      `Observed activity tail: ${JSON.stringify(observed.activities).slice(-2_000)}`,
       `Server tail: ${serverOutput.slice(-2_000)}`,
     ].join('\n'),
   );
