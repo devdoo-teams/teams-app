@@ -12,10 +12,10 @@
 
 ## Execution update — 2026-08-27
 
-- Candidate branch `recovery/teams-core-1.0.89` is clean at `d3b77e7b2bf3178c7467eb0847a67cdd29869c13`; package and manifest remain `1.0.76` because this run contains CI/test/control-plane changes only.
-- Draft PR #1 is open against `main` with merge state `CLEAN`. GitHub Actions run `33059173554` passed Core, A2A, Atomic continuity, and Docker Core runtime build/smoke; the immutable artifact job was correctly skipped for the pull-request event.
+- Candidate branch `recovery/teams-core-1.0.89` is clean at `9341ea835d484f4090c716e60f348442c7c0d3e5`; package and manifest remain `1.0.76` because this run contains CI/test/control-plane changes only. The branch also contains the pre-existing product delta from `main`; the current recovery commits are not being represented as a replacement for that broader historical diff.
+- Draft PR #1 is open against `main` with merge state `CLEAN`. GitHub Actions run `33059749674` passed the preceding candidate `1f111914...` for Core, A2A, Atomic continuity, and Docker Core runtime build/smoke; the immutable artifact job was correctly skipped for the pull-request event. The two post-run commits require a fresh CI run before promotion evidence can be reused.
 - The preserved public service remains `https://q3kj3s3z-3980.jpe1.devtunnels.ms`, serving `1.0.76` from `944ae3ae2ed90841fd02df8280c895d63d63a822` with production Teams SDK health. It has not been restarted, replaced, or used as evidence for the candidate.
-- Tasks 2–4 and 6 are implemented/verified. Task 5 remains pending until an approved `main` merge/tag, real deployment variables, stable host, portal update, and authenticated Teams/A2A UI evidence are available.
+- Tasks 2–4 and 6 are implemented/verified, including same-digest published-image smoke wiring and a credential-free two-server authenticated A2A HTTP round-trip fixture. Task 5 remains pending until an approved `main` merge/tag, real deployment variables, stable host, portal update, and authenticated Teams/A2A UI evidence are available.
 
 ## Global Constraints
 
@@ -43,7 +43,7 @@
 
 - [x] **Step 1: Record the current source and runtime facts.**
 
-  The initial candidate at plan creation was `01052e8f9cbad71767f4536d9773b39f498ca2be`; after the verified CI changes, the current candidate is branch `recovery/teams-core-1.0.89` at `d3b77e7b2bf3178c7467eb0847a67cdd29869c13`, with package/manifest `1.0.76`. The preserved public origin is `https://q3kj3s3z-3980.jpe1.devtunnels.ms`, currently serving source commit `944ae3ae2ed90841fd02df8280c895d63d63a822` and server bundle `c1a28900f8b9905877a15d80f491ff3bdce5b016b30b42ca6f2fa5e43da09658`.
+  The initial candidate at plan creation was `01052e8f9cbad71767f4536d9773b39f498ca2be`; the current candidate is branch `recovery/teams-core-1.0.89` at `9341ea835d484f4090c716e60f348442c7c0d3e5`, with package/manifest `1.0.76`. The preserved public origin is `https://q3kj3s3z-3980.jpe1.devtunnels.ms`, currently serving source commit `944ae3ae2ed90841fd02df8280c895d63d63a822` and server bundle `c1a28900f8b9905877a15d80f491ff3bdce5b016b30b42ca6f2fa5e43da09658`.
 
 - [x] **Step 2: Mark stale plan content as historical.**
 
@@ -161,6 +161,10 @@
   git commit -m "ci: bind image promotion to merged release identity"
   ```
 
+- [x] **Step 8: Require a smoke of the exact pushed image before attestation.** Commit: `7fdfe12`.
+
+  The promotion workflow now pulls the digest returned by the push step and runs `scripts/docker-runtime-image-smoke.mjs` before provenance attestation. The script verifies production health, source commit identity, Core auth/bot mode, `/tabs/home/`, and the hashed main asset. The workflow contract requires the digest and shared script; Docker availability is still required for the actual promotion run.
+
 ### Task 4: Re-run FileProvider-independent Core verification
 
 **Files:**
@@ -171,15 +175,15 @@
 - Consumes: the two CI workflow commits from Tasks 2–3.
 - Produces: bounded evidence that Core/A2A/continuity contracts still pass without using the Documents/FileProvider checkout.
 
-- [x] **Step 1: Verify the tracked worktree and identity.** Candidate HEAD `d3b77e7…`; clean tracked worktree; package and manifest both `1.0.76`.
+- [x] **Step 1: Verify the tracked worktree and identity.** Candidate HEAD `9341ea8…`; clean tracked worktree; package and manifest both `1.0.76`.
 
   Run `git status --short --branch`, `git rev-parse HEAD`, and compare the package/manifest versions. Do not build if tracked source is dirty or FileProvider reads are unstable.
 
-- [x] **Step 2: Run the bounded Core gate.** Local Core/A2A/continuity/package gates passed; standalone bundle-boundary fallback was fixed in `d3b77e7`.
+- [x] **Step 2: Run the bounded Core gate.** Local Core gates pass at `9341ea8…`; the standalone bundle-boundary fallback remains fixed in `d3b77e7`, and the two previously unregistered admission/process-controller security tests now run through the Core runner.
 
   Run `npm run typecheck:core`, `npm run test:ci-workflow-contract`, `npm run test:image-publish-workflow-contract`, `npm run test:docker-build-contract`, `npm run build:core`, `npm run test:core`, `npm run validate:manifest`, and `npm run test:package-determinism` sequentially with bounded timeouts.
 
-- [x] **Step 3: Verify A2A contract coverage separately.** Local Core runner and GitHub A2A job passed; this remains contract evidence, not live remote round-trip evidence.
+- [x] **Step 3: Verify A2A contract coverage separately.** Existing A2A contracts pass, and `9341ea8…` adds a local two-server HTTP fixture covering authenticated Agent Card, SendMessage/GetTask/ListTasks/CancelTask, and wrong-token rejection. This remains fixture evidence, not public live remote or Teams evidence.
 
   Run the existing A2A contract, lifecycle, authorization, JSON-RPC, and telemetry scripts. Treat these as contract evidence only until a public authenticated multi-agent round trip is observed.
 
