@@ -10,6 +10,13 @@
 
 **Spec:** `docs/teams-release-workflow.md`, `docs/api-free-teams-roadmap.md`, and `AGENTS.md`.
 
+## Execution update — 2026-08-27
+
+- Candidate branch `recovery/teams-core-1.0.89` is clean at `d3b77e7b2bf3178c7467eb0847a67cdd29869c13`; package and manifest remain `1.0.76` because this run contains CI/test/control-plane changes only.
+- Draft PR #1 is open against `main` with merge state `CLEAN`. GitHub Actions run `33059173554` passed Core, A2A, Atomic continuity, and Docker Core runtime build/smoke; the immutable artifact job was correctly skipped for the pull-request event.
+- The preserved public service remains `https://q3kj3s3z-3980.jpe1.devtunnels.ms`, serving `1.0.76` from `944ae3ae2ed90841fd02df8280c895d63d63a822` with production Teams SDK health. It has not been restarted, replaced, or used as evidence for the candidate.
+- Tasks 2–4 and 6 are implemented/verified. Task 5 remains pending until an approved `main` merge/tag, real deployment variables, stable host, portal update, and authenticated Teams/A2A UI evidence are available.
+
 ## Global Constraints
 
 - Preserve the running public `1.0.76` service and do not replace it until a newer release identity is independently proven.
@@ -36,7 +43,7 @@
 
 - [x] **Step 1: Record the current source and runtime facts.**
 
-  The current candidate is branch `recovery/teams-core-1.0.89` at `01052e8f9cbad71767f4536d9773b39f498ca2be`, with package/manifest `1.0.76`. The preserved public origin is `https://q3kj3s3z-3980.jpe1.devtunnels.ms`, currently serving source commit `944ae3ae2ed90841fd02df8280c895d63d63a822` and server bundle `c1a28900f8b9905877a15d80f491ff3bdce5b016b30b42ca6f2fa5e43da09658`.
+  The initial candidate at plan creation was `01052e8f9cbad71767f4536d9773b39f498ca2be`; after the verified CI changes, the current candidate is branch `recovery/teams-core-1.0.89` at `d3b77e7b2bf3178c7467eb0847a67cdd29869c13`, with package/manifest `1.0.76`. The preserved public origin is `https://q3kj3s3z-3980.jpe1.devtunnels.ms`, currently serving source commit `944ae3ae2ed90841fd02df8280c895d63d63a822` and server bundle `c1a28900f8b9905877a15d80f491ff3bdce5b016b30b42ca6f2fa5e43da09658`.
 
 - [x] **Step 2: Mark stale plan content as historical.**
 
@@ -52,17 +59,17 @@
 - Consumes: `core`, `a2a`, `continuity`, and `container` job conclusions.
 - Produces: an immutable artifact job whose `needs` includes `container`, so a failed image build/runtime smoke cannot still emit a release package.
 
-- [ ] **Step 1: Add a failing contract assertion.**
+- [x] **Step 1: Add a failing contract assertion.**
 
   In `scripts/ci-workflow-contract-test.mjs`, extract the `artifact` job header and assert that its `needs` value includes `core`, `a2a`, `continuity`, and `container`.
 
-- [ ] **Step 2: Run the focused test and observe the expected failure.**
+- [x] **Step 2: Run the focused test and observe the expected failure.**
 
   Run `node scripts/ci-workflow-contract-test.mjs`.
 
   Expected result before the workflow edit: failure because the current artifact job declares only `[core, a2a, continuity]`.
 
-- [ ] **Step 3: Make the minimal workflow change.**
+- [x] **Step 3: Make the minimal workflow change.**
 
   Change the artifact job declaration to:
 
@@ -71,13 +78,13 @@
       needs: [core, a2a, continuity, container]
   ```
 
-- [ ] **Step 4: Run the focused test and the workflow contract suite.**
+- [x] **Step 4: Run the focused test and the workflow contract suite.**
 
   Run `node scripts/ci-workflow-contract-test.mjs` and `npm run test:docker-build-contract`.
 
   Expected result: both pass, with no source or application-version change.
 
-- [ ] **Step 5: Commit the isolated workflow/test change.**
+- [x] **Step 5: Commit the isolated workflow/test change.** Commit: `a530ab3`.
 
   Run:
 
@@ -96,7 +103,7 @@
 - Consumes: `github.sha`, GitHub repository variables for the Teams manifest, the deterministic package script, the Core server marker, and the pushed image digest.
 - Produces: a promotion workflow that (a) runs only for manual `main` or a `vX.Y.Z` tag on a `main` ancestor, (b) builds and packages the exact commit, and (c) uploads `dist/evidence/release-identity.json` containing `sourceCommit`, `version`, `teamsPackageSha256`, `serverBundleSha256`, `manifestSha256`, and `imageDigest`.
 
-- [ ] **Step 1: Add failing contract assertions.**
+- [x] **Step 1: Add failing contract assertions.**
 
   Extend `scripts/image-publish-workflow-contract-test.mjs` to require all of the following text contracts:
 
@@ -115,13 +122,13 @@
   requireText(/actions\/upload-artifact@[0-9a-f]{40}/, 'promotion identity must be retained as an immutable workflow artifact');
   ```
 
-- [ ] **Step 2: Run the focused test and observe the expected failure.**
+- [x] **Step 2: Run the focused test and observe the expected failure.**
 
   Run `node scripts/image-publish-workflow-contract-test.mjs`.
 
   Expected result before the workflow edit: failure because manual runs are not restricted to `main`, tag ancestry is not checked, and package/image identity is not persisted together.
 
-- [ ] **Step 3: Add the main/tag promotion guard.**
+- [x] **Step 3: Add the main/tag promotion guard.**
 
   Keep `workflow_dispatch` and `push.tags: ['v*.*.*']`, add this job condition, and fetch/check ancestry before installing dependencies:
 
@@ -133,19 +140,19 @@
 
   For tag events, run `git fetch origin main --depth=1` and reject the run unless `git merge-base --is-ancestor "$GITHUB_SHA" origin/main` succeeds. Use `fetch-depth: 0` on checkout.
 
-- [ ] **Step 4: Generate the exact package and pre-push identity.**
+- [x] **Step 4: Generate the exact package and pre-push identity.**
 
   Supply the existing repository variables (`TEAMS_APP_ID`, `TEAMS_CATALOG_APP_ID`, `BOT_ID`, `BOT_CLIENT_ID`, `TENANT_ID`, `TAB_DOMAIN`, `CLIENT_ID`, and `APPLICATION_ID_URI`) to the job. Run `npm run check:deployment`, `npm run build:core`, `npm run test:core`, `npm run validate:manifest`, `npm run package:app`, and the deterministic package checks. Compute the ZIP SHA-256, read the ZIP manifest, read `dist/server/.teams-server-build-commit`, and compute the manifest SHA without printing credentials.
 
-- [ ] **Step 5: Bind the pushed digest and upload machine-readable evidence.**
+- [x] **Step 5: Bind the pushed digest and upload machine-readable evidence.**
 
   After the `docker/build-push-action` step, write the digest from `steps.push.outputs.digest` into `dist/evidence/release-identity.json`, then upload `dist/evidence` and the verified ZIP with a pinned `actions/upload-artifact` action. The JSON must contain only identity fields and hashes.
 
-- [ ] **Step 6: Run the focused test and static workflow contracts.**
+- [x] **Step 6: Run the focused test and static workflow contracts.**
 
   Run `node scripts/image-publish-workflow-contract-test.mjs`, `node scripts/ci-workflow-contract-test.mjs`, and `npm run test:docker-build-contract`.
 
-- [ ] **Step 7: Commit the promotion workflow/test change.**
+- [x] **Step 7: Commit the promotion workflow/test change.** Commit: `e38fc06`.
 
   Run:
 
@@ -164,19 +171,19 @@
 - Consumes: the two CI workflow commits from Tasks 2–3.
 - Produces: bounded evidence that Core/A2A/continuity contracts still pass without using the Documents/FileProvider checkout.
 
-- [ ] **Step 1: Verify the tracked worktree and identity.**
+- [x] **Step 1: Verify the tracked worktree and identity.** Candidate HEAD `d3b77e7…`; clean tracked worktree; package and manifest both `1.0.76`.
 
   Run `git status --short --branch`, `git rev-parse HEAD`, and compare the package/manifest versions. Do not build if tracked source is dirty or FileProvider reads are unstable.
 
-- [ ] **Step 2: Run the bounded Core gate.**
+- [x] **Step 2: Run the bounded Core gate.** Local Core/A2A/continuity/package gates passed; standalone bundle-boundary fallback was fixed in `d3b77e7`.
 
   Run `npm run typecheck:core`, `npm run test:ci-workflow-contract`, `npm run test:image-publish-workflow-contract`, `npm run test:docker-build-contract`, `npm run build:core`, `npm run test:core`, `npm run validate:manifest`, and `npm run test:package-determinism` sequentially with bounded timeouts.
 
-- [ ] **Step 3: Verify A2A contract coverage separately.**
+- [x] **Step 3: Verify A2A contract coverage separately.** Local Core runner and GitHub A2A job passed; this remains contract evidence, not live remote round-trip evidence.
 
   Run the existing A2A contract, lifecycle, authorization, JSON-RPC, and telemetry scripts. Treat these as contract evidence only until a public authenticated multi-agent round trip is observed.
 
-- [ ] **Step 4: Preserve the current public service.**
+- [x] **Step 4: Preserve the current public service.** Public health and `/tabs/home/` remain HTTP 200 on the old `1.0.76` identity; local server and tunnel processes remain alive.
 
   Confirm the local server PID, Dev Tunnel host PID, public `/api/health`, and `/tabs/home/` remain the preserved `1.0.76` identity. Do not restart or replace it during this CI-only work.
 
@@ -219,15 +226,15 @@
 - Consumes: actual worker authentication and OS isolation evidence supplied by an approved deployment.
 - Produces: either a separately reviewed provider implementation with regression/Core evidence or a measured unavailable state; never a silent security relaxation.
 
-- [ ] **Step 1: Preserve current invariants.**
+- [x] **Step 1: Preserve current invariants.**
 
   Provider-owned leases, canonical projection, denied entries, TOCTOU/symlink/hardlink checks, isolated `HOME/CODEX_HOME`, and process-tree control remain required.
 
-- [ ] **Step 2: Do not equate CLI presence/authentication with worker readiness.**
+- [x] **Step 2: Do not equate CLI presence/authentication with worker readiness.**
 
   A server-level `codex login status` does not prove that an isolated worker can authenticate or complete a bounded turn. The status surface must remain conservative until a real bounded probe is implemented.
 
-- [ ] **Step 3: If an approved provider becomes available, use TDD.**
+- [x] **Step 3: If an approved provider becomes available, use TDD.** Current provider remains read-only/fail-closed; no security relaxation was made.
 
   Add a failing test for the exact provider command/environment invariants, verify the red result, implement the minimum provider, run the focused and Core tests, and only then consider a qualifying version bump and release.
 
@@ -240,4 +247,3 @@
 - Security: Task 6 prevents the screenshot error from being “fixed” by removing the isolation requirement or copying user credentials.
 - Version policy: Tasks 1–4 are documentation/control-plane changes and do not increment `1.0.76`; a later functional change must satisfy the global release policy.
 - No placeholders or guessed provider credentials are required by this plan.
-
