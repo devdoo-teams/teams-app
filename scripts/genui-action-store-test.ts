@@ -109,6 +109,29 @@ try {
   assert.equal(helpCard.actions.at(-1)?.entityId, 'home');
   assert.equal(helpCard.metadata.openTabUrl, personalTabUrl);
 
+  const providerEnvelope = {
+    ...configuredFactory.answer('응답 엔진 결과', 'response-engine-result'),
+    actions: [],
+    metadata: { provider: 'deterministic', deterministic: true },
+  };
+  const decoratedProviderEnvelope = configuredFactory.withTabAction(providerEnvelope);
+  assert.equal(
+    decoratedProviderEnvelope.actions.at(-1)?.action,
+    'open-tab',
+    'response-engine cards preserve the default Work Hub tab action',
+  );
+  assert.equal(
+    decoratedProviderEnvelope.metadata.provider,
+    'deterministic',
+    'decorating a response-engine card preserves provider metadata',
+  );
+  assert.equal(providerEnvelope.actions.length, 0, 'decorating a response-engine card does not mutate the provider envelope');
+  assert.equal(
+    configuredFactory.withTabAction(decoratedProviderEnvelope).actions.filter((action) => action.action === 'open-tab').length,
+    1,
+    'decorating a response-engine card is idempotent',
+  );
+
   const jobStatusCard = await configuredFactory.jobStatus({
     id: 'task-status-1',
     prompt: '실제 작업 상태',

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
@@ -171,7 +171,7 @@ async function main(): Promise<void> {
       CODEX_BIN: process.execPath,
       CODEX_SCRIPT: join(root, 'scripts/fake-codex.mjs'),
       WEATHER_MODE: 'demo',
-      COPILOTKIT_DETERMINISTIC_MODE: 'true',
+      COPILOTKIT_DETERMINISTIC_MODE: '',
       OPENAI_API_KEY: '',
       OPENAI_MODEL: '',
       LOCAL_MODEL_BASE_URL: '',
@@ -290,6 +290,13 @@ async function main(): Promise<void> {
         && naturalCardJson.includes('업무 목록')
         && !/A2A|협업.*접수|신뢰된 격리/.test(naturalCardJson),
       `Teams Bot natural-language messages honor deterministic mode with one attachment-only task-list card: ${naturalCardJson}`,
+    );
+    const a2aState = JSON.parse(await readFile(join(dataRoot, 'a2a.json'), 'utf8')) as {
+      tasks?: Record<string, unknown>;
+    };
+    assertPass(
+      Object.keys(a2aState.tasks ?? {}).length === 0,
+      'ordinary natural-language messages do not create A2A parent tasks',
     );
 
     const asyncSuffix = 'natural-agent-async';

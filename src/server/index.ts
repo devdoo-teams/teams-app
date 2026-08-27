@@ -3104,7 +3104,7 @@ async function handleBotResponseEngine(
       deferAgentCompletion: true,
       approvalEnvelope: (job) => genUi.approval(job),
     });
-    await send(output.text, output.envelope);
+    await send(output.text, genUi.withTabAction(output.envelope));
   } catch (error) {
     if (error instanceof AgentMutationAuthorizationError) {
       await send(error.message, genUi.error(error.message, 'response-engine-forbidden'));

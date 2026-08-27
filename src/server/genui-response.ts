@@ -302,6 +302,21 @@ export class GenUiResponseFactory {
     }));
   }
 
+  withTabAction(input: GenUiEnvelopeV1): GenUiEnvelopeV1 {
+    const envelope = GenUiEnvelopeV1Schema.parse(input);
+    if (!this.openTabUrl || envelope.actions.some((action) => action.action === 'open-tab')) {
+      return envelope;
+    }
+    return GenUiEnvelopeV1Schema.parse({
+      ...envelope,
+      actions: [...envelope.actions, ...this.tabActions()],
+      metadata: {
+        ...envelope.metadata,
+        openTabUrl: this.openTabUrl,
+      },
+    });
+  }
+
   private create(input: {
     kind: GenUiEnvelopeV1['kind'];
     id: string;
