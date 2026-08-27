@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
+import { TeamsA2AOutboundStore } from '../src/server/teams-a2a-outbound-store.js';
 
 type PersistedA2ATask = {
   id?: unknown;
@@ -77,9 +78,11 @@ const accessToken = crypto.randomBytes(32).toString('base64url');
 const tenantId = 'teams-a2a-chat-tenant';
 const requesterId = 'teams-a2a-chat-requester';
 const conversationId = 'teams-a2a-chat-conversation';
+const testScope = { tenantId, requesterId, conversationId } as const;
 const activityId = 'teams-a2a-chat-duplicate-activity';
 const fakeCodexDelayMs = 1_500;
 const inboundResponseDeadlineMs = 750;
+const requestTimeoutMs = 5_000;
 const prompt = `현재 저장소의 핵심 위험을 검토하고 한 문장으로 요약해줘 [FAKE_CODEX_DELAY_MS=${fakeCodexDelayMs}]`;
 const a2aStorePath = path.join(temporaryRoot, 'a2a.json');
 const a2aOutboundStorePath = path.join(temporaryRoot, 'a2a-outbound.json');
@@ -89,6 +92,8 @@ let child: ChildProcess | undefined;
 let serverOutput = '';
 
 try {
+  await assertRequestDeadline();
+
   const marker = JSON.parse(await fs.readFile(
     path.join(runtimeDistRoot, 'server', '.teams-server-build-commit'),
     'utf8',
@@ -103,6 +108,27 @@ try {
       'Teams A2A chat regression server bundle must match the explicitly pinned source commit',
     );
   }
+
+  const staleOutboundStore = new TeamsA2AOutboundStore(a2aOutboundStorePath);
+  await staleOutboundStore.initialize();
+  const staleOutbound = await staleOutboundStore.createOrGetCompletionIntent({
+    parentTaskId: 'task-stale-same-scope',
+    scope: testScope,
+    payloadSha256: crypto.createHash('sha256').update('stale-same-scope-outbound', 'utf8').digest('hex'),
+  });
+  const staleLease = await staleOutboundStore.claim(
+    staleOutbound.intent.id,
+    testScope,
+    'stale-fixture-worker',
+    30_000,
+  );
+  assert.ok(staleLease, 'stale same-scope outbound fixture must be claimable');
+  await staleOutboundStore.recordConnectorAccepted(
+    staleLease.id,
+    testScope,
+    staleLease.leaseToken!,
+    'stale-fixture-activity',
+  );
 
   const isolatedNodePath = path.join(temporaryRoot, 'node');
   await fs.copyFile(process.execPath, isolatedNodePath);
@@ -187,11 +213,17 @@ try {
 
   const observed = await observeContract(baseUrl, 8_000);
   const parents = Object.values(observed.a2a.tasks ?? {}).filter((task) => sameScope(task.scope));
+  const parentIds = parents
+    .map((candidate) => candidate.id)
+    .filter((value): value is string => typeof value === 'string' && value.length > 0);
   const records = Object.values(observed.a2a.records ?? {}).filter((record) => sameScope(record.scope));
   const dispatches = Object.values(observed.a2a.dispatchIntents ?? {})
     .filter((dispatch) => sameScope(dispatch.scope));
-  const outboundIntents = Object.values(observed.outbound.intents ?? {})
+  const allScopedOutboundIntents = Object.values(observed.outbound.intents ?? {})
     .filter((intent) => sameScope(intent.scope));
+  const outboundIntents = allScopedOutboundIntents.filter((intent) => (
+    typeof intent.parentTaskId === 'string' && parentIds.includes(intent.parentTaskId)
+  ));
   const children = dispatches.flatMap((dispatch) => (
     Array.isArray(dispatch.children) ? dispatch.children as PersistedDispatchChild[] : []
   ));
@@ -215,10 +247,6 @@ try {
     const serialized = JSON.stringify(adaptiveCard(value));
     return serialized.includes('접수했습니다') && serialized.includes('백그라운드');
   });
-  const parentIds = parents
-    .map((candidate) => candidate.id)
-    .filter((value): value is string => typeof value === 'string' && value.length > 0);
-
   const failures: string[] = [];
   if (inboundElapsedMs >= inboundResponseDeadlineMs) {
     failures.push(
@@ -234,6 +262,9 @@ try {
   }
   if (dispatches.length !== 1) {
     failures.push(`expected one durable A2A dispatch intent; observed ${dispatches.length}`);
+  }
+  if (allScopedOutboundIntents.length !== 2) {
+    failures.push(`stale same-scope outbound fixture must coexist with the current intent; observed ${allScopedOutboundIntents.length}`);
   }
   if (outboundIntents.length !== 1) {
     failures.push(`expected one durable Teams completion outbound intent; observed ${outboundIntents.length}`);
@@ -341,19 +372,26 @@ async function observeContract(baseUrl: string, timeoutMs: number): Promise<Obse
   let legacyTerminalObservedAt: number | undefined;
 
   while (Date.now() < deadline) {
-    const outbox = await requestJson(baseUrl, `/api/debug/agent-outbox/${conversationId}`);
+    const outbox = await requestJson(baseUrl, `/api/debug/agent-outbox/${conversationId}`, deadline);
     if (Array.isArray(outbox.activities)) activities.push(...outbox.activities);
     a2a = await readJson<PersistedA2AState>(a2aStorePath, {});
     outbound = await readJson<PersistedOutboundState>(a2aOutboundStorePath, {});
     jobs = await readJson<PersistedAgentJob[]>(agentJobStorePath, []);
 
     const scopedParents = Object.values(a2a.tasks ?? {}).filter((task) => sameScope(task.scope));
+    const scopedParentIds = scopedParents
+      .map((candidate) => candidate.id)
+      .filter((value): value is string => typeof value === 'string' && value.length > 0);
     const scopedDispatches = Object.values(a2a.dispatchIntents ?? {}).filter((dispatch) => sameScope(dispatch.scope));
     const scopedChildren = scopedDispatches.flatMap((dispatch) => (
       Array.isArray(dispatch.children) ? dispatch.children as PersistedDispatchChild[] : []
     ));
     const scopedOutboundIntents = Object.values(outbound.intents ?? {})
-      .filter((intent) => sameScope(intent.scope));
+      .filter((intent) => (
+        sameScope(intent.scope)
+        && typeof intent.parentTaskId === 'string'
+        && scopedParentIds.includes(intent.parentTaskId)
+      ));
     const terminalCards = activities.filter((value) => {
       const card = adaptiveCard(value);
       return card !== undefined && JSON.stringify(card).includes('completed');
@@ -382,7 +420,7 @@ async function observeContract(baseUrl: string, timeoutMs: number): Promise<Obse
     ) {
       legacyTerminalObservedAt ??= Date.now();
       if (Date.now() - legacyTerminalObservedAt >= 250) {
-        const finalOutbox = await requestJson(baseUrl, `/api/debug/agent-outbox/${conversationId}`);
+        const finalOutbox = await requestJson(baseUrl, `/api/debug/agent-outbox/${conversationId}`, deadline);
         if (Array.isArray(finalOutbox.activities)) activities.push(...finalOutbox.activities);
         return { a2a, outbound, jobs, activities };
       }
@@ -390,8 +428,6 @@ async function observeContract(baseUrl: string, timeoutMs: number): Promise<Obse
     await delay(50);
   }
 
-  const finalOutbox = await requestJson(baseUrl, `/api/debug/agent-outbox/${conversationId}`);
-  if (Array.isArray(finalOutbox.activities)) activities.push(...finalOutbox.activities);
   return {
     a2a: await readJson<PersistedA2AState>(a2aStorePath, {}),
     outbound: await readJson<PersistedOutboundState>(a2aOutboundStorePath, {}),
@@ -421,19 +457,55 @@ async function freePort(): Promise<number> {
   return address.port;
 }
 
-async function request(baseUrl: string, pathname: string, init: RequestInit = {}) {
+async function assertRequestDeadline(): Promise<void> {
+  const sockets = new Set<import('node:net').Socket>();
+  const server = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+    socket.on('data', () => { /* intentionally never respond */ });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  try {
+    await assert.rejects(
+      () => request(`http://127.0.0.1:${address.port}`, '/stalled', {}, Date.now() + 100),
+      (error: unknown) => error instanceof Error && /abort|timeout/iu.test(`${error.name} ${error.message}`),
+      'stalled HTTP reads must abort at the absolute request deadline',
+    );
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+
+async function request(
+  baseUrl: string,
+  pathname: string,
+  init: RequestInit = {},
+  deadlineAtMs = Date.now() + requestTimeoutMs,
+) {
+  const remainingMs = deadlineAtMs - Date.now();
+  if (remainingMs <= 0) throw new Error(`${pathname} request deadline exceeded before dispatch`);
   const headers = new Headers(init.headers);
   headers.set('x-teams-local-access-token', accessToken);
   if (init.body) headers.set('content-type', 'application/json');
-  const response = await fetch(`${baseUrl}${pathname}`, { ...init, headers });
+  const deadlineSignal = AbortSignal.timeout(Math.max(1, Math.ceil(remainingMs)));
+  const signal = init.signal
+    ? AbortSignal.any([init.signal, deadlineSignal])
+    : deadlineSignal;
+  const response = await fetch(`${baseUrl}${pathname}`, { ...init, headers, signal });
   const text = await response.text();
   let body: unknown = text;
   try { body = JSON.parse(text); } catch { /* retain text diagnostics */ }
   return { response, text, body };
 }
 
-async function requestJson(baseUrl: string, pathname: string): Promise<any> {
-  const result = await request(baseUrl, pathname);
+async function requestJson(baseUrl: string, pathname: string, deadlineAtMs: number): Promise<any> {
+  const result = await request(baseUrl, pathname, {}, deadlineAtMs);
   assert.ok(result.response.ok, `${pathname} failed: ${result.response.status} ${result.text}`);
   return result.body;
 }
@@ -445,7 +517,7 @@ async function waitForHealth(baseUrl: string, process: ChildProcess): Promise<an
       throw new Error(`server exited before health: ${serverOutput.slice(-4_000)}`);
     }
     try {
-      const health = await request(baseUrl, '/api/health');
+      const health = await request(baseUrl, '/api/health', {}, deadline);
       if (health.response.ok) return health.body;
     } catch {
       // Startup is still in progress.
