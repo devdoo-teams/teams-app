@@ -16,8 +16,21 @@ permissions:
 jobs:
   publish:
     name: Publish immutable runtime image
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      TEAMS_SOURCE_COMMIT: ${{ github.sha }}
+      TEAMS_APP_ID: ${{ vars.TEAMS_APP_ID }}
+      TEAMS_CATALOG_APP_ID: ${{ vars.TEAMS_CATALOG_APP_ID }}
+      BOT_ID: ${{ vars.BOT_ID }}
+      BOT_CLIENT_ID: ${{ vars.BOT_CLIENT_ID }}
+      TENANT_ID: ${{ vars.TENANT_ID }}
+      TAB_DOMAIN: ${{ vars.TAB_DOMAIN }}
+      CLIENT_ID: ${{ vars.CLIENT_ID }}
+      APPLICATION_ID_URI: ${{ vars.APPLICATION_ID_URI }}
     permissions:
       contents: read
       packages: write
@@ -26,6 +39,8 @@ jobs:
     steps:
       - name: Check out the exact source commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -34,10 +49,17 @@ jobs:
           cache: npm
 
       - name: Verify the exact source before publishing
-        env:
-          TEAMS_SOURCE_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
+          git fetch origin main --depth=1
+          if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' && "$GITHUB_REF" != 'refs/heads/main' ]]; then
+            echo 'manual image promotion is allowed only from refs/heads/main' >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_REF" == refs/tags/* ]] && ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "tag commit $GITHUB_SHA is not an ancestor of origin/main" >&2
+            exit 1
+          fi
           npm ci --ignore-scripts --no-audit --no-fund
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             package_version="$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")"
@@ -47,11 +69,51 @@ jobs:
               exit 1
             fi
           fi
+          npm run check:deployment
           npm run typecheck:core
           npm run build:core
           npm run test:core
           npm run test:runtime-dist
           npm run validate:manifest
+          npm run package:app
+          npm run test:package-determinism
+          npm run test:package-output-determinism
+          npm run test:package-atomic
+
+      - name: Record package and server identity before image push
+        run: |
+          set -euo pipefail
+          mkdir -p dist/evidence
+          node --input-type=module <<'NODE'
+          import crypto from 'node:crypto';
+          import fs from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+
+          const sourceCommit = process.env.GITHUB_SHA;
+          const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const packagePath = 'appPackage/build/teams-sdk-mvp.zip';
+          const packageBytes = fs.readFileSync(packagePath);
+          const manifestBytes = execFileSync('unzip', ['-p', packagePath, 'manifest.json']);
+          const manifest = JSON.parse(manifestBytes.toString('utf8'));
+          const marker = JSON.parse(fs.readFileSync('dist/server/.teams-server-build-commit', 'utf8'));
+          if (marker.commit !== sourceCommit || marker.mode !== 'core' || marker.worktree !== 'clean') {
+            throw new Error('server build marker does not prove the exact clean Core source commit');
+          }
+          if (manifest.version !== packageJson.version || manifest.devicePermissions?.includes('geolocation') !== true) {
+            throw new Error('packaged manifest version or geolocation permission is invalid');
+          }
+          const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
+          const identity = {
+            schema: 2,
+            sourceCommit,
+            version: packageJson.version,
+            teamsPackageSha256: sha256(packageBytes),
+            serverBundleSha256: marker.bundleSha256,
+            manifestSha256: sha256(manifestBytes),
+            imageDigest: null,
+          };
+          fs.writeFileSync('dist/evidence/release-identity.json', `${JSON.stringify(identity, null, 2)}\n`);
+          NODE
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1 # v3
@@ -88,9 +150,33 @@ jobs:
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
-      - name: Record the immutable image identity
+      - name: Bind the pushed image digest to the release identity
+        env:
+          IMAGE_DIGEST: ${{ steps.push.outputs.digest }}
         run: |
-          printf 'sourceCommit=%s\nimage=%s\ndigest=%s\n' \
-            '${{ github.sha }}' \
-            '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}' \
-            '${{ steps.push.outputs.digest }}'
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const identityPath = 'dist/evidence/release-identity.json';
+          const identity = JSON.parse(fs.readFileSync(identityPath, 'utf8'));
+          if (!/^sha256:[0-9a-f]{64}$/.test(process.env.IMAGE_DIGEST ?? '')) {
+            throw new Error('Docker did not return a valid immutable image digest');
+          }
+          if (identity.sourceCommit !== process.env.GITHUB_SHA) {
+            throw new Error('release identity source commit changed before digest binding');
+          }
+          identity.image = `${process.env.REGISTRY}/${process.env.IMAGE_NAME}`;
+          identity.imageDigest = process.env.IMAGE_DIGEST;
+          fs.writeFileSync(identityPath, `${JSON.stringify(identity, null, 2)}\n`);
+          NODE
+
+      - name: Upload immutable release identity
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: teams-runtime-identity-${{ github.sha }}
+          path: |
+            dist/evidence/release-identity.json
+            appPackage/build/teams-sdk-mvp.zip
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
