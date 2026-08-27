@@ -31,6 +31,7 @@ const plainTests = [
 ];
 const runtimeTests = [
   'scripts/teams-core-chat-regression-test.ts',
+  'scripts/teams-a2a-chat-regression-test.ts',
 ];
 const tsTests = [
   'scripts/status-card-test.ts',
@@ -81,6 +82,7 @@ const tsTests = [
   'scripts/a2a-remote-roster-test.ts',
   'scripts/a2a-collaboration-plan-test.ts',
   'scripts/a2a-production-collaboration-test.ts',
+  'scripts/teams-a2a-outbound-store-test.ts',
   'scripts/a2a-health-provider-roster-test.ts',
   'scripts/a2a-telemetry-test.ts',
   'scripts/a2a-orchestration-identity-test.ts',

@@ -18,6 +18,8 @@ const requesterId = 'runtime-user';
 const naturalConversationId = 'runtime-conversation-sdk-natural';
 const naturalPrompt = '저장소의 현재 상태를 분석하고 핵심 리스크를 한 줄로 요약해줘';
 const jobStorePath = path.join(temporaryRoot, 'agent-jobs.json');
+const a2aOutboundStorePath = path.join(temporaryRoot, 'a2a-outbound.json');
+const agentWorkspace = path.join(temporaryRoot, 'agent-workspace');
 let child: ChildProcess | undefined;
 let output = '';
 
@@ -42,6 +44,11 @@ try {
   await fs.writeFile(profilePath, '(version 1)\n(allow default)\n', { mode: 0o600 });
   await fs.copyFile(process.execPath, isolatedNodePath);
   await fs.chmod(isolatedNodePath, 0o700);
+  await fs.mkdir(path.join(agentWorkspace, 'scripts'), { recursive: true });
+  await fs.copyFile(
+    path.join(root, 'scripts', 'fake-codex.mjs'),
+    path.join(agentWorkspace, 'scripts', 'fake-codex.mjs'),
+  );
 
   const serverEnv: NodeJS.ProcessEnv = {
     ...process.env,
@@ -64,10 +71,11 @@ try {
     COLLABORATION_STORE_PATH: path.join(temporaryRoot, 'collaboration.json'),
     AGENT_JOB_STORE_PATH: jobStorePath,
     A2A_STORE_PATH: path.join(temporaryRoot, 'a2a.json'),
+    A2A_OUTBOUND_STORE_PATH: a2aOutboundStorePath,
     AGENT_ADMISSION_JOURNAL_PATH: path.join(temporaryRoot, 'agent-admission.json'),
     GENUI_ACTION_STORE_PATH: path.join(temporaryRoot, 'genui-actions.json'),
     RESPONSE_MODE_STORE_PATH: path.join(temporaryRoot, 'response-modes.json'),
-    AGENT_WORKSPACE: root,
+    AGENT_WORKSPACE: agentWorkspace,
     AGENT_ISOLATION_PROFILE: profilePath,
     AGENT_SANDBOX_EXEC_PATH: '/usr/bin/sandbox-exec',
     CODEX_BIN: isolatedNodePath,
@@ -104,7 +112,8 @@ try {
   assert.ok(naturalResponse.response.ok, `registered Teams SDK handler rejected the Activity: ${naturalResponse.response.status} ${naturalResponse.text}`);
 
   const job = await waitForSingleJob(baseUrl, naturalConversationId, 4_000);
-  assert.equal(job.prompt, naturalPrompt);
+  assert.match(job.prompt, new RegExp(naturalPrompt));
+  assert.match(job.prompt, /reviewer/i);
   assert.equal(job.provider, 'codex');
   assert.equal(job.mode, 'read-only');
   assert.equal(job.requesterId, requesterId);

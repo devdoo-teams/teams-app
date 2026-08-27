@@ -156,6 +156,7 @@
     "test:production-agent-isolation": "tsx scripts/production-agent-isolation-test.ts",
     "test:codex-native-isolation": "tsx scripts/codex-native-permission-isolation-test.ts",
     "test:teams-core-chat-regression": "tsx scripts/teams-core-chat-regression-test.ts",
+    "test:teams-a2a-chat-regression": "tsx scripts/teams-a2a-chat-regression-test.ts",
     "test:weather-service": "tsx scripts/weather-service-test.ts",
     "test:optional:copilotkit": "npm run test:copilot-item-seeding-failure",
     "test:optional:runtime": "node scripts/runtime-test.mjs",
