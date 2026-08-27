@@ -7,6 +7,8 @@ const SCHEMA_VERSION = 1 as const;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const MAX_ERROR_LENGTH = 500;
+const MAX_RECOVERY_INTENTS = 1_000;
+const EXPIRED_LEASE_ERROR = 'Teams completion delivery outcome is unknown after the dispatcher lease expired.';
 
 export type TeamsA2AOutboundStatus =
   | 'queued'
@@ -69,6 +71,9 @@ export class TeamsA2AOutboundStore {
       try {
         try {
           this.state = loadState(JSON.parse(await readAtomicJsonStore(this.filePath)) as unknown);
+          if (markExpiredDispatchesAmbiguous(this.state, this.now())) {
+            await atomicWriteJson(this.filePath, this.state);
+          }
         } catch (error) {
           if (!isFileNotFound(error)) throw error;
           this.state = emptyState();
@@ -149,7 +154,11 @@ export class TeamsA2AOutboundStore {
       const expired = intent.status === 'dispatching'
         && intent.leaseExpiresAt !== undefined
         && Date.parse(intent.leaseExpiresAt) <= now;
-      if (intent.status !== 'queued' && !expired) return undefined;
+      if (expired) {
+        markIntentAmbiguous(intent, now, EXPIRED_LEASE_ERROR);
+        return undefined;
+      }
+      if (intent.status !== 'queued') return undefined;
 
       intent.status = 'dispatching';
       intent.attempts += 1;
@@ -207,6 +216,20 @@ export class TeamsA2AOutboundStore {
     return intent && sameScope(intent.scope, scope) ? cloneIntent(intent) : undefined;
   }
 
+  listQueued(limit = 100): TeamsA2AOutboundIntent[] {
+    this.assertInitialized();
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_RECOVERY_INTENTS) {
+      throw new Error(`Outbound recovery limit must be an integer between 1 and ${MAX_RECOVERY_INTENTS}.`);
+    }
+    return Object.values(this.state.intents)
+      .filter((intent) => intent.status === 'queued')
+      .sort((left, right) => (
+        left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)
+      ))
+      .slice(0, limit)
+      .map(cloneIntent);
+  }
+
   private async recordOutcome(
     intentIdValue: string,
     scopeValue: A2AScope,
@@ -262,6 +285,30 @@ export class TeamsA2AOutboundStore {
 
 function emptyState(): TeamsA2AOutboundState {
   return { schemaVersion: SCHEMA_VERSION, intents: {} };
+}
+
+function markExpiredDispatchesAmbiguous(state: TeamsA2AOutboundState, now: number): boolean {
+  let changed = false;
+  for (const intent of Object.values(state.intents)) {
+    if (
+      intent.status === 'dispatching'
+      && intent.leaseExpiresAt !== undefined
+      && Date.parse(intent.leaseExpiresAt) <= now
+    ) {
+      markIntentAmbiguous(intent, now, EXPIRED_LEASE_ERROR);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function markIntentAmbiguous(intent: TeamsA2AOutboundIntent, now: number, error: string): void {
+  intent.status = 'ambiguous';
+  intent.updatedAt = new Date(now).toISOString();
+  intent.error = safeError(error);
+  delete intent.leaseToken;
+  delete intent.leaseExpiresAt;
+  delete intent.activityId;
 }
 
 function loadState(value: unknown): TeamsA2AOutboundState {
