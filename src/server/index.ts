@@ -1479,9 +1479,9 @@ function publicModelLabel(value: string | undefined, fallback: string): string {
 function publicResponseModeAvailability(): PublicResponseModeAvailability[] {
   return responseModeStore.availability().map((entry) => ({
     ...entry,
-    ...(entry.mode === 'openai'
+    ...(entry.configured && entry.mode === 'openai'
       ? { model: publicModelLabel(openAiModel, openAiModel) }
-      : entry.mode === 'local'
+      : entry.configured && entry.mode === 'local'
         ? { model: publicModelLabel(localModelName, 'local-model') }
         : {}),
   }));

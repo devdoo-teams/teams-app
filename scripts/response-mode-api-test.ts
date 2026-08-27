@@ -357,6 +357,10 @@ async function main(): Promise<void> {
       (attachment: any) => attachment.contentType === 'application/vnd.microsoft.card.adaptive',
     )?.content;
     const unavailableModeJson = JSON.stringify(unavailableModeCard ?? {});
+    const unavailableModeFacts = unavailableModeCard?.body?.find(
+      (element: any) => element.type === 'FactSet',
+    )?.facts ?? [];
+    const unavailableOpenAiFact = unavailableModeFacts.find((fact: any) => fact.title === 'OpenAI');
     assertPass(
       !('text' in (unavailableModeActivity ?? {}))
         && unavailableModeCard?.type === 'AdaptiveCard'
@@ -366,6 +370,10 @@ async function main(): Promise<void> {
         && unavailableModeCard.actions?.some((action: any) => action.data?.mode === 'deterministic')
         && !unavailableModeCard.actions?.some((action: any) => action.data?.mode === 'openai'),
       `a persisted unavailable provider returns an actionable attachment-only mode card without silent fallback: ${unavailableModeJson}`,
+    );
+    assertPass(
+      unavailableOpenAiFact?.value === 'OpenAI: 서버 설정 필요 · 현재 선택',
+      `an unavailable provider does not advertise a misleading model name: ${JSON.stringify(unavailableOpenAiFact)}`,
     );
     const unavailableModeA2a = JSON.parse(await readFile(join(dataRoot, 'a2a.json'), 'utf8')) as {
       tasks?: Record<string, unknown>;
