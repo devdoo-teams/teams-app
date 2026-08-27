@@ -81,6 +81,40 @@ try {
   assert.equal(reopened.getIntent(ambiguous.id, scope)?.status, 'ambiguous');
   assert.equal(reopened.getIntent(rejected.id, scope)?.status, 'connector-rejected');
 
+  let now = Date.parse('2026-08-28T00:00:00.000Z');
+  const leasePath = path.join(root, 'expired-lease.json');
+  const leaseStore = new TeamsA2AOutboundStore(leasePath, () => now);
+  await leaseStore.initialize();
+  const expiring = await leaseStore.createOrGetCompletionIntent({
+    parentTaskId: 'task-parent-expired-lease',
+    scope,
+    payloadSha256: crypto.createHash('sha256').update('expired-lease-card', 'utf8').digest('hex'),
+  });
+  const initialLease = await leaseStore.claim(expiring.intent.id, scope, 'worker-before-crash', 1_000);
+  assert.ok(initialLease);
+  now += 1_001;
+  assert.equal(
+    await leaseStore.claim(expiring.intent.id, scope, 'worker-after-crash', 1_000),
+    undefined,
+    'an expired dispatching lease is delivery-ambiguous and must never be resent',
+  );
+  const expired = leaseStore.getIntent(expiring.intent.id, scope);
+  assert.equal(expired?.status, 'ambiguous');
+  assert.equal(expired?.attempts, 1);
+  assert.equal(expired?.leaseToken, undefined);
+  assert.equal(expired?.leaseExpiresAt, undefined);
+
+  const queued = await leaseStore.createOrGetCompletionIntent({
+    parentTaskId: 'task-parent-startup-recovery',
+    scope,
+    payloadSha256: crypto.createHash('sha256').update('startup-recovery-card', 'utf8').digest('hex'),
+  });
+  assert.deepEqual(
+    leaseStore.listQueued(10).map((intent: { id: string }) => intent.id),
+    [queued.intent.id],
+    'startup recovery must be able to enumerate only durable queued completion intents',
+  );
+
   console.log('teams-a2a-outbound-store-test: PASS');
 } finally {
   await fs.rm(root, { recursive: true, force: true });
