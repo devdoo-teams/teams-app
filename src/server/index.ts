@@ -41,7 +41,12 @@ import {
 } from './agent-admission-controller.js';
 import { probeCliCapabilities, unknownCliCapabilities, type CliCapabilities } from './codex-capability.js';
 import { GitService } from './git-service.js';
-import { configureResponseEngineRouter } from './response-engine.js';
+import {
+  configureResponseEngineRouter,
+  ResponseEngineRouter,
+  type ResponseEngineInput,
+} from './response-engine.js';
+import { DeterministicResponseEngine } from './response-engine-deterministic.js';
 import { ResponseModeStore } from './response-mode-store.js';
 import {
   createResponseModeCardActivity,
@@ -526,8 +531,10 @@ await a2aOutboundStore.initialize();
 await genUiActionStore.initialize();
 await responseModeStore.initialize();
 
+const coreResponseEngine = new DeterministicResponseEngine();
+const configuredResponseEngines = [coreResponseEngine, ...optionalResponseEngines];
 configureResponseEngineRouter({
-  engines: optionalResponseEngines,
+  engines: configuredResponseEngines,
   resolveMode: async (input) => {
     // This environment flag is intentionally retained only for the existing
     // deterministic test harness. Production users are resolved from the
@@ -539,6 +546,7 @@ configureResponseEngineRouter({
     });
   },
 });
+const botResponseEngineRouter = new ResponseEngineRouter(configuredResponseEngines);
 
 let http: any;
 let teamsApp: any;
@@ -3009,7 +3017,7 @@ async function recoverQueuedA2ACompletions(): Promise<void> {
   }
 }
 
-async function handleBotNaturalLanguage(activity: any, send: BotSend, scope: AgentJobScope, prompt: string): Promise<void> {
+async function handleBotA2ACollaboration(activity: any, send: BotSend, scope: AgentJobScope, prompt: string): Promise<void> {
   try {
     if (!a2aProductionRuntime) throw new Error('A2A production runtime is not initialized.');
     const started = await a2aProductionRuntime.startCollaboration({
@@ -3069,6 +3077,53 @@ async function handleBotNaturalLanguage(activity: any, send: BotSend, scope: Age
   }
 }
 
+function teamsBotResponseRequest(activity: any, scope: AgentJobScope, prompt: string): ResponseEngineInput['request'] {
+  const sourceActivityId = nonEmptyString(activity?.id, 200) ?? crypto.randomUUID();
+  return {
+    threadId: scope.conversationId,
+    runId: `teams-bot-${sourceActivityId}`,
+    messages: [{ id: sourceActivityId, role: 'user', content: prompt }],
+    context: [],
+  } as ResponseEngineInput['request'];
+}
+
+async function handleBotResponseEngine(
+  activity: any,
+  send: BotSend,
+  scope: AgentJobScope,
+  prompt: string,
+): Promise<void> {
+  try {
+    const output = await botResponseEngineRouter.run({
+      mode: 'deterministic',
+      prompt,
+      request: teamsBotResponseRequest(activity, scope, prompt),
+      scope,
+      itemStore,
+      agentService,
+      deferAgentCompletion: true,
+      approvalEnvelope: (job) => genUi.approval(job),
+    });
+    await send(output.text, output.envelope);
+  } catch (error) {
+    if (error instanceof AgentMutationAuthorizationError) {
+      await send(error.message, genUi.error(error.message, 'response-engine-forbidden'));
+      return;
+    }
+    if (error instanceof AgentCapacityError) {
+      await send(agentCapacityText(error), agentCapacityEnvelope(error, 'response-engine-capacity'));
+      return;
+    }
+    if (error instanceof AgentExecutionUnavailableError) {
+      await send(agentUnavailableText(), agentUnavailableEnvelope('response-engine-unavailable'));
+      return;
+    }
+    console.error('Teams Bot response engine failed', error);
+    const text = '응답 엔진을 실행하지 못했습니다. mode에서 사용 가능한 모드를 선택한 뒤 다시 시도하세요.';
+    await send(text, genUi.error(text, 'response-engine-error'));
+  }
+}
+
 async function handleMessage(activity: any, send: BotSend): Promise<void> {
   const userText = typeof activity.text === 'string'
     ? activity.text.replace(/<at>.*?<\/at>/gi, '').trim()
@@ -3082,7 +3137,7 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
     }
 
     if (normalizedText === 'help') {
-      const responseText = '사용 가능한 명령: help, mode, carousel, weather [위도 경도], status, list, work, collaboration, run <작업>, continue <작업 ID> <추가 요청>, write <작업>, approve <작업 ID>, commit <작업 ID> [메시지], cancel <작업 ID>';
+      const responseText = '사용 가능한 명령: help, mode, carousel, weather [위도 경도], status, list, work, collaboration, a2a <협업 요청>, run <작업>, continue <작업 ID> <추가 요청>, write <작업>, approve <작업 ID>, commit <작업 ID> [메시지], cancel <작업 ID>';
       const envelope = genUi.help();
       await send(responseText, envelope);
       return;
@@ -3160,6 +3215,21 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
         : `최근 에이전트 작업:\n${jobs.map((job) => `- ${job.id}: ${job.status}`).join('\n')}`;
       const responseText = `${itemText}\n\n${jobText}`;
       await send(responseText, genUi.list(itemStore.list(), jobs));
+      return;
+    }
+
+    const a2aMatch = userText.match(/^(?:a2a|collaborate|협업)\s+([\s\S]+)$/i);
+    if (a2aMatch) {
+      if (!scope) {
+        await send('A2A 협업에는 사용자·대화·테넌트 정보가 필요합니다.', genUi.error('A2A 협업에는 사용자·대화·테넌트 정보가 필요합니다.', 'a2a-scope-missing'));
+        return;
+      }
+      const promptResult = validatePrompt(a2aMatch[1]);
+      if (promptResult.error) {
+        await send(promptResult.error, genUi.error(promptResult.error, 'a2a-prompt-invalid'));
+        return;
+      }
+      await handleBotA2ACollaboration(activity, send, scope, promptResult.value!);
       return;
     }
 
@@ -3339,7 +3409,7 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
       await send(promptResult.error, genUi.error(promptResult.error, 'natural-language-prompt-invalid'));
       return;
     }
-    await handleBotNaturalLanguage(activity, send, scope, promptResult.value!);
+    await handleBotResponseEngine(activity, send, scope, promptResult.value!);
     return;
   }
 
