@@ -32,6 +32,7 @@ const plainTests = [
 const runtimeTests = [
   'scripts/teams-core-chat-regression-test.ts',
   'scripts/teams-a2a-chat-regression-test.ts',
+  'scripts/teams-a2a-outbound-restart-regression-test.ts',
 ];
 const tsTests = [
   'scripts/status-card-test.ts',
