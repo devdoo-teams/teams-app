@@ -276,9 +276,20 @@ async function main(): Promise<void> {
       body: JSON.stringify(activity(baseUrl, '현재 업무 목록 보여줘', 'natural-language')),
     });
     assert.equal(naturalLanguage.response.status, 200, JSON.stringify(naturalLanguage.body));
+    const naturalActivities = naturalLanguage.body.activities ?? [];
+    assert.equal(naturalActivities.length, 1, JSON.stringify(naturalLanguage.body));
+    const naturalActivity = naturalActivities[0];
+    const naturalCard = naturalActivity?.attachments?.find(
+      (attachment: any) => attachment.contentType === 'application/vnd.microsoft.card.adaptive',
+    )?.content;
+    const naturalCardJson = JSON.stringify(naturalCard ?? {});
     assertPass(
-      JSON.stringify(naturalLanguage.body.activities).includes('업무 목록'),
-      'Teams Bot natural-language messages use the persisted response-engine selection and return GenUI',
+      !('text' in (naturalActivity ?? {}))
+        && naturalCard?.type === 'AdaptiveCard'
+        && naturalCard?.version === '1.2'
+        && naturalCardJson.includes('업무 목록')
+        && !/A2A|협업.*접수|신뢰된 격리/.test(naturalCardJson),
+      `Teams Bot natural-language messages honor deterministic mode with one attachment-only task-list card: ${naturalCardJson}`,
     );
 
     const asyncSuffix = 'natural-agent-async';
