@@ -6,6 +6,10 @@ import { isFullCommitOid } from './fileprovider-git-clean.mjs';
 import { resolveCoreTestWorkspace } from './core-test-workspace.mjs';
 
 const moduleRunner = 'scripts/run-module-test.mjs';
+const coreBuildSteps = [
+  ['scripts/build-client.mjs', '--core'],
+  ['scripts/build-server.mjs', '--core'],
+];
 const plainTests = [
   'scripts/core-test-runner-test.mjs',
   'scripts/core-test-workspace-test.mjs',
@@ -97,6 +101,7 @@ const tsTests = [
 ];
 
 const DEFAULT_PER_TEST_TIMEOUT_MS = 60_000;
+const DEFAULT_BUILD_TIMEOUT_MS = 300_000;
 const DEFAULT_TERMINATION_GRACE_MS = 500;
 const DEFAULT_REAP_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_BUFFER = 2 * 1024 * 1024;
@@ -287,9 +292,15 @@ export async function runProcessWithTimeout(
   });
 }
 
-async function run(command, args, cwd = process.cwd(), env = process.env) {
+async function run(
+  command,
+  args,
+  cwd = process.cwd(),
+  env = process.env,
+  timeoutMs = DEFAULT_PER_TEST_TIMEOUT_MS,
+) {
   try {
-    const result = await runProcessWithTimeout(command, args, { cwd, env });
+    const result = await runProcessWithTimeout(command, args, { cwd, env, timeoutMs });
     const output = `${result.stdout}${result.stderr}`.trim();
     if (output) process.stdout.write(`${output}\n`);
   } catch (error) {
@@ -311,6 +322,14 @@ export function createCoreTestInvocations({
   }
   const childEnv = { ...env, TEAMS_SOURCE_COMMIT: sourceCommit };
   return [
+    ...coreBuildSteps.map(([script, ...args]) => ({
+      kind: 'build',
+      command: process.execPath,
+      args: [script, ...args],
+      cwd: rootCwd,
+      env: childEnv,
+      timeoutMs: DEFAULT_BUILD_TIMEOUT_MS,
+    })),
     ...plainTests.map((script) => ({
       kind: 'contract',
       command: process.execPath,
@@ -351,7 +370,13 @@ export async function runCoreTestSuite() {
       sourceCommit: testWorkspace.commitOid,
     });
     for (const invocation of invocations) {
-      await run(invocation.command, invocation.args, invocation.cwd, invocation.env);
+      await run(
+        invocation.command,
+        invocation.args,
+        invocation.cwd,
+        invocation.env,
+        invocation.timeoutMs,
+      );
     }
   } finally {
     testWorkspace.cleanup();

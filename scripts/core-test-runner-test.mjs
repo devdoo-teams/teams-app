@@ -29,12 +29,26 @@ async function assertProcessReaped(pid, label, timeoutMs = 2_000) {
     env: { EXISTING: 'value' },
   });
   assert.ok(invocations.length > 2);
+  const clientBuild = invocations.find(({ args }) => args.includes('scripts/build-client.mjs'));
+  const serverBuild = invocations.find(({ args }) => args.includes('scripts/build-server.mjs'));
+  const runtimeSmoke = invocations.find(({ args }) => args.includes('scripts/core-runtime-smoke.mjs'));
   const workspaceContract = invocations.find(({ args }) => args.includes('scripts/core-test-workspace-test.mjs'));
   const runtimeContract = invocations.find(({ args }) => args.includes('scripts/teams-core-chat-regression-test.ts'));
   const a2aRuntimeContract = invocations.find(({ args }) => args.includes('scripts/teams-a2a-chat-regression-test.ts'));
   const outboundStoreContract = invocations.find(({ args }) => args.includes('scripts/teams-a2a-outbound-store-test.ts'));
   const sourceContract = invocations.find(({ args }) => args.includes('scripts/client-item-mutation-test.ts'));
   const renderContract = invocations.find(({ args }) => args.includes('scripts/client-work-item-render-test.ts'));
+  assert.equal(clientBuild.kind, 'build', 'Core tests must build the client from the pinned release source');
+  assert.deepEqual(clientBuild.args, ['scripts/build-client.mjs', '--core']);
+  assert.equal(serverBuild.kind, 'build', 'Core tests must build the server from the pinned release source');
+  assert.deepEqual(serverBuild.args, ['scripts/build-server.mjs', '--core']);
+  assert.ok(
+    invocations.indexOf(clientBuild) < invocations.indexOf(serverBuild) &&
+      invocations.indexOf(serverBuild) < invocations.indexOf(runtimeSmoke),
+    'Core client/server builds must complete before the runtime smoke starts',
+  );
+  assert.equal(clientBuild.timeoutMs, 300_000, 'Core builds use the bounded release build budget');
+  assert.equal(serverBuild.timeoutMs, 300_000, 'Core builds use the bounded release build budget');
   assert.equal(workspaceContract.cwd, '/repo', 'plain runner contract tests execute against the orchestrator root');
   assert.equal(runtimeContract.kind, 'runtime', 'compiled runtime tests have an explicit invocation kind');
   assert.equal(runtimeContract.cwd, '/repo', 'compiled runtime tests execute beside the commit-bound dist output');
