@@ -258,6 +258,7 @@ const agentExecutionPolicy = createProductionAgentExecutionPolicy({
   isProduction: isProduction || safeLocal,
   codexHome: agentProvider === 'codex' && isProduction ? process.env.AGENT_CODEX_HOME : undefined,
   codexExecutable: agentProvider === 'codex' && isProduction ? process.env.CODEX_BIN : undefined,
+  codexExecutableSha256: agentProvider === 'codex' && isProduction ? process.env.CODEX_BIN_SHA256 : undefined,
   allowLegacySeatbeltTestProvider: safeLocal,
   profilePath: safeLocal ? process.env.AGENT_ISOLATION_PROFILE : undefined,
   sandboxExecPath: safeLocal ? process.env.AGENT_SANDBOX_EXEC_PATH : undefined,

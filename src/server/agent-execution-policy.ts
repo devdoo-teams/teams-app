@@ -348,7 +348,7 @@ export class AgentExecutionPolicy {
         throw new AgentExecutionUnavailableError('provider-rejected-request', '격리 provider가 소유한 lease가 아닙니다.');
       }
       return {
-        workspace: projectionRoot,
+        workspace: lease.workspace,
         projected: true,
         isolationLease: lease,
         environmentOverrides: { ...lease.environmentOverrides },

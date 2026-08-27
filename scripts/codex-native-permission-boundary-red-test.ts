@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import type { ChildProcess } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -25,6 +26,7 @@ type Fixture = Readonly<{
   serviceCodexHome: string;
   authPath: string;
   codexExecutable: string;
+  codexExecutableSha256: string;
 }>;
 
 const scope = (suffix: string) => ({
@@ -69,7 +71,7 @@ async function executableIdentityReplacementIsRejected(): Promise<void> {
     'SEC-01 executable inode replacement after preflight/acquire',
     () => spawnLease(lease, scope('executable-identity'), fixture),
   );
-  assert.equal(spawnCalls.length, 1, 'f2352b1 demonstrates that the replaced executable reaches spawn');
+  if (spawnCalls.length > 0) findings.push('SEC-01 replaced executable reached the process spawn boundary');
   await lease.dispose();
 }
 
@@ -124,6 +126,7 @@ async function trustedParentEnvironmentIsSealed(): Promise<void> {
   const spawnCalls: Array<{ options: AgentIsolationSpawnOptions }> = [];
   const provider = new CodexPermissionProfileIsolationProvider({
     codexExecutable: fixture.codexExecutable,
+    codexExecutableSha256: fixture.codexExecutableSha256,
     codexHome: fixture.serviceCodexHome,
     platform: 'darwin',
     preflight: async () => undefined,
@@ -131,16 +134,24 @@ async function trustedParentEnvironmentIsSealed(): Promise<void> {
       spawnCalls.push({ options });
       return fakeChild;
     },
+    executableTrustVerifier: () => undefined,
   });
   const subject = scope('environment');
-  const lease = await provider.acquire({
-    subject,
-    sourceWorkspace: fixture.sourceWorkspace,
-    workspace: fixture.projectedWorkspace,
-    protectedRoots: [fixture.sourceWorkspace, os.homedir()],
-    environmentOverrides: injected,
-    prompt: 'inspect only',
-  });
+  let lease: AgentIsolationLease;
+  try {
+    lease = await provider.acquire({
+      subject,
+      sourceWorkspace: fixture.sourceWorkspace,
+      workspace: fixture.projectedWorkspace,
+      protectedRoots: [fixture.sourceWorkspace, os.homedir()],
+      environmentOverrides: injected,
+      prompt: 'inspect only',
+    });
+  } catch (error) {
+    if (error instanceof AgentExecutionUnavailableError
+      && ['provider-rejected-request', 'trusted-isolation-required'].includes(error.reason)) return;
+    throw error;
+  }
 
   await recordUnexpectedAcceptance(
     'SEC-04 loader/proxy/CA/shared-TMP environment injection',
@@ -242,12 +253,15 @@ async function defaultPreflightExercisesTheActualBoundary(): Promise<void> {
   await fs.writeFile(workspaceCanary, 'workspace fixture\n', { mode: 0o600 });
   await fs.writeFile(serviceCanary, 'service fixture\n', { mode: 0o600 });
   await writeLoggingCodexExecutable(fixture.codexExecutable, invocationLog);
+  const codexExecutableSha256 = await sha256(fixture.codexExecutable);
 
   const provider = new CodexPermissionProfileIsolationProvider({
     codexExecutable: fixture.codexExecutable,
+    codexExecutableSha256,
     codexHome: fixture.serviceCodexHome,
     platform: 'darwin',
     spawn: () => fakeChild,
+    executableTrustVerifier: () => undefined,
   });
   const lease = await acquire(provider, fixture, scope('actual-preflight'));
   await lease.dispose();
@@ -261,7 +275,8 @@ async function defaultPreflightExercisesTheActualBoundary(): Promise<void> {
   if (!invocations.some((entry) => entry.args[0] === 'exec')) {
     findings.push('SEC-03 default preflight never exercised the actual codex exec boundary');
   }
-  if (!invocations.some((entry) => entry.codexHome === fixture.serviceCodexHome)) {
+  const canonicalServiceHome = await fs.realpath(fixture.serviceCodexHome);
+  if (!invocations.some((entry) => entry.codexHome === canonicalServiceHome)) {
     findings.push('SEC-03 default preflight never used the actual service CODEX_HOME/auth boundary');
   }
   if (!serialized.includes(workspaceCanary)) {
@@ -292,7 +307,8 @@ async function createFixture(name: string): Promise<Fixture> {
   await fs.mkdir(serviceCodexHome, { recursive: true, mode: 0o700 });
   await fs.writeFile(authPath, '{"fixture":"service-auth"}\n', { mode: 0o600 });
   await fs.writeFile(codexExecutable, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
-  return { sourceWorkspace, projectedWorkspace, isolatedHome, serviceCodexHome, authPath, codexExecutable };
+  const codexExecutableSha256 = await sha256(codexExecutable);
+  return { sourceWorkspace, projectedWorkspace, isolatedHome, serviceCodexHome, authPath, codexExecutable, codexExecutableSha256 };
 }
 
 function createProvider(fixture: Fixture): {
@@ -302,6 +318,7 @@ function createProvider(fixture: Fixture): {
   const spawnCalls: Array<{ command: string; args: readonly string[]; options: AgentIsolationSpawnOptions }> = [];
   const provider = new CodexPermissionProfileIsolationProvider({
     codexExecutable: fixture.codexExecutable,
+    codexExecutableSha256: fixture.codexExecutableSha256,
     codexHome: fixture.serviceCodexHome,
     platform: 'darwin',
     preflight: async () => undefined,
@@ -309,6 +326,7 @@ function createProvider(fixture: Fixture): {
       spawnCalls.push({ command, args: [...args], options });
       return fakeChild;
     },
+    executableTrustVerifier: () => undefined,
   });
   return { provider, spawnCalls };
 }
@@ -348,7 +366,7 @@ async function spawnLease(
   lease: AgentIsolationLease,
   subject: ReturnType<typeof scope>,
   fixture: Fixture,
-  args: readonly string[] = baseArgs(fixture.projectedWorkspace),
+  args: readonly string[] = baseArgs(lease.workspace),
 ): Promise<ChildProcess> {
   return lease.spawn(subject, fixture.codexExecutable, args, {
     cwd: lease.workspace,
@@ -372,15 +390,22 @@ async function recordUnexpectedAcceptance(label: string, action: () => Promise<u
 
 async function writeLoggingCodexExecutable(executable: string, invocationLog: string): Promise<void> {
   const source = [
-    '#!/usr/bin/env node',
+    `#!${process.execPath}`,
     "const fs = require('node:fs');",
     `const log = ${JSON.stringify(invocationLog)};`,
     'const args = process.argv.slice(2);',
     'fs.appendFileSync(log, JSON.stringify({ args, codexHome: process.env.CODEX_HOME ?? null, cwd: process.cwd() }) + "\\n");',
     'if (args[0] === "--version") { console.log("codex-cli 0.148.0"); process.exit(0); }',
-    'if (args[0] === "sandbox") { process.exit(args.some((value) => value.includes("/denied/")) ? 1 : 0); }',
+    'if (args[0] === "mcp") { console.log("[]"); process.exit(0); }',
+    'if (args[0] === "plugin") { console.log(JSON.stringify({ installed: [], available: [] })); process.exit(0); }',
+    'if (args[0] === "sandbox") { process.exit(args.some((value) => value.includes("denied-canary") || value.includes("service-secret-canary")) ? 1 : 0); }',
+    'if (args[0] === "exec") { console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "TEAMS_CODEX_AUTH_PREFLIGHT_OK" } })); process.exit(0); }',
     'process.exit(0);',
     '',
   ].join('\n');
   await fs.writeFile(executable, source, { mode: 0o700 });
+}
+
+async function sha256(file: string): Promise<string> {
+  return crypto.createHash('sha256').update(await fs.readFile(file)).digest('hex');
 }

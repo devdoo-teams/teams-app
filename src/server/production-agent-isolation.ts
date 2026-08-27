@@ -6,7 +6,10 @@ import {
   AgentIsolationProvider,
   type AgentIsolationSpawnOptions,
 } from './agent-execution-policy.js';
-import { CodexPermissionProfileIsolationProvider } from './codex-permission-profile-isolation-provider.js';
+import {
+  CodexPermissionProfileIsolationProvider,
+  type ExecutableTrustVerifier,
+} from './codex-permission-profile-isolation-provider.js';
 import { MacOSSeatbeltIsolationProvider } from './macos-seatbelt-isolation-provider.js';
 
 export type ProductionAgentExecutionPolicyOptions = Readonly<{
@@ -18,8 +21,12 @@ export type ProductionAgentExecutionPolicyOptions = Readonly<{
   codexHome?: string;
   /** Explicit pinned Codex executable. Relative PATH lookup is not a production boundary. */
   codexExecutable?: string;
+  /** Operator-pinned SHA-256 of the signed Codex executable. */
+  codexExecutableSha256?: string;
   /** Test seam for the native permission-profile enforcement probe. */
   nativePreflight?: (input: { codexExecutable: string; codexHome: string; workspace: string }) => Promise<void>;
+  /** Test seam only; production uses the OpenAI Developer ID requirement. */
+  nativeExecutableTrustVerifier?: ExecutableTrustVerifier;
   /** Local test-only compatibility seam; never enabled by production composition. */
   allowLegacySeatbeltTestProvider?: boolean;
   /** Explicitly trusted, absolute Seatbelt profile for hermetic local fixtures only. */
@@ -45,17 +52,23 @@ export function createProductionAgentIsolationProvider(
   const platform = options.platform ?? process.platform;
   const codexHome = normalizedOptionalValue(options.codexHome);
   const codexExecutable = normalizedOptionalValue(options.codexExecutable);
-  if (Boolean(codexHome) !== Boolean(codexExecutable)) {
-    throw new Error('AGENT_CODEX_HOME and absolute CODEX_BIN must be configured together.');
+  const codexExecutableSha256 = normalizedOptionalValue(options.codexExecutableSha256)?.toLowerCase();
+  const configuredNativeInputs = [codexHome, codexExecutable, codexExecutableSha256].filter(Boolean).length;
+  if (configuredNativeInputs !== 0 && configuredNativeInputs !== 3) {
+    throw new Error('AGENT_CODEX_HOME, absolute CODEX_BIN, and CODEX_BIN_SHA256 must be configured together.');
   }
-  if (codexHome && codexExecutable) {
+  if (codexHome && codexExecutable && codexExecutableSha256) {
     if (platform !== 'darwin') return undefined;
     return new CodexPermissionProfileIsolationProvider({
       codexHome,
       codexExecutable,
+      codexExecutableSha256,
       platform,
       ...(options.nativePreflight ? { preflight: options.nativePreflight } : {}),
       ...(options.spawn ? { spawn: options.spawn } : {}),
+      ...(options.nativeExecutableTrustVerifier
+        ? { executableTrustVerifier: options.nativeExecutableTrustVerifier }
+        : {}),
     });
   }
 

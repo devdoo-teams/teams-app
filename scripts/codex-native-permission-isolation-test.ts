@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import type { ChildProcess } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -40,9 +41,11 @@ try {
   await fs.mkdir(serviceCodexHome, { recursive: true, mode: 0o700 });
   await fs.writeFile(path.join(serviceCodexHome, 'auth.json'), '{"fixture":"service-auth"}\n', { mode: 0o600 });
   await fs.writeFile(codexExecutable, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+  const codexExecutableSha256 = crypto.createHash('sha256').update(await fs.readFile(codexExecutable)).digest('hex');
 
   const provider = new CodexPermissionProfileIsolationProvider({
     codexExecutable,
+    codexExecutableSha256,
     codexHome: serviceCodexHome,
     platform: 'darwin',
     preflight: async () => { preflightCalls += 1; },
@@ -50,6 +53,7 @@ try {
       spawnCalls.push({ command, args: [...args], options });
       return fakeChild;
     },
+    executableTrustVerifier: () => undefined,
   });
 
   const lease = await provider.acquire({
@@ -67,7 +71,7 @@ try {
 
   assert.equal(preflightCalls, 1, 'native permission-profile enforcement must pass preflight before a lease is issued');
   assert.equal(lease.providerId, 'codex-permission-profile');
-  assert.equal(lease.environmentOverrides.HOME, isolatedHome, 'generated commands retain the disposable home');
+  assert.equal(lease.environmentOverrides.HOME, await fs.realpath(isolatedHome), 'generated commands retain the canonical disposable home');
   assert.equal(lease.environmentOverrides.CODEX_HOME, await fs.realpath(serviceCodexHome), 'only the trusted Codex parent receives the service auth home');
   await assert.rejects(
     () => fs.access(path.join(projectedWorkspace, '.isolated-home', '.codex', 'auth.json')),
@@ -79,12 +83,12 @@ try {
     '--json',
     ...CODEX_READ_ONLY_PERMISSION_ARGS,
     '--cd',
-    projectedWorkspace,
+    lease.workspace,
     '--',
     'inspect only the projected workspace',
   ];
   const spawnOptions: AgentIsolationSpawnOptions = {
-    cwd: projectedWorkspace,
+    cwd: lease.workspace,
     env: { ...lease.environmentOverrides },
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -137,10 +141,12 @@ try {
   await fs.chmod(authPath, 0o644);
   const insecure = new CodexPermissionProfileIsolationProvider({
     codexExecutable,
+    codexExecutableSha256,
     codexHome: serviceCodexHome,
     platform: 'darwin',
     preflight: async () => undefined,
     spawn: () => fakeChild,
+    executableTrustVerifier: () => undefined,
   });
   await assert.rejects(
     () => insecure.acquire({

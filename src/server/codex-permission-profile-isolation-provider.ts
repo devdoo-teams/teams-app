@@ -1,8 +1,9 @@
-import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import crypto from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
-import os from 'node:os';
+import net from 'node:net';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
@@ -18,7 +19,33 @@ const execFileAsync = promisify(execFile);
 const PROVIDER_ID = 'codex-permission-profile';
 const PROFILE_NAME = 'teams-agent-read-only';
 const MAX_AUTH_FILE_BYTES = 1024 * 1024;
-const PREFLIGHT_TIMEOUT_MS = 15_000;
+const PREFLIGHT_TIMEOUT_MS = 45_000;
+const OPENAI_TEAM_IDENTIFIER = '2DC432GLL2';
+const TRUSTED_PARENT_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
+
+const DISABLED_CODEX_FEATURES = Object.freeze([
+  'apps',
+  'auth_elicitation',
+  'browser_use',
+  'browser_use_external',
+  'browser_use_full_cdp_access',
+  'code_mode_host',
+  'computer_use',
+  'goals',
+  'hooks',
+  'image_generation',
+  'in_app_browser',
+  'in_app_updates',
+  'multi_agent',
+  'plugin_sharing',
+  'plugins',
+  'remote_plugin',
+  'skill_mcp_dependency_install',
+  'skill_search',
+  'tool_call_mcp_elicitation',
+  'tool_suggest',
+  'view_image',
+] as const);
 
 const DEFAULT_PERMISSION_VALUE = `default_permissions="${PROFILE_NAME}"`;
 const PERMISSION_PROFILE_VALUE = `permissions.${PROFILE_NAME}={description="Teams Core read only",filesystem={":minimal"="read",":workspace_roots"={"."="read"}},network={enabled=false}}`;
@@ -28,6 +55,8 @@ export const CODEX_READ_ONLY_PERMISSION_ARGS = Object.freeze([
   '--ignore-user-config',
   '--ignore-rules',
   '--skip-git-repo-check',
+  '--ephemeral',
+  ...DISABLED_CODEX_FEATURES.flatMap((feature) => ['--disable', feature]),
   '-c',
   'approval_policy="never"',
   '-c',
@@ -38,88 +67,163 @@ export const CODEX_READ_ONLY_PERMISSION_ARGS = Object.freeze([
   PERMISSION_PROFILE_VALUE,
 ] as const);
 
+type StableFileIdentity = Readonly<{
+  dev: string;
+  ino: string;
+  mode: number;
+  nlink: number;
+  size: number;
+  uid: number;
+  mtimeMs: number;
+  ctimeMs: number;
+}>;
+
+type TrustedPathSnapshot = Readonly<{
+  path: string;
+  identity: StableFileIdentity;
+}>;
+
+type TrustedExecutableSnapshot = TrustedPathSnapshot & Readonly<{
+  sha256: string;
+}>;
+
+export type ExecutableTrustVerifier = (input: Readonly<{ path: string; sha256: string }>) => void;
+
 export type CodexPermissionProfileIsolationProviderOptions = Readonly<{
   codexExecutable: string;
+  codexExecutableSha256: string;
   codexHome: string;
   platform?: NodeJS.Platform;
   spawn?: (command: string, args: readonly string[], options: AgentIsolationSpawnOptions) => ChildProcess;
-  preflight?: (input: { codexExecutable: string; codexHome: string; workspace: string }) => Promise<void>;
+  preflight?: (input: {
+    codexExecutable: string;
+    codexHome: string;
+    workspace: string;
+    environment: Readonly<NodeJS.ProcessEnv>;
+  }) => Promise<void>;
+  /** Test seam only. Production verifies the OpenAI Developer ID requirement with codesign. */
+  executableTrustVerifier?: ExecutableTrustVerifier;
 }>;
 
 export class CodexPermissionProfileIsolationProvider extends AgentIsolationProvider {
   private readonly codexExecutable: string;
+  private readonly codexExecutableSha256: string;
   private readonly codexHome: string;
   private readonly platform: NodeJS.Platform;
   private readonly spawnChild: NonNullable<CodexPermissionProfileIsolationProviderOptions['spawn']>;
   private readonly preflight: NonNullable<CodexPermissionProfileIsolationProviderOptions['preflight']>;
-  private preflightPromise: Promise<void> | undefined;
+  private readonly executableTrustVerifier: ExecutableTrustVerifier;
+  private leaseReserved = false;
 
   constructor(options: CodexPermissionProfileIsolationProviderOptions) {
     super(PROVIDER_ID);
     if (!isAbsolutePath(options?.codexExecutable) || !isAbsolutePath(options?.codexHome)) {
       throw new Error('Codex executable and service CODEX_HOME must be explicit absolute paths.');
     }
+    if (!/^[a-f0-9]{64}$/u.test(options.codexExecutableSha256?.toLowerCase() ?? '')) {
+      throw new Error('Codex executable SHA-256 must be an explicit 64-character hex digest.');
+    }
     this.codexExecutable = path.normalize(options.codexExecutable);
+    this.codexExecutableSha256 = options.codexExecutableSha256.toLowerCase();
     this.codexHome = path.normalize(options.codexHome);
     this.platform = options.platform ?? process.platform;
     this.spawnChild = options.spawn ?? ((command, args, spawnOptions) => (
       spawn(command, [...args], spawnOptions as any)
     ));
     this.preflight = options.preflight ?? runNativePermissionPreflight;
+    this.executableTrustVerifier = options.executableTrustVerifier ?? verifyOpenAICodexSignature;
   }
 
   override async acquire(input: AgentIsolationAcquireInput): Promise<AgentIsolationLease> {
     if (this.platform !== 'darwin') {
       throw unavailable('native Codex permission-profile isolation is currently verified only on macOS.');
     }
+    if (this.leaseReserved) {
+      throw unavailable('the dedicated service CODEX_HOME already has one active or starting Codex workflow.');
+    }
+    this.leaseReserved = true;
+    try {
+      return await this.acquireReserved(input);
+    } catch (error) {
+      this.leaseReserved = false;
+      throw error;
+    }
+  }
+
+  private async acquireReserved(input: AgentIsolationAcquireInput): Promise<AgentIsolationLease> {
     await this.validateRequest(input);
 
     const sourceWorkspace = await requireDirectory(input.sourceWorkspace, 'source workspace');
     const workspace = await requireDirectory(input.workspace, 'projected workspace');
-    const leaseWorkspace = path.normalize(input.workspace);
-    const codexHome = await requirePrivateDirectory(this.codexHome, 'service CODEX_HOME');
-    const codexExecutable = await requireExecutable(this.codexExecutable);
-    await requirePrivateAuthFile(path.join(codexHome, 'auth.json'));
+    const protectedRoots = await Promise.all(input.protectedRoots.map((root) => (
+      requireCanonicalPath(root, 'protected root')
+    )));
+    let codexHome = await requirePrivateDirectory(this.codexHome, 'service CODEX_HOME');
+    const codexExecutable = await requireExecutable(
+      this.codexExecutable,
+      this.codexExecutableSha256,
+      this.executableTrustVerifier,
+    );
+    let authFile = await requirePrivateAuthFile(path.join(codexHome.path, 'auth.json'));
 
     if (pathsOverlap(sourceWorkspace, workspace)) {
       throw rejected('projected workspace must be disjoint from the source workspace.');
     }
-    if (pathsOverlap(codexHome, sourceWorkspace) || pathsOverlap(codexHome, workspace)) {
+    if (pathsOverlap(codexHome.path, sourceWorkspace) || pathsOverlap(codexHome.path, workspace)) {
       throw rejected('service CODEX_HOME must stay outside source and projected workspaces.');
     }
-    if (input.protectedRoots.some((root) => pathsOverlap(workspace, path.resolve(root)))) {
+    if (protectedRoots.some((root) => pathsOverlap(workspace, root))) {
       throw rejected('projected workspace overlaps a protected root.');
     }
+    if (protectedRoots.some((root) => pathsOverlap(codexExecutable.path, root))
+      || pathsOverlap(codexExecutable.path, sourceWorkspace)
+      || pathsOverlap(codexExecutable.path, workspace)
+      || pathsOverlap(codexExecutable.path, codexHome.path)) {
+      throw rejected('pinned Codex executable must stay outside protected, source, workspace, and auth roots.');
+    }
 
-    this.preflightPromise ??= this.preflight({ codexExecutable, codexHome, workspace })
-      .catch((error) => {
-        this.preflightPromise = undefined;
-        const detail = error instanceof Error ? error.message : String(error);
-        throw unavailable(`native Codex permission-profile preflight failed: ${detail}`);
+    const environmentOverrides = await buildTrustedParentEnvironment(input, workspace, codexHome.path);
+    try {
+      await this.preflight({
+        codexExecutable: codexExecutable.path,
+        codexHome: codexHome.path,
+        workspace,
+        environment: environmentOverrides,
       });
-    await this.preflightPromise;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw unavailable(`native Codex permission-profile preflight failed: ${detail}`);
+    }
+    codexHome = await requirePrivateDirectory(this.codexHome, 'service CODEX_HOME');
+    authFile = await requirePrivateAuthFile(path.join(codexHome.path, 'auth.json'));
 
-    const environmentOverrides = {
-      ...input.environmentOverrides,
-      CODEX_HOME: codexHome,
-    };
     return this.issueLease({
       subject: input.subject,
-      workspace: leaseWorkspace,
-      protectedRoots: input.protectedRoots,
+      workspace,
+      protectedRoots,
       environmentOverrides,
+      dispose: () => { this.leaseReserved = false; },
       spawn: (command, args, options) => {
+        assertTrustedPathSnapshot(codexHome, 'service CODEX_HOME');
+        assertPrivateAuthSnapshot(authFile);
+        assertTrustedExecutableSnapshot(
+          codexExecutable,
+          this.codexExecutableSha256,
+          this.executableTrustVerifier,
+        );
         validateLaunch({
           command,
           args,
           options,
-          codexExecutable,
-          codexHome,
-          workspace: leaseWorkspace,
+          codexExecutable: codexExecutable.path,
+          codexHome: codexHome.path,
+          workspace,
         });
-        return this.spawnChild(codexExecutable, args, {
+        const trustedArgs = buildTrustedExecArgs(args, workspace);
+        return this.spawnChild(codexExecutable.path, trustedArgs, {
           ...options,
-          env: { ...options.env, CODEX_HOME: codexHome },
+          cwd: workspace,
+          env: { ...environmentOverrides },
         });
       },
     });
@@ -146,41 +250,7 @@ function validateLaunch(input: {
   if (!Array.isArray(input.args) || input.args.some((value) => typeof value !== 'string')) {
     throw rejected('Codex launch arguments are invalid.');
   }
-  const separatorIndex = input.args.indexOf('--');
-  if (separatorIndex < 0 || input.args.indexOf('--', separatorIndex + 1) >= 0) {
-    throw rejected('Codex prompt separator is missing or ambiguous.');
-  }
-  const commandArgs = input.args.slice(0, separatorIndex);
-  if (commandArgs[0] !== 'exec') {
-    throw rejected('Codex executable prefixes and alternate subcommands are forbidden.');
-  }
-  const forbidden = new Set([
-    '--sandbox', '-s', '--dangerously-bypass-approvals-and-sandbox', '--dangerously-bypass-hook-trust',
-    '--add-dir', '--enable', '--search', '--profile', '-p', '--config',
-  ]);
-  if (commandArgs.some((value) => forbidden.has(value) || value.startsWith('sandbox_mode='))) {
-    throw rejected('legacy sandbox or permission-widening arguments are forbidden.');
-  }
-  for (const required of ['exec', '--json', '--strict-config', '--ignore-user-config', '--ignore-rules', '--skip-git-repo-check']) {
-    if (!commandArgs.includes(required)) throw rejected(`required Codex isolation argument is missing: ${required}`);
-  }
-  const expectedConfigValues = new Set([
-    'approval_policy="never"',
-    'web_search="disabled"',
-    DEFAULT_PERMISSION_VALUE,
-    PERMISSION_PROFILE_VALUE,
-  ]);
-  const actualConfigValues = commandArgs.flatMap((value, index) => value === '-c' ? [commandArgs[index + 1] ?? ''] : []);
-  if (actualConfigValues.length !== expectedConfigValues.size
-    || actualConfigValues.some((value) => !expectedConfigValues.has(value))
-    || [...expectedConfigValues].some((value) => !actualConfigValues.includes(value))) {
-    throw rejected('Codex permission-profile configuration is incomplete or altered.');
-  }
-  const cdIndex = commandArgs.indexOf('--cd');
-  if (cdIndex < 0 || commandArgs.indexOf('--cd', cdIndex + 1) >= 0
-    || !samePath(commandArgs[cdIndex + 1] ?? '', input.workspace)) {
-    throw rejected('Codex working root does not match the projected workspace.');
-  }
+  buildTrustedExecArgs(input.args, input.workspace);
   if (!samePath(input.options.cwd, input.workspace)) {
     throw rejected('spawn cwd does not match the projected workspace.');
   }
@@ -189,12 +259,36 @@ function validateLaunch(input: {
   }
 }
 
+function buildTrustedExecArgs(args: readonly string[], workspace: string): string[] {
+  const separatorIndex = args.indexOf('--');
+  if (separatorIndex < 0 || args.indexOf('--', separatorIndex + 1) >= 0 || args.length !== separatorIndex + 2) {
+    throw rejected('Codex prompt separator or prompt cardinality is invalid.');
+  }
+  const prompt = args[separatorIndex + 1];
+  if (typeof prompt !== 'string' || !prompt.trim()) throw rejected('Codex prompt must be one non-empty argument.');
+  const commandArgs = args.slice(0, separatorIndex);
+  const base = ['exec', '--json', ...CODEX_READ_ONLY_PERMISSION_ARGS, '--cd', workspace];
+  const isFresh = arraysEqual(commandArgs, base);
+  const resumeArgs = commandArgs.slice(base.length);
+  const isResume = arraysEqual(commandArgs.slice(0, base.length), base)
+    && resumeArgs.length === 2
+    && resumeArgs[0] === 'resume'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(resumeArgs[1] ?? '');
+  if (!isFresh && !isResume) {
+    throw rejected('Codex launch arguments must exactly match the provider-owned read-only grammar.');
+  }
+  return [...commandArgs, '--', prompt];
+}
+
 async function runNativePermissionPreflight(input: {
   codexExecutable: string;
   codexHome: string;
   workspace: string;
+  environment: Readonly<NodeJS.ProcessEnv>;
 }): Promise<void> {
+  const environment = { ...input.environment };
   const version = await execFileAsync(input.codexExecutable, ['--version'], {
+    env: environment,
     encoding: 'utf8',
     timeout: PREFLIGHT_TIMEOUT_MS,
     maxBuffer: 4 * 1024,
@@ -203,48 +297,70 @@ async function runNativePermissionPreflight(input: {
     throw new Error(`unsupported Codex permission-profile version: ${version.stdout.trim()}`);
   }
 
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-codex-permission-preflight-'));
-  try {
-    const probeHome = path.join(root, 'codex-home');
-    const allowedRoot = path.join(root, 'allowed');
-    const deniedRoot = path.join(root, 'denied');
-    const allowedFile = path.join(allowedRoot, 'canary.txt');
-    const deniedFile = path.join(deniedRoot, 'canary.txt');
-    await fs.mkdir(probeHome, { mode: 0o700 });
-    await fs.mkdir(allowedRoot, { mode: 0o700 });
-    await fs.mkdir(deniedRoot, { mode: 0o700 });
-    await fs.writeFile(allowedFile, 'allowed\n', { mode: 0o600 });
-    await fs.writeFile(deniedFile, 'denied\n', { mode: 0o600 });
-    await fs.writeFile(path.join(probeHome, 'config.toml'), [
-      'default_permissions = "teams-preflight"',
-      '',
-      '[permissions.teams-preflight.filesystem]',
-      `":minimal" = "read"`,
-      `${tomlString(allowedRoot)} = "read"`,
-      '',
-      '[permissions.teams-preflight.network]',
-      'enabled = false',
-      '',
-    ].join('\n'), { mode: 0o600 });
+  const mcpInventory = await execFileAsync(input.codexExecutable, ['mcp', 'list', '--json'], {
+    env: environment,
+    encoding: 'utf8',
+    timeout: PREFLIGHT_TIMEOUT_MS,
+    maxBuffer: 32 * 1024,
+  });
+  const mcpServers = parseJson(mcpInventory.stdout, 'MCP inventory');
+  if (!Array.isArray(mcpServers) || mcpServers.length !== 0) {
+    throw new Error('service Codex MCP inventory must be empty');
+  }
+  const pluginInventory = await execFileAsync(input.codexExecutable, ['plugin', 'list', '--json'], {
+    env: environment,
+    encoding: 'utf8',
+    timeout: PREFLIGHT_TIMEOUT_MS,
+    maxBuffer: 32 * 1024,
+  });
+  const plugins = parseJson(pluginInventory.stdout, 'plugin inventory');
+  if (!isPlainRecord(plugins) || !Array.isArray(plugins.installed) || plugins.installed.length !== 0) {
+    throw new Error('service Codex installed plugin inventory must be empty');
+  }
 
-    const environment = { ...process.env, CODEX_HOME: probeHome };
-    await execFileAsync(input.codexExecutable, [
-      'sandbox', '-P', 'teams-preflight', '-C', allowedRoot, '--',
-      '/bin/sh', '-c', 'cat "$1" >/dev/null', 'probe', allowedFile,
-    ], { env: environment, timeout: PREFLIGHT_TIMEOUT_MS, maxBuffer: 8 * 1024 });
+  const workspaceCanary = await findWorkspaceCanary(input.workspace);
+  const serviceCanary = await ensureServiceCanary(input.codexHome);
+  const sandboxPrefix = [
+    'sandbox',
+    '-c', DEFAULT_PERMISSION_VALUE,
+    '-c', PERMISSION_PROFILE_VALUE,
+    '-P', PROFILE_NAME,
+    '-C', input.workspace,
+    '--',
+  ];
+  await execFileAsync(input.codexExecutable, [
+    ...sandboxPrefix,
+    '/bin/sh', '-c', 'test -r "$1"', 'workspace-read-canary', workspaceCanary,
+  ], { env: environment, timeout: PREFLIGHT_TIMEOUT_MS, maxBuffer: 16 * 1024 });
+  await expectSandboxDenial(input.codexExecutable, [
+    ...sandboxPrefix,
+    '/bin/sh', '-c', 'cat "$1" >/dev/null', 'service-read-denied-canary', serviceCanary,
+  ], environment, 'service-home read');
+  const writeCanary = path.join(input.workspace, 'write-denied-canary');
+  await expectSandboxDenial(input.codexExecutable, [
+    ...sandboxPrefix,
+    '/bin/sh', '-c', ': > "$1"', 'workspace-write-denied-canary', writeCanary,
+  ], environment, 'workspace write');
+  await withLoopbackServer(async (port) => {
+    await expectSandboxDenial(input.codexExecutable, [
+      ...sandboxPrefix,
+      '/bin/sh', '-c', 'exec /usr/bin/nc -z 127.0.0.1 "$1"', 'network-denied-canary', String(port),
+    ], environment, 'network');
+  });
 
-    let denied = false;
-    try {
-      await execFileAsync(input.codexExecutable, [
-        'sandbox', '-P', 'teams-preflight', '-C', allowedRoot, '--',
-        '/bin/sh', '-c', 'cat "$1" >/dev/null', 'probe', deniedFile,
-      ], { env: environment, timeout: PREFLIGHT_TIMEOUT_MS, maxBuffer: 8 * 1024 });
-    } catch {
-      denied = true;
-    }
-    if (!denied) throw new Error('native sandbox allowed a default-denied file read');
-  } finally {
-    await fs.rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  const authenticated = await execFileAsync(input.codexExecutable, [
+    'exec', '--json', ...CODEX_READ_ONLY_PERMISSION_ARGS,
+    '--cd', input.workspace,
+    '--', 'Reply with exactly TEAMS_CODEX_AUTH_PREFLIGHT_OK. Do not call any tool.',
+  ], {
+    env: environment,
+    cwd: input.workspace,
+    encoding: 'utf8',
+    timeout: PREFLIGHT_TIMEOUT_MS,
+    maxBuffer: 128 * 1024,
+  });
+  if (!hasExactPreflightMessage(authenticated.stdout)) {
+    throw new Error('authenticated Codex exec preflight did not return the exact terminal canary');
   }
 }
 
@@ -259,17 +375,26 @@ async function requireDirectory(candidate: string, label: string): Promise<strin
   }
 }
 
-async function requirePrivateDirectory(candidate: string, label: string): Promise<string> {
+async function requireCanonicalPath(candidate: string, label: string): Promise<string> {
+  if (!isAbsolutePath(candidate)) throw rejected(`${label} path must be absolute.`);
+  try {
+    return path.normalize(await fs.realpath(candidate));
+  } catch {
+    throw unavailable(`${label} is unavailable.`);
+  }
+}
+
+async function requirePrivateDirectory(candidate: string, label: string): Promise<TrustedPathSnapshot> {
   const real = await requireDirectory(candidate, label);
   const stat = await fs.lstat(real);
   const currentUserId = typeof process.getuid === 'function' ? process.getuid() : undefined;
   if ((stat.mode & 0o077) !== 0 || (currentUserId !== undefined && stat.uid !== currentUserId)) {
     throw rejected(`${label} must be owner-only and owned by the current user.`);
   }
-  return real;
+  return { path: real, identity: stableIdentity(stat) };
 }
 
-async function requirePrivateAuthFile(candidate: string): Promise<void> {
+async function requirePrivateAuthFile(candidate: string): Promise<TrustedPathSnapshot> {
   let handle: fs.FileHandle | undefined;
   try {
     const initial = await fs.lstat(candidate);
@@ -282,9 +407,10 @@ async function requirePrivateAuthFile(candidate: string): Promise<void> {
     }
     handle = await fs.open(candidate, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
     const opened = await handle.stat();
-    if (opened.dev !== initial.dev || opened.ino !== initial.ino || opened.size !== initial.size) {
+    if (!sameStableIdentity(stableIdentity(opened), stableIdentity(initial))) {
       throw new Error('auth file identity changed');
     }
+    return { path: path.normalize(await fs.realpath(candidate)), identity: stableIdentity(opened) };
   } catch {
     throw rejected('service CODEX_HOME/auth.json must be one owner-only regular file.');
   } finally {
@@ -292,16 +418,267 @@ async function requirePrivateAuthFile(candidate: string): Promise<void> {
   }
 }
 
-async function requireExecutable(candidate: string): Promise<string> {
+async function requireExecutable(
+  candidate: string,
+  expectedSha256: string,
+  verifyTrust: ExecutableTrustVerifier,
+): Promise<TrustedExecutableSnapshot> {
   if (!isAbsolutePath(candidate)) throw rejected('Codex executable path must be absolute.');
+  let handle: fs.FileHandle | undefined;
   try {
     const stat = await fs.lstat(candidate);
-    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('not a regular executable');
+    const currentUserId = typeof process.getuid === 'function' ? process.getuid() : undefined;
+    if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1
+      || (stat.mode & 0o022) !== 0
+      || (currentUserId !== undefined && stat.uid !== 0 && stat.uid !== currentUserId)) {
+      throw new Error('not a trusted regular executable');
+    }
     await fs.access(candidate, fsConstants.X_OK);
-    return path.normalize(await fs.realpath(candidate));
+    const real = path.normalize(await fs.realpath(candidate));
+    handle = await fs.open(real, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    const opened = await handle.stat();
+    if (!sameStableIdentity(stableIdentity(opened), stableIdentity(stat))) {
+      throw new Error('executable identity changed while opened');
+    }
+    const sha256 = crypto.createHash('sha256').update(await handle.readFile()).digest('hex');
+    const afterRead = await handle.stat();
+    if (!sameStableIdentity(stableIdentity(afterRead), stableIdentity(opened)) || sha256 !== expectedSha256) {
+      throw new Error('executable identity or SHA-256 does not match the configured pin');
+    }
+    verifyTrust({ path: real, sha256 });
+    return { path: real, identity: stableIdentity(afterRead), sha256 };
   } catch {
-    throw unavailable('pinned Codex executable is unavailable.');
+    throw unavailable('signed and SHA-pinned Codex executable is unavailable.');
+  } finally {
+    await handle?.close();
   }
+}
+
+async function buildTrustedParentEnvironment(
+  input: AgentIsolationAcquireInput,
+  workspace: string,
+  codexHome: string,
+): Promise<Record<string, string>> {
+  const allowedInputKeys = new Set(['HOME', 'USERPROFILE', 'CODEX_HOME']);
+  const unexpected = Object.keys(input.environmentOverrides).filter((key) => !allowedInputKeys.has(key));
+  if (unexpected.length > 0) {
+    throw rejected(`trusted Codex parent environment contains forbidden keys: ${unexpected.sort().join(', ')}`);
+  }
+  const requestedHome = input.environmentOverrides.HOME;
+  if (!isAbsolutePath(requestedHome)) throw rejected('isolated HOME must be an explicit absolute path.');
+  const home = await requirePrivateDirectory(requestedHome, 'isolated HOME');
+  if (pathsOverlap(home.path, codexHome)) throw rejected('isolated HOME must stay outside service CODEX_HOME.');
+  const requestedUserProfile = input.environmentOverrides.USERPROFILE;
+  if (requestedUserProfile && !samePath(await requireCanonicalPath(requestedUserProfile, 'isolated USERPROFILE'), home.path)) {
+    throw rejected('isolated HOME and USERPROFILE must resolve to the same directory.');
+  }
+  const tempDirectory = path.join(home.path, '.teams-agent-tmp');
+  await fs.mkdir(tempDirectory, { recursive: true, mode: 0o700 });
+  await fs.chmod(tempDirectory, 0o700);
+  const temp = await requirePrivateDirectory(tempDirectory, 'isolated temporary directory');
+  if (pathsOverlap(temp.path, codexHome) || !isInside(temp.path, home.path)) {
+    throw rejected('isolated temporary directory escaped the isolated HOME.');
+  }
+  void workspace;
+  return {
+    CI: '1',
+    PATH: TRUSTED_PARENT_PATH,
+    HOME: home.path,
+    USERPROFILE: home.path,
+    CODEX_HOME: codexHome,
+    TMPDIR: temp.path,
+    TMP: temp.path,
+    TEMP: temp.path,
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+  };
+}
+
+function stableIdentity(stat: fsSync.Stats): StableFileIdentity {
+  return {
+    dev: String(stat.dev),
+    ino: String(stat.ino),
+    mode: stat.mode,
+    nlink: stat.nlink,
+    size: stat.size,
+    uid: stat.uid,
+    mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs,
+  };
+}
+
+function sameStableIdentity(left: StableFileIdentity, right: StableFileIdentity): boolean {
+  return left.dev === right.dev
+    && left.ino === right.ino
+    && left.mode === right.mode
+    && left.nlink === right.nlink
+    && left.size === right.size
+    && left.uid === right.uid
+    && left.mtimeMs === right.mtimeMs
+    && left.ctimeMs === right.ctimeMs;
+}
+
+function assertTrustedPathSnapshot(snapshot: TrustedPathSnapshot, label: string): void {
+  try {
+    const real = fsSync.realpathSync.native(snapshot.path);
+    const stat = fsSync.lstatSync(real);
+    if (stat.isSymbolicLink() || !stat.isDirectory() || !samePath(real, snapshot.path)
+      || !sameStableIdentity(stableIdentity(stat), snapshot.identity)) {
+      throw new Error('identity changed');
+    }
+  } catch {
+    throw rejected(`${label} identity changed after the isolation lease was acquired.`);
+  }
+}
+
+function assertPrivateAuthSnapshot(snapshot: TrustedPathSnapshot): void {
+  let descriptor: number | undefined;
+  try {
+    const initial = fsSync.lstatSync(snapshot.path);
+    if (initial.isSymbolicLink() || !initial.isFile() || initial.nlink !== 1
+      || initial.size <= 0 || initial.size > MAX_AUTH_FILE_BYTES || (initial.mode & 0o077) !== 0
+      || !sameStableIdentity(stableIdentity(initial), snapshot.identity)) {
+      throw new Error('unsafe auth identity');
+    }
+    descriptor = fsSync.openSync(snapshot.path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    const opened = fsSync.fstatSync(descriptor);
+    if (!sameStableIdentity(stableIdentity(opened), snapshot.identity)) throw new Error('auth identity changed');
+  } catch {
+    throw rejected('service CODEX_HOME/auth.json identity changed after the isolation lease was acquired.');
+  } finally {
+    if (descriptor !== undefined) fsSync.closeSync(descriptor);
+  }
+}
+
+function assertTrustedExecutableSnapshot(
+  snapshot: TrustedExecutableSnapshot,
+  expectedSha256: string,
+  verifyTrust: ExecutableTrustVerifier,
+): void {
+  let descriptor: number | undefined;
+  try {
+    const real = fsSync.realpathSync.native(snapshot.path);
+    const initial = fsSync.lstatSync(real);
+    if (!samePath(real, snapshot.path) || initial.isSymbolicLink() || !initial.isFile() || initial.nlink !== 1
+      || (initial.mode & 0o022) !== 0 || !sameStableIdentity(stableIdentity(initial), snapshot.identity)) {
+      throw new Error('executable identity changed');
+    }
+    descriptor = fsSync.openSync(real, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    const opened = fsSync.fstatSync(descriptor);
+    if (!sameStableIdentity(stableIdentity(opened), snapshot.identity)) throw new Error('executable identity changed');
+    const sha256 = crypto.createHash('sha256').update(fsSync.readFileSync(descriptor)).digest('hex');
+    const afterRead = fsSync.fstatSync(descriptor);
+    if (!sameStableIdentity(stableIdentity(afterRead), snapshot.identity)
+      || sha256 !== snapshot.sha256 || sha256 !== expectedSha256) {
+      throw new Error('executable SHA-256 changed');
+    }
+    verifyTrust({ path: real, sha256 });
+  } catch {
+    throw rejected('signed and SHA-pinned Codex executable identity changed before launch.');
+  } finally {
+    if (descriptor !== undefined) fsSync.closeSync(descriptor);
+  }
+}
+
+function verifyOpenAICodexSignature(input: Readonly<{ path: string; sha256: string }>): void {
+  void input.sha256;
+  const requirement = `identifier "codex" and anchor apple generic and certificate leaf[subject.OU] = "${OPENAI_TEAM_IDENTIFIER}"`;
+  execFileSync('/usr/bin/codesign', [
+    '--verify', '--strict', '--verbose=2', `-R=${requirement}`, input.path,
+  ], { encoding: 'utf8', timeout: PREFLIGHT_TIMEOUT_MS, maxBuffer: 16 * 1024, stdio: 'pipe' });
+}
+
+function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function parseJson(value: string, label: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    throw new Error(`${label} was not valid JSON`);
+  }
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+async function findWorkspaceCanary(workspace: string): Promise<string> {
+  for (const name of ['workspace-canary.txt', 'package.json', 'AGENTS.md', 'README.md']) {
+    const candidate = path.join(workspace, name);
+    try {
+      const stat = await fs.lstat(candidate);
+      if (stat.isFile() && !stat.isSymbolicLink()) return candidate;
+    } catch {
+      // Continue to the next deterministic projected file.
+    }
+  }
+  throw new Error('projected workspace has no deterministic readable canary');
+}
+
+async function ensureServiceCanary(codexHome: string): Promise<string> {
+  for (const name of ['service-secret-canary.txt', '.teams-permission-canary']) {
+    const existing = path.join(codexHome, name);
+    try {
+      const stat = await fs.lstat(existing);
+      const currentUserId = typeof process.getuid === 'function' ? process.getuid() : undefined;
+      if (stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1 && (stat.mode & 0o077) === 0
+        && (currentUserId === undefined || stat.uid === currentUserId)) return existing;
+      throw new Error('service canary metadata is unsafe');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+  const candidate = path.join(codexHome, '.teams-permission-canary');
+  await fs.writeFile(candidate, 'teams-permission-boundary\n', { flag: 'wx', mode: 0o600 });
+  return candidate;
+}
+
+async function expectSandboxDenial(
+  executable: string,
+  args: readonly string[],
+  environment: NodeJS.ProcessEnv,
+  label: string,
+): Promise<void> {
+  try {
+    await execFileAsync(executable, [...args], {
+      env: environment,
+      timeout: PREFLIGHT_TIMEOUT_MS,
+      maxBuffer: 16 * 1024,
+    });
+  } catch {
+    return;
+  }
+  throw new Error(`native permission profile allowed forbidden ${label}`);
+}
+
+async function withLoopbackServer(operation: (port: number) => Promise<void>): Promise<void> {
+  const server = net.createServer((socket) => socket.destroy());
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => resolve());
+  });
+  try {
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('loopback preflight listener is unavailable');
+    await operation(address.port);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+
+function hasExactPreflightMessage(stdout: string): boolean {
+  return stdout.split('\n').filter(Boolean).some((line) => {
+    try {
+      const event = JSON.parse(line) as { type?: unknown; item?: { type?: unknown; text?: unknown } };
+      return event.type === 'item.completed'
+        && event.item?.type === 'agent_message'
+        && event.item.text === 'TEAMS_CODEX_AUTH_PREFLIGHT_OK';
+    } catch {
+      return false;
+    }
+  });
 }
 
 function isAbsolutePath(value: unknown): value is string {
@@ -324,10 +701,6 @@ function samePath(left: string, right: string): boolean {
   const a = path.normalize(path.resolve(left));
   const b = path.normalize(path.resolve(right));
   return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
-}
-
-function tomlString(value: string): string {
-  return JSON.stringify(value);
 }
 
 function rejected(message: string): AgentExecutionUnavailableError {

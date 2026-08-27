@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import type { ChildProcess } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -47,6 +48,7 @@ try {
   assert.match(productionIndex, /createProductionAgentExecutionPolicy\(/u);
   assert.match(productionIndex, /executionPolicy:\s*agentExecutionPolicy/u);
   assert.match(productionIndex, /AGENT_CODEX_HOME/u, 'production must select one service CODEX_HOME outside the projection');
+  assert.match(productionIndex, /CODEX_BIN_SHA256/u, 'production must pin the signed Codex executable digest');
   assert.doesNotMatch(productionIndex, /AGENT_CODEX_AUTH_FILE/u, 'production must not copy raw auth files into jobs');
 
   await fs.mkdir(path.join(sourceWorkspace, 'src'), { recursive: true, mode: 0o700 });
@@ -55,6 +57,7 @@ try {
   await fs.mkdir(serviceCodexHome, { mode: 0o700 });
   await fs.writeFile(path.join(serviceCodexHome, 'auth.json'), '{"fixture":"service-auth"}\n', { mode: 0o600 });
   await fs.writeFile(codexExecutable, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+  const codexExecutableSha256 = crypto.createHash('sha256').update(await fs.readFile(codexExecutable)).digest('hex');
 
   const missingConfiguration = createProductionAgentExecutionPolicy({
     sourceWorkspace,
@@ -73,6 +76,7 @@ try {
     platform: 'linux',
     codexHome: serviceCodexHome,
     codexExecutable,
+    codexExecutableSha256,
     nativePreflight: async () => undefined,
     canReadScope: () => true,
   });
@@ -84,6 +88,7 @@ try {
     platform: 'darwin',
     codexHome: serviceCodexHome,
     codexExecutable,
+    codexExecutableSha256,
     nativePreflight: async () => undefined,
     canReadScope: () => true,
   });
@@ -96,6 +101,7 @@ try {
       platform: 'darwin',
       codexHome: 'relative-codex-home',
       codexExecutable,
+      codexExecutableSha256,
       canReadScope: () => true,
     }),
     /absolute/i,
@@ -107,10 +113,12 @@ try {
     platform: 'darwin',
     codexHome: serviceCodexHome,
     codexExecutable,
+    codexExecutableSha256,
     nativePreflight: async () => { preflightCalls += 1; },
     canReadScope: () => true,
     canMutateScope: () => false,
     spawn: fakeSpawn,
+    nativeExecutableTrustVerifier: () => undefined,
   });
   assert.deepEqual(configured.authorize(scope, 'read-only'), { allowed: true });
   assert.deepEqual(configured.authorize(scope, 'workspace-write'), { allowed: false, reason: 'write-forbidden' });
