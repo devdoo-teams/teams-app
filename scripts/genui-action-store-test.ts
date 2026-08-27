@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import { GenUiActionStore } from '../src/server/genui-action-store.js';
 import { GenUiResponseFactory } from '../src/server/genui-response.js';
+import { renderGenUiCard } from '../src/server/genui-teams.js';
 
 const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-genui-actions-'));
 const dataFile = path.join(directory, 'actions.json');
@@ -130,6 +131,49 @@ try {
     configuredFactory.withTabAction(decoratedProviderEnvelope).actions.filter((action) => action.action === 'open-tab').length,
     1,
     'decorating a response-engine card is idempotent',
+  );
+
+  const configuredTabAction = decoratedProviderEnvelope.actions[0];
+  assert.ok(configuredTabAction);
+  const staleProviderEnvelope = {
+    ...decoratedProviderEnvelope,
+    actions: [
+      configuredTabAction,
+      {
+        ...configuredTabAction,
+        id: 'provider-open-tab',
+        actionToken: 'stale-provider-tab-token',
+      },
+    ],
+    metadata: {
+      ...decoratedProviderEnvelope.metadata,
+      openTabUrl: 'https://stale.example/global',
+      'openTabUrl.open-tab': 'https://stale.example/action',
+      'openTabUrl.0': 'https://stale.example/index',
+    },
+  };
+  const normalizedProviderEnvelope = configuredFactory.withTabAction(staleProviderEnvelope);
+  assert.equal(
+    normalizedProviderEnvelope.actions.filter((action) => action.action === 'open-tab').length,
+    1,
+    'decorating a provider card normalizes duplicate tab actions to one',
+  );
+  assert.equal(normalizedProviderEnvelope.metadata.openTabUrl, personalTabUrl);
+  assert.equal(normalizedProviderEnvelope.metadata['openTabUrl.open-tab'], undefined);
+  assert.equal(normalizedProviderEnvelope.metadata['openTabUrl.0'], undefined);
+  assert.equal(normalizedProviderEnvelope.metadata.provider, 'deterministic');
+  const renderedTabAction = renderGenUiCard(normalizedProviderEnvelope).actions?.find(
+    (action) => action.type === 'Action.OpenUrl',
+  );
+  assert.equal(
+    renderedTabAction?.url,
+    personalTabUrl,
+    'the surviving tab action renders the configured Work Hub deep link',
+  );
+  assert.equal(
+    staleProviderEnvelope.metadata.openTabUrl,
+    'https://stale.example/global',
+    'normalizing a provider card does not mutate its metadata',
   );
 
   const jobStatusCard = await configuredFactory.jobStatus({

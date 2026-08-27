@@ -304,14 +304,27 @@ export class GenUiResponseFactory {
 
   withTabAction(input: GenUiEnvelopeV1): GenUiEnvelopeV1 {
     const envelope = GenUiEnvelopeV1Schema.parse(input);
-    if (!this.openTabUrl || envelope.actions.some((action) => action.action === 'open-tab')) {
-      return envelope;
-    }
+    if (!this.openTabUrl) return envelope;
+
+    let retainedOpenTabAction = false;
+    const actions = envelope.actions.filter((action) => {
+      if (action.action !== 'open-tab') return true;
+      if (retainedOpenTabAction) return false;
+      retainedOpenTabAction = true;
+      return true;
+    });
+    if (!retainedOpenTabAction) actions.push(...this.tabActions());
+
+    const metadata = Object.fromEntries(
+      Object.entries(envelope.metadata).filter(([key]) => (
+        key !== 'openTabUrl' && !key.startsWith('openTabUrl.')
+      )),
+    );
     return GenUiEnvelopeV1Schema.parse({
       ...envelope,
-      actions: [...envelope.actions, ...this.tabActions()],
+      actions,
       metadata: {
-        ...envelope.metadata,
+        ...metadata,
         openTabUrl: this.openTabUrl,
       },
     });
