@@ -46,6 +46,7 @@ import {
 import { formatWeatherMessage, getWeather } from './weather-service.js';
 import { GenUiActionStore, type GenUiActionName } from './genui-action-store.js';
 import { GenUiResponseFactory } from './genui-response.js';
+import { createA2AProviderFacts, type A2AProviderFact } from './a2a-provider-facts.js';
 import {
   createAdaptiveCardActivity,
   createAdaptiveCardCarouselActivity,
@@ -738,15 +739,7 @@ async function buildStatusEnvelope(): Promise<GenUiEnvelopeV1> {
     deterministic: true,
     codex: capabilities.codex,
     ghcp: capabilities.ghcp,
-    a2aProviders: a2aAgentProviders.map((provider) => ({
-      provider,
-      agentId: a2aAgentId(provider),
-      providerId: a2aProviderId(provider),
-    })).concat(configuredRemoteA2AAgent ? [{
-      provider: 'remote',
-      agentId: configuredRemoteA2AAgent.agentId,
-      providerId: configuredRemoteA2AAgent.providerId,
-    }] : []),
+    a2aProviders: a2aProviderFacts(),
   });
 }
 
@@ -1154,6 +1147,23 @@ const configuredRemoteA2AAgent = remoteA2AEndpoint && remoteA2ABearerToken
     telemetry: a2aTelemetry,
   })
   : undefined;
+
+function a2aProviderFacts(): A2AProviderFact[] {
+  return createA2AProviderFacts(
+    a2aAgentProviders.map((provider) => ({
+      provider,
+      agentId: a2aAgentId(provider),
+      providerId: a2aProviderId(provider),
+      configured: Boolean(providerRunners[provider]),
+    })),
+    configuredRemoteA2AAgent ? {
+      provider: 'remote',
+      agentId: configuredRemoteA2AAgent.agentId,
+      providerId: configuredRemoteA2AAgent.providerId,
+    } : undefined,
+  );
+}
+
 const a2aAgents = [
   ...a2aAgentProviders.map((provider) => {
   const agentId = a2aAgentId(provider);
@@ -1279,12 +1289,7 @@ http.get('/api/health', async (_request: any, response: any) => {
         requiredScope: authenticatedMcpConfig.requiredScope,
       }
       : { enabled: false, reason: authenticatedMcpConfig.reason },
-    a2aProviders: a2aAgentProviders.map((provider) => ({
-      provider,
-      agentId: a2aAgentId(provider),
-      providerId: a2aProviderId(provider),
-      configured: Boolean(providerRunners[provider]),
-    })),
+    a2aProviders: a2aProviderFacts(),
     a2aTelemetry: (() => {
       const snapshot = a2aTelemetry.snapshot();
       return {

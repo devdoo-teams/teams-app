@@ -95,6 +95,7 @@
     "test:a2a-remote-client": "tsx scripts/a2a-remote-client-test.ts",
     "test:a2a-remote-http-roundtrip": "tsx scripts/a2a-remote-http-roundtrip-test.ts",
     "test:a2a-remote-agent-adapter": "tsx scripts/a2a-remote-agent-adapter-test.ts",
+    "test:a2a-health-provider-roster": "tsx scripts/a2a-health-provider-roster-test.ts",
     "test:a2a-telemetry": "tsx scripts/a2a-telemetry-test.ts",
     "test:a2a-official-contract-audit": "tsx scripts/a2a-official-contract-audit-test.ts",
     "test:a2a-index-integration": "tsx scripts/a2a-index-integration-test.mjs",
