@@ -6,6 +6,7 @@ import {
   AgentIsolationProvider,
   type AgentIsolationSpawnOptions,
 } from './agent-execution-policy.js';
+import { CodexPermissionProfileIsolationProvider } from './codex-permission-profile-isolation-provider.js';
 import { MacOSSeatbeltIsolationProvider } from './macos-seatbelt-isolation-provider.js';
 
 export type ProductionAgentExecutionPolicyOptions = Readonly<{
@@ -13,12 +14,18 @@ export type ProductionAgentExecutionPolicyOptions = Readonly<{
   isProduction: boolean;
   canReadScope?: (scope: AgentJobScope) => boolean;
   canMutateScope?: (scope: AgentJobScope) => boolean;
-  /** Explicitly trusted, absolute Seatbelt profile; never inferred. */
+  /** Dedicated service auth home used only by the trusted Codex parent. */
+  codexHome?: string;
+  /** Explicit pinned Codex executable. Relative PATH lookup is not a production boundary. */
+  codexExecutable?: string;
+  /** Test seam for the native permission-profile enforcement probe. */
+  nativePreflight?: (input: { codexExecutable: string; codexHome: string; workspace: string }) => Promise<void>;
+  /** Local test-only compatibility seam; never enabled by production composition. */
+  allowLegacySeatbeltTestProvider?: boolean;
+  /** Explicitly trusted, absolute Seatbelt profile for hermetic local fixtures only. */
   profilePath?: string;
-  /** Optional explicit absolute sandbox-exec path. */
+  /** Optional explicit absolute sandbox-exec path for hermetic local fixtures only. */
   sandboxExecPath?: string;
-  /** Explicit owner-only Codex auth file copied into each disposable projection. */
-  codexAuthFile?: string;
   /** Test seam for the platform-gated provider. */
   platform?: NodeJS.Platform;
   /** Test seam; production defaults to node:child_process spawn. */
@@ -34,15 +41,30 @@ export type ProductionAgentExecutionPolicyOptions = Readonly<{
 export function createProductionAgentIsolationProvider(
   options: ProductionAgentExecutionPolicyOptions,
 ): AgentIsolationProvider | undefined {
+  if (!options.isProduction) return undefined;
+  const platform = options.platform ?? process.platform;
+  const codexHome = normalizedOptionalValue(options.codexHome);
+  const codexExecutable = normalizedOptionalValue(options.codexExecutable);
+  if (Boolean(codexHome) !== Boolean(codexExecutable)) {
+    throw new Error('AGENT_CODEX_HOME and absolute CODEX_BIN must be configured together.');
+  }
+  if (codexHome && codexExecutable) {
+    if (platform !== 'darwin') return undefined;
+    return new CodexPermissionProfileIsolationProvider({
+      codexHome,
+      codexExecutable,
+      platform,
+      ...(options.nativePreflight ? { preflight: options.nativePreflight } : {}),
+      ...(options.spawn ? { spawn: options.spawn } : {}),
+    });
+  }
+
   const profilePath = normalizedOptionalValue(options.profilePath);
   const sandboxExecPath = normalizedOptionalValue(options.sandboxExecPath);
   if (sandboxExecPath && !profilePath) {
     throw new Error('AGENT_SANDBOX_EXEC_PATH requires AGENT_ISOLATION_PROFILE.');
   }
-  if (!options.isProduction || !profilePath) return undefined;
-
-  const platform = options.platform ?? process.platform;
-  if (platform !== 'darwin') return undefined;
+  if (!options.allowLegacySeatbeltTestProvider || !profilePath || platform !== 'darwin') return undefined;
 
   const spawnChild = options.spawn ?? ((command, args, spawnOptions) => (
     spawn(command, [...args], spawnOptions as any)
@@ -63,7 +85,6 @@ export function createProductionAgentExecutionPolicy(
     ...(options.canReadScope ? { canReadScope: options.canReadScope } : {}),
     ...(options.canMutateScope ? { canMutateScope: options.canMutateScope } : {}),
     ...(isolationProvider ? { isolationProvider } : {}),
-    ...(options.codexAuthFile ? { codexAuthFile: options.codexAuthFile } : {}),
   });
 }
 

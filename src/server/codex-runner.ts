@@ -20,6 +20,8 @@ import {
 import { REMOTE_AGENT_GUIDANCE } from './remote-agent-guidance.js';
 import { diagnoseRemoteTroubleshooting, formatRemoteTroubleshooting } from './remote-troubleshooting.js';
 import { redactCliDiagnostics } from './cli-diagnostics.js';
+import { CODEX_READ_ONLY_PERMISSION_ARGS } from './codex-permission-profile-isolation-provider.js';
+import { redactSensitiveText } from './sensitive-text.js';
 
 export interface CodexRunEvent {
   type?: string;
@@ -146,6 +148,16 @@ function isFailureType(type: string): boolean {
   return type === 'error' || type === 'turn.failed' || type === 'turn.cancelled' || type === 'turn.aborted';
 }
 
+function sanitizeRunEvent(event: CodexRunEvent): CodexRunEvent {
+  if (!event.item) return event;
+  const item = { ...event.item };
+  for (const key of ['text', 'message', 'command'] as const) {
+    const value = item[key];
+    if (typeof value === 'string') item[key] = redactSensitiveText(value);
+  }
+  return { ...event, item };
+}
+
 type ProtocolState = 'thread' | 'turn' | 'items' | 'message' | 'completed';
 
 export class CodexRunner {
@@ -201,8 +213,9 @@ export class CodexRunner {
       ...prefixArgs,
       'exec',
       '--json',
-      '--sandbox',
-      options.mode,
+      ...(options.mode === 'read-only'
+        ? CODEX_READ_ONLY_PERMISSION_ARGS
+        : ['--sandbox', options.mode]),
       '--cd',
       options.workspace,
     ];
@@ -387,7 +400,7 @@ export class CodexRunner {
         return;
       }
       eventCount += 1;
-      const event = parsed as CodexRunEvent;
+      const event = sanitizeRunEvent(parsed as CodexRunEvent);
       observeEvent(event);
       if (terminationError) return;
       queueEvent(event);

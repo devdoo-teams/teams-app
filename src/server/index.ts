@@ -256,9 +256,11 @@ const agentExecutionPolicy = createProductionAgentExecutionPolicy({
   // the registered Teams SDK path be exercised end-to-end without weakening
   // the factory's fail-closed behavior for ordinary development runtimes.
   isProduction: isProduction || safeLocal,
-  profilePath: process.env.AGENT_ISOLATION_PROFILE,
-  sandboxExecPath: process.env.AGENT_SANDBOX_EXEC_PATH,
-  codexAuthFile: agentProvider === 'codex' ? process.env.AGENT_CODEX_AUTH_FILE : undefined,
+  codexHome: agentProvider === 'codex' && isProduction ? process.env.AGENT_CODEX_HOME : undefined,
+  codexExecutable: agentProvider === 'codex' && isProduction ? process.env.CODEX_BIN : undefined,
+  allowLegacySeatbeltTestProvider: safeLocal,
+  profilePath: safeLocal ? process.env.AGENT_ISOLATION_PROFILE : undefined,
+  sandboxExecPath: safeLocal ? process.env.AGENT_SANDBOX_EXEC_PATH : undefined,
   canMutateScope: (scope) => isOperator(scope),
   canReadScope: (scope) => isOperator(scope),
 });

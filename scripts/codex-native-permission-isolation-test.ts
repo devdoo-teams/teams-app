@@ -106,6 +106,25 @@ try {
       && error.reason === 'provider-rejected-request',
     'a legacy sandbox argument must be rejected before process launch',
   );
+  const promptSeparator = args.indexOf('--');
+  const overriddenProfileArgs = [
+    ...args.slice(0, promptSeparator),
+    '-c',
+    'default_permissions=":danger-full-access"',
+    ...args.slice(promptSeparator),
+  ];
+  await assert.rejects(
+    () => lease.spawn(scope, codexExecutable, overriddenProfileArgs, spawnOptions),
+    (error: unknown) => error instanceof AgentExecutionUnavailableError
+      && error.reason === 'provider-rejected-request',
+    'a later config override must not widen the pinned permission profile',
+  );
+  await assert.rejects(
+    () => lease.spawn(scope, codexExecutable, ['unexpected-prefix', ...args], spawnOptions),
+    (error: unknown) => error instanceof AgentExecutionUnavailableError
+      && error.reason === 'provider-rejected-request',
+    'CODEX_SCRIPT-style executable prefixes must be rejected',
+  );
   await assert.rejects(
     () => lease.spawn(scope, '/usr/bin/env', args, spawnOptions),
     (error: unknown) => error instanceof AgentExecutionUnavailableError

@@ -13,7 +13,6 @@ const runtimeDistRoot = resolveRuntimeDistRoot(root);
 const entry = path.join(runtimeDistRoot, 'server', 'index.js');
 const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-core-chat-regression-'));
 const accessToken = crypto.randomBytes(32).toString('base64url');
-const authCanary = `teams-core-auth-canary-${crypto.randomBytes(24).toString('hex')}`;
 const tenantId = 'runtime-tenant';
 const requesterId = 'runtime-user';
 const naturalConversationId = 'runtime-conversation-sdk-natural';
@@ -39,14 +38,8 @@ try {
   }
 
   const profilePath = path.join(temporaryRoot, 'read-only.sb');
-  const authPath = path.join(temporaryRoot, 'codex-auth.json');
   const isolatedNodePath = path.join(temporaryRoot, 'node');
   await fs.writeFile(profilePath, '(version 1)\n(allow default)\n', { mode: 0o600 });
-  await fs.writeFile(
-    authPath,
-    `${JSON.stringify({ fixture: 'teams-core-chat', canary: authCanary })}\n`,
-    { mode: 0o600 },
-  );
   await fs.copyFile(process.execPath, isolatedNodePath);
   await fs.chmod(isolatedNodePath, 0o700);
 
@@ -77,9 +70,8 @@ try {
     AGENT_WORKSPACE: root,
     AGENT_ISOLATION_PROFILE: profilePath,
     AGENT_SANDBOX_EXEC_PATH: '/usr/bin/sandbox-exec',
-    AGENT_CODEX_AUTH_FILE: authPath,
     CODEX_BIN: isolatedNodePath,
-    CODEX_SCRIPT: 'scripts/fake-codex-auth-required.mjs',
+    CODEX_SCRIPT: 'scripts/fake-codex.mjs',
     COPILOTKIT_DETERMINISTIC_MODE: 'true',
     WEATHER_MODE: 'demo',
     TEAMS_OPERATOR_REQUESTER_ALLOWLIST: `${tenantId}/${requesterId}`,
@@ -126,7 +118,7 @@ try {
     `natural-language Codex job failed: ${completed.error ?? 'no persisted error'}\n${output.slice(-4_000)}`,
   );
   assert.match(completed.result ?? '', /FAKE_CODEX_OK/);
-  assert.equal(completed.threadId, '00000000-0000-4000-8000-0000000000ac');
+  assert.equal(completed.threadId, '00000000-0000-4000-8000-0000000000aa');
   assert.ok(completed.finishedAt, 'completed job must persist finishedAt');
 
   const completionActivity = await waitForTerminalOutboxActivity(
@@ -184,8 +176,7 @@ try {
 
   const persistedText = JSON.stringify(persisted);
   assert.equal(persistedText.includes('teams-core-chat-fixture-secret'), false, 'Bot credentials must not enter the durable job store');
-  assert.equal(persistedText.includes(authCanary), false, 'The unique Codex auth canary must not enter the durable job store');
-  assert.equal(persistedText.includes(authPath), false, 'The Codex auth source path must not enter the durable job store');
+  assert.equal(persistedText.includes('AGENT_CODEX_AUTH_FILE'), false, 'deprecated raw auth staging must not enter the durable job store');
 
   runtime = await startBuiltServer();
   baseUrl = runtime.baseUrl;
