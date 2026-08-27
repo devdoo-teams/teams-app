@@ -39,6 +39,20 @@ type PersistedA2AState = {
   dispatchIntents?: Record<string, PersistedDispatch>;
 };
 
+type PersistedOutboundIntent = {
+  parentTaskId?: unknown;
+  scope?: PersistedA2ATask['scope'];
+  kind?: unknown;
+  status?: unknown;
+  attempts?: unknown;
+  activityId?: unknown;
+};
+
+type PersistedOutboundState = {
+  schemaVersion?: unknown;
+  intents?: Record<string, PersistedOutboundIntent>;
+};
+
 type PersistedAgentJob = {
   id?: unknown;
   provider?: unknown;
@@ -50,6 +64,7 @@ type PersistedAgentJob = {
 
 type Observation = {
   a2a: PersistedA2AState;
+  outbound: PersistedOutboundState;
   jobs: PersistedAgentJob[];
   activities: unknown[];
 };
@@ -65,6 +80,7 @@ const conversationId = 'teams-a2a-chat-conversation';
 const activityId = 'teams-a2a-chat-duplicate-activity';
 const prompt = '현재 저장소의 핵심 위험을 검토하고 한 문장으로 요약해줘';
 const a2aStorePath = path.join(temporaryRoot, 'a2a.json');
+const a2aOutboundStorePath = path.join(temporaryRoot, 'a2a-outbound.json');
 const agentJobStorePath = path.join(temporaryRoot, 'agent-jobs.json');
 const agentWorkspace = path.join(temporaryRoot, 'agent-workspace');
 let child: ChildProcess | undefined;
@@ -123,6 +139,7 @@ try {
       COLLABORATION_STORE_PATH: path.join(temporaryRoot, 'collaboration.json'),
       AGENT_JOB_STORE_PATH: agentJobStorePath,
       A2A_STORE_PATH: a2aStorePath,
+      A2A_OUTBOUND_STORE_PATH: a2aOutboundStorePath,
       AGENT_ADMISSION_JOURNAL_PATH: path.join(temporaryRoot, 'agent-admission.json'),
       GENUI_ACTION_STORE_PATH: path.join(temporaryRoot, 'genui-actions.json'),
       RESPONSE_MODE_STORE_PATH: path.join(temporaryRoot, 'response-modes.json'),
@@ -172,6 +189,8 @@ try {
   const records = Object.values(observed.a2a.records ?? {}).filter((record) => sameScope(record.scope));
   const dispatches = Object.values(observed.a2a.dispatchIntents ?? {})
     .filter((dispatch) => sameScope(dispatch.scope));
+  const outboundIntents = Object.values(observed.outbound.intents ?? {})
+    .filter((intent) => sameScope(intent.scope));
   const children = dispatches.flatMap((dispatch) => (
     Array.isArray(dispatch.children) ? dispatch.children as PersistedDispatchChild[] : []
   ));
@@ -204,6 +223,20 @@ try {
   }
   if (dispatches.length !== 1) {
     failures.push(`expected one durable A2A dispatch intent; observed ${dispatches.length}`);
+  }
+  if (outboundIntents.length !== 1) {
+    failures.push(`expected one durable Teams completion outbound intent; observed ${outboundIntents.length}`);
+  } else {
+    const outbound = outboundIntents[0];
+    if (outbound.kind !== 'teams-completion') {
+      failures.push(`expected Teams completion outbound kind; observed ${String(outbound.kind)}`);
+    }
+    if (outbound.status !== 'connector-accepted') {
+      failures.push(`expected connector-accepted outbound state; observed ${String(outbound.status)}`);
+    }
+    if (outbound.attempts !== 1) {
+      failures.push(`duplicate Activity must dispatch one outbound attempt; observed ${String(outbound.attempts)}`);
+    }
   }
   if (children.length !== 1) {
     failures.push(`requestedRoles=['reviewer'] must select exactly one Codex child; observed ${children.length}`);
@@ -250,6 +283,7 @@ try {
       `Observed scoped AgentJobs: ${scopedJobs.length}`,
       `Observed Adaptive Cards: ${cardActivities.length}`,
       `A2A schema: ${String(observed.a2a.schemaVersion ?? 'missing')}`,
+      `A2A outbound schema: ${String(observed.outbound.schemaVersion ?? 'missing')}`,
       `Server tail: ${serverOutput.slice(-2_000)}`,
     ].join('\n'),
   );
@@ -285,6 +319,7 @@ async function observeContract(baseUrl: string, timeoutMs: number): Promise<Obse
   const deadline = Date.now() + timeoutMs;
   const activities: unknown[] = [];
   let a2a = await readJson<PersistedA2AState>(a2aStorePath, {});
+  let outbound = await readJson<PersistedOutboundState>(a2aOutboundStorePath, {});
   let jobs = await readJson<PersistedAgentJob[]>(agentJobStorePath, []);
   let legacyTerminalObservedAt: number | undefined;
 
@@ -292,6 +327,7 @@ async function observeContract(baseUrl: string, timeoutMs: number): Promise<Obse
     const outbox = await requestJson(baseUrl, `/api/debug/agent-outbox/${conversationId}`);
     if (Array.isArray(outbox.activities)) activities.push(...outbox.activities);
     a2a = await readJson<PersistedA2AState>(a2aStorePath, {});
+    outbound = await readJson<PersistedOutboundState>(a2aOutboundStorePath, {});
     jobs = await readJson<PersistedAgentJob[]>(agentJobStorePath, []);
 
     const scopedParents = Object.values(a2a.tasks ?? {}).filter((task) => sameScope(task.scope));
@@ -310,7 +346,7 @@ async function observeContract(baseUrl: string, timeoutMs: number): Promise<Obse
       && scopedChildren[0].status === 'completed'
       && terminalCards.length >= 1
     ) {
-      return { a2a, jobs, activities };
+      return { a2a, outbound, jobs, activities };
     }
 
     const scopedJobs = jobs.filter((job) => (
@@ -327,7 +363,7 @@ async function observeContract(baseUrl: string, timeoutMs: number): Promise<Obse
       if (Date.now() - legacyTerminalObservedAt >= 250) {
         const finalOutbox = await requestJson(baseUrl, `/api/debug/agent-outbox/${conversationId}`);
         if (Array.isArray(finalOutbox.activities)) activities.push(...finalOutbox.activities);
-        return { a2a, jobs, activities };
+        return { a2a, outbound, jobs, activities };
       }
     }
     await delay(50);
@@ -337,6 +373,7 @@ async function observeContract(baseUrl: string, timeoutMs: number): Promise<Obse
   if (Array.isArray(finalOutbox.activities)) activities.push(...finalOutbox.activities);
   return {
     a2a: await readJson<PersistedA2AState>(a2aStorePath, {}),
+    outbound: await readJson<PersistedOutboundState>(a2aOutboundStorePath, {}),
     jobs: await readJson<PersistedAgentJob[]>(agentJobStorePath, []),
     activities,
   };
