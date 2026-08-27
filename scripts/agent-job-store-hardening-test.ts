@@ -14,6 +14,8 @@ import {
   type AgentJobScope,
 } from '../src/server/agent-job-store.js';
 
+const originalNodeEnv = process.env.NODE_ENV;
+process.env.NODE_ENV = 'test';
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-agent-job-store-hardening-'));
 const storeDirectory = path.join(root, 'stores');
 await fs.mkdir(storeDirectory, { mode: 0o700 });
@@ -78,6 +80,24 @@ async function assertRejectedUnchanged(label: string, records: unknown): Promise
 }
 
 try {
+  assert.throws(
+    () => new AgentJobStore(path.join(storeDirectory, 'unsafe-writer.json'), {
+      writeAtomicJson: async () => undefined,
+    } as never),
+    /test-only writer/i,
+    'the production constructor must reject an arbitrary persistence writer override',
+  );
+  process.env.NODE_ENV = 'production';
+  assert.throws(
+    () => AgentJobStore.createForTesting(
+      path.join(storeDirectory, 'production-test-writer.json'),
+      {},
+      async () => undefined,
+    ),
+    /NODE_ENV=test/,
+    'the test-only factory must be closed outside the test runtime',
+  );
+  process.env.NODE_ENV = 'test';
   await assertRejectedUnchanged('non-array-root', { jobs: [currentJob()] });
   await assertRejectedUnchanged('non-object-record', [null]);
   await assertRejectedUnchanged('missing-id', [{ ...currentJob(), id: undefined }]);
@@ -193,6 +213,84 @@ try {
     'provider identity cannot be changed after job creation',
   );
 
+  const initializeRacePath = path.join(storeDirectory, 'initialize-race.json');
+  await fs.writeFile(initializeRacePath, JSON.stringify([{
+    id: 'task-stale-legacy',
+    prompt: 'stale legacy snapshot',
+    mode: 'read-only',
+    status: 'completed',
+    conversationId: 'legacy-conversation',
+    requesterId: 'legacy-user',
+    progress: [],
+    result: 'stale result',
+    createdAt: '2026-08-07T00:00:00Z',
+  }]), 'utf8');
+  const initializeRaceWriteStarted = deferredSignal();
+  const releaseInitializeRaceWrite = deferredSignal();
+  let initializeRaceWriteAttempt = 0;
+  const initializeRaceStore = AgentJobStore.createForTesting(
+    initializeRacePath,
+    { legacyProvider: 'codex' },
+    async (targetPath: string, value: unknown) => {
+      initializeRaceWriteAttempt += 1;
+      if (initializeRaceWriteAttempt === 1) {
+        initializeRaceWriteStarted.resolve();
+        await releaseInitializeRaceWrite.promise;
+      }
+      await fs.writeFile(targetPath, `${JSON.stringify(value)}\n`, 'utf8');
+    },
+  );
+  const initializeRaceCreatePending = initializeRaceStore.create({
+    prompt: 'must survive concurrent initialization',
+    provider: 'codex',
+    mode: 'read-only',
+    scope,
+  });
+  await waitForSignal(initializeRaceWriteStarted.promise, 'concurrent create write');
+  const initializeRacePending = initializeRaceStore.initialize();
+  // Give initialize() a turn to expose the stale-read/queued-write race while
+  // the create write is deliberately held open.
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  releaseInitializeRaceWrite.resolve();
+  const initializeRaceCreated = await initializeRaceCreatePending;
+  await initializeRacePending;
+  const initializeRaceRestarted = new AgentJobStore(initializeRacePath);
+  await initializeRaceRestarted.initialize();
+  assert.ok(
+    initializeRaceRestarted.get(initializeRaceCreated.id, scope),
+    'initialize must serialize behind an active mutation instead of overwriting it with a stale snapshot',
+  );
+
+  const migrationFailurePath = path.join(storeDirectory, 'migration-failure.json');
+  await fs.writeFile(migrationFailurePath, JSON.stringify([{
+    id: 'task-migration-failure',
+    prompt: 'legacy migration must remain private until persisted',
+    mode: 'read-only',
+    status: 'completed',
+    conversationId: 'legacy-conversation',
+    requesterId: 'legacy-user',
+    progress: [],
+    result: 'legacy result',
+    createdAt: '2026-08-07T00:00:00Z',
+  }]), 'utf8');
+  const migrationFailureStore = AgentJobStore.createForTesting(
+    migrationFailurePath,
+    { legacyProvider: 'codex' },
+    async () => {
+      throw new Error('synthetic migration persistence failure');
+    },
+  );
+  await assert.rejects(
+    () => migrationFailureStore.initialize(),
+    /synthetic migration persistence failure/,
+    'a failed legacy migration write rejects initialization',
+  );
+  assert.deepEqual(
+    migrationFailureStore.listLocalOnly(),
+    [],
+    'a failed migration must not publish the uncommitted migrated snapshot',
+  );
+
   const durableVisibilityPath = path.join(storeDirectory, 'durable-visibility.json');
   const createWriteStarted = deferredSignal();
   const releaseCreateWrite = deferredSignal();
@@ -209,8 +307,10 @@ try {
     { started: failedWriteStarted, release: releaseFailedWrite, fail: true },
   ];
   let writeAttempt = 0;
-  const durableVisibilityStore = new AgentJobStore(durableVisibilityPath, {
-    writeAtomicJson: async (targetPath: string, value: unknown) => {
+  const durableVisibilityStore = AgentJobStore.createForTesting(
+    durableVisibilityPath,
+    {},
+    async (targetPath: string, value: unknown) => {
       const gate = writeGates[writeAttempt++];
       assert.ok(gate, 'unexpected durable visibility write attempt');
       gate.started.resolve();
@@ -218,7 +318,7 @@ try {
       if (gate.fail) throw new Error('synthetic deferred atomic write failure');
       await fs.writeFile(targetPath, `${JSON.stringify(value)}\n`, 'utf8');
     },
-  });
+  );
   const createPending = durableVisibilityStore.create({
     prompt: 'durable visibility create',
     provider: 'codex',
@@ -355,5 +455,7 @@ try {
 
   console.log('PASS: AgentJobStore rejects malformed records, preserves ACL scope, and publishes mutations only after atomic persistence');
 } finally {
+  if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+  else process.env.NODE_ENV = originalNodeEnv;
   await fs.rm(root, { recursive: true, force: true });
 }

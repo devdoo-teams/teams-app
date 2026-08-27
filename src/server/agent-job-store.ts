@@ -69,32 +69,68 @@ export interface AgentJob {
 
 export type AgentJobStoreOptions = Readonly<{
   legacyProvider?: CliAgentProvider;
-  /** Test seam for proving that readers observe only durably committed snapshots. */
-  writeAtomicJson?: typeof atomicWriteJson;
 }>;
 
 export class AgentJobStore {
   private jobs: AgentJob[] = [];
   private writeChain: Promise<void> = Promise.resolve();
+  private testOnlyWriteAtomicJson?: typeof atomicWriteJson;
 
   constructor(
     private readonly filePath: string,
     private readonly options: AgentJobStoreOptions = {},
-  ) {}
+  ) {
+    if ('writeAtomicJson' in options) {
+      throw new Error('AgentJobStore test-only writer must use createForTesting()');
+    }
+  }
+
+  /** @internal Test-only factory for deterministic persistence race injection. */
+  static createForTesting(
+    filePath: string,
+    options: AgentJobStoreOptions,
+    writeAtomicJson: typeof atomicWriteJson,
+  ): AgentJobStore {
+    if (process.env.NODE_ENV !== 'test') {
+      throw new Error('AgentJobStore test-only writer requires NODE_ENV=test');
+    }
+    const store = new AgentJobStore(filePath, options);
+    store.testOnlyWriteAtomicJson = writeAtomicJson;
+    return store;
+  }
 
   async initialize(): Promise<void> {
-    try {
-      const raw = await readAtomicJsonStore(this.filePath);
-      const parsed = JSON.parse(raw) as unknown;
-      const loaded = loadJobs(parsed, this.filePath, this.options.legacyProvider);
-      // Do not replace the in-memory state or rewrite the file until every
-      // record and cross-record scope relationship has passed validation.
-      this.jobs = loaded.jobs;
-      if (loaded.migrated) await this.persist();
-    } catch (error: any) {
-      if (error?.code !== 'ENOENT') throw error;
-      await this.persist();
-    }
+    const operation = this.writeChain.then(async () => {
+      const previousJobs = this.jobs;
+      try {
+        let nextJobs: AgentJob[];
+        let requiresPersistence = false;
+        try {
+          const raw = await readAtomicJsonStore(this.filePath);
+          const parsed = JSON.parse(raw) as unknown;
+          const loaded = loadJobs(parsed, this.filePath, this.options.legacyProvider);
+          nextJobs = loaded.jobs.map(cloneAgentJob);
+          requiresPersistence = loaded.migrated;
+        } catch (error: any) {
+          if (error?.code !== 'ENOENT') throw error;
+          nextJobs = [];
+          requiresPersistence = true;
+        }
+
+        // Initialization shares the mutation queue. Readers continue seeing
+        // the last durable snapshot, and migrated/new-store state is published
+        // only after its atomic write succeeds.
+        if (requiresPersistence) {
+          await this.writeAtomicJson(this.filePath, nextJobs.map(cloneAgentJob));
+        }
+        this.jobs = nextJobs;
+      } catch (error) {
+        this.jobs = previousJobs;
+        throw error;
+      }
+    });
+    this.writeChain = operation.then(() => undefined, () => undefined);
+    await operation;
   }
 
   async create(input: {
@@ -240,13 +276,6 @@ export class AgentJobStore {
     });
   }
 
-  private async persist(): Promise<void> {
-    const snapshot = this.jobs.map(cloneAgentJob);
-    const nextWrite = this.writeChain.then(() => this.writeAtomicJson(this.filePath, snapshot));
-    this.writeChain = nextWrite.catch(() => undefined);
-    await nextWrite;
-  }
-
   private enqueueMutation<T>(mutate: () => T): Promise<T> {
     const operation = this.writeChain.then(async () => {
       const previousJobs = this.jobs;
@@ -277,7 +306,7 @@ export class AgentJobStore {
   }
 
   private writeAtomicJson(filePath: string, value: unknown): Promise<void> {
-    return (this.options.writeAtomicJson ?? atomicWriteJson)(filePath, value);
+    return (this.testOnlyWriteAtomicJson ?? atomicWriteJson)(filePath, value);
   }
 }
 
