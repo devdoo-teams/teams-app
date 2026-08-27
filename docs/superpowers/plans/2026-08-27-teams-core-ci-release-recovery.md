@@ -1,0 +1,243 @@
+# Teams Core CI Release Recovery Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Keep the known public Teams service running while making the merged GitHub source, Core checks, immutable container image, Teams package, and later A2A/UI evidence prove one release identity.
+
+**Architecture:** The existing Dev Tunnel and `1.0.76` public process remain a preserved reference service, not the next release. GitHub Actions must verify Core, A2A, continuity, Docker runtime, and the package before an image promotion can run; the promotion workflow may publish only a tag or a manual run selected from `main`, and it must retain a machine-readable binding between source commit, package SHA, server bundle SHA, manifest SHA, and image digest. Codex read-only execution remains fail-closed until a separately proven OS boundary and worker authentication contract exists.
+
+**Tech Stack:** GitHub Actions, pinned Docker actions, Node.js 24, TypeScript/React Teams Core, Express/Teams SDK, deterministic ZIP packaging, GHCR provenance attestations, A2A JSON-RPC contracts, and Jira MP-160 evidence tracking.
+
+**Spec:** `docs/teams-release-workflow.md`, `docs/api-free-teams-roadmap.md`, and `AGENTS.md`.
+
+## Global Constraints
+
+- Preserve the running public `1.0.76` service and do not replace it until a newer release identity is independently proven.
+- The authoritative implementation checkout for this run is `/tmp/teams-core-recovery-verify.gJCiJT`; the FileProvider-affected Documents checkout is not used for builds.
+- Do not increment the app/package/manifest version for this CI control-plane or documentation change.
+- Increment the version only for a reproduced user-visible bug or feature with a failing regression test, passing implementation test, and Core evidence.
+- Never publish from an arbitrary branch, a pull request, or a tag that is not an ancestor of `main`.
+- Never treat `HTTP 200`, a CLI presence check, a helper/card test, or a local Docker image as Teams desktop/mobile or live A2A proof.
+- Do not generate a Seatbelt profile, copy the original Codex auth file, or bypass the provider-owned isolation lease.
+- Use existing authenticated in-app browser tabs for later portal work; do not create or close sessions during CI work.
+- Keep Jira MP-160 as the existing release-blocker record; add evidence there instead of duplicating it.
+
+---
+
+### Task 1: Synchronize the current execution plan
+
+**Files:**
+- Create: `docs/superpowers/plans/2026-08-27-teams-core-ci-release-recovery.md`
+- Review: `docs/superpowers/plans/2026-08-11-teams-release-recovery-replan.md`
+
+**Interfaces:**
+- Consumes: current checkout `01052e8f9cbad71767f4536d9773b39f498ca2be`, public health identity `1.0.76`/`944ae3a…`, PR #1, and Jira MP-160.
+- Produces: a current plan that does not treat stale `1.0.42` artifacts or old screenshots as current evidence.
+
+- [x] **Step 1: Record the current source and runtime facts.**
+
+  The current candidate is branch `recovery/teams-core-1.0.89` at `01052e8f9cbad71767f4536d9773b39f498ca2be`, with package/manifest `1.0.76`. The preserved public origin is `https://q3kj3s3z-3980.jpe1.devtunnels.ms`, currently serving source commit `944ae3ae2ed90841fd02df8280c895d63d63a822` and server bundle `c1a28900f8b9905877a15d80f491ff3bdce5b016b30b42ca6f2fa5e43da09658`.
+
+- [x] **Step 2: Mark stale plan content as historical.**
+
+  The older `2026-08-11` plan remains an archive of the earlier `1.0.42` run. It is not used as evidence or as the current execution source.
+
+### Task 2: Make release-artifact creation depend on Docker runtime verification
+
+**Files:**
+- Modify: `.github/workflows/core-ci.yml:104-178`
+- Test: `scripts/ci-workflow-contract-test.mjs`
+
+**Interfaces:**
+- Consumes: `core`, `a2a`, `continuity`, and `container` job conclusions.
+- Produces: an immutable artifact job whose `needs` includes `container`, so a failed image build/runtime smoke cannot still emit a release package.
+
+- [ ] **Step 1: Add a failing contract assertion.**
+
+  In `scripts/ci-workflow-contract-test.mjs`, extract the `artifact` job header and assert that its `needs` value includes `core`, `a2a`, `continuity`, and `container`.
+
+- [ ] **Step 2: Run the focused test and observe the expected failure.**
+
+  Run `node scripts/ci-workflow-contract-test.mjs`.
+
+  Expected result before the workflow edit: failure because the current artifact job declares only `[core, a2a, continuity]`.
+
+- [ ] **Step 3: Make the minimal workflow change.**
+
+  Change the artifact job declaration to:
+
+  ```yaml
+    artifact:
+      needs: [core, a2a, continuity, container]
+  ```
+
+- [ ] **Step 4: Run the focused test and the workflow contract suite.**
+
+  Run `node scripts/ci-workflow-contract-test.mjs` and `npm run test:docker-build-contract`.
+
+  Expected result: both pass, with no source or application-version change.
+
+- [ ] **Step 5: Commit the isolated workflow/test change.**
+
+  Run:
+
+  ```bash
+  git add .github/workflows/core-ci.yml scripts/ci-workflow-contract-test.mjs
+  git commit -m "ci: gate release artifacts on container verification"
+  ```
+
+### Task 3: Restrict image promotion to merged-main source and persist identity
+
+**Files:**
+- Modify: `.github/workflows/publish-image.yml:1-120`
+- Test: `scripts/image-publish-workflow-contract-test.mjs`
+
+**Interfaces:**
+- Consumes: `github.sha`, GitHub repository variables for the Teams manifest, the deterministic package script, the Core server marker, and the pushed image digest.
+- Produces: a promotion workflow that (a) runs only for manual `main` or a `vX.Y.Z` tag on a `main` ancestor, (b) builds and packages the exact commit, and (c) uploads `dist/evidence/release-identity.json` containing `sourceCommit`, `version`, `teamsPackageSha256`, `serverBundleSha256`, `manifestSha256`, and `imageDigest`.
+
+- [ ] **Step 1: Add failing contract assertions.**
+
+  Extend `scripts/image-publish-workflow-contract-test.mjs` to require all of the following text contracts:
+
+  ```js
+  requireText(/if:\s*\|[\s\S]*github\.event_name == 'workflow_dispatch'[\s\S]*github\.ref == 'refs\/heads\/main'/, 'manual promotion must be main-only');
+  requireText(/startsWith\(github\.ref, 'refs\/tags\/v'\)/, 'tag promotion must be version-tag-only');
+  requireText(/git fetch origin main/, 'tag promotion must fetch main for ancestry verification');
+  requireText(/git merge-base --is-ancestor/, 'tag promotion must prove the tag commit is on main');
+  requireText(/fetch-depth:\s*0/, 'promotion checkout must retain ancestry metadata');
+  requireText(/npm run check:deployment/, 'promotion must require a complete deployment variable contract');
+  requireText(/npm run package:app/, 'promotion must package the exact source commit');
+  requireText(/teamsPackageSha256/, 'promotion evidence must bind the Teams ZIP digest');
+  requireText(/serverBundleSha256/, 'promotion evidence must bind the server bundle digest');
+  requireText(/manifestSha256/, 'promotion evidence must bind the manifest digest');
+  requireText(/imageDigest/, 'promotion evidence must bind the pushed image digest');
+  requireText(/actions\/upload-artifact@[0-9a-f]{40}/, 'promotion identity must be retained as an immutable workflow artifact');
+  ```
+
+- [ ] **Step 2: Run the focused test and observe the expected failure.**
+
+  Run `node scripts/image-publish-workflow-contract-test.mjs`.
+
+  Expected result before the workflow edit: failure because manual runs are not restricted to `main`, tag ancestry is not checked, and package/image identity is not persisted together.
+
+- [ ] **Step 3: Add the main/tag promotion guard.**
+
+  Keep `workflow_dispatch` and `push.tags: ['v*.*.*']`, add this job condition, and fetch/check ancestry before installing dependencies:
+
+  ```yaml
+      if: >-
+        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+        (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+  ```
+
+  For tag events, run `git fetch origin main --depth=1` and reject the run unless `git merge-base --is-ancestor "$GITHUB_SHA" origin/main` succeeds. Use `fetch-depth: 0` on checkout.
+
+- [ ] **Step 4: Generate the exact package and pre-push identity.**
+
+  Supply the existing repository variables (`TEAMS_APP_ID`, `TEAMS_CATALOG_APP_ID`, `BOT_ID`, `BOT_CLIENT_ID`, `TENANT_ID`, `TAB_DOMAIN`, `CLIENT_ID`, and `APPLICATION_ID_URI`) to the job. Run `npm run check:deployment`, `npm run build:core`, `npm run test:core`, `npm run validate:manifest`, `npm run package:app`, and the deterministic package checks. Compute the ZIP SHA-256, read the ZIP manifest, read `dist/server/.teams-server-build-commit`, and compute the manifest SHA without printing credentials.
+
+- [ ] **Step 5: Bind the pushed digest and upload machine-readable evidence.**
+
+  After the `docker/build-push-action` step, write the digest from `steps.push.outputs.digest` into `dist/evidence/release-identity.json`, then upload `dist/evidence` and the verified ZIP with a pinned `actions/upload-artifact` action. The JSON must contain only identity fields and hashes.
+
+- [ ] **Step 6: Run the focused test and static workflow contracts.**
+
+  Run `node scripts/image-publish-workflow-contract-test.mjs`, `node scripts/ci-workflow-contract-test.mjs`, and `npm run test:docker-build-contract`.
+
+- [ ] **Step 7: Commit the promotion workflow/test change.**
+
+  Run:
+
+  ```bash
+  git add .github/workflows/publish-image.yml scripts/image-publish-workflow-contract-test.mjs
+  git commit -m "ci: bind image promotion to merged release identity"
+  ```
+
+### Task 4: Re-run FileProvider-independent Core verification
+
+**Files:**
+- Inspect only: `package.json`, `package-lock.json`, `appPackage/manifest.json`, `.github/workflows/`, `src/server/`, `scripts/`
+- Test: existing Core and release contract commands
+
+**Interfaces:**
+- Consumes: the two CI workflow commits from Tasks 2–3.
+- Produces: bounded evidence that Core/A2A/continuity contracts still pass without using the Documents/FileProvider checkout.
+
+- [ ] **Step 1: Verify the tracked worktree and identity.**
+
+  Run `git status --short --branch`, `git rev-parse HEAD`, and compare the package/manifest versions. Do not build if tracked source is dirty or FileProvider reads are unstable.
+
+- [ ] **Step 2: Run the bounded Core gate.**
+
+  Run `npm run typecheck:core`, `npm run test:ci-workflow-contract`, `npm run test:image-publish-workflow-contract`, `npm run test:docker-build-contract`, `npm run build:core`, `npm run test:core`, `npm run validate:manifest`, and `npm run test:package-determinism` sequentially with bounded timeouts.
+
+- [ ] **Step 3: Verify A2A contract coverage separately.**
+
+  Run the existing A2A contract, lifecycle, authorization, JSON-RPC, and telemetry scripts. Treat these as contract evidence only until a public authenticated multi-agent round trip is observed.
+
+- [ ] **Step 4: Preserve the current public service.**
+
+  Confirm the local server PID, Dev Tunnel host PID, public `/api/health`, and `/tabs/home/` remain the preserved `1.0.76` identity. Do not restart or replace it during this CI-only work.
+
+### Task 5: Resolve external promotion gates without guessing
+
+**Files:**
+- Update only through existing systems: GitHub PR #1, GitHub variables/secrets, approved hosting, existing in-app browser tabs, Jira MP-160.
+
+**Interfaces:**
+- Consumes: successful merged-main CI and the uploaded identity artifact.
+- Produces: an immutable image deployment and an existing Teams app update tied to the same identity.
+
+- [ ] **Step 1: Keep PR #1 Draft until the user explicitly authorizes merge.**
+
+  Confirm all checks pass and review the diff; do not merge or mark ready automatically.
+
+- [ ] **Step 2: Configure the approved stable host and durable storage.**
+
+  Do not select Vercel, Fly.io, Railway, Render, or another host by inference. The host must support one persistent process/replica and durable storage for the current file-JSON contract, or the store must be migrated before scaling A2A workers.
+
+- [ ] **Step 3: Publish only from the merged commit.**
+
+  Use the guarded workflow, record the image digest and identity artifact, and deploy by digest. Verify `/api/health`, `/tabs/home/`, hashed assets, and the release identity before any Teams upload.
+
+- [ ] **Step 4: Reuse the existing in-app browser update tab.**
+
+  Update the existing app through Admin Center → existing app → new version → file upload only after a qualifying version/package change. Read back the published version and preserve the login session.
+
+- [ ] **Step 5: Complete desktop/mobile and live A2A gates.**
+
+  Use Computer Use for Teams desktop accessibility/screenshot evidence, then obtain current mobile screenshots from the user. For A2A, require authenticated Agent Card, SendMessage/GetTask/ListTasks/CancelTask, independent provider identities, persistence, cancellation/restart recovery, telemetry, and Teams UI evidence.
+
+### Task 6: Keep Codex read-only execution fail-closed until its real boundary is proven
+
+**Files:**
+- Inspect: `src/server/production-agent-isolation.ts`, `src/server/agent-execution-policy.ts`, `src/server/codex-runner.ts`, `scripts/production-agent-isolation-test.ts`
+- Track: Jira MP-160
+
+**Interfaces:**
+- Consumes: actual worker authentication and OS isolation evidence supplied by an approved deployment.
+- Produces: either a separately reviewed provider implementation with regression/Core evidence or a measured unavailable state; never a silent security relaxation.
+
+- [ ] **Step 1: Preserve current invariants.**
+
+  Provider-owned leases, canonical projection, denied entries, TOCTOU/symlink/hardlink checks, isolated `HOME/CODEX_HOME`, and process-tree control remain required.
+
+- [ ] **Step 2: Do not equate CLI presence/authentication with worker readiness.**
+
+  A server-level `codex login status` does not prove that an isolated worker can authenticate or complete a bounded turn. The status surface must remain conservative until a real bounded probe is implemented.
+
+- [ ] **Step 3: If an approved provider becomes available, use TDD.**
+
+  Add a failing test for the exact provider command/environment invariants, verify the red result, implement the minimum provider, run the focused and Core tests, and only then consider a qualifying version bump and release.
+
+---
+
+## Self-review
+
+- CI provenance: Tasks 2–4 cover job dependencies, merged-main promotion, package/image identity, Core/A2A tests, and preservation of the current service.
+- Product runtime: Task 5 covers stable hosting, Admin Center update, desktop/mobile UI, and live A2A gates that CI cannot prove.
+- Security: Task 6 prevents the screenshot error from being “fixed” by removing the isolation requirement or copying user credentials.
+- Version policy: Tasks 1–4 are documentation/control-plane changes and do not increment `1.0.76`; a later functional change must satisfy the global release policy.
+- No placeholders or guessed provider credentials are required by this plan.
+
