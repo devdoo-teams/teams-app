@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
-import { isFullCommitOid } from './fileprovider-git-clean.mjs';
+import { isFullCommitOid, resolvePinnedCommitOid } from './fileprovider-git-clean.mjs';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 import { parseServerBuildMarker } from './server-build-marker.mjs';
 
@@ -11,7 +11,7 @@ const root = process.cwd();
 const runtimeRoot = resolveRuntimeDistRoot(root);
 const clientAssets = path.join(runtimeRoot, 'client', 'assets');
 const serverDir = path.join(runtimeRoot, 'server');
-const currentCommit = process.env.TEAMS_SOURCE_COMMIT;
+const currentCommit = process.env.TEAMS_SOURCE_COMMIT ?? resolvePinnedCommitOid(root);
 assert.equal(
   isFullCommitOid(currentCommit),
   true,
