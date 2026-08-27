@@ -1,20 +1,20 @@
 import assert from 'node:assert/strict';
+import type { ChildProcess } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { ChildProcess } from 'node:child_process';
 
 import {
   AgentExecutionUnavailableError,
   type AgentIsolationSpawnOptions,
 } from '../src/server/agent-execution-policy.js';
+import { CODEX_READ_ONLY_PERMISSION_ARGS } from '../src/server/codex-permission-profile-isolation-provider.js';
 import { createProductionAgentExecutionPolicy } from '../src/server/production-agent-isolation.js';
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-production-agent-isolation-'));
 const sourceWorkspace = path.join(root, 'source');
-const profilePath = path.join(root, 'read-only.sb');
-const sandboxExecPath = path.join(root, 'sandbox-exec');
-const codexAuthFile = path.join(root, 'codex-auth.json');
+const serviceCodexHome = path.join(root, 'service-codex-home');
+const codexExecutable = path.join(root, 'codex');
 const scope = {
   tenantId: 'tenant-a',
   requesterId: 'requester-a',
@@ -26,6 +26,7 @@ const spawnCalls: Array<{
   options: AgentIsolationSpawnOptions;
 }> = [];
 const fakeChild = {} as ChildProcess;
+let preflightCalls = 0;
 
 const fakeSpawn = (
   command: string,
@@ -42,192 +43,98 @@ const unavailableDecision = {
 };
 
 try {
-  const productionIndex = await fs.readFile(
-    path.resolve(process.cwd(), 'src/server/index.ts'),
-    'utf8',
-  );
-  assert.match(
-    productionIndex,
-    /createProductionAgentExecutionPolicy\(/u,
-    'production composition must build the explicit execution policy',
-  );
-  assert.match(
-    productionIndex,
-    /executionPolicy:\s*agentExecutionPolicy/u,
-    'production AgentService must receive the explicit execution policy',
-  );
-  assert.match(
-    productionIndex,
-    /AGENT_ISOLATION_PROFILE/u,
-    'production composition must use an explicit isolation profile configuration',
-  );
-  assert.match(
-    productionIndex,
-    /AGENT_CODEX_AUTH_FILE/u,
-    'production composition must use an explicit Codex credential source instead of the user home at runtime',
-  );
+  const productionIndex = await fs.readFile(path.resolve(process.cwd(), 'src/server/index.ts'), 'utf8');
+  assert.match(productionIndex, /createProductionAgentExecutionPolicy\(/u);
+  assert.match(productionIndex, /executionPolicy:\s*agentExecutionPolicy/u);
+  assert.match(productionIndex, /AGENT_CODEX_HOME/u, 'production must select one service CODEX_HOME outside the projection');
+  assert.doesNotMatch(productionIndex, /AGENT_CODEX_AUTH_FILE/u, 'production must not copy raw auth files into jobs');
 
-  await fs.mkdir(sourceWorkspace, { recursive: true, mode: 0o700 });
   await fs.mkdir(path.join(sourceWorkspace, 'src'), { recursive: true, mode: 0o700 });
   await fs.writeFile(path.join(sourceWorkspace, 'package.json'), '{"private":true}\n', { mode: 0o600 });
   await fs.writeFile(path.join(sourceWorkspace, 'src', 'readme.txt'), 'read-only fixture\n', { mode: 0o600 });
-  await fs.writeFile(profilePath, '(version 1)\n(deny default)\n', { mode: 0o600 });
-  await fs.writeFile(sandboxExecPath, 'test-only executable placeholder\n', { mode: 0o700 });
-  await fs.writeFile(codexAuthFile, '{"auth_mode":"test-fixture"}\n', { mode: 0o600 });
+  await fs.mkdir(serviceCodexHome, { mode: 0o700 });
+  await fs.writeFile(path.join(serviceCodexHome, 'auth.json'), '{"fixture":"service-auth"}\n', { mode: 0o600 });
+  await fs.writeFile(codexExecutable, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
 
   const missingConfiguration = createProductionAgentExecutionPolicy({
     sourceWorkspace,
     isProduction: true,
     canReadScope: () => true,
   });
-  assert.deepEqual(
-    missingConfiguration.authorize(scope, 'read-only'),
-    unavailableDecision,
-    'production remains fail-closed when no explicit Seatbelt profile is configured',
-  );
+  assert.deepEqual(missingConfiguration.authorize(scope, 'read-only'), unavailableDecision);
   await assert.rejects(
     () => missingConfiguration.prepareWorkspace('read-only', scope, 'inspect only'),
     (error: unknown) => error instanceof AgentExecutionUnavailableError && error.code === 'UNAVAILABLE',
-    'missing production isolation configuration must not create a read-only workspace',
   );
 
   const nonDarwin = createProductionAgentExecutionPolicy({
     sourceWorkspace,
     isProduction: true,
     platform: 'linux',
-    profilePath,
-    sandboxExecPath,
+    codexHome: serviceCodexHome,
+    codexExecutable,
+    nativePreflight: async () => undefined,
     canReadScope: () => true,
   });
-  assert.deepEqual(
-    nonDarwin.authorize(scope, 'read-only'),
-    unavailableDecision,
-    'production does not enable the macOS provider on another platform',
-  );
+  assert.deepEqual(nonDarwin.authorize(scope, 'read-only'), unavailableDecision);
 
   const localConfiguration = createProductionAgentExecutionPolicy({
     sourceWorkspace,
     isProduction: false,
     platform: 'darwin',
-    profilePath,
-    sandboxExecPath,
+    codexHome: serviceCodexHome,
+    codexExecutable,
+    nativePreflight: async () => undefined,
     canReadScope: () => true,
   });
-  assert.deepEqual(
-    localConfiguration.authorize(scope, 'read-only'),
-    unavailableDecision,
-    'local composition does not silently enable the production isolation boundary',
-  );
+  assert.deepEqual(localConfiguration.authorize(scope, 'read-only'), unavailableDecision);
 
   assert.throws(
     () => createProductionAgentExecutionPolicy({
       sourceWorkspace,
       isProduction: true,
       platform: 'darwin',
-      profilePath: 'relative-read-only.sb',
+      codexHome: 'relative-codex-home',
+      codexExecutable,
       canReadScope: () => true,
     }),
-    /absolute.*profile|profile.*absolute/i,
-    'production rejects a guessed or relative isolation profile path',
-  );
-
-  const insecureAuthFile = path.join(root, 'insecure-codex-auth.json');
-  await fs.writeFile(insecureAuthFile, '{"fixture":"insecure"}\n', { mode: 0o600 });
-  await fs.chmod(insecureAuthFile, 0o644);
-  const insecureAuthPolicy = createProductionAgentExecutionPolicy({
-    sourceWorkspace,
-    isProduction: true,
-    platform: 'darwin',
-    profilePath,
-    sandboxExecPath,
-    codexAuthFile: insecureAuthFile,
-    canReadScope: () => true,
-    spawn: fakeSpawn,
-  });
-  await assert.rejects(
-    () => insecureAuthPolicy.prepareWorkspace('read-only', scope, 'inspect only'),
-    (error: unknown) => error instanceof AgentExecutionUnavailableError
-      && error.reason === 'provider-rejected-request',
-    'group/world-readable Codex credentials must never be staged',
-  );
-
-  const invalidAuthFile = path.join(root, 'invalid-codex-auth.json');
-  await fs.writeFile(invalidAuthFile, 'not-json\n', { mode: 0o600 });
-  const invalidAuthPolicy = createProductionAgentExecutionPolicy({
-    sourceWorkspace,
-    isProduction: true,
-    platform: 'darwin',
-    profilePath,
-    sandboxExecPath,
-    codexAuthFile: invalidAuthFile,
-    canReadScope: () => true,
-    spawn: fakeSpawn,
-  });
-  await assert.rejects(
-    () => invalidAuthPolicy.prepareWorkspace('read-only', scope, 'inspect only'),
-    (error: unknown) => error instanceof AgentExecutionUnavailableError
-      && error.reason === 'provider-rejected-request',
-    'malformed Codex credentials must never be staged',
-  );
-
-  const workspaceAuthFile = path.join(sourceWorkspace, 'codex-auth.json');
-  await fs.writeFile(workspaceAuthFile, '{"fixture":"source-workspace"}\n', { mode: 0o600 });
-  const workspaceAuthPolicy = createProductionAgentExecutionPolicy({
-    sourceWorkspace,
-    isProduction: true,
-    platform: 'darwin',
-    profilePath,
-    sandboxExecPath,
-    codexAuthFile: workspaceAuthFile,
-    canReadScope: () => true,
-    spawn: fakeSpawn,
-  });
-  await assert.rejects(
-    () => workspaceAuthPolicy.prepareWorkspace('read-only', scope, 'inspect only'),
-    (error: unknown) => error instanceof AgentExecutionUnavailableError
-      && error.reason === 'provider-rejected-request',
-    'credentials stored inside the source workspace must never be staged',
+    /absolute/i,
   );
 
   const configured = createProductionAgentExecutionPolicy({
     sourceWorkspace,
     isProduction: true,
     platform: 'darwin',
-    profilePath,
-    sandboxExecPath,
-    codexAuthFile,
+    codexHome: serviceCodexHome,
+    codexExecutable,
+    nativePreflight: async () => { preflightCalls += 1; },
     canReadScope: () => true,
     canMutateScope: () => false,
     spawn: fakeSpawn,
   });
-  assert.deepEqual(
-    configured.authorize(scope, 'read-only'),
-    { allowed: true },
-    'an explicit trusted macOS profile enables the read-only policy decision',
-  );
-  assert.deepEqual(
-    configured.authorize(scope, 'workspace-write'),
-    { allowed: false, reason: 'write-forbidden' },
-    'read-only isolation wiring does not broaden the write authorization boundary',
-  );
+  assert.deepEqual(configured.authorize(scope, 'read-only'), { allowed: true });
+  assert.deepEqual(configured.authorize(scope, 'workspace-write'), { allowed: false, reason: 'write-forbidden' });
 
   const prepared = await configured.prepareWorkspace('read-only', scope, 'inspect only the projected workspace');
   try {
     assert.equal(prepared.projected, true);
-    assert.equal(prepared.isolationLease?.providerId, 'macos-seatbelt');
-    const stagedAuthFile = path.join(prepared.environmentOverrides?.CODEX_HOME ?? '', 'auth.json');
-    assert.equal(
-      await fs.readFile(stagedAuthFile, 'utf8'),
-      '{"auth_mode":"test-fixture"}\n',
-      'the explicit Codex auth file is copied into the disposable isolated CODEX_HOME',
+    assert.equal(prepared.isolationLease?.providerId, 'codex-permission-profile');
+    assert.equal(prepared.environmentOverrides?.CODEX_HOME, await fs.realpath(serviceCodexHome));
+    assert.equal(preflightCalls, 1);
+    await assert.rejects(
+      () => fs.access(path.join(prepared.workspace, '.isolated-home', '.codex', 'auth.json')),
+      'the projection must not contain a raw auth copy',
     );
-    const stagedAuthStat = await fs.stat(stagedAuthFile);
-    assert.equal(stagedAuthStat.mode & 0o777, 0o600, 'the staged auth file is owner-only');
+
     prepared.isolationLease?.bindJob('job-1');
+    const args = [
+      'exec', '--json', ...CODEX_READ_ONLY_PERMISSION_ARGS,
+      '--cd', prepared.workspace, '--', 'inspect only the projected workspace',
+    ];
     await prepared.isolationLease?.spawn(
       { ...scope, jobId: 'job-1' },
-      'codex',
-      ['--json', '--sandbox', 'read-only'],
+      codexExecutable,
+      args,
       {
         cwd: prepared.workspace,
         env: prepared.environmentOverrides ?? {},
@@ -236,17 +143,13 @@ try {
       },
     );
     assert.equal(spawnCalls.length, 1);
-    assert.equal(spawnCalls[0]?.command, sandboxExecPath);
-    assert.deepEqual(
-      spawnCalls[0]?.args,
-      ['-f', profilePath, 'codex', '--json', '--sandbox', 'read-only'],
-      'production read-only children launch only through the configured Seatbelt profile',
-    );
+    assert.equal(spawnCalls[0]?.command, await fs.realpath(codexExecutable));
+    assert.deepEqual(spawnCalls[0]?.args, args);
   } finally {
     await prepared.dispose();
   }
 
-  console.log('PASS: production AgentExecutionPolicy wiring is explicit, macOS-only, read-only, and fail-closed');
+  console.log('PASS: production AgentExecutionPolicy uses native Codex permission profiles without credential copies');
 } finally {
   await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 }
