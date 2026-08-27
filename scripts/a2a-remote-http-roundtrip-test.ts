@@ -134,7 +134,10 @@ assert.ok(aAddress && typeof aAddress === 'object');
   const body = JSON.parse(probe.body) as Record<string, any>;
   assert.equal(body.remoteCard.version, '1.0.76-agent-b');
   assert.equal(body.remoteCard.supportedInterfaces[0].url, 'https://agent-b.example.test/a2a/v1');
-  assert.equal(body.sent.status.state, 'TASK_STATE_SUBMITTED');
+  // A2A message/send returns the current task state after processing the
+  // message. This fixture's submit hook transitions synchronously, so the
+  // response must expose WORKING rather than the earlier SUBMITTED snapshot.
+  assert.equal(body.sent.status.state, 'TASK_STATE_WORKING');
   assert.equal(body.beforeCancel.status.state, 'TASK_STATE_WORKING');
   assert.equal(body.listed.totalSize, 1);
   assert.equal(body.listed.tasks[0].status.state, 'TASK_STATE_WORKING');
