@@ -1,7 +1,8 @@
 import fs from 'node:fs/promises';
 
 const prompt = process.argv.at(-1) ?? '';
-const configuredDelayMs = Number(process.env.FAKE_CODEX_DELAY_MS ?? 0);
+const promptDelayMs = Number(prompt.match(/\[FAKE_CODEX_DELAY_MS=(\d{1,5})\]/)?.[1] ?? 0);
+const configuredDelayMs = promptDelayMs || Number(process.env.FAKE_CODEX_DELAY_MS ?? 0);
 
 if (Number.isFinite(configuredDelayMs) && configuredDelayMs > 0) {
   await new Promise((resolve) => setTimeout(resolve, Math.min(configuredDelayMs, 10_000)));

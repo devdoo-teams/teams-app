@@ -78,9 +78,9 @@ const tenantId = 'teams-a2a-chat-tenant';
 const requesterId = 'teams-a2a-chat-requester';
 const conversationId = 'teams-a2a-chat-conversation';
 const activityId = 'teams-a2a-chat-duplicate-activity';
-const prompt = '현재 저장소의 핵심 위험을 검토하고 한 문장으로 요약해줘';
 const fakeCodexDelayMs = 1_500;
 const inboundResponseDeadlineMs = 750;
+const prompt = `현재 저장소의 핵심 위험을 검토하고 한 문장으로 요약해줘 [FAKE_CODEX_DELAY_MS=${fakeCodexDelayMs}]`;
 const a2aStorePath = path.join(temporaryRoot, 'a2a.json');
 const a2aOutboundStorePath = path.join(temporaryRoot, 'a2a-outbound.json');
 const agentJobStorePath = path.join(temporaryRoot, 'agent-jobs.json');
@@ -150,7 +150,6 @@ try {
       AGENT_SANDBOX_EXEC_PATH: '/usr/bin/sandbox-exec',
       CODEX_BIN: isolatedNodePath,
       CODEX_SCRIPT: 'scripts/fake-codex.mjs',
-      FAKE_CODEX_DELAY_MS: String(fakeCodexDelayMs),
       TEAMS_AGENT_CLI_PROVIDER: 'codex',
       TEAMS_A2A_AGENT_PROVIDERS: 'codex',
       TEAMS_AGENT_GLOBAL_LIMIT: '4',
