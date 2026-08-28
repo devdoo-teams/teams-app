@@ -17,6 +17,9 @@ import {
 import { formatWeatherMessage, type WeatherResponse } from './weather-service.js';
 
 const DEFAULT_BASE_URL = 'https://api.x.ai/v1';
+const XAI_PRODUCTION_HOST = 'api.x.ai';
+const XAI_PRODUCTION_PATH = '/v1';
+const LOOPBACK_TEST_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
 const DEFAULT_MODEL = 'grok-4.6';
 const MAX_CONVERSATION_MESSAGES = 10;
 const MAX_MESSAGE_LENGTH = 4_000;
@@ -296,7 +299,7 @@ function providerErrorOutput(error: unknown): ResponseEngineOutput {
       return errorOutput('Grok이 설정되지 않았습니다. 서버에 XAI_API_KEY를 설정하거나 결정형 모드로 전환하세요.', 'grok-not-configured');
     }
     if (error.code === 'invalid-url') {
-      return errorOutput('Grok 제공자 주소 설정이 올바르지 않습니다. http 또는 https 주소를 서버 환경변수로 설정하세요.', 'grok-invalid-url');
+      return errorOutput('Grok 제공자 주소 설정이 올바르지 않습니다. 운영 환경에서는 https://api.x.ai/v1만 사용할 수 있습니다.', 'grok-invalid-url');
     }
     if (error.code === 'timeout') return errorOutput('Grok 응답 시간이 초과되었습니다. 잠시 후 다시 시도하세요.', 'grok-timeout');
     if (error.code === 'tool') return errorOutput('Grok이 유효하지 않은 도구 요청을 반환했습니다. 요청을 다시 시도하세요.', 'grok-invalid-tool');
@@ -599,7 +602,26 @@ export class GrokResponseEngine implements ResponseEngine {
     } catch {
       throw new GrokProviderError('invalid-url');
     }
-    if (!['http:', 'https:'].includes(baseUrl.protocol) || baseUrl.search || baseUrl.hash) {
+    const productionBaseUrl = baseUrl.protocol === 'https:'
+      && baseUrl.hostname === XAI_PRODUCTION_HOST
+      && baseUrl.pathname === XAI_PRODUCTION_PATH
+      && !baseUrl.port
+      && !baseUrl.username
+      && !baseUrl.password
+      && !baseUrl.search
+      && !baseUrl.hash;
+    const loopbackTestBaseUrl = baseUrl.protocol === 'http:'
+      && LOOPBACK_TEST_HOSTS.has(baseUrl.hostname)
+      && baseUrl.pathname === XAI_PRODUCTION_PATH
+      && !baseUrl.username
+      && !baseUrl.password
+      && !baseUrl.search
+      && !baseUrl.hash
+      && process.env.NODE_ENV !== 'production'
+      && process.env.XAI_ALLOW_LOOPBACK_TEST === 'true'
+      && process.env.TEAMS_LOCAL_DEV === 'true'
+      && process.env.TEAMS_SKIP_AUTH === 'true';
+    if (!productionBaseUrl && !loopbackTestBaseUrl) {
       throw new GrokProviderError('invalid-url');
     }
 

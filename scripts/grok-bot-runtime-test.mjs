@@ -184,6 +184,7 @@ try {
     XAI_API_KEY: xaiKey,
     XAI_MODEL: 'grok-runtime-model',
     XAI_BASE_URL: `http://127.0.0.1:${xaiPort}/v1`,
+    XAI_ALLOW_LOOPBACK_TEST: 'true',
     TEAMS_RESPONSE_MODE_DEFAULT: 'grok',
     OPENAI_API_KEY: '',
     LOCAL_MODEL_BASE_URL: '',

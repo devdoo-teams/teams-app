@@ -181,6 +181,37 @@ async function main(): Promise<void> {
     assert.equal((plain.envelope.metadata as any).source, 'xai');
     assert.doesNotMatch(JSON.stringify(plain), /xai-test-secret/);
 
+    const untrustedBaseUrls = [
+      'http://127.0.0.1:43210/v1',
+      'https://attacker.example.test/v1',
+      'https://api.x.ai.evil.example.test/v1',
+    ];
+    for (const baseUrl of untrustedBaseUrls) {
+      const untrustedFetch = queueFetch([messageResponse('이 응답은 도달하면 안 됩니다.')]);
+      const invalidBaseUrl = await new GrokResponseEngine({
+        apiKey: 'untrusted-url-secret',
+        baseUrl,
+        fetchImpl: untrustedFetch.fetch,
+      }).run(await createInput(itemStore, createAgentServiceFake([]), '주소 검증'));
+      assert.equal(untrustedFetch.calls.length, 0, `untrusted base URL must be rejected before fetch: ${baseUrl}`);
+      assert.equal(invalidBaseUrl.envelope.metadata.errorCode, 'grok-invalid-url');
+      assert.doesNotMatch(JSON.stringify(invalidBaseUrl), /untrusted-url-secret/);
+    }
+
+    process.env.NODE_ENV = 'test';
+    process.env.XAI_ALLOW_LOOPBACK_TEST = 'true';
+    process.env.TEAMS_LOCAL_DEV = 'true';
+    process.env.TEAMS_SKIP_AUTH = 'true';
+    const loopbackFetch = queueFetch([messageResponse('로컬 fixture 응답')]);
+    const loopback = await new GrokResponseEngine({
+      apiKey: 'loopback-test-secret',
+      baseUrl: 'http://127.0.0.1:43210/v1',
+      fetchImpl: loopbackFetch.fetch,
+    }).run(await createInput(itemStore, createAgentServiceFake([]), '로컬 fixture'));
+    assert.equal(loopbackFetch.calls.length, 1, 'explicit loopback test mode may reach a loopback fixture');
+    assert.equal(loopback.text, '로컬 fixture 응답');
+    assert.doesNotMatch(JSON.stringify(loopback), /loopback-test-secret/);
+
     const forcedWeatherFetch = queueFetch([messageResponse('날씨 도구를 확인했습니다.')]);
     await new GrokResponseEngine({ apiKey: 'forced-tool-secret', fetchImpl: forcedWeatherFetch.fetch })
       .run(await createInput(itemStore, createAgentServiceFake([]), '날씨 알려줘'));
