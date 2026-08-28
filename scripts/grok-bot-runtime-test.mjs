@@ -135,6 +135,8 @@ const xaiServer = http.createServer(async (request, response) => {
 
   const output = {
     id: 'resp-grok-runtime',
+    object: 'response',
+    status: 'completed',
     output: [{
       type: 'message',
       role: 'assistant',
