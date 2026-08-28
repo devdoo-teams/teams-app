@@ -173,6 +173,7 @@ async function main(): Promise<void> {
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const token = 'response-mode-local-test-token-0123456789';
+  const grokExpected = optionalRuntimeUnconfigured && Boolean(process.env.XAI_API_KEY?.trim());
   const serverEnv = {
       ...process.env,
       NODE_ENV: 'development',
@@ -238,8 +239,18 @@ async function main(): Promise<void> {
       ['deterministic', true],
       ['openai', false],
       ['local', false],
-      ['grok', false],
+      ['grok', grokExpected],
     ]);
+    const health = await request(baseUrl, '/api/health', token);
+    assert.equal(health.response.status, 200);
+    if (grokExpected) {
+      assert.equal(health.body.genAI, 'grok-configured');
+      assert.equal(health.body.genAIProvider?.provider, 'grok');
+      assert.equal(health.body.responseProviders?.grok, true);
+      assert.equal(health.body.genAIProvider?.model, process.env.XAI_MODEL?.trim() || 'grok-4.6');
+      const configuredGrokKey = process.env.XAI_API_KEY?.trim() ?? '';
+      assertPass(!configuredGrokKey || !JSON.stringify(health.body).includes(configuredGrokKey), 'Grok health does not expose the xAI key');
+    }
     const publicJson = JSON.stringify(initial.body);
     assertPass(!publicJson.includes('OPENAI_API_KEY') && !publicJson.includes('LOCAL_MODEL_BASE_URL'), 'response-mode status has no secret or provider URL credential');
     assertPass(initial.body.mode === 'deterministic', 'new authenticated scope defaults to deterministic mode');
