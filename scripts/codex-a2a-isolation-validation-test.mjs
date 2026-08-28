@@ -82,6 +82,65 @@ try {
   });
   assert.deepEqual(copilotDefault, { ok: true, issues: [] }, 'a Copilot default has no effective Codex worker');
 
+  const unknownDefaultProvider = await validateCodexA2AIsolation({
+    env: {
+      ...validEnvironment,
+      TEAMS_AGENT_CLI_PROVIDER: 'grok',
+    },
+    platform: 'darwin',
+    verifyExecutableSignature: () => undefined,
+  });
+  assert.deepEqual(unknownDefaultProvider.issues.map(({ code }) => code), [
+    'TEAMS_AGENT_CLI_PROVIDER_INVALID',
+  ], 'an unknown default provider must be rejected like the runtime parser');
+
+  const unknownProvider = await validateCodexA2AIsolation({
+    env: {
+      ...validEnvironment,
+      TEAMS_A2A_AGENT_PROVIDERS: 'codex,grok',
+    },
+    platform: 'darwin',
+    verifyExecutableSignature: () => undefined,
+  });
+  assert.deepEqual(unknownProvider.issues.map(({ code }) => code), [
+    'TEAMS_A2A_AGENT_PROVIDERS_INVALID',
+  ], 'unknown A2A providers must be rejected like the runtime roster parser');
+
+  const blankProvider = await validateCodexA2AIsolation({
+    env: {
+      ...validEnvironment,
+      TEAMS_A2A_AGENT_PROVIDERS: 'codex,',
+    },
+    platform: 'darwin',
+    verifyExecutableSignature: () => undefined,
+  });
+  assert.deepEqual(blankProvider.issues.map(({ code }) => code), [
+    'TEAMS_A2A_AGENT_PROVIDERS_INVALID',
+  ], 'blank A2A provider entries must be rejected instead of filtered');
+
+  const maxRoster = await validateCodexA2AIsolation({
+    env: {
+      ...baseEnvironment,
+      TEAMS_AGENT_CLI_PROVIDER: 'copilot',
+      TEAMS_A2A_AGENT_PROVIDERS: Array.from({ length: 8 }, () => 'copilot').join(','),
+    },
+    platform: 'darwin',
+    verifyExecutableSignature: () => undefined,
+  });
+  assert.deepEqual(maxRoster, { ok: true, issues: [] }, 'the runtime maximum of eight workers remains valid');
+
+  const overLimitRoster = await validateCodexA2AIsolation({
+    env: {
+      ...baseEnvironment,
+      TEAMS_A2A_AGENT_PROVIDERS: Array.from({ length: 8 }, () => 'copilot').join(','),
+    },
+    platform: 'darwin',
+    verifyExecutableSignature: () => undefined,
+  });
+  assert.deepEqual(overLimitRoster.issues.map(({ code }) => code), [
+    'TEAMS_A2A_AGENT_PROVIDERS_LIMIT',
+  ], 'rosters above the runtime maximum must be rejected');
+
   const indexed = await validateCodexA2AIsolation({
     env: {
       ...validEnvironment,

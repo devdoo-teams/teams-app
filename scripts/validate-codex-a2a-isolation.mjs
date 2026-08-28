@@ -15,6 +15,7 @@ const CODE_SIGN_PATH = '/usr/bin/codesign';
 const OPENAI_TEAM_IDENTIFIER = '2DC432GLL2';
 const CODE_SIGN_REQUIREMENT = `identifier "codex" and anchor apple generic and certificate leaf[subject.OU] = "${OPENAI_TEAM_IDENTIFIER}"`;
 const NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
+const MAX_A2A_CLI_WORKERS = 8;
 
 const ISSUE_MESSAGES = Object.freeze({
   AGENT_CODEX_HOME_REQUIRED: 'AGENT_CODEX_HOME is required.',
@@ -38,6 +39,9 @@ const ISSUE_MESSAGES = Object.freeze({
   CODEX_SIGNATURE_PLATFORM: 'Signed Codex executable validation requires macOS.',
   CODEX_SIGNATURE_PREREQUISITE: 'The macOS codesign prerequisite is unavailable.',
   CODEX_SIGNATURE_INVALID: 'CODEX_BIN does not satisfy the trusted Codex signing requirement.',
+  TEAMS_AGENT_CLI_PROVIDER_INVALID: 'TEAMS_AGENT_CLI_PROVIDER must be either codex or copilot.',
+  TEAMS_A2A_AGENT_PROVIDERS_INVALID: 'TEAMS_A2A_AGENT_PROVIDERS may contain only codex and copilot.',
+  TEAMS_A2A_AGENT_PROVIDERS_LIMIT: `TEAMS_A2A_AGENT_PROVIDERS may register at most ${MAX_A2A_CLI_WORKERS} workers.`,
 });
 
 class SignaturePrerequisiteError extends Error {}
@@ -86,7 +90,9 @@ export async function validateCodexA2AIsolation({
 async function validateIndexedA2AHomes({ env, serviceHome, currentUid, issues }) {
   let ordinal = 0;
   const indexedHomes = new Set();
-  for (const provider of normalizeA2AAgentProviders(env)) {
+  const providers = normalizeA2AAgentProviders(env, issues);
+  if (!providers) return;
+  for (const provider of providers) {
     if (provider !== 'codex') continue;
     ordinal += 1;
     const variableName = `AGENT_CODEX_HOME_${ordinal}`;
@@ -111,19 +117,39 @@ async function validateIndexedA2AHomes({ env, serviceHome, currentUid, issues })
   }
 }
 
-function normalizeA2AAgentProviders(env) {
+function normalizeA2AAgentProviders(env, issues) {
   const defaultProvider = typeof env.TEAMS_AGENT_CLI_PROVIDER === 'string'
     ? env.TEAMS_AGENT_CLI_PROVIDER.trim() || 'codex'
     : 'codex';
+  if (!isSupportedA2AProvider(defaultProvider)) {
+    issues.push(issue('TEAMS_AGENT_CLI_PROVIDER_INVALID'));
+    return undefined;
+  }
   const rawProviders = typeof env.TEAMS_A2A_AGENT_PROVIDERS === 'string'
     ? env.TEAMS_A2A_AGENT_PROVIDERS.trim()
     : '';
   const requestedProviders = rawProviders
     ? rawProviders.split(',').map((entry) => entry.trim())
     : [defaultProvider];
-  return requestedProviders.includes(defaultProvider)
+  for (const provider of requestedProviders) {
+    if (!isSupportedA2AProvider(provider)) {
+      issues.push(issue('TEAMS_A2A_AGENT_PROVIDERS_INVALID'));
+      return undefined;
+    }
+  }
+
+  const providers = requestedProviders.includes(defaultProvider)
     ? requestedProviders
     : [defaultProvider, ...requestedProviders];
+  if (providers.length > MAX_A2A_CLI_WORKERS) {
+    issues.push(issue('TEAMS_A2A_AGENT_PROVIDERS_LIMIT'));
+    return undefined;
+  }
+  return providers;
+}
+
+function isSupportedA2AProvider(provider) {
+  return provider === 'codex' || provider === 'copilot';
 }
 
 function requiredAbsoluteValue(value, name, issues) {
