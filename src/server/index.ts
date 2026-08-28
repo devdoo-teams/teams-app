@@ -258,9 +258,9 @@ const a2aAgentProviders = parseAgentProviders(
 const providerRunners: Partial<Record<CliAgentProvider, ProviderNeutralAgentRunner>> = {
   [agentProvider]: codexRunner,
 };
-for (const provider of a2aAgentProviders) {
-  if (!providerRunners[provider]) {
-    providerRunners[provider] = new ProviderNeutralAgentRunner({ provider });
+for (const configuredAgent of a2aAgentProviders) {
+  if (!providerRunners[configuredAgent.provider]) {
+    providerRunners[configuredAgent.provider] = new ProviderNeutralAgentRunner({ provider: configuredAgent.provider });
   }
 }
 const agentWorkspace = path.resolve(process.env.AGENT_WORKSPACE ?? process.cwd());
@@ -1325,11 +1325,11 @@ const coreA2ARoles = Object.freeze(A2A_ROLE_CATALOG.map((role) => role.id));
 
 function a2aProviderFacts(): A2AProviderFact[] {
   const facts = createA2AProviderFacts(
-    a2aAgentProviders.map((provider) => ({
-      provider,
-      agentId: a2aAgentId(provider),
-      providerId: a2aProviderId(provider),
-      configured: Boolean(providerRunners[provider]),
+    a2aAgentProviders.map((configuredAgent) => ({
+      provider: configuredAgent.provider,
+      agentId: a2aAgentId(configuredAgent),
+      providerId: a2aProviderId(configuredAgent),
+      configured: Boolean(providerRunners[configuredAgent.provider]),
     })),
     configuredRemoteA2AAgent ? {
       provider: 'remote',
@@ -1347,29 +1347,30 @@ function a2aProviderFacts(): A2AProviderFact[] {
 }
 
 const a2aAgents = [
-  ...a2aAgentProviders.map((provider) => {
-  const agentId = a2aAgentId(provider);
-  return {
-    agentId,
-    providerId: a2aProviderId(provider),
-    kind: 'cli',
-    executionIdentity: `teams-core-${provider}`,
-    executionBoundaryId: `teams-core-${provider}-runner`,
-    roles: coreA2ARoles,
-    capabilities: A2A_CAPABILITIES,
-    authorize: ({ scope }: { scope: AgentJobScope }) => isOperator(scope),
-    authorizationPolicy: createA2AAgentAuthorizationPolicy({
-      authorize: (input) => (
-        input.agentId === agentId
-        && Boolean(input.scope.tenantId && input.scope.requesterId && input.scope.conversationId)
-        && (skipAuth || !configuredTenantId || input.scope.tenantId === configuredTenantId)
-        && isOperator(input.scope)
-        && Boolean(input.role && input.capabilities?.length)
-      ),
-    }),
-    executeChild: (input: A2AProductionChildExecutionInput) => executeA2AProviderChild(provider, input),
-    cancelChild: (input: A2AProductionChildCancellationInput) => cancelA2AProviderChild(provider, input),
-  };
+  ...a2aAgentProviders.map((configuredAgent) => {
+    const { provider } = configuredAgent;
+    const agentId = a2aAgentId(configuredAgent);
+    return {
+      agentId,
+      providerId: a2aProviderId(configuredAgent),
+      kind: 'cli',
+      executionIdentity: a2aExecutionIdentity(configuredAgent),
+      executionBoundaryId: a2aExecutionBoundaryId(configuredAgent),
+      roles: coreA2ARoles,
+      capabilities: A2A_CAPABILITIES,
+      authorize: ({ scope }: { scope: AgentJobScope }) => isOperator(scope),
+      authorizationPolicy: createA2AAgentAuthorizationPolicy({
+        authorize: (input) => (
+          input.agentId === agentId
+          && Boolean(input.scope.tenantId && input.scope.requesterId && input.scope.conversationId)
+          && (skipAuth || !configuredTenantId || input.scope.tenantId === configuredTenantId)
+          && isOperator(input.scope)
+          && Boolean(input.role && input.capabilities?.length)
+        ),
+      }),
+      executeChild: (input: A2AProductionChildExecutionInput) => executeA2AProviderChild(provider, input),
+      cancelChild: (input: A2AProductionChildCancellationInput) => cancelA2AProviderChild(provider, input),
+    };
   }),
   ...(configuredRemoteA2AAgent ? [configuredRemoteA2AAgent] : []),
   ...configuredRemoteA2ABatch.agents,
@@ -3682,27 +3683,58 @@ function isDeploymentGuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
-function parseAgentProviders(rawValue: string | undefined, defaultProvider: CliAgentProvider): readonly CliAgentProvider[] {
-  const values = new Set<CliAgentProvider>([defaultProvider]);
+type ConfiguredA2AProvider = Readonly<{
+  provider: CliAgentProvider;
+  ordinal: number;
+}>;
+
+const MAX_A2A_CLI_WORKERS = 8;
+
+function parseAgentProviders(rawValue: string | undefined, defaultProvider: CliAgentProvider): readonly ConfiguredA2AProvider[] {
   const raw = rawValue?.trim();
-  if (raw) {
-    for (const entry of raw.split(',')) {
-      const provider = entry.trim();
-      if (provider !== 'codex' && provider !== 'copilot') {
-        throw new Error('TEAMS_A2A_AGENT_PROVIDERS may contain only codex and copilot.');
-      }
-      values.add(provider);
+  const requested = raw ? raw.split(',').map((entry) => entry.trim()) : [defaultProvider];
+  for (const provider of requested) {
+    if (provider !== 'codex' && provider !== 'copilot') {
+      throw new Error('TEAMS_A2A_AGENT_PROVIDERS may contain only codex and copilot.');
     }
   }
-  return [...values];
+
+  // Preserve the legacy default worker when callers add only a secondary
+  // provider, while allowing repeated entries such as codex,codex to create
+  // independent server-registered Codex workers.
+  const providers = requested.includes(defaultProvider)
+    ? requested
+    : [defaultProvider, ...requested];
+  if (providers.length > MAX_A2A_CLI_WORKERS) {
+    throw new Error(`TEAMS_A2A_AGENT_PROVIDERS may register at most ${MAX_A2A_CLI_WORKERS} workers.`);
+  }
+
+  const ordinals = new Map<CliAgentProvider, number>();
+  return Object.freeze(providers.map((provider) => {
+    const ordinal = (ordinals.get(provider) ?? 0) + 1;
+    ordinals.set(provider, ordinal);
+    return Object.freeze({ provider, ordinal });
+  }));
 }
 
-function a2aAgentId(provider: CliAgentProvider): string {
-  return provider === 'copilot' ? 'teams-core-copilot' : 'teams-core-codex';
+function a2aAgentId(configuredAgent: ConfiguredA2AProvider): string {
+  const base = configuredAgent.provider === 'copilot' ? 'teams-core-copilot' : 'teams-core-codex';
+  return configuredAgent.ordinal === 1 ? base : `${base}-${configuredAgent.ordinal}`;
 }
 
-function a2aProviderId(provider: CliAgentProvider): string {
-  return provider === 'copilot' ? 'official-copilot-cli' : 'codex-cli';
+function a2aProviderId(configuredAgent: ConfiguredA2AProvider): string {
+  const base = configuredAgent.provider === 'copilot' ? 'official-copilot-cli' : 'codex-cli';
+  return configuredAgent.ordinal === 1 ? base : `${base}-${configuredAgent.ordinal}`;
+}
+
+function a2aExecutionIdentity(configuredAgent: ConfiguredA2AProvider): string {
+  const base = `teams-core-${configuredAgent.provider}`;
+  return configuredAgent.ordinal === 1 ? base : `${base}-${configuredAgent.ordinal}`;
+}
+
+function a2aExecutionBoundaryId(configuredAgent: ConfiguredA2AProvider): string {
+  const base = `${a2aExecutionIdentity(configuredAgent)}-runner`;
+  return base;
 }
 
 function createA2ARemoteAuthorizationPolicy(agentId: string) {
@@ -3718,8 +3750,8 @@ function createA2ARemoteAuthorizationPolicy(agentId: string) {
 }
 
 function cliProviderFromA2AProviderId(providerId: string): CliAgentProvider | undefined {
-  if (providerId === 'codex-cli') return 'codex';
-  if (providerId === 'official-copilot-cli') return 'copilot';
+  if (providerId === 'codex-cli' || /^codex-cli-[2-8]$/.test(providerId)) return 'codex';
+  if (providerId === 'official-copilot-cli' || /^official-copilot-cli-[2-8]$/.test(providerId)) return 'copilot';
   return undefined;
 }
 

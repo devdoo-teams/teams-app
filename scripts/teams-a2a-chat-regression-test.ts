@@ -174,7 +174,7 @@ try {
       CODEX_BIN: isolatedNodePath,
       CODEX_SCRIPT: 'scripts/fake-codex.mjs',
       TEAMS_AGENT_CLI_PROVIDER: 'codex',
-      TEAMS_A2A_AGENT_PROVIDERS: 'codex',
+      TEAMS_A2A_AGENT_PROVIDERS: 'codex,codex',
       TEAMS_AGENT_GLOBAL_LIMIT: '4',
       TEAMS_AGENT_TENANT_LIMIT: '4',
       COPILOTKIT_DETERMINISTIC_MODE: 'true',
@@ -280,28 +280,28 @@ try {
       failures.push(`duplicate Activity must dispatch one outbound attempt; observed ${String(outbound.attempts)}`);
     }
   }
-  if (children.length !== 1) {
-    failures.push(`requestedRoles=['reviewer'] must select exactly one Codex child; observed ${children.length}`);
+  if (children.length !== 2) {
+    failures.push(`two independently registered Codex workers must create two specialist children; observed ${children.length}`);
   } else {
-    if (children[0].role !== 'reviewer') {
-      failures.push(`expected reviewer child role; observed ${String(children[0].role)}`);
+    const childRoles = children.map((child) => child.role).sort();
+    if (JSON.stringify(childRoles) !== JSON.stringify(['release-auditor', 'reviewer'])) {
+      failures.push(`expected release-auditor and reviewer children; observed ${JSON.stringify(childRoles)}`);
     }
-    if (children[0].providerId !== 'codex-cli') {
-      failures.push(`expected codex-cli child provider; observed ${String(children[0].providerId)}`);
+    const childProviders = children.map((child) => child.providerId).sort();
+    if (JSON.stringify(childProviders) !== JSON.stringify(['codex-cli', 'codex-cli-2'])) {
+      failures.push(`expected two distinct Codex provider identities; observed ${JSON.stringify(childProviders)}`);
     }
-    if (children[0].status !== 'completed') {
-      failures.push(`expected terminal completed child; observed ${String(children[0].status)}`);
+    if (children.some((child) => child.status !== 'completed')) {
+      failures.push(`expected both specialist children to complete; observed ${JSON.stringify(children)}`);
     }
   }
   if (parents.length === 1 && parents[0].status !== 'completed') {
     failures.push(`expected terminal completed A2A parent; observed ${String(parents[0].status)}`);
   }
-  if (childJobs.length !== 1) {
-    failures.push(`duplicate Activity must execute exactly one bound child AgentJob; observed ${childJobs.length}`);
-  } else if (childJobs[0].provider !== 'codex' || childJobs[0].status !== 'completed') {
-    failures.push(
-      `expected one completed Codex AgentJob; observed provider=${String(childJobs[0].provider)} status=${String(childJobs[0].status)}`,
-    );
+  if (childJobs.length !== 2) {
+    failures.push(`duplicate Activity must execute exactly two independently bound Codex AgentJobs; observed ${childJobs.length}`);
+  } else if (childJobs.some((job) => job.provider !== 'codex' || job.status !== 'completed')) {
+    failures.push(`expected two completed Codex AgentJobs; observed ${JSON.stringify(childJobs)}`);
   }
   if (terminalCardActivities.length !== 1) {
     failures.push(`expected exactly one terminal Teams completion card; observed ${terminalCardActivities.length}`);
@@ -399,8 +399,8 @@ async function observeContract(baseUrl: string, timeoutMs: number): Promise<Obse
     if (
       scopedParents.length === 1
       && scopedParents[0].status === 'completed'
-      && scopedChildren.length === 1
-      && scopedChildren[0].status === 'completed'
+      && scopedChildren.length === 2
+      && scopedChildren.every((child) => child.status === 'completed')
       && scopedOutboundIntents.length === 1
       && !['queued', 'dispatching'].includes(String(scopedOutboundIntents[0].status))
       && terminalCards.length >= 1
