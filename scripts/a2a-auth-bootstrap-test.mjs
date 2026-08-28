@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -11,6 +12,7 @@ import {
   prepareWorkerHome,
   resolveWorkerHome,
   resolveDistinctWorkerHomes,
+  runWorkerLogin,
   validateExecutableInputs,
 } from './a2a-auth-bootstrap.mjs';
 
@@ -44,6 +46,112 @@ assert.deepEqual(
   },
 );
 assert.throws(() => createLoginInvocation({ codexBin: 'codex', codexHome: '/tmp/home' }), /absolute/i);
+
+let capturedLoginOptions;
+let successfulAbortCount = 0;
+const successfulChild = new EventEmitter();
+successfulChild.kill = () => false;
+const sentinelSecret = 'a2a-bootstrap-sentinel-secret';
+const successfulLogin = await runWorkerLogin({
+  codexBin: '/Applications/ChatGPT.app/Contents/Resources/codex',
+  codexHome: '/var/lib/teams/codex-worker-1',
+  env: {
+    PATH: '/usr/bin',
+    HOME: '/Users/operator',
+    TERM: 'xterm-256color',
+    CODEX_HOME: '/wrong/inherited/home',
+    A2A_BOOTSTRAP_SENTINEL: sentinelSecret,
+    OPENAI_API_KEY: sentinelSecret,
+    CODEX_BIN_SHA256: sentinelSecret,
+  },
+  maxAttempts: 1,
+  timeoutMs: 25,
+  spawnImpl: (_command, _args, options) => {
+    capturedLoginOptions = options;
+    options.signal.addEventListener('abort', () => {
+      successfulAbortCount += 1;
+    }, { once: true });
+    queueMicrotask(() => successfulChild.emit('close', 0, null));
+    return successfulChild;
+  },
+});
+assert.deepEqual(successfulLogin, { code: 0, signal: null });
+assert.equal(capturedLoginOptions.env.CODEX_HOME, '/var/lib/teams/codex-worker-1');
+assert.equal(capturedLoginOptions.env.PATH, '/usr/bin');
+assert.equal(capturedLoginOptions.env.HOME, '/Users/operator');
+assert.equal(capturedLoginOptions.env.CI, '1');
+assert.equal(capturedLoginOptions.env.A2A_BOOTSTRAP_SENTINEL, undefined);
+assert.equal(capturedLoginOptions.env.OPENAI_API_KEY, undefined);
+assert.equal(capturedLoginOptions.env.CODEX_BIN_SHA256, undefined);
+assert.doesNotMatch(JSON.stringify(capturedLoginOptions.env), new RegExp(sentinelSecret, 'u'));
+await new Promise((resolve) => setTimeout(resolve, 40));
+assert.equal(successfulAbortCount, 0, 'a completed login must clear its timeout');
+
+let timeoutSignal;
+let timeoutAbortCount = 0;
+const timedOutChild = new EventEmitter();
+timedOutChild.kill = () => false;
+await assert.rejects(
+  () => runWorkerLogin({
+    codexBin: '/Applications/ChatGPT.app/Contents/Resources/codex',
+    codexHome: '/var/lib/teams/codex-worker-1',
+    env: { PATH: '/usr/bin' },
+    maxAttempts: 1,
+    timeoutMs: 10,
+    spawnImpl: (_command, _args, options) => {
+      timeoutSignal = options.signal;
+      options.signal.addEventListener('abort', () => {
+        timeoutAbortCount += 1;
+        queueMicrotask(() => timedOutChild.emit('close', null, 'SIGTERM'));
+      }, { once: true });
+      return timedOutChild;
+    },
+  }),
+  (error) => {
+    assert.equal(error.code, 'CODEX_LOGIN_TIMEOUT');
+    assert.match(error.message, /timed out/i);
+    return true;
+  },
+);
+assert.equal(timeoutSignal.aborted, true, 'timed-out login must abort its child process');
+assert.equal(timeoutAbortCount, 1);
+await new Promise((resolve) => setTimeout(resolve, 30));
+assert.equal(timeoutAbortCount, 1, 'the timeout must be cleared after cleanup');
+
+let retryAttempts = 0;
+let activeLogins = 0;
+let maxActiveLogins = 0;
+const retriedLogin = await runWorkerLogin({
+  codexBin: '/Applications/ChatGPT.app/Contents/Resources/codex',
+  codexHome: '/var/lib/teams/codex-worker-1',
+  env: { PATH: '/usr/bin' },
+  maxAttempts: 2,
+  timeoutMs: 10,
+  spawnImpl: (_command, _args, options) => {
+    retryAttempts += 1;
+    activeLogins += 1;
+    maxActiveLogins = Math.max(maxActiveLogins, activeLogins);
+    const child = new EventEmitter();
+    child.kill = () => false;
+    if (retryAttempts === 1) {
+      options.signal.addEventListener('abort', () => {
+        queueMicrotask(() => {
+          activeLogins -= 1;
+          child.emit('close', null, 'SIGTERM');
+        });
+      }, { once: true });
+    } else {
+      queueMicrotask(() => {
+        activeLogins -= 1;
+        child.emit('close', 0, null);
+      });
+    }
+    return child;
+  },
+});
+assert.deepEqual(retriedLogin, { code: 0, signal: null });
+assert.equal(retryAttempts, 2, 'a timed-out worker login gets one deterministic retry');
+assert.equal(maxActiveLogins, 1, 'a retry must wait for the timed-out child cleanup');
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-a2a-auth-'));
 const executableFixture = path.join(root, 'codex-bin');

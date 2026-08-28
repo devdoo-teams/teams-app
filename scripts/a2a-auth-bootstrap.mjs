@@ -7,6 +7,36 @@ import path from 'node:path';
 
 const MAX_AUTH_FILE_BYTES = 1024 * 1024;
 const WORKERS = Object.freeze(['main', '1', '2']);
+const DEFAULT_LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
+const MAX_LOGIN_TIMEOUT_MS = 60 * 60 * 1000;
+const DEFAULT_LOGIN_ATTEMPTS = 2;
+const MAX_LOGIN_ATTEMPTS = 2;
+const LOGIN_ABORT_GRACE_MS = 250;
+const LOGIN_ENV_ALLOWLIST = Object.freeze([
+  'PATH',
+  'Path',
+  'HOME',
+  'USERPROFILE',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'LOCALAPPDATA',
+  'APPDATA',
+  'SYSTEMROOT',
+  'SystemRoot',
+  'WINDIR',
+  'PATHEXT',
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+  'TERM',
+  'COLORTERM',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+  'NODE_EXTRA_CA_CERTS',
+]);
 
 export function parseArguments(argv) {
   const args = [...argv];
@@ -86,6 +116,19 @@ export function createLoginInvocation({ codexBin, codexHome }) {
   };
 }
 
+export function createLoginEnvironment(source, codexHome) {
+  if (typeof codexHome !== 'string' || !path.isAbsolute(codexHome)) {
+    throw new Error('AGENT_CODEX_HOME must be an absolute path');
+  }
+  const environment = { CI: '1' };
+  for (const key of LOGIN_ENV_ALLOWLIST) {
+    const value = source?.[key];
+    if (typeof value === 'string') environment[key] = value;
+  }
+  environment.CODEX_HOME = codexHome;
+  return environment;
+}
+
 export async function prepareWorkerHome(candidate, currentUid = process.getuid?.()) {
   let stat;
   try {
@@ -116,16 +159,42 @@ export async function inspectAuthMetadata(authPath, currentUid = process.getuid?
   return { state: 'valid', mode: stat.mode & 0o777, size: stat.size };
 }
 
-export async function runWorkerLogin({ codexBin, codexHome, spawnImpl = defaultSpawn }) {
+export class CodexLoginTimeoutError extends Error {
+  code = 'CODEX_LOGIN_TIMEOUT';
+
+  constructor(timeoutMs) {
+    super(`Codex login timed out after ${timeoutMs} ms`);
+    this.name = 'CodexLoginTimeoutError';
+  }
+}
+
+export async function runWorkerLogin({
+  codexBin,
+  codexHome,
+  env = process.env,
+  spawnImpl = defaultSpawn,
+  timeoutMs,
+  maxAttempts,
+}) {
   const invocation = createLoginInvocation({ codexBin, codexHome });
-  const child = spawnImpl(invocation.command, invocation.args, {
-    ...invocation.options,
-    env: { ...process.env, ...invocation.options.env },
-  });
-  return await new Promise((resolve, reject) => {
-    child.once('error', reject);
-    child.once('close', (code, signal) => resolve({ code, signal }));
-  });
+  const childEnvironment = createLoginEnvironment(env, codexHome);
+  const boundedTimeoutMs = normalizeLoginTimeout(timeoutMs);
+  const boundedAttempts = normalizeLoginAttempts(maxAttempts);
+
+  for (let attempt = 1; attempt <= boundedAttempts; attempt += 1) {
+    try {
+      return await runLoginAttempt({
+        invocation,
+        childEnvironment,
+        spawnImpl,
+        timeoutMs: boundedTimeoutMs,
+      });
+    } catch (error) {
+      if (!(error instanceof CodexLoginTimeoutError) || attempt === boundedAttempts) throw error;
+    }
+  }
+
+  throw new Error('Codex login did not complete');
 }
 
 export async function validateExecutableInputs(env) {
@@ -147,6 +216,94 @@ function assertPrivateDirectory(stat, currentUid) {
   if ((stat.mode & 0o077) !== 0 || (currentUid !== undefined && stat.uid !== currentUid)) {
     throw new Error('worker home must be an owner-only directory owned by the current user');
   }
+}
+
+function normalizeLoginTimeout(timeoutMs) {
+  if (timeoutMs === undefined || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return DEFAULT_LOGIN_TIMEOUT_MS;
+  }
+  return Math.min(MAX_LOGIN_TIMEOUT_MS, Math.max(1, Math.floor(timeoutMs)));
+}
+
+function normalizeLoginAttempts(maxAttempts) {
+  if (maxAttempts === undefined || !Number.isFinite(maxAttempts) || maxAttempts <= 0) {
+    return DEFAULT_LOGIN_ATTEMPTS;
+  }
+  return Math.min(MAX_LOGIN_ATTEMPTS, Math.max(1, Math.floor(maxAttempts)));
+}
+
+async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeoutMs }) {
+  const controller = new AbortController();
+  let child;
+  let timeoutHandle;
+  let abortGraceHandle;
+  let settled = false;
+  let timedOut = false;
+  let removeChildListeners = () => undefined;
+
+  const timeoutError = new CodexLoginTimeoutError(timeoutMs);
+  const result = new Promise((resolve, reject) => {
+    const settle = (callback, keepChildListeners = false) => {
+      if (settled) return;
+      settled = true;
+      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+      if (abortGraceHandle !== undefined) clearTimeout(abortGraceHandle);
+      if (!keepChildListeners) removeChildListeners();
+      callback();
+    };
+
+    const onError = (error) => {
+      if (settled) {
+        removeChildListeners();
+        return;
+      }
+      settle(() => reject(timedOut ? timeoutError : error));
+    };
+
+    const onClose = (code, signal) => {
+      if (settled) {
+        removeChildListeners();
+        return;
+      }
+      settle(() => {
+        if (timedOut) reject(timeoutError);
+        else resolve({ code, signal });
+      });
+    };
+
+    const onTimeout = () => {
+      if (settled) return;
+      timedOut = true;
+      controller.abort();
+      if (!settled && child?.killed !== true && typeof child?.kill === 'function') {
+        try {
+          child.kill('SIGTERM');
+        } catch {
+          // The abort signal remains the primary termination mechanism.
+        }
+      }
+      if (!settled) {
+        abortGraceHandle = setTimeout(() => {
+          settle(() => reject(timeoutError), true);
+        }, LOGIN_ABORT_GRACE_MS);
+      }
+    };
+
+    child = spawnImpl(invocation.command, invocation.args, {
+      ...invocation.options,
+      env: childEnvironment,
+      signal: controller.signal,
+    });
+    removeChildListeners = () => {
+      child?.removeListener?.('error', onError);
+      child?.removeListener?.('close', onClose);
+    };
+    child.once('error', onError);
+    child.once('close', onClose);
+    timeoutHandle = setTimeout(onTimeout, timeoutMs);
+  });
+
+  return await result;
 }
 
 function printUsage() {
