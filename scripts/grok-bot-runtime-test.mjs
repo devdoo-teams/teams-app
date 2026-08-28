@@ -71,11 +71,14 @@ function activity(baseUrl) {
     channelId: 'msteams',
     from: {
       id: '29:grok-runtime-user',
-      aadObjectId: 'grok-runtime-user',
+      // Local skip-auth REST requests use the fixed server-owned principal;
+      // use the same principal so the mode preference and Bot activity share
+      // one scope in this route-level test.
+      aadObjectId: 'local-user',
       name: 'Grok Runtime Test User',
     },
-    conversation: { id: 'grok-runtime-conversation', tenantId: 'grok-runtime-tenant' },
-    channelData: { tenant: { id: 'grok-runtime-tenant' } },
+    conversation: { id: 'grok-runtime-conversation', tenantId: 'local-tenant' },
+    channelData: { tenant: { id: 'local-tenant' } },
     recipient: { id: 'runtime-bot', name: 'Teams SDK MVP' },
     text: '짧게 답해줘',
   };
@@ -187,7 +190,7 @@ try {
     TEAMS_LOCAL_DEV: 'true',
     TEAMS_BIND_HOST: '127.0.0.1',
     TEAMS_LOCAL_ACCESS_TOKEN: accessToken,
-    TEAMS_OPERATOR_REQUESTER_ALLOWLIST: 'grok-runtime-tenant/grok-runtime-user',
+    TEAMS_OPERATOR_REQUESTER_ALLOWLIST: 'local-tenant/local-user',
     PUBLIC_BASE_URL: '',
     TAB_DOMAIN: '',
     BOT_DOMAIN: '',
