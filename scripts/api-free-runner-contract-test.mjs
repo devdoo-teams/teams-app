@@ -126,6 +126,16 @@ assert.match(
   'runtime tests must isolate the A2A outbound store from any live server',
 );
 assert.match(
+  runtimeTest,
+  /AGENT_CODEX_HOME:\s*codexHome/,
+  'production runtime fixtures must provide an isolated Codex home without copying live credentials',
+);
+assert.match(
+  runtimeTest,
+  /CODEX_BIN_SHA256:\s*codexExecutableSha256/,
+  'production runtime fixtures must provide the actual test executable digest',
+);
+assert.match(
   coreSourceCheck,
   /runCoreSourceCheck/,
   'the npm typecheck:core entrypoint must delegate to the deep Core source-check module',

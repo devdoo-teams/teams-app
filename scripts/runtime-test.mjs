@@ -18,6 +18,7 @@ const localAccessTokens = new Map();
 const optionalProviderTestsEnabled = process.env.TEAMS_OPTIONAL_RUNTIME === 'true';
 const manifestVersion = JSON.parse(await fs.readFile(path.join(root, 'appPackage/manifest.json'), 'utf8')).version;
 const runtimeOutputReaders = new Map();
+const codexExecutableSha256 = crypto.createHash('sha256').update(await fs.readFile(process.execPath)).digest('hex');
 
 function assert(condition, message) {
   if (!condition) throw new Error(`FAIL: ${message}`);
@@ -315,6 +316,8 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
   const port = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const localAccessToken = production ? '' : crypto.randomBytes(32).toString('base64url');
+  const codexHome = path.join(path.dirname(jobDataFile), `${path.basename(jobDataFile)}.codex-home`);
+  await fs.mkdir(codexHome, { recursive: true, mode: 0o700 });
   if (!production) localAccessTokens.set(baseUrl, localAccessToken);
   const command = process.execPath;
   const child = spawn(command, [runtimeEntry], {
@@ -333,7 +336,9 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
       GENUI_ACTION_STORE_PATH: `${jobDataFile}.genui-actions.json`,
       RESPONSE_MODE_STORE_PATH: `${jobDataFile}.response-modes.json`,
       AGENT_WORKSPACE: workspace,
+      AGENT_CODEX_HOME: codexHome,
       CODEX_BIN: process.execPath,
+      CODEX_BIN_SHA256: codexExecutableSha256,
       CODEX_SCRIPT: path.join(root, 'scripts/fake-codex.mjs'),
       WEATHER_MODE: 'demo',
       COPILOTKIT_DETERMINISTIC_MODE: production ? '' : 'true',
