@@ -58,7 +58,13 @@ try {
   }
 
   const stagedZipPath = path.join(stagingDir, 'teams-sdk-mvp.zip');
-  execFileSync('zip', ['-X', '-q', stagedZipPath, ...packagedFiles], { cwd: stagingDir });
+  execFileSync('zip', ['-X', '-q', stagedZipPath, ...packagedFiles], {
+    cwd: stagingDir,
+    // zip serializes DOS timestamps in the process timezone. Pin it here so
+    // the same committed inputs produce the same archive bytes on a Seoul
+    // workstation and a UTC CI runner.
+    env: { ...process.env, TZ: 'UTC' },
+  });
 
   packagedManifest = JSON.parse(execFileSync('unzip', ['-p', stagedZipPath, 'manifest.json'], { encoding: 'utf8' }));
   if (packagedManifest.version !== JSON.parse(manifest).version) {

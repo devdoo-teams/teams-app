@@ -40,8 +40,13 @@ const env = {
 };
 const script = path.join(root, 'scripts', 'package-app.mjs');
 const packagePath = path.join(fixturePackage, 'build', 'teams-sdk-mvp.zip');
-const build = () => {
-  const output = execFileSync(process.execPath, [script], { cwd: fixtureRoot, env, stdio: 'pipe', encoding: 'utf8' });
+const build = (timezone) => {
+  const output = execFileSync(process.execPath, [script], {
+    cwd: fixtureRoot,
+    env: { ...env, TZ: timezone },
+    stdio: 'pipe',
+    encoding: 'utf8',
+  });
   return {
     output,
     sha256: crypto.createHash('sha256').update(fs.readFileSync(packagePath)).digest('hex'),
@@ -49,14 +54,18 @@ const build = () => {
 };
 
 try {
-  const first = build();
+  const first = build('Asia/Seoul');
   assert.match(first.output, new RegExp(sourceCommit), 'package evidence must report the explicit source OID');
   runGit(['commit', '--allow-empty', '-q', '-m', 'move HEAD without changing package inputs']);
   assert.notEqual(runGit(['rev-parse', '--verify', 'HEAD^{commit}']), sourceCommit);
   await new Promise((resolve) => setTimeout(resolve, 2_200));
-  const second = build();
-  assert.equal(second.sha256, first.sha256, 'identical pinned Teams app inputs must produce an identical ZIP SHA across rebuilds');
-  console.log('PASS: Teams app ZIP packaging is deterministic across rebuilds');
+  const second = build('UTC');
+  assert.equal(
+    second.sha256,
+    first.sha256,
+    'identical pinned Teams app inputs must produce an identical ZIP SHA across Seoul and UTC builds',
+  );
+  console.log('PASS: Teams app ZIP packaging is deterministic across Seoul and UTC rebuilds');
 } finally {
   fs.rmSync(fixtureRoot, { recursive: true, force: true });
 }
