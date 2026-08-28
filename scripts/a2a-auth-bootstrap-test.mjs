@@ -153,6 +153,83 @@ assert.deepEqual(retriedLogin, { code: 0, signal: null });
 assert.equal(retryAttempts, 2, 'a timed-out worker login gets one deterministic retry');
 assert.equal(maxActiveLogins, 1, 'a retry must wait for the timed-out child cleanup');
 
+let stubbornRetryAttempts = 0;
+let stubbornActiveLogins = 0;
+let stubbornMaxActiveLogins = 0;
+let stubbornChildReaped = false;
+let retryStartedBeforeReap = false;
+const stubbornSignals = [];
+const stubbornRetriedLogin = await runWorkerLogin({
+  codexBin: '/Applications/ChatGPT.app/Contents/Resources/codex',
+  codexHome: '/var/lib/teams/codex-worker-1',
+  env: { PATH: '/usr/bin' },
+  maxAttempts: 2,
+  timeoutMs: 10,
+  spawnImpl: (_command, _args, options) => {
+    stubbornRetryAttempts += 1;
+    stubbornActiveLogins += 1;
+    stubbornMaxActiveLogins = Math.max(stubbornMaxActiveLogins, stubbornActiveLogins);
+    const child = new EventEmitter();
+    child.kill = (signal) => {
+      stubbornSignals.push(signal);
+      if (stubbornRetryAttempts === 1 && signal === 'SIGTERM') {
+        return true;
+      }
+      if (stubbornRetryAttempts === 1 && signal === 'SIGKILL') {
+        queueMicrotask(() => {
+          stubbornChildReaped = true;
+          stubbornActiveLogins -= 1;
+          child.emit('close', null, 'SIGKILL');
+        });
+        return true;
+      }
+      return false;
+    };
+    if (stubbornRetryAttempts === 2) {
+      retryStartedBeforeReap = !stubbornChildReaped;
+      queueMicrotask(() => {
+        stubbornActiveLogins -= 1;
+        child.emit('close', 0, null);
+      });
+    }
+    return child;
+  },
+});
+assert.deepEqual(stubbornRetriedLogin, { code: 0, signal: null });
+assert.equal(retryStartedBeforeReap, false, 'a retry must not start before a SIGTERM-resistant child is reaped');
+assert.deepEqual(stubbornSignals, ['SIGTERM', 'SIGKILL']);
+assert.equal(stubbornMaxActiveLogins, 1, 'a stubborn timed-out child must not overlap its retry');
+assert.equal(stubbornActiveLogins, 0);
+
+let unreapableAttempts = 0;
+const unreapableSignals = [];
+await assert.rejects(
+  () => runWorkerLogin({
+    codexBin: '/Applications/ChatGPT.app/Contents/Resources/codex',
+    codexHome: '/var/lib/teams/codex-worker-1',
+    env: { PATH: '/usr/bin' },
+    maxAttempts: 2,
+    timeoutMs: 10,
+    spawnImpl: (_command, _args, _options) => {
+      unreapableAttempts += 1;
+      const child = new EventEmitter();
+      child.kill = (signal) => {
+        unreapableSignals.push(signal);
+        return true;
+      };
+      if (unreapableAttempts > 1) queueMicrotask(() => child.emit('close', 0, null));
+      return child;
+    },
+  }),
+  (error) => {
+    assert.equal(error.code, 'CODEX_LOGIN_REAP_FAILED');
+    assert.match(error.message, /reap/i);
+    return true;
+  },
+);
+assert.equal(unreapableAttempts, 1, 'an unreaped child must fail closed without retry');
+assert.deepEqual(unreapableSignals, ['SIGTERM', 'SIGKILL']);
+
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-a2a-auth-'));
 const executableFixture = path.join(root, 'codex-bin');
 await fs.copyFile(process.execPath, executableFixture);

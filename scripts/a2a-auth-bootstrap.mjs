@@ -168,6 +168,15 @@ export class CodexLoginTimeoutError extends Error {
   }
 }
 
+class CodexLoginReapError extends Error {
+  code = 'CODEX_LOGIN_REAP_FAILED';
+
+  constructor(timeoutMs) {
+    super(`Codex login child could not be reaped after timing out at ${timeoutMs} ms`);
+    this.name = 'CodexLoginReapError';
+  }
+}
+
 export async function runWorkerLogin({
   codexBin,
   codexHome,
@@ -237,18 +246,21 @@ async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeou
   let child;
   let timeoutHandle;
   let abortGraceHandle;
+  let reapGraceHandle;
   let settled = false;
   let timedOut = false;
   let removeChildListeners = () => undefined;
 
   const timeoutError = new CodexLoginTimeoutError(timeoutMs);
+  const reapError = new CodexLoginReapError(timeoutMs);
   const result = new Promise((resolve, reject) => {
-    const settle = (callback, keepChildListeners = false) => {
+    const settle = (callback) => {
       if (settled) return;
       settled = true;
       if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
       if (abortGraceHandle !== undefined) clearTimeout(abortGraceHandle);
-      if (!keepChildListeners) removeChildListeners();
+      if (reapGraceHandle !== undefined) clearTimeout(reapGraceHandle);
+      removeChildListeners();
       callback();
     };
 
@@ -257,7 +269,8 @@ async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeou
         removeChildListeners();
         return;
       }
-      settle(() => reject(timedOut ? timeoutError : error));
+      if (timedOut) return;
+      settle(() => reject(error));
     };
 
     const onClose = (code, signal) => {
@@ -284,7 +297,16 @@ async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeou
       }
       if (!settled) {
         abortGraceHandle = setTimeout(() => {
-          settle(() => reject(timeoutError), true);
+          if (settled) return;
+          try {
+            child?.kill?.('SIGKILL');
+          } catch {
+            // Reaping below remains the final safety check before retrying.
+          }
+          reapGraceHandle = setTimeout(() => {
+            if (settled) return;
+            settle(() => reject(reapError));
+          }, LOGIN_ABORT_GRACE_MS);
         }, LOGIN_ABORT_GRACE_MS);
       }
     };
