@@ -8,6 +8,7 @@ const serverBuild = fs.readFileSync(new URL('./build-server.mjs', import.meta.ur
 const responseModeApiTest = fs.readFileSync(new URL('./response-mode-api-test.ts', import.meta.url), 'utf8');
 const authStartupTest = fs.readFileSync(new URL('./auth-startup-gate-test.mjs', import.meta.url), 'utf8');
 const operatorAllowlistTest = fs.readFileSync(new URL('./operator-allowlist-runtime-test.mjs', import.meta.url), 'utf8');
+const runtimeTest = fs.readFileSync(new URL('./runtime-test.mjs', import.meta.url), 'utf8');
 const coreSourceCheck = fs.readFileSync(new URL('./core-source-check.mjs', import.meta.url), 'utf8');
 const coreSourceCheckModule = fs.readFileSync(new URL('./core-source-check-lib.mjs', import.meta.url), 'utf8');
 const coreTestRunner = fs.readFileSync(new URL('./core-test-runner.mjs', import.meta.url), 'utf8');
@@ -90,6 +91,11 @@ assert.match(
   'runtime API tests must launch the server bundle from the resolved runtime distribution',
 );
 assert.match(
+  responseModeApiTest,
+  /A2A_OUTBOUND_STORE_PATH:\s*join\(dataRoot, 'a2a-outbound\.json'\)/,
+  'response-mode runtime tests must isolate the A2A outbound store from any live server',
+);
+assert.match(
   authStartupTest,
   /resolveRuntimeDistRoot\(root\)/,
   'production auth startup tests must resolve the verified runtime distribution',
@@ -108,6 +114,16 @@ assert.match(
   operatorAllowlistTest,
   /path\.join\(runtimeDistRoot, 'server', 'index\.js'\)/,
   'operator authorization runtime tests must launch the server bundle from the resolved runtime distribution',
+);
+assert.match(
+  operatorAllowlistTest,
+  /A2A_OUTBOUND_STORE_PATH:\s*path\.join\(tempRoot, 'a2a-outbound\.json'\)/,
+  'operator authorization runtime tests must isolate the A2A outbound store from any live server',
+);
+assert.match(
+  runtimeTest,
+  /A2A_OUTBOUND_STORE_PATH:\s*`\$\{jobDataFile\}\.a2a-outbound\.json`/,
+  'runtime tests must isolate the A2A outbound store from any live server',
 );
 assert.match(
   coreSourceCheck,

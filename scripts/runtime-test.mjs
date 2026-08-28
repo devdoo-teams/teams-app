@@ -329,6 +329,7 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
       AGENT_JOB_STORE_PATH: jobDataFile,
       AGENT_ADMISSION_JOURNAL_PATH: `${jobDataFile}.agent-admission.json`,
       A2A_STORE_PATH: `${jobDataFile}.a2a.json`,
+      A2A_OUTBOUND_STORE_PATH: `${jobDataFile}.a2a-outbound.json`,
       GENUI_ACTION_STORE_PATH: `${jobDataFile}.genui-actions.json`,
       RESPONSE_MODE_STORE_PATH: `${jobDataFile}.response-modes.json`,
       AGENT_WORKSPACE: workspace,

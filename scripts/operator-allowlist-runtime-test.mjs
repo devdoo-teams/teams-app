@@ -107,6 +107,7 @@ async function startServer(extraEnv = {}, options = {}) {
       COLLABORATION_STORE_PATH: path.join(tempRoot, 'collaboration.json'),
       AGENT_JOB_STORE_PATH: agentJobStorePath,
       A2A_STORE_PATH: path.join(tempRoot, 'a2a.json'),
+      A2A_OUTBOUND_STORE_PATH: path.join(tempRoot, 'a2a-outbound.json'),
       AGENT_ADMISSION_JOURNAL_PATH: path.join(tempRoot, 'agent-admission.json'),
       GENUI_ACTION_STORE_PATH: path.join(tempRoot, 'genui-actions.json'),
       RESPONSE_MODE_STORE_PATH: path.join(tempRoot, 'response-modes.json'),

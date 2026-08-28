@@ -183,6 +183,7 @@ async function main(): Promise<void> {
       COLLABORATION_STORE_PATH: join(dataRoot, 'collaboration.json'),
       AGENT_JOB_STORE_PATH: join(dataRoot, 'agent-jobs.json'),
       A2A_STORE_PATH: join(dataRoot, 'a2a.json'),
+      A2A_OUTBOUND_STORE_PATH: join(dataRoot, 'a2a-outbound.json'),
       AGENT_ADMISSION_JOURNAL_PATH: join(dataRoot, 'agent-admission.json'),
       GENUI_ACTION_STORE_PATH: join(dataRoot, 'genui-actions.json'),
       RESPONSE_MODE_STORE_PATH: join(dataRoot, 'response-modes.json'),
