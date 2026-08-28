@@ -153,8 +153,8 @@ const CODEX_NOT_AUTHENTICATED_STATUS = 'Not logged in';
 
 function codexStatusText(result: CliCommandResult): string {
   return [result.stdout, result.stderr]
-    .filter((value): value is string | Buffer => typeof value === 'string' || Buffer.isBuffer(value))
-    .map((value) => value.toString().replace(/\r\n/gu, '\n').trim())
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.replace(/\r\n/gu, '\n').trim())
     .filter(Boolean)
     .join('\n')
     .trim();

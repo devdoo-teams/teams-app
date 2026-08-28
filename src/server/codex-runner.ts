@@ -276,6 +276,7 @@ export class CodexRunner {
     let terminationRequested = false;
     let protocolState: ProtocolState = 'thread';
     let agentMessageCount = 0;
+    const currentProtocolState = (): ProtocolState => protocolState;
     let timeoutHandle: NodeJS.Timeout | undefined;
     let resolveTermination!: (error: Error) => void;
     const terminationPromise = new Promise<Error>((resolve) => { resolveTermination = resolve; });
@@ -483,7 +484,7 @@ export class CodexRunner {
         const diagnostic = formatRemoteTroubleshooting(diagnoseRemoteTroubleshooting(reason));
         throw new Error(diagnostic ? `${reason}\n\n${diagnostic}` : reason);
       }
-      if (protocolState !== 'completed' || agentMessageCount < 1 || !finalMessage) {
+      if (currentProtocolState() !== 'completed' || agentMessageCount < 1 || !finalMessage) {
         throw new CodexTerminalProtocolError('Codex did not emit a non-empty final agent message followed by turn.completed.');
       }
       return { threadId, finalMessage, eventCount };

@@ -546,9 +546,10 @@ async function inspectEntry(
   if (!stat.isFile()) throw new Error(`non-regular files are not allowed: ${relative}`);
   if (stat.nlink !== 1) throw new Error(`hard-linked files are not allowed: ${relative}`);
   if (hashFile) {
-    if (stat.size > MAX_PROJECTED_FILE_BYTES) throw new Error(`projection file exceeds the per-file limit: ${relative}`);
+    const size = statNumber(stat.size, relative);
+    if (size > MAX_PROJECTED_FILE_BYTES) throw new Error(`projection file exceeds the per-file limit: ${relative}`);
     budget.files += 1;
-    budget.bytes += stat.size;
+    budget.bytes += size;
     if (budget.files > MAX_PROJECTED_FILES || budget.bytes > MAX_PROJECTED_TOTAL_BYTES) throw new Error('projection exceeds bounded limits');
   }
   return {
@@ -591,7 +592,24 @@ async function copyProjectionEntry(sourceRoot: string, sourcePath: string, desti
 }
 
 function identityOf(kind: ProjectionKind, stat: Awaited<ReturnType<typeof fs.lstat>>): ProjectionIdentity {
-  return { kind, dev: String(stat.dev), ino: String(stat.ino), mode: stat.mode, nlink: stat.nlink, size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, birthtimeMs: stat.birthtimeMs };
+  return {
+    kind,
+    dev: String(stat.dev),
+    ino: String(stat.ino),
+    mode: statNumber(stat.mode, 'mode'),
+    nlink: statNumber(stat.nlink, 'nlink'),
+    size: statNumber(stat.size, 'size'),
+    mtimeMs: statNumber(stat.mtimeMs, 'mtimeMs'),
+    ctimeMs: statNumber(stat.ctimeMs, 'ctimeMs'),
+    birthtimeMs: statNumber(stat.birthtimeMs, 'birthtimeMs'),
+  };
+}
+
+function statNumber(value: number | bigint, field: string): number {
+  if (typeof value === 'number') return value;
+  const normalized = Number(value);
+  if (!Number.isSafeInteger(normalized)) throw new Error(`filesystem ${field} is outside the supported numeric range`);
+  return normalized;
 }
 
 function sameIdentity(left: ProjectionIdentity, right: ProjectionIdentity): boolean {

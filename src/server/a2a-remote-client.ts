@@ -253,7 +253,7 @@ async function fetchWithTimeout(
     if (timedOut) fail('TIMEOUT');
     if (signal?.aborted) throw signal.reason ?? error;
     if (error instanceof A2ARemoteClientError) throw error;
-    fail('NETWORK_ERROR');
+    return fail('NETWORK_ERROR');
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);

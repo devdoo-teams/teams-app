@@ -107,7 +107,9 @@ export function createA2ARouter(options: A2ARouteOptions): express.Router {
 
   router.get('/tasks/:id', asyncHandler(async (request, response) => {
     const scope = requireScope(options, request);
-    const task = options.store.getTaskForOwner(request.params.id, scope);
+    const taskId = request.params.id;
+    if (typeof taskId !== 'string') throw new A2AContractError('InvalidRequestError', 'task id must be a single value.');
+    const task = options.store.getTaskForOwner(taskId, scope);
     if (!task) throw new A2ANotFoundError();
     response.status(200).json(task);
   }));

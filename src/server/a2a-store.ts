@@ -937,12 +937,13 @@ function loadMessageInfo(value: unknown): A2AStoredMessageInfo {
   assertExactKeys(value, ['messageId', 'role', 'partCount', 'contextId', 'taskId'], 'Invalid A2A stored message info.');
   const messageId = validateTaskIdForPersistence(value.messageId, 'message.messageId');
   if (value.role !== 'user' && value.role !== 'agent') throw new Error('Invalid A2A stored message role.');
-  if (!Number.isSafeInteger(value.partCount) || (value.partCount as number) < 1 || (value.partCount as number) > 16) {
+  const partCount = value.partCount;
+  if (typeof partCount !== 'number' || !Number.isSafeInteger(partCount) || partCount < 1 || partCount > 16) {
     throw new Error('Invalid A2A stored message part count.');
   }
   const contextId = validateTaskIdForPersistence(value.contextId, 'message.contextId');
   const taskId = validateTaskIdForPersistence(value.taskId, 'message.taskId');
-  return { messageId, role: value.role, partCount: value.partCount, contextId, taskId };
+  return { messageId, role: value.role, partCount, contextId, taskId };
 }
 
 function validateState(state: A2AStoreState, filePath: string): void {
@@ -1259,7 +1260,9 @@ function validateRecoveryLimit(limit: number, recordKind: string): void {
   }
 }
 
-function isTerminalDispatchChildStatus(status: A2ADispatchChildStatus): boolean {
+function isTerminalDispatchChildStatus(
+  status: A2ADispatchChildStatus,
+): status is Extract<A2ADispatchChildStatus, 'completed' | 'failed' | 'canceled'> {
   return status === 'completed' || status === 'failed' || status === 'canceled';
 }
 

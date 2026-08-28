@@ -434,7 +434,7 @@ export async function createConfiguredA2ARemoteAgents(
   const agents: A2ARemoteProductionAgent[] = [];
   const failures: A2AConfiguredRemoteAgentFailure[] = [];
   for (const outcome of outcomes) {
-    if ('agent' in outcome) {
+    if ('agent' in outcome && outcome.agent) {
       agents.push(outcome.agent);
     } else {
       failures.push(outcome.failure);

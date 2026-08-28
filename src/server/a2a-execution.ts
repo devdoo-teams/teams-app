@@ -87,7 +87,7 @@ export function createA2AExecutionAdapter(input: {
   const resolveProviderForRecovery = input.resolveProviderForRecovery
     ?? ((providerId: string) => BUILT_IN_RECOVERY_PROVIDERS[providerId]);
 
-  const adapter = async (event: A2ATaskSubmittedEvent) => {
+  const adapter: A2AExecutionAdapter = async (event: A2ATaskSubmittedEvent) => {
     if (activeTasks.has(event.task.id)) return;
     activeTasks.add(event.task.id);
     let resolveBinding!: () => void;
@@ -722,7 +722,7 @@ function cancellationInput(
 function reconciliationFailureInput(
   dispatch: A2ADispatchIntent,
   child: A2ADispatchIntent['children'][number],
-): A2ADispatchCancellationFailure {
+): Omit<A2ADispatchCancellationFailure, 'reason'> {
   return {
     scope: { ...dispatch.scope },
     parentTaskId: dispatch.parentTaskId,
@@ -762,16 +762,22 @@ async function emitRecoveredDispatchAudit(
   try {
     const audit = createA2ADispatchAudit({
       parentTaskId,
-      children: dispatch.children.map((child) => ({
-        childKey: child.childKey,
-        childIdempotencyKey: child.childIdempotencyKey,
-        agentId: child.agentId,
-        providerId: child.providerId,
-        role: child.role,
-        requestSha256: child.requestSha256,
-        status: child.status,
-        duplicated: false,
-      })),
+      children: dispatch.children.map((child) => {
+        const status = child.status;
+        if (status !== 'completed' && status !== 'failed' && status !== 'canceled') {
+          throw new Error('A2A recovered dispatch child did not reach a terminal state.');
+        }
+        return {
+          childKey: child.childKey,
+          childIdempotencyKey: child.childIdempotencyKey,
+          agentId: child.agentId,
+          providerId: child.providerId,
+          role: child.role,
+          requestSha256: child.requestSha256,
+          status,
+          duplicated: false,
+        };
+      }),
     });
     await handler(audit);
   } catch (error) {
@@ -784,12 +790,13 @@ async function emitRecoveredDispatchAudit(
 
 function dispatchOutcomes(dispatch: A2ADispatchIntent): A2ADispatchChildOutcome[] {
   return dispatch.children.map((child) => {
-    if (child.status !== 'completed' && child.status !== 'failed' && child.status !== 'canceled') {
+    const status = child.status;
+    if (status !== 'completed' && status !== 'failed' && status !== 'canceled') {
       throw new Error('A2A durable dispatch child did not reconcile to a terminal state.');
     }
     return {
       childKey: child.childKey,
-      status: child.status,
+      status,
       ...(child.agentJobId ? { agentJobId: child.agentJobId } : {}),
     };
   });
