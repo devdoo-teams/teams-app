@@ -712,14 +712,23 @@ function classifyPreflightFailure(error: unknown): CodexPermissionProfilePreflig
     stdout?: string | Buffer;
     stderr?: string | Buffer;
   };
-  const diagnostics = [
-    error instanceof Error ? error.message : String(error),
-    candidate.stdout,
-    candidate.stderr,
-  ].map((value) => typeof value === 'string' ? value : value?.toString('utf8') ?? '').join('\n');
+  const message = error instanceof Error ? error.message : String(error);
+  const stdout = typeof candidate.stdout === 'string'
+    ? candidate.stdout
+    : candidate.stdout?.toString('utf8') ?? '';
   const stderr = typeof candidate.stderr === 'string'
     ? candidate.stderr
     : candidate.stderr?.toString('utf8') ?? '';
+  // execFile includes the complete command line in Error.message. That line
+  // contains the permission/profile arguments by design, so using it beside
+  // a numeric exit code can misclassify an ordinary canary failure as a
+  // malformed profile. Structured child output is authoritative; only use a
+  // message for injected/non-process errors that have no exit-code metadata.
+  const diagnostics = [
+    candidate.code === undefined ? message : '',
+    stdout,
+    stderr,
+  ].filter(Boolean).join('\n');
   if (candidate.code === 'ENOENT' || /\bENOENT\b|(?:command|executable|file).{0,40}(?:not found|no such file)/iu.test(diagnostics)) {
     return 'command-not-found';
   }

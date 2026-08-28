@@ -107,6 +107,30 @@ try {
     );
   }
 
+  const commandLineFailure = Object.assign(
+    new Error('Command failed: /tmp/codex sandbox -c default_permissions=teams-agent-read-only'),
+    {
+      code: 1,
+      stderr: 'cat: /missing-service-canary: No such file or directory',
+    },
+  );
+  const commandLineProvider = new CodexPermissionProfileIsolationProvider({
+    codexExecutable,
+    codexExecutableSha256,
+    codexHome: serviceCodexHome,
+    platform: 'darwin',
+    preflight: async () => { throw commandLineFailure; },
+    spawn: () => fakeChild,
+    executableTrustVerifier: () => undefined,
+  });
+  await assert.rejects(
+    () => commandLineProvider.acquire(acquireInput()),
+    (error: unknown) => error instanceof AgentExecutionUnavailableError
+      && error.reason === 'trusted-isolation-required'
+      && (error as Error & { classification?: unknown }).classification === 'unknown-infrastructure',
+    'execFile command-line diagnostics must not turn a missing canary into malformed profile',
+  );
+
   const denialExecutable = path.join(root, 'codex-explicit-denial');
   await writePreflightFixture(denialExecutable, 'sandbox: /bin/cat: Operation not permitted');
   const denialExecutableSha256 = crypto.createHash('sha256').update(await fs.readFile(denialExecutable)).digest('hex');
