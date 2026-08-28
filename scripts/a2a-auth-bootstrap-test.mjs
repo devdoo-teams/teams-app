@@ -10,6 +10,7 @@ import {
   parseArguments,
   prepareWorkerHome,
   resolveWorkerHome,
+  resolveDistinctWorkerHomes,
   validateExecutableInputs,
 } from './a2a-auth-bootstrap.mjs';
 
@@ -69,6 +70,27 @@ await fs.writeFile(authPath, '{"token":"fixture-secret"}\n', { mode: 0o600 });
 const authMetadata = await inspectAuthMetadata(authPath);
 assert.deepEqual(authMetadata, { state: 'valid', mode: 0o600, size: 27 });
 assert.equal(Object.hasOwn(authMetadata, 'contents'), false, 'auth contents must never be returned');
+
+const alias = path.join(root, 'worker-1-alias');
+await fs.symlink(home, alias, 'dir');
+await assert.rejects(
+  () => resolveDistinctWorkerHomes({
+    AGENT_CODEX_HOME_1: home,
+    AGENT_CODEX_HOME_2: alias,
+  }, ['1', '2']),
+  /distinct worker home|alias/i,
+  'symlink aliases must be rejected before any login or home preparation',
+);
+
+const lexicalAlias = path.join(root, 'worker-1', '..', 'worker-1');
+await assert.rejects(
+  () => resolveDistinctWorkerHomes({
+    AGENT_CODEX_HOME: home,
+    AGENT_CODEX_HOME_1: lexicalAlias,
+  }, ['main', '1']),
+  /distinct worker home|alias/i,
+  'lexical path aliases must be rejected before any login or home preparation',
+);
 
 await fs.rm(root, { recursive: true, force: true });
 console.log('PASS: A2A auth bootstrap argument, worker-home, and metadata contracts');

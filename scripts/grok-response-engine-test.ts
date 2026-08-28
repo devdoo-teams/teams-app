@@ -152,6 +152,11 @@ async function main(): Promise<void> {
   await itemStore.initialize();
   const originalKey = process.env.XAI_API_KEY;
   const originalModel = process.env.XAI_MODEL;
+  const originalNodeEnv = process.env.NODE_ENV;
+  const originalLoopbackFlag = process.env.XAI_ALLOW_LOOPBACK_TEST;
+  const originalLocalDev = process.env.TEAMS_LOCAL_DEV;
+  const originalSkipAuth = process.env.TEAMS_SKIP_AUTH;
+  const originalLoopbackKey = process.env.XAI_LOOPBACK_TEST_KEY;
 
   try {
     delete process.env.XAI_API_KEY;
@@ -198,19 +203,33 @@ async function main(): Promise<void> {
       assert.doesNotMatch(JSON.stringify(invalidBaseUrl), /untrusted-url-secret/);
     }
 
-    process.env.NODE_ENV = 'test';
+    process.env.NODE_ENV = 'development';
     process.env.XAI_ALLOW_LOOPBACK_TEST = 'true';
     process.env.TEAMS_LOCAL_DEV = 'true';
     process.env.TEAMS_SKIP_AUTH = 'true';
+    const developmentLoopbackFetch = queueFetch([messageResponse('개발 loopback 응답')]);
+    const developmentLoopback = await new GrokResponseEngine({
+      apiKey: 'real-xai-key-must-not-be-forwarded',
+      baseUrl: 'http://127.0.0.1:43210/v1',
+      fetchImpl: developmentLoopbackFetch.fetch,
+    }).run(await createInput(itemStore, createAgentServiceFake([]), '개발 loopback'));
+    assert.equal(developmentLoopbackFetch.calls.length, 0, 'loopback override must be test-only');
+    assert.equal(developmentLoopback.envelope.metadata.errorCode, 'grok-invalid-url');
+
+    process.env.NODE_ENV = 'test';
+    process.env.XAI_LOOPBACK_TEST_KEY = 'loopback-fixture-key';
     const loopbackFetch = queueFetch([messageResponse('로컬 fixture 응답')]);
     const loopback = await new GrokResponseEngine({
-      apiKey: 'loopback-test-secret',
+      apiKey: 'real-xai-key-must-not-be-forwarded',
       baseUrl: 'http://127.0.0.1:43210/v1',
       fetchImpl: loopbackFetch.fetch,
     }).run(await createInput(itemStore, createAgentServiceFake([]), '로컬 fixture'));
     assert.equal(loopbackFetch.calls.length, 1, 'explicit loopback test mode may reach a loopback fixture');
     assert.equal(loopback.text, '로컬 fixture 응답');
-    assert.doesNotMatch(JSON.stringify(loopback), /loopback-test-secret/);
+    const loopbackHeaders = new Headers(loopbackFetch.calls[0]?.init?.headers);
+    assert.equal(loopbackHeaders.get('authorization'), 'Bearer loopback-fixture-key');
+    assert.notEqual(loopbackHeaders.get('authorization'), 'Bearer real-xai-key-must-not-be-forwarded');
+    assert.doesNotMatch(JSON.stringify(loopback), /real-xai-key-must-not-be-forwarded/);
 
     const forcedWeatherFetch = queueFetch([messageResponse('날씨 도구를 확인했습니다.')]);
     await new GrokResponseEngine({ apiKey: 'forced-tool-secret', fetchImpl: forcedWeatherFetch.fetch })
@@ -532,6 +551,16 @@ async function main(): Promise<void> {
     else process.env.XAI_API_KEY = originalKey;
     if (originalModel === undefined) delete process.env.XAI_MODEL;
     else process.env.XAI_MODEL = originalModel;
+    if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = originalNodeEnv;
+    if (originalLoopbackFlag === undefined) delete process.env.XAI_ALLOW_LOOPBACK_TEST;
+    else process.env.XAI_ALLOW_LOOPBACK_TEST = originalLoopbackFlag;
+    if (originalLocalDev === undefined) delete process.env.TEAMS_LOCAL_DEV;
+    else process.env.TEAMS_LOCAL_DEV = originalLocalDev;
+    if (originalSkipAuth === undefined) delete process.env.TEAMS_SKIP_AUTH;
+    else process.env.TEAMS_SKIP_AUTH = originalSkipAuth;
+    if (originalLoopbackKey === undefined) delete process.env.XAI_LOOPBACK_TEST_KEY;
+    else process.env.XAI_LOOPBACK_TEST_KEY = originalLoopbackKey;
     await rm(dataDirectory, { recursive: true, force: true });
   }
 }

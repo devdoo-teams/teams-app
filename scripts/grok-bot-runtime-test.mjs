@@ -12,6 +12,7 @@ const root = process.cwd();
 const runtimeDistRoot = resolveRuntimeDistRoot(root);
 const accessToken = 'grok-runtime-test-token-0123456789';
 const xaiKey = 'xai-runtime-test-key';
+const loopbackKey = 'loopback-runtime-fixture-key';
 
 function listen(server) {
   return new Promise((resolve, reject) => {
@@ -128,7 +129,7 @@ const xaiServer = http.createServer(async (request, response) => {
   const body = await readBody(request);
   const parsed = JSON.parse(body);
   xaiRequests.push({ headers: request.headers, body: parsed });
-  if (request.headers.authorization !== `Bearer ${xaiKey}`) {
+  if (request.headers.authorization !== `Bearer ${loopbackKey}`) {
     response.writeHead(401, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'unauthorized' }));
     return;
   }
@@ -165,7 +166,7 @@ try {
   const baseUrl = `http://127.0.0.1:${teamsPort}`;
   const serverEnv = {
     ...process.env,
-    NODE_ENV: 'development',
+    NODE_ENV: 'test',
     PORT: String(teamsPort),
     ITEM_STORE_PATH: path.join(dataRoot, 'items.json'),
     WORK_ITEM_STORE_PATH: path.join(dataRoot, 'work-items.json'),
@@ -182,6 +183,7 @@ try {
     WEATHER_MODE: 'demo',
     TEAMS_OPTIONAL_RUNTIME: 'true',
     XAI_API_KEY: xaiKey,
+    XAI_LOOPBACK_TEST_KEY: loopbackKey,
     XAI_MODEL: 'grok-runtime-model',
     XAI_BASE_URL: `http://127.0.0.1:${xaiPort}/v1`,
     XAI_ALLOW_LOOPBACK_TEST: 'true',
@@ -243,7 +245,8 @@ try {
   assert.equal(xaiRequests.length, 1);
   assert.equal(xaiRequests[0].body.model, 'grok-runtime-model');
   assert.equal(xaiRequests[0].body.input.at(-1).role, 'user');
-  assert.equal(xaiRequests[0].headers.authorization, `Bearer ${xaiKey}`);
+  assert.equal(xaiRequests[0].headers.authorization, `Bearer ${loopbackKey}`);
+  assert.notEqual(xaiRequests[0].headers.authorization, `Bearer ${xaiKey}`);
 
   console.log('PASS: optional bundle selects Grok through the Teams Bot route and renders an attachment-only response');
 } finally {

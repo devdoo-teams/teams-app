@@ -135,7 +135,7 @@ TEAMS_RESPONSE_MODE_DEFAULT=grok \
 npm run release:preflight
 ```
 
-`XAI_BASE_URL`은 운영에서 공식 xAI Responses endpoint인 `https://api.x.ai/v1`만 허용한다. 로컬 mock을 사용하는 테스트는 운영 프로세스와 분리된 환경에서만 `XAI_ALLOW_LOOPBACK_TEST=true`, `TEAMS_LOCAL_DEV=true`, `TEAMS_SKIP_AUTH=true`를 함께 지정하고 loopback 주소를 사용한다. 이 예외는 `NODE_ENV=production`에서 거부되며, 실제 xAI 키를 테스트 mock으로 보내지 않는다.
+`XAI_BASE_URL`은 운영에서 공식 xAI Responses endpoint인 `https://api.x.ai/v1`만 허용한다. 로컬 mock은 운영 프로세스와 분리된 `NODE_ENV=test` 환경에서만 `XAI_ALLOW_LOOPBACK_TEST=true`, `TEAMS_LOCAL_DEV=true`, `TEAMS_SKIP_AUTH=true`, 별도의 `XAI_LOOPBACK_TEST_KEY`를 함께 지정하고 loopback 주소를 사용한다. loopback 요청에는 `XAI_API_KEY`가 절대 사용되지 않으며, `NODE_ENV=development`를 포함한 다른 환경에서는 예외가 거부된다.
 
 `TEAMS_RESPONSE_MODE_DEFAULT=grok`은 새 사용자/대화의 서버 소유 응답 모드를 Grok으로 시작하게 하는 선택값이며, 이미 저장된 scope별 모드가 우선한다. 이 값을 생략하면 optional 런타임도 기존처럼 결정형 모드로 시작한다. 이 프로필은 Core 회귀 테스트를 먼저 실행한 뒤 optional 서버를 마지막에 빌드해 `mode=optional` marker를 남긴다. `TEAMS_RELEASE_RUNTIME=optional`인데 optional flag 또는 xAI key가 없으면 게이트가 닫힌 상태로 실패한다. 반대로 Core 프로필에서는 xAI key가 없어도 기존 서비스 검증을 계속할 수 있다. 두 프로필 모두 공개 health, `/tabs/home/`, 패키지 identity, 설치본, 데스크톱·모바일 UI 증거가 필요하며, optional preflight 통과만으로 Grok의 실제 xAI 왕복이나 Teams 배포를 완료로 보고하지 않는다.
 

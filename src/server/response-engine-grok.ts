@@ -590,11 +590,7 @@ export class GrokResponseEngine implements ResponseEngine {
   }
 
   private readConfig(): GrokConfig {
-    const apiKey = (this.options.apiKey ?? process.env.XAI_API_KEY ?? '').trim();
-    if (!apiKey || apiKey.length > MAX_API_KEY_LENGTH || /[\u0000-\u001f\u007f]/.test(apiKey)) {
-      throw new GrokProviderError('configuration');
-    }
-
+    const configuredApiKey = (this.options.apiKey ?? process.env.XAI_API_KEY ?? '').trim();
     const rawBaseUrl = (this.options.baseUrl ?? process.env.XAI_BASE_URL ?? DEFAULT_BASE_URL).trim().replace(/\/$/, '');
     let baseUrl: URL;
     try {
@@ -617,12 +613,22 @@ export class GrokResponseEngine implements ResponseEngine {
       && !baseUrl.password
       && !baseUrl.search
       && !baseUrl.hash
-      && process.env.NODE_ENV !== 'production'
+      && process.env.NODE_ENV === 'test'
       && process.env.XAI_ALLOW_LOOPBACK_TEST === 'true'
       && process.env.TEAMS_LOCAL_DEV === 'true'
       && process.env.TEAMS_SKIP_AUTH === 'true';
     if (!productionBaseUrl && !loopbackTestBaseUrl) {
       throw new GrokProviderError('invalid-url');
+    }
+
+    // A loopback fixture must never receive the configured production key.
+    // Its explicit test-only key is kept separate from XAI_API_KEY and is the
+    // only credential permitted on the mock request path.
+    const apiKey = loopbackTestBaseUrl
+      ? (process.env.XAI_LOOPBACK_TEST_KEY ?? '').trim()
+      : configuredApiKey;
+    if (!apiKey || apiKey.length > MAX_API_KEY_LENGTH || /[\u0000-\u001f\u007f]/.test(apiKey)) {
+      throw new GrokProviderError('configuration');
     }
 
     const model = boundedModel(this.options.model ?? process.env.XAI_MODEL ?? DEFAULT_MODEL);

@@ -43,13 +43,30 @@ export function parseArguments(argv) {
 }
 
 export function resolveWorkerHome(env, worker) {
-  const variable = worker === 'main' ? 'AGENT_CODEX_HOME' : `AGENT_CODEX_HOME_${worker}`;
+  const variable = workerHomeVariable(worker);
   const value = typeof env?.[variable] === 'string' ? env[variable].trim() : '';
   if (!value) throw new Error(`${variable} is required`);
   if (!path.isAbsolute(value) || value.includes('\u0000')) {
     throw new Error(`${variable} must be an absolute path`);
   }
   return value;
+}
+
+export async function resolveDistinctWorkerHomes(env, workers) {
+  const seen = new Map();
+  const resolved = [];
+  for (const worker of workers) {
+    const variable = workerHomeVariable(worker);
+    const codexHome = resolveWorkerHome(env, worker);
+    const identity = await workerHomeIdentity(codexHome);
+    const previous = seen.get(identity);
+    if (previous) {
+      throw new Error(`${variable} must reference a distinct worker home from ${previous}`);
+    }
+    seen.set(identity, variable);
+    resolved.push({ worker, codexHome });
+  }
+  return resolved;
 }
 
 export function createLoginInvocation({ codexBin, codexHome }) {
@@ -144,9 +161,9 @@ async function main() {
     printUsage();
     return;
   }
+  const workerHomes = await resolveDistinctWorkerHomes(process.env, options.workers);
   const codexBin = await validateExecutableInputs(process.env);
-  for (const worker of options.workers) {
-    const codexHome = resolveWorkerHome(process.env, worker);
+  for (const { worker, codexHome } of workerHomes) {
     await prepareWorkerHome(codexHome);
     const authPath = path.join(codexHome, 'auth.json');
     console.log(`${worker}: home ready (${options.runLogin ? 'login requested' : 'dry run'})`);
@@ -163,6 +180,46 @@ async function main() {
     }
   }
   if (options.runLogin) console.log('Run npm run check:codex-a2a-isolation after all workers are authenticated.');
+}
+
+function workerHomeVariable(worker) {
+  return worker === 'main' ? 'AGENT_CODEX_HOME' : `AGENT_CODEX_HOME_${worker}`;
+}
+
+async function workerHomeIdentity(candidate) {
+  const normalized = path.normalize(path.resolve(candidate));
+  let canonical = normalized;
+  try {
+    canonical = path.normalize(await fs.realpath(normalized));
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw new Error('worker home is unavailable');
+    canonical = await canonicalizeMissingHome(normalized);
+  }
+
+  try {
+    const stat = await fs.stat(normalized);
+    return `inode:${String(stat.dev)}:${String(stat.ino)}`;
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw new Error('worker home is unavailable');
+    return `path:${canonical}`;
+  }
+}
+
+async function canonicalizeMissingHome(normalized) {
+  const suffix = [];
+  let current = normalized;
+  while (true) {
+    try {
+      const ancestor = path.normalize(await fs.realpath(current));
+      return path.join(ancestor, ...suffix.reverse());
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw new Error('worker home is unavailable');
+      const parent = path.dirname(current);
+      if (parent === current) return normalized;
+      suffix.push(path.basename(current));
+      current = parent;
+    }
+  }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
