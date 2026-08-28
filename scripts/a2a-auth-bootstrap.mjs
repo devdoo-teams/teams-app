@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn as defaultSpawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -110,7 +111,7 @@ export async function runWorkerLogin({ codexBin, codexHome, spawnImpl = defaultS
   });
 }
 
-async function validateExecutableInputs(env) {
+export async function validateExecutableInputs(env) {
   const codexBin = typeof env.CODEX_BIN === 'string' ? env.CODEX_BIN.trim() : '';
   if (!codexBin || !path.isAbsolute(codexBin)) throw new Error('CODEX_BIN must be an absolute path');
   const digest = typeof env.CODEX_BIN_SHA256 === 'string' ? env.CODEX_BIN_SHA256.trim().toLowerCase() : '';
@@ -119,6 +120,8 @@ async function validateExecutableInputs(env) {
   if (!stat?.isFile() || (stat.mode & 0o111) === 0 || (stat.mode & 0o022) !== 0) {
     throw new Error('CODEX_BIN must be a private executable regular file');
   }
+  const actualDigest = crypto.createHash('sha256').update(await fs.readFile(codexBin)).digest('hex');
+  if (actualDigest !== digest) throw new Error('CODEX_BIN does not match CODEX_BIN_SHA256');
   return codexBin;
 }
 
