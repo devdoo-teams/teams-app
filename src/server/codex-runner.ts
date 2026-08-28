@@ -68,6 +68,7 @@ const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_STDOUT_BUFFER_CHARS = 64 * 1024;
 const MAX_STDERR_CHARS = 8 * 1024;
 const MAX_EVENT_COUNT = 10_000;
+const CONTROLLER_ATTACHMENT_REAP_TIMEOUT_MS = 1_000;
 const CODEX_THREAD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const CODEX_CHILD_ENV_ALLOWLIST = [
@@ -111,6 +112,43 @@ export class CodexProcessControlUnavailableError extends AgentExecutionUnavailab
     super('process-tree-control-required', 'Codex 프로세스 전체 트리를 제어할 수 있는 지원 경계가 없습니다.');
     this.name = 'CodexProcessControlUnavailableError';
   }
+}
+
+export async function reapChildProcess(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let timeout: NodeJS.Timeout | undefined;
+    const cleanup = (): void => {
+      if (timeout) clearTimeout(timeout);
+      child.removeListener('close', onClose);
+      child.removeListener('error', onError);
+    };
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    };
+    const onClose = (): void => finish();
+    const onError = (): void => finish();
+
+    child.once('close', onClose);
+    child.once('error', onError);
+    timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error('spawned CLI child did not close after controller attachment failed.'));
+    }, CONTROLLER_ATTACHMENT_REAP_TIMEOUT_MS);
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      // The child may have exited between the state check and kill().
+    }
+    if (child.exitCode !== null || child.signalCode !== null) finish();
+  });
 }
 
 function codexChildEnvironment(
@@ -257,13 +295,23 @@ export class CodexRunner {
       child = spawnChild(command, args, spawnOptions);
     }
 
-    const processController = injectedController
-      ? await injectedController.attach(child)
-      : this.runnerOptions.processControllerFactory
-        ? this.runnerOptions.processControllerFactory(child, controllerOptions)
-        : createAgentProcessTreeController(child, controllerOptions);
-    if (!processController) {
-      throw new CodexProcessControlUnavailableError();
+    let processController: AgentProcessTreeController | undefined;
+    try {
+      processController = injectedController
+        ? await injectedController.attach(child)
+        : this.runnerOptions.processControllerFactory
+          ? this.runnerOptions.processControllerFactory(child, controllerOptions)
+          : createAgentProcessTreeController(child, controllerOptions);
+      if (!processController) {
+        throw new CodexProcessControlUnavailableError();
+      }
+    } catch (error) {
+      try {
+        await reapChildProcess(child);
+      } catch {
+        throw new CodexProcessControlUnavailableError();
+      }
+      throw error;
     }
 
     let threadId: string | undefined;

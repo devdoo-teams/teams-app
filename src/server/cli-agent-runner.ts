@@ -17,7 +17,7 @@ import {
   type AgentProcessPlatform,
   type AgentProcessTreeController,
 } from './agent-process-controller.js';
-import { CodexRunner, type CodexRunEvent } from './codex-runner.js';
+import { CodexRunner, reapChildProcess, type CodexRunEvent } from './codex-runner.js';
 import { redactCliDiagnostics } from './cli-diagnostics.js';
 import {
   ghcpCliCommandFromEnvironment,
@@ -389,12 +389,22 @@ export class CliAgentRunner {
         command.args,
         spawnOptions,
       );
-    const processController = injectedController
-      ? await injectedController.attach(child)
-      : this.options.processControllerFactory
-        ? this.options.processControllerFactory(child, controllerOptions)
-        : createAgentProcessTreeController(child, controllerOptions);
-    if (!processController) throw new AgentExecutionUnavailableError('process-tree-control-required');
+    let processController: AgentProcessTreeController | undefined;
+    try {
+      processController = injectedController
+        ? await injectedController.attach(child)
+        : this.options.processControllerFactory
+          ? this.options.processControllerFactory(child, controllerOptions)
+          : createAgentProcessTreeController(child, controllerOptions);
+      if (!processController) throw new AgentExecutionUnavailableError('process-tree-control-required');
+    } catch (error) {
+      try {
+        await reapChildProcess(child);
+      } catch {
+        throw new AgentExecutionUnavailableError('process-tree-control-required');
+      }
+      throw error;
+    }
 
     let sessionId: string | undefined;
     let finalResult = '';

@@ -43,6 +43,80 @@ try {
   await fs.writeFile(codexExecutable, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
   const codexExecutableSha256 = crypto.createHash('sha256').update(await fs.readFile(codexExecutable)).digest('hex');
 
+  const acquireInput = (executable = codexExecutable) => ({
+    subject: scope,
+    sourceWorkspace,
+    workspace: projectedWorkspace,
+    protectedRoots: [sourceWorkspace, os.homedir()],
+    environmentOverrides: {
+      HOME: isolatedHome,
+      USERPROFILE: isolatedHome,
+      CODEX_HOME: isolatedCodexHome,
+    },
+    prompt: 'inspect only the projected workspace',
+    executable,
+  });
+
+  for (const [expectedClassification, failure] of [
+    ['command-not-found', Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' })],
+    ['malformed-profile', new Error('invalid permission profile syntax')],
+    ['timeout', Object.assign(new Error('permission preflight timed out'), { code: 'ETIMEDOUT', killed: true })],
+    ['unknown-infrastructure', Object.assign(new Error('permission preflight I/O failure'), { code: 'EIO' })],
+  ] as const) {
+    const failingProvider = new CodexPermissionProfileIsolationProvider({
+      codexExecutable,
+      codexExecutableSha256,
+      codexHome: serviceCodexHome,
+      platform: 'darwin',
+      preflight: async () => { throw failure; },
+      spawn: () => fakeChild,
+      executableTrustVerifier: () => undefined,
+    });
+    await assert.rejects(
+      () => failingProvider.acquire(acquireInput()),
+      (error: unknown) => error instanceof AgentExecutionUnavailableError
+        && error.reason === 'trusted-isolation-required'
+        && (error as Error & { classification?: unknown }).classification === expectedClassification,
+      `${expectedClassification} preflight failures retain a stable fail-closed classification`,
+    );
+  }
+
+  const malformedExecutable = path.join(root, 'codex-malformed-profile');
+  await fs.writeFile(malformedExecutable, [
+    '#!/bin/sh',
+    'case "$1" in',
+    '  --version) echo "codex-cli 0.148.0" ;;',
+    '  mcp) echo "[]" ;;',
+    '  plugin) echo \'{"installed":[],"available":[]}\' ;;',
+    '  sandbox)',
+    '    case "$*" in',
+    '      *workspace-read-canary*) exit 0 ;;',
+    '      *service-read-denied-canary*) echo "invalid permission profile" >&2; exit 1 ;;',
+    '      *) exit 1 ;;',
+    '    esac',
+    '    ;;',
+    '  exec) echo \'{"type":"item.completed","item":{"type":"agent_message","text":"TEAMS_CODEX_AUTH_PREFLIGHT_OK"}}\' ;;',
+    '  *) exit 1 ;;',
+    'esac',
+  ].join('\n'), { mode: 0o700 });
+  await fs.writeFile(path.join(projectedWorkspace, 'workspace-canary.txt'), 'workspace fixture\n', { mode: 0o600 });
+  const malformedExecutableSha256 = crypto.createHash('sha256').update(await fs.readFile(malformedExecutable)).digest('hex');
+  const malformedProvider = new CodexPermissionProfileIsolationProvider({
+    codexExecutable: malformedExecutable,
+    codexExecutableSha256: malformedExecutableSha256,
+    codexHome: serviceCodexHome,
+    platform: 'darwin',
+    spawn: () => fakeChild,
+    executableTrustVerifier: () => undefined,
+  });
+  await assert.rejects(
+    () => malformedProvider.acquire(acquireInput(malformedExecutable)),
+    (error: unknown) => error instanceof AgentExecutionUnavailableError
+      && error.reason === 'trusted-isolation-required'
+      && (error as Error & { classification?: unknown }).classification === 'malformed-profile',
+    'a malformed permission profile must not be accepted as a genuine sandbox denial',
+  );
+
   const provider = new CodexPermissionProfileIsolationProvider({
     codexExecutable,
     codexExecutableSha256,

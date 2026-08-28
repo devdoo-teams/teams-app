@@ -108,6 +108,25 @@ type TrustedExecutableSnapshot = TrustedPathSnapshot & Readonly<{
 
 export type ExecutableTrustVerifier = (input: Readonly<{ path: string; sha256: string }>) => void;
 
+export type CodexPermissionProfilePreflightClassification =
+  | 'command-not-found'
+  | 'malformed-profile'
+  | 'timeout'
+  | 'genuine-denial'
+  | 'unknown-infrastructure';
+
+type ThrownPreflightClassification = Exclude<CodexPermissionProfilePreflightClassification, 'genuine-denial'>;
+
+export class CodexPermissionProfilePreflightError extends AgentExecutionUnavailableError {
+  readonly classification: ThrownPreflightClassification;
+
+  constructor(classification: ThrownPreflightClassification, message: string) {
+    super('trusted-isolation-required', message);
+    this.name = 'CodexPermissionProfilePreflightError';
+    this.classification = classification;
+  }
+}
+
 export type CodexPermissionProfileIsolationProviderOptions = Readonly<{
   codexExecutable: string;
   codexExecutableSha256: string;
@@ -212,8 +231,13 @@ export class CodexPermissionProfileIsolationProvider extends AgentIsolationProvi
         toolSurfacePolicy: CODEX_EXTERNAL_TOOL_SURFACE_POLICY,
       });
     } catch (error) {
+      if (error instanceof CodexPermissionProfilePreflightError) throw error;
       const detail = error instanceof Error ? error.message : String(error);
-      throw unavailable(`native Codex permission-profile preflight failed: ${detail}`);
+      const classification = classifyPreflightFailure(error);
+      throw preflightFailure(
+        classification === 'genuine-denial' ? 'unknown-infrastructure' : classification,
+        `native Codex permission-profile preflight failed: ${detail}`,
+      );
     }
     codexHome = await requirePrivateDirectory(this.codexHome, 'service CODEX_HOME');
     authFile = await requirePrivateAuthFile(path.join(codexHome.path, 'auth.json'));
@@ -670,10 +694,44 @@ async function expectSandboxDenial(
       timeout: PREFLIGHT_TIMEOUT_MS,
       maxBuffer: 16 * 1024,
     });
-  } catch {
-    return;
+  } catch (error) {
+    const classification = classifyPreflightFailure(error);
+    if (classification === 'genuine-denial') return;
+    const detail = error instanceof Error ? error.message : String(error);
+    throw preflightFailure(classification, `${label} preflight failed: ${detail}`);
   }
   throw new Error(`native permission profile allowed forbidden ${label}`);
+}
+
+function classifyPreflightFailure(error: unknown): CodexPermissionProfilePreflightClassification {
+  const candidate = (error && typeof error === 'object' ? error : {}) as {
+    code?: string | number;
+    killed?: boolean;
+    signal?: NodeJS.Signals | null;
+    stdout?: string | Buffer;
+    stderr?: string | Buffer;
+  };
+  const diagnostics = [
+    error instanceof Error ? error.message : String(error),
+    candidate.stdout,
+    candidate.stderr,
+  ].map((value) => typeof value === 'string' ? value : value?.toString('utf8') ?? '').join('\n');
+  if (candidate.code === 'ENOENT' || /\bENOENT\b|(?:command|executable|file).{0,40}(?:not found|no such file)/iu.test(diagnostics)) {
+    return 'command-not-found';
+  }
+  if (candidate.code === 'ETIMEDOUT' || candidate.killed === true || candidate.signal === 'SIGTERM'
+    || /\b(?:timed out|timeout|time limit exceeded)\b/iu.test(diagnostics)) {
+    return 'timeout';
+  }
+  if (/(?:\b(?:invalid|malformed|unknown|unrecognized|unsupported|bad|failed)\b.{0,80}\b(?:permission|profile|config|sandbox)\b|\b(?:permission|profile|config|sandbox)\b.{0,80}\b(?:invalid|malformed|unknown|unrecognized|unsupported|bad|failed)\b)/iu.test(diagnostics)) {
+    return 'malformed-profile';
+  }
+  if (typeof candidate.code === 'number' && candidate.code !== 0) return 'genuine-denial';
+  return 'unknown-infrastructure';
+}
+
+function preflightFailure(classification: ThrownPreflightClassification, message: string): CodexPermissionProfilePreflightError {
+  return new CodexPermissionProfilePreflightError(classification, message);
 }
 
 async function withLoopbackServer(operation: (port: number) => Promise<void>): Promise<void> {

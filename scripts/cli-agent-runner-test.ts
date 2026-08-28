@@ -102,6 +102,29 @@ if (process.argv.includes('exec')) {
 }
 `;
 
+async function childClosedWithin(child: ReturnType<typeof spawnProcess>, timeoutMs = 500): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) return true;
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    const finish = (closed: boolean): void => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      child.removeListener('close', onClose);
+      child.removeListener('error', onError);
+      resolve(closed);
+    };
+    const onClose = (): void => finish(true);
+    const onError = (): void => finish(true);
+    child.once('close', onClose);
+    child.once('error', onError);
+    timer = setTimeout(() => finish(false), timeoutMs);
+  });
+}
+
+let attachmentChild: ReturnType<typeof spawnProcess> | undefined;
+
 try {
   await fs.writeFile(fakeCliPath, fakeCliSource, { mode: 0o700 });
 
@@ -132,6 +155,34 @@ try {
     },
     processControllerOptions: { graceMs: 20, cleanupWaitMs: 200 },
   });
+
+  const attachmentFailureRunner = new CliAgentRunner({
+    commands: { copilot: { executable: process.execPath } },
+    resolveGhcpExecutable: async (command) => ({ state: 'resolved', command }),
+    platform: 'linux',
+    processControllerProvider: {
+      preflight: () => undefined,
+      attach: () => undefined,
+    },
+    spawn: () => {
+      attachmentChild = spawnProcess(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+      return attachmentChild;
+    },
+  });
+  await assert.rejects(
+    () => attachmentFailureRunner.run({
+      provider: 'copilot',
+      jobId: 'copilot-controller-attachment-failure',
+      prompt: 'attachment must fail closed',
+      workspace: root,
+      mode: 'workspace-write',
+    }),
+    (error: unknown) => error instanceof Error
+      && (error as Error & { reason?: unknown }).reason === 'process-tree-control-required',
+    'missing controller attachment fails closed after cleanup begins',
+  );
+  assert.ok(attachmentChild, 'the Copilot attachment regression must spawn a child');
+  assert.equal(await childClosedWithin(attachmentChild), true, 'a Copilot child is reaped when controller attachment returns no controller');
 
   const result = await runner.run({
     provider: 'copilot',
@@ -472,5 +523,9 @@ try {
 
   console.log('PASS: provider-neutral CLI runner selects independent Codex and official Copilot JSONL adapters');
 } finally {
+  if (attachmentChild && attachmentChild.exitCode === null && attachmentChild.signalCode === null) {
+    attachmentChild.kill('SIGKILL');
+    await childClosedWithin(attachmentChild);
+  }
   await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 }

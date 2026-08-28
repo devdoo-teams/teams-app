@@ -153,6 +153,27 @@ async function runCase(caseName: string, onEvent?: (event: CodexRunEvent) => Pro
   }));
 }
 
+async function childClosedWithin(child: ReturnType<typeof spawnChild>, timeoutMs = 500): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) return true;
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    const finish = (closed: boolean): void => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      child.removeListener('close', onClose);
+      child.removeListener('error', onError);
+      resolve(closed);
+    };
+    const onClose = (): void => finish(true);
+    const onError = (): void => finish(true);
+    child.once('close', onClose);
+    child.once('error', onError);
+    timer = setTimeout(() => finish(false), timeoutMs);
+  });
+}
+
 const negativeCases: Array<[string, RegExp, number?]> = [
   ['malformed', /malformed|protocol/i],
   ['non-object', /object|protocol/i],
@@ -167,6 +188,8 @@ const negativeCases: Array<[string, RegExp, number?]> = [
   ['signal', /signal|protocol|terminated/i],
   ['timeout', /시간 제한|timeout/i, 100],
 ];
+
+let attachmentChild: ReturnType<typeof spawnChild> | undefined;
 
 try {
   await fs.mkdir(path.join(projectionRoot, '.isolated-home', '.codex'), { recursive: true });
@@ -204,6 +227,30 @@ try {
   );
   assert.equal(spawnCount, 0, 'cwd/assert-only isolation has spawn=0');
 
+  const attachmentFailureRunner = new CodexRunner({
+    platform: 'linux',
+    processControllerProvider: {
+      preflight: () => undefined,
+      attach: async () => { throw new Error('controller attachment failed'); },
+    },
+    spawn: () => {
+      attachmentChild = spawnChild(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+      return attachmentChild;
+    },
+  });
+  await assert.rejects(
+    () => attachmentFailureRunner.run({
+      jobId: 'controller-attachment-failure',
+      prompt: 'attachment must fail closed',
+      workspace: projectionRoot,
+      mode: 'workspace-write',
+    }),
+    /controller attachment failed/iu,
+    'controller attachment errors are returned after cleanup begins',
+  );
+  assert.ok(attachmentChild, 'the attachment regression must spawn a child');
+  assert.equal(await childClosedWithin(attachmentChild), true, 'a child is reaped when controller attachment throws');
+
   await assert.rejects(
     () => provider.validateRequest({
       subject: { tenantId: 'security-tenant', requesterId: 'security-requester', conversationId: 'security-conversation' },
@@ -215,6 +262,10 @@ try {
 
   console.log('PASS: CodexRunner enforces provider-owned leases, final agent_message JSONL FSM, nonzero/signal rejection, callback ordering, and cwd-only fail-closed launch');
 } finally {
+  if (attachmentChild && attachmentChild.exitCode === null && attachmentChild.signalCode === null) {
+    attachmentChild.kill('SIGKILL');
+    await childClosedWithin(attachmentChild);
+  }
   await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   await fs.rm(projectionRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 }
