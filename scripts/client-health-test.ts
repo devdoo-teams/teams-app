@@ -47,6 +47,7 @@ assert.equal(healthStorageLabel('file-json-single-process'), '파일 JSON (단�
 assert.equal(genAiLabel('not-configured'), '미사용 · 결정형 기본');
 assert.equal(genAiLabel('deterministic-test'), '결정형 테스트');
 assert.equal(genAiLabel('openai-configured'), 'OpenAI (선택형)');
+assert.equal(genAiLabel('grok-configured'), 'Grok (xAI) 선택형');
 assert.equal(
   releaseIdentityLabel({ version: '1.0.45', sourceCommit: '9576052b55327b0ca5c40dc326fb4926a26ee864' }),
   '1.0.45 · 9576052',

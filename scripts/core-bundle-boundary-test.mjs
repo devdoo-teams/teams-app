@@ -46,12 +46,12 @@ const serverEntry = serverEntryBytes.toString('utf8');
 assert.match(serverEntry, /mcpEnabled/, 'core health still reports MCP disabled state');
 assert.doesNotMatch(
   serverEntry,
-  /\b(?:LocalCompatibleResponseEngine|OpenAIResponseEngine)\b/,
+  /\b(?:LocalCompatibleResponseEngine|OpenAIResponseEngine|GrokResponseEngine)\b/,
   'core server artifact must not embed optional response engine implementations',
 );
 assert.doesNotMatch(
   serverEntry,
-  /OPENAI_API_KEY|OPENAI_MODEL|LOCAL_MODEL_BASE_URL|LOCAL_MODEL_NAME/,
+  /OPENAI_API_KEY|OPENAI_MODEL|LOCAL_MODEL_BASE_URL|LOCAL_MODEL_NAME|XAI_API_KEY|XAI_MODEL|XAI_BASE_URL/,
   'core server artifact must not expose optional provider configuration paths',
 );
 const serverBuildConfig = await fs.readFile(path.join(root, 'scripts', 'build-server.mjs'), 'utf8');

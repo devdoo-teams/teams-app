@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-type ResponseMode = 'deterministic' | 'openai' | 'local';
+type ResponseMode = 'deterministic' | 'openai' | 'local' | 'grok';
 type ResponseModeScope = { tenantId: string; requesterId: string };
 type ResponseModeAvailability = {
   mode: ResponseMode;
@@ -21,7 +21,7 @@ type ResponseModeStore = {
 type ResponseModeModules = {
   DEFAULT_RESPONSE_MODE: ResponseMode;
   ResponseModeSchema: { safeParse(value: unknown): { success: boolean } };
-  ResponseModeStore: new (filePath: string, options?: { providers?: { openai: boolean; local: boolean } }) => ResponseModeStore;
+  ResponseModeStore: new (filePath: string, options?: { providers?: { openai: boolean; local: boolean; grok?: boolean } }) => ResponseModeStore;
   responseModeLabel(mode: ResponseMode): string;
   isLocalModelBaseUrlConfigured(value: string | undefined): boolean;
 };
@@ -179,6 +179,12 @@ try {
         {
           mode: 'local',
           label: '로컬/사내 모델',
+          configured: false,
+          requiresServerConfiguration: true,
+        },
+        {
+          mode: 'grok',
+          label: 'Grok (xAI)',
           configured: false,
           requiresServerConfiguration: true,
         },

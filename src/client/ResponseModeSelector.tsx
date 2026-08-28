@@ -327,7 +327,7 @@ export type ResponseModeSelectorProps = {
 
 function safeDisplayError(error: string): string {
   const trimmed = error.trim();
-  if (!trimmed || trimmed.length > 240 || /https?:\/\/|OPENAI_API_KEY|LOCAL_MODEL|Bearer\s/i.test(trimmed)) {
+  if (!trimmed || trimmed.length > 240 || /https?:\/\/|OPENAI_API_KEY|XAI_API_KEY|LOCAL_MODEL|Bearer\s/i.test(trimmed)) {
     return GENERIC_RESPONSE_MODE_ERROR;
   }
   return trimmed;

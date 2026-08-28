@@ -238,6 +238,7 @@ async function main(): Promise<void> {
       ['deterministic', true],
       ['openai', false],
       ['local', false],
+      ['grok', false],
     ]);
     const publicJson = JSON.stringify(initial.body);
     assertPass(!publicJson.includes('OPENAI_API_KEY') && !publicJson.includes('LOCAL_MODEL_BASE_URL'), 'response-mode status has no secret or provider URL credential');

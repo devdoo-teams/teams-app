@@ -55,7 +55,7 @@ type WorkspaceHealth = {
   ok: boolean;
   bot: 'teams-sdk' | 'local-handler';
   userAuth: string;
-  genAI: 'openai-configured' | 'not-configured' | 'deterministic-test';
+  genAI: 'openai-configured' | 'grok-configured' | 'not-configured' | 'deterministic-test';
 };
 
 const weatherToolSchema = z.object({

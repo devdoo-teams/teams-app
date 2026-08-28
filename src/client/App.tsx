@@ -257,7 +257,7 @@ export type HealthResponse = {
   storage: 'file-json-single-process';
   timestamp: string;
   copilotKit: 'enabled' | 'disabled';
-  genAI: 'openai-configured' | 'not-configured' | 'deterministic-test';
+  genAI: 'openai-configured' | 'grok-configured' | 'not-configured' | 'deterministic-test';
 };
 
 export function healthAuthLabel(value: HealthResponse['auth'] | undefined): string {
@@ -287,6 +287,7 @@ export function healthStorageLabel(value: HealthResponse['storage'] | undefined)
 }
 
 export function genAiLabel(value: HealthResponse['genAI'] | undefined): string {
+  if (value === 'grok-configured') return 'Grok (xAI) 선택형';
   if (value === 'openai-configured') return 'OpenAI (선택형)';
   if (value === 'deterministic-test') return '결정형 테스트';
   return '미사용 · 결정형 기본';

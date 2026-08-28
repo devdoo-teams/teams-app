@@ -370,18 +370,23 @@ const genUiMode = process.env.TEAMS_GENUI_MODE === 'legacy' || process.env.TEAMS
 const openAiConfigured = process.env.TEAMS_CORE_BUILD !== 'true'
   && optionalRuntimeEnabled
   && Boolean(process.env.OPENAI_API_KEY?.trim());
+const grokConfigured = process.env.TEAMS_CORE_BUILD !== 'true'
+  && optionalRuntimeEnabled
+  && Boolean(process.env.XAI_API_KEY?.trim());
 let optionalResponseEngines: Array<import('./response-engine.js').ResponseEngine> = [];
 let localModelConfigured = false;
 if (process.env.TEAMS_CORE_BUILD !== 'true' && optionalRuntimeEnabled) {
-  const [{ LocalCompatibleResponseEngine }, { OpenAIResponseEngine }, { isLocalModelBaseUrlConfigured }] = await Promise.all([
+  const [{ LocalCompatibleResponseEngine }, { OpenAIResponseEngine }, { GrokResponseEngine }, { isLocalModelBaseUrlConfigured }] = await Promise.all([
     import('./response-engine-local.js'),
     import('./response-engine-openai.js'),
+    import('./response-engine-grok.js'),
     import('./local-model-url.js'),
   ]);
   localModelConfigured = isLocalModelBaseUrlConfigured(process.env.LOCAL_MODEL_BASE_URL);
   optionalResponseEngines = [
     ...(localModelConfigured ? [new LocalCompatibleResponseEngine()] : []),
     ...(openAiConfigured ? [new OpenAIResponseEngine()] : []),
+    ...(grokConfigured ? [new GrokResponseEngine()] : []),
   ];
 }
 type ChannelsShadowRenderer = typeof import('./copilot-channels-shadow.js')['renderChannelsShadow'];
@@ -405,6 +410,9 @@ const channelsShadowMonitor = new ChannelsShadowMonitor();
 const openAiModel = process.env.TEAMS_CORE_BUILD === 'true'
   ? 'deterministic'
   : process.env.OPENAI_MODEL?.trim() || 'gpt-4o-mini';
+const grokModel = process.env.TEAMS_CORE_BUILD === 'true'
+  ? 'deterministic'
+  : process.env.XAI_MODEL?.trim() || 'grok-4.6';
 const localModelName = process.env.TEAMS_CORE_BUILD === 'true'
   ? 'local-model'
   : process.env.LOCAL_MODEL_NAME?.trim() || 'local-model';
@@ -413,11 +421,13 @@ const responseProviders = {
   deterministic: true,
   openai: optionalRuntimeEnabled && openAiConfigured,
   local: optionalRuntimeEnabled && localModelConfigured,
+  grok: optionalRuntimeEnabled && grokConfigured,
 } as const;
 const responseModeStore = new ResponseModeStore(responseModeStorePath, {
   providers: {
     openai: openAiConfigured,
     local: localModelConfigured,
+    grok: grokConfigured,
   },
 });
 
@@ -1422,13 +1432,15 @@ http.get('/api/health', async (_request: any, response: any) => {
     copilotKitRuntime: optionalRuntimeEnabled ? '/api/copilotkit' : 'disabled',
     genAI: process.env.COPILOTKIT_DETERMINISTIC_MODE === 'true'
       ? 'deterministic-test'
-      : openAiConfigured
+      : grokConfigured
+        ? 'grok-configured'
+        : openAiConfigured
         ? 'openai-configured'
         : 'not-configured',
     genAIProvider: {
-      provider: 'openai',
-      configured: openAiConfigured,
-      model: openAiModel.slice(0, 120),
+      provider: grokConfigured ? 'grok' : 'openai',
+      configured: grokConfigured || openAiConfigured,
+      model: (grokConfigured ? grokModel : openAiModel).slice(0, 120),
     },
     responseProviders,
     weatherMode,
@@ -1483,6 +1495,8 @@ function publicResponseModeAvailability(): PublicResponseModeAvailability[] {
       ? { model: publicModelLabel(openAiModel, openAiModel) }
       : entry.configured && entry.mode === 'local'
         ? { model: publicModelLabel(localModelName, 'local-model') }
+        : entry.configured && entry.mode === 'grok'
+          ? { model: publicModelLabel(grokModel, 'grok-4.6') }
         : {}),
   }));
 }

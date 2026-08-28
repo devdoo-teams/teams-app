@@ -35,10 +35,11 @@ export type ApprovalToolParameters = {
   action: 'approve' | 'cancel';
 };
 
-export type GenAiRuntimeStatus = 'openai-configured' | 'not-configured' | 'deterministic-test';
+export type GenAiRuntimeStatus = 'openai-configured' | 'grok-configured' | 'not-configured' | 'deterministic-test';
 
 export function getGenAiBadgeLabel(genAI: GenAiRuntimeStatus | undefined): string {
-  if (genAI === 'openai-configured') return 'GenAI 연결됨';
+  if (genAI === 'openai-configured') return 'OpenAI 연결됨';
+  if (genAI === 'grok-configured') return 'Grok 연결됨';
   if (genAI === 'deterministic-test') return '테스트 모드';
   return '설정 필요';
 }

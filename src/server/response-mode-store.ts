@@ -25,7 +25,7 @@ export class ResponseModeStore {
   constructor(
     private readonly dataFile: string,
     private readonly options: {
-      providers?: { openai: boolean; local: boolean };
+      providers?: { openai: boolean; local: boolean; grok?: boolean };
     } = {},
   ) {}
 
@@ -87,6 +87,12 @@ export class ResponseModeStore {
         mode: 'local',
         label: responseModeLabel('local'),
         configured: this.options.providers?.local === true,
+        requiresServerConfiguration: true,
+      },
+      {
+        mode: 'grok',
+        label: responseModeLabel('grok'),
+        configured: this.options.providers?.grok === true,
         requiresServerConfiguration: true,
       },
     ];

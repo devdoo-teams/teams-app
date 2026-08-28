@@ -32,6 +32,13 @@ const unavailableProviderPayload = {
       requiresServerConfiguration: true,
       model: 'http://10.0.0.5:11434/v1',
     },
+    {
+      mode: 'grok',
+      label: 'Grok (xAI)',
+      configured: false,
+      requiresServerConfiguration: true,
+      model: 'https://api.x.ai/v1',
+    },
   ],
 };
 
@@ -65,6 +72,7 @@ const postFetcher: ResponseModeApiFetcher = async (input, init) => {
       { mode: 'deterministic', label: '결정형', configured: true, requiresServerConfiguration: false },
       { mode: 'openai', label: 'OpenAI', configured: true, requiresServerConfiguration: true },
       { mode: 'local', label: '로컬/사내 모델', configured: false, requiresServerConfiguration: true },
+      { mode: 'grok', label: 'Grok (xAI)', configured: false, requiresServerConfiguration: true },
     ],
   });
 };
@@ -108,8 +116,9 @@ assert.match(readyMarkup, /role="radiogroup"/);
 assert.match(readyMarkup, /결정형/);
 assert.match(readyMarkup, /OpenAI/);
 assert.match(readyMarkup, /로컬\/사내 모델/);
+assert.match(readyMarkup, /Grok \(xAI\)/);
 assert.match(readyMarkup, /disabled=""/);
-assert.doesNotMatch(readyMarkup, /provider\.example|super-secret|OPENAI_API_KEY|10\.0\.0\.5/);
+assert.doesNotMatch(readyMarkup, /provider\.example|super-secret|OPENAI_API_KEY|XAI_API_KEY|10\.0\.0\.5/);
 
 const loadingMarkup = renderToStaticMarkup(React.createElement(ResponseModeSelector, {
   state: { ...DEFAULT_RESPONSE_MODE_STATE, status: 'loading' },
