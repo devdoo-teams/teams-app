@@ -22,6 +22,7 @@ const MAX_AUTH_FILE_BYTES = 1024 * 1024;
 const PREFLIGHT_TIMEOUT_MS = 45_000;
 const OPENAI_TEAM_IDENTIFIER = '2DC432GLL2';
 const TRUSTED_PARENT_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
+const MACOS_PERMISSION_PROFILE_DENIAL_SIGNATURE = /\bOperation not permitted\b/u;
 
 const DISABLED_CODEX_FEATURES = Object.freeze([
   'apps',
@@ -716,6 +717,9 @@ function classifyPreflightFailure(error: unknown): CodexPermissionProfilePreflig
     candidate.stdout,
     candidate.stderr,
   ].map((value) => typeof value === 'string' ? value : value?.toString('utf8') ?? '').join('\n');
+  const stderr = typeof candidate.stderr === 'string'
+    ? candidate.stderr
+    : candidate.stderr?.toString('utf8') ?? '';
   if (candidate.code === 'ENOENT' || /\bENOENT\b|(?:command|executable|file).{0,40}(?:not found|no such file)/iu.test(diagnostics)) {
     return 'command-not-found';
   }
@@ -726,7 +730,10 @@ function classifyPreflightFailure(error: unknown): CodexPermissionProfilePreflig
   if (/(?:\b(?:invalid|malformed|unknown|unrecognized|unsupported|bad|failed)\b.{0,80}\b(?:permission|profile|config|sandbox)\b|\b(?:permission|profile|config|sandbox)\b.{0,80}\b(?:invalid|malformed|unknown|unrecognized|unsupported|bad|failed)\b)/iu.test(diagnostics)) {
     return 'malformed-profile';
   }
-  if (typeof candidate.code === 'number' && candidate.code !== 0) return 'genuine-denial';
+  if (typeof candidate.code === 'number' && candidate.code !== 0
+    && MACOS_PERMISSION_PROFILE_DENIAL_SIGNATURE.test(stderr)) {
+    return 'genuine-denial';
+  }
   return 'unknown-infrastructure';
 }
 
