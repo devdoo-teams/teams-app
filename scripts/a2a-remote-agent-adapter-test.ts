@@ -208,6 +208,110 @@ const canceled = await canceledPromise;
 assert.equal(canceled.status, 'canceled');
 assert.ok(calls.includes('cancel'), 'aborting a remote child must cancel the remote task');
 
+let initialSendSignal: AbortSignal | undefined;
+const initialSendController = new AbortController();
+const initialSendAgent = createA2ARemoteAgent({
+  agentId: 'remote-agent',
+  providerId: 'remote-provider',
+  client: {
+    card: {} as A2ARemoteClient['card'],
+    async sendMessage(_input, requestOptions) {
+      initialSendSignal = requestOptions?.signal;
+      if (!requestOptions?.signal) throw new Error('parent signal was not propagated');
+      return new Promise<A2ARemoteTask>((_resolve, reject) => {
+        requestOptions.signal!.addEventListener('abort', () => {
+          reject(requestOptions.signal!.reason ?? new Error('parent canceled'));
+        }, { once: true });
+      });
+    },
+    async getTask() { throw new Error('initial SendMessage cancellation must not poll'); },
+    async listTasks() { return { tasks: [] }; },
+    async cancelTask() { throw new Error('initial SendMessage has no remote task ID to cancel'); },
+  },
+  authorizationPolicy,
+});
+const initialSendPromise = initialSendAgent.executeChild({
+  scope,
+  parentTaskId: 'parent-initial-send-cancel',
+  childKey: 'review',
+  childIdempotencyKey: 'child-initial-send-cancel',
+  role: 'reviewer',
+  prompt: 'Cancel during initial SendMessage.',
+  capabilities: ['source.read'],
+  agentId: 'remote-agent',
+  providerId: 'remote-provider',
+  deadlineAtMs: Date.now() + 1_000,
+  signal: initialSendController.signal,
+  bindChild: async () => { throw new Error('initial SendMessage cancellation must not bind a child'); },
+});
+assert.equal(initialSendSignal, initialSendController.signal);
+initialSendController.abort(new Error('parent canceled before remote task ID'));
+const initialSendCanceled = await initialSendPromise;
+assert.deepEqual(initialSendCanceled, {
+  taskId: 'child-initial-send-cancel',
+  status: 'canceled',
+  error: 'Remote A2A task canceled.',
+});
+
+let pollingSignal: AbortSignal | undefined;
+let pollingStarted!: () => void;
+const pollingStartedPromise = new Promise<void>((resolve) => { pollingStarted = resolve; });
+let pollingCancelOptions: Readonly<{ signal?: AbortSignal }> | undefined;
+const pollingController = new AbortController();
+const pollingAgent = createA2ARemoteAgent({
+  agentId: 'remote-agent',
+  providerId: 'remote-provider',
+  pollIntervalMs: 1,
+  maxPolls: 5,
+  client: {
+    card: {} as A2ARemoteClient['card'],
+    async sendMessage() {
+      return { id: 'remote-task-poll-cancel', status: { state: 'TASK_STATE_WORKING' } };
+    },
+    async getTask(_id, requestOptions) {
+      pollingSignal = requestOptions?.signal;
+      pollingStarted();
+      if (!requestOptions?.signal) throw new Error('polling signal was not propagated');
+      return new Promise<A2ARemoteTask>((_resolve, reject) => {
+        requestOptions.signal!.addEventListener('abort', () => {
+          reject(requestOptions.signal!.reason ?? new Error('parent canceled during polling'));
+        }, { once: true });
+      });
+    },
+    async listTasks() { return { tasks: [] }; },
+    async cancelTask(_id, requestOptions) {
+      pollingCancelOptions = requestOptions;
+      return { id: 'remote-task-poll-cancel', status: { state: 'TASK_STATE_CANCELED' } };
+    },
+  },
+  authorizationPolicy,
+});
+const pollingPromise = pollingAgent.executeChild({
+  scope,
+  parentTaskId: 'parent-poll-cancel',
+  childKey: 'review',
+  childIdempotencyKey: 'child-poll-cancel',
+  role: 'reviewer',
+  prompt: 'Cancel during remote task polling.',
+  capabilities: ['source.read'],
+  agentId: 'remote-agent',
+  providerId: 'remote-provider',
+  deadlineAtMs: Date.now() + 1_000,
+  signal: pollingController.signal,
+  bindChild: async () => undefined,
+});
+await pollingStartedPromise;
+assert.equal(pollingSignal, pollingController.signal);
+pollingController.abort(new Error('parent canceled during polling'));
+const pollingCanceled = await pollingPromise;
+assert.deepEqual(pollingCanceled, {
+  taskId: 'remote-task-poll-cancel',
+  status: 'canceled',
+  error: 'Remote A2A task canceled.',
+});
+assert.equal(pollingCancelOptions?.signal, undefined,
+  'remote cleanup cancellation must not reuse an already-aborted parent signal');
+
 current = {
   id: 'remote-task-recovery',
   status: { state: 'TASK_STATE_COMPLETED' },

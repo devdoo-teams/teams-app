@@ -261,7 +261,12 @@ async function pollRemoteTask(
     if (Date.now() >= input.deadlineAtMs) {
       return cancelAndReturn(client, remoteTaskId, 'Remote A2A task deadline exceeded.');
     }
-    task = await client.getTask(remoteTaskId);
+    try {
+      task = await client.getTask(remoteTaskId, { signal: input.signal });
+    } catch (error) {
+      if (!input.signal.aborted) throw error;
+      return cancelAndReturn(client, remoteTaskId, 'Remote A2A task canceled.');
+    }
   }
   return cancelAndReturn(client, remoteTaskId, 'Remote A2A task polling deadline exceeded.');
 }
@@ -289,8 +294,16 @@ export function createA2ARemoteAgent(options: A2ARemoteAgentAdapterOptions): A2A
           messageId: input.childIdempotencyKey,
           contextId: input.parentTaskId,
           parts: [{ text: input.prompt, mediaType: 'text/plain' }],
-        });
+        }, { signal: input.signal });
       } catch (error) {
+        if (input.signal.aborted) {
+          recordTelemetry(options.telemetry, input, 'canceled', 'canceled');
+          return {
+            taskId: input.childIdempotencyKey,
+            status: 'canceled',
+            error: 'Remote A2A task canceled.',
+          };
+        }
         recordTelemetry(options.telemetry, input, 'failed', 'failure');
         throw error;
       }
@@ -343,7 +356,7 @@ export function createA2ARemoteAgent(options: A2ARemoteAgentAdapterOptions): A2A
     async recoverChild(input) {
       recordTelemetry(options.telemetry, input, 'started', 'accepted');
       try {
-        const task = await options.client.getTask(input.agentJobId);
+        const task = await options.client.getTask(input.agentJobId, { signal: input.signal });
         const returnedTaskId = taskId(task);
         if (returnedTaskId !== input.agentJobId) {
           throw new Error('Remote A2A task recovery returned a different task identity.');

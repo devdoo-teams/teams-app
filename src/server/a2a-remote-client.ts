@@ -29,6 +29,7 @@ export type A2ARemoteAgentCard = Readonly<{
 
 export type A2ARemoteFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 export type A2ARemoteTokenProvider = () => string | Promise<string>;
+export type A2ARemoteRequestOptions = Readonly<{ signal?: AbortSignal }>;
 export type A2ARemoteMessagePart = Readonly<{ text: string; mediaType?: string }>;
 export type A2ARemoteMessage = Readonly<{
   messageId: string;
@@ -80,10 +81,10 @@ export type A2ARemoteClient = Readonly<{
     messageId: string;
     contextId?: string;
     parts: readonly A2ARemoteMessagePart[];
-  }>) => Promise<A2ARemoteTask | A2ARemoteMessage>;
-  getTask: (id: string, options?: Readonly<{ historyLength?: number }>) => Promise<A2ARemoteTask>;
-  listTasks: (options?: Readonly<{ pageSize?: number; pageToken?: string; historyLength?: number }>) => Promise<Record<string, unknown>>;
-  cancelTask: (id: string) => Promise<A2ARemoteTask>;
+  }>, options?: A2ARemoteRequestOptions) => Promise<A2ARemoteTask | A2ARemoteMessage>;
+  getTask: (id: string, options?: Readonly<{ historyLength?: number; signal?: AbortSignal }>) => Promise<A2ARemoteTask>;
+  listTasks: (options?: Readonly<{ pageSize?: number; pageToken?: string; historyLength?: number; signal?: AbortSignal }>) => Promise<Record<string, unknown>>;
+  cancelTask: (id: string, options?: A2ARemoteRequestOptions) => Promise<A2ARemoteTask>;
 }>;
 
 type ClientOptions = Readonly<{
@@ -229,17 +230,33 @@ async function fetchWithTimeout(
   input: RequestInfo | URL,
   init: RequestInit,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<Response> {
+  if (signal?.aborted) throw signal.reason ?? new Error('A2A remote operation was canceled.');
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let timedOut = false;
+  const onAbort = (): void => {
+    controller.abort(signal?.reason ?? new Error('A2A remote operation was canceled.'));
+  };
+  signal?.addEventListener('abort', onAbort, { once: true });
+  if (signal?.aborted) onAbort();
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
   try {
-    return await fetcher(input, { ...init, signal: controller.signal });
+    const response = await fetcher(input, { ...init, signal: controller.signal });
+    if (timedOut) fail('TIMEOUT');
+    if (signal?.aborted) throw signal.reason ?? new Error('A2A remote operation was canceled.');
+    return response;
   } catch (error) {
-    if (controller.signal.aborted) fail('TIMEOUT');
+    if (timedOut) fail('TIMEOUT');
+    if (signal?.aborted) throw signal.reason ?? error;
     if (error instanceof A2ARemoteClientError) throw error;
     fail('NETWORK_ERROR');
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
   }
 }
 
@@ -264,13 +281,17 @@ export async function createA2ARemoteClient(baseUrl: string, options: ClientOpti
     return { authorization: `Bearer ${token}` };
   }
 
-  async function rpc<T>(method: string, params: Record<string, unknown>): Promise<T> {
+  async function rpc<T>(
+    method: string,
+    params: Record<string, unknown>,
+    requestOptions: A2ARemoteRequestOptions = {},
+  ): Promise<T> {
     const headers = await authorizationHeaders();
     const response = await fetchWithTimeout(fetcher, endpoint, {
       method: 'POST',
       headers: { ...headers, accept: 'application/json', 'content-type': 'application/json', 'a2a-version': PROTOCOL_VERSION },
       body: JSON.stringify({ jsonrpc: '2.0', id: requestId(), method, params }),
-    }, timeoutMs);
+    }, timeoutMs, requestOptions.signal);
     if (response.status === 401 || response.status === 403) fail('AUTHENTICATION_FAILED');
     if (!response.ok) fail('HTTP_ERROR');
     const body = asRecord(await readJson(response));
@@ -281,7 +302,7 @@ export async function createA2ARemoteClient(baseUrl: string, options: ClientOpti
 
   return Object.freeze({
     card,
-    async sendMessage(input) {
+    async sendMessage(input, requestOptions = {}) {
       const messageId = boundedId(input.messageId);
       const parts = input.parts.map((part) => ({ text: boundedText(part.text), mediaType: part.mediaType ?? 'text/plain' }));
       const result = await rpc<{ task?: unknown; message?: unknown }>('SendMessage', {
@@ -291,7 +312,7 @@ export async function createA2ARemoteClient(baseUrl: string, options: ClientOpti
           ...(input.contextId ? { contextId: boundedId(input.contextId) } : {}),
           parts,
         },
-      });
+      }, requestOptions);
       const hasTask = result.task !== undefined;
       const hasMessage = result.message !== undefined;
       if (hasTask === hasMessage) fail('INVALID_RESPONSE');
@@ -299,7 +320,11 @@ export async function createA2ARemoteClient(baseUrl: string, options: ClientOpti
       return validateMessage(result.message);
     },
     async getTask(id, options = {}) {
-      const result = await rpc<A2ARemoteTask>('GetTask', { id: boundedId(id), historyLength: options.historyLength ?? 0 });
+      const result = await rpc<A2ARemoteTask>(
+        'GetTask',
+        { id: boundedId(id), historyLength: options.historyLength ?? 0 },
+        options,
+      );
       return asRecord(result);
     },
     async listTasks(options = {}) {
@@ -307,11 +332,11 @@ export async function createA2ARemoteClient(baseUrl: string, options: ClientOpti
         ...(options.pageSize === undefined ? {} : { pageSize: options.pageSize }),
         ...(options.pageToken ? { pageToken: options.pageToken } : {}),
         historyLength: options.historyLength ?? 0,
-      });
+      }, options);
       return result;
     },
-    async cancelTask(id) {
-      const result = await rpc<A2ARemoteTask>('CancelTask', { id: boundedId(id) });
+    async cancelTask(id, requestOptions = {}) {
+      const result = await rpc<A2ARemoteTask>('CancelTask', { id: boundedId(id) }, requestOptions);
       return asRecord(result);
     },
   });

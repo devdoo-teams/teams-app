@@ -74,6 +74,7 @@ await testAuthenticationFailureIsSafe();
 await testInvalidCardSecurityMetadata();
 await testUnsupportedProtocolAndSsrf();
 await testTimeout();
+await testAbortSignalPropagatesToRpc();
 await testJsonRpcErrorSerialization();
 
 console.log('a2a-remote-client-test: PASS');
@@ -291,6 +292,46 @@ async function testTimeout(): Promise<void> {
     }),
     'TIMEOUT',
   );
+}
+
+async function testAbortSignalPropagatesToRpc(): Promise<void> {
+  calls.length = 0;
+  let observedSignal: AbortSignal | undefined;
+  let fetchAbortObserved = false;
+  let fetchStartedResolve!: () => void;
+  const fetchStarted = new Promise<void>((resolve) => { fetchStartedResolve = resolve; });
+  nextResponse = (url, init) => {
+    if (url.pathname === '/.well-known/agent-card.json') return jsonResponse(validCard);
+    observedSignal = init.signal;
+    fetchStartedResolve();
+    return new Promise<Response>((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => {
+        fetchAbortObserved = true;
+        reject(new Error('fetch aborted by parent'));
+      }, { once: true });
+    });
+  };
+
+  const client = await createA2ARemoteClient('https://agent.example.test', {
+    fetch: mockFetch,
+    bearerTokenProvider: () => 'test-token',
+    requestTimeoutMs: 1_000,
+  });
+  const controller = new AbortController();
+  const pending = client.sendMessage({
+    messageId: 'message-abort',
+    parts: [{ text: 'This request must be canceled.' }],
+  }, { signal: controller.signal });
+  await fetchStarted;
+  assert.ok(observedSignal, 'the remote client must pass an abort-capable signal to the fetch boundary');
+  assert.notEqual(observedSignal, controller.signal,
+    'the fetch boundary may use a linked signal so its timeout remains independent');
+  controller.abort(new Error('parent cancellation'));
+  await assert.rejects(pending, /parent cancellation/);
+  assert.equal(fetchAbortObserved, true,
+    'aborting the parent signal must abort the in-flight remote request');
+  assert.equal(observedSignal?.aborted, true,
+    'the linked fetch signal must be aborted when the parent signal is canceled');
 }
 
 async function testJsonRpcErrorSerialization(): Promise<void> {
