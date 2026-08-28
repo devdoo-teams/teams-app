@@ -841,6 +841,7 @@ async function runLocalFlow(dataFile, jobDataFile, { optionalProviders = false }
       ['deterministic', true],
       ['openai', false],
       ['local', false],
+      ['grok', false],
     ]), 'response-mode availability exposes deterministic as the only configured engine without keys');
     assert(!JSON.stringify(responseMode.body).includes('OPENAI_API_KEY') && !JSON.stringify(responseMode.body).includes('LOCAL_MODEL_BASE_URL'), 'response-mode status omits provider secrets and endpoint URLs');
     const unavailableOpenAi = await request(server.baseUrl, '/api/response-mode', {
@@ -1838,6 +1839,7 @@ async function runTeamsSdkFlow(dataFile, jobDataFile) {
   try {
     const health = await request(server.baseUrl, '/api/health');
     assert(health.body.bot === 'teams-sdk', 'Teams SDK runtime branch is active');
+    assert(health.body.outbound === 'disabled', 'Teams SDK runtime disables external outbound delivery for the local fixture');
     assert(health.body.genAIProvider?.configured === false, 'Teams SDK runtime has no OpenAI key');
 
     const modeStatus = await request(server.baseUrl, '/api/response-mode');
@@ -1864,7 +1866,14 @@ async function runTeamsSdkFlow(dataFile, jobDataFile) {
     assert(!sdkJob, 'Teams SDK Activity fails closed when trusted Codex isolation is unavailable');
 
     const outbox = await request(server.baseUrl, '/api/debug/agent-outbox/runtime-conversation-sdk-agent');
-    assert(outbox.body.messages.length === 0, 'Teams SDK test does not synthesize outbound delivery when outbound is disabled');
+    assert(
+      outbox.body.messages.length === 1 && outbox.body.activities.length === 1,
+      'Teams SDK local fixture captures one response without external outbound delivery',
+    );
+    assert(
+      outbox.body.messages[0].includes('신뢰된 격리'),
+      'Teams SDK local capture preserves the trusted-isolation failure response',
+    );
   } finally {
     await stopServer(server.child);
   }
