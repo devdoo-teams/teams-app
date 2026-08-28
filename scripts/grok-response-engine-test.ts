@@ -42,7 +42,11 @@ function queueFetch(responses: Response[]): {
 
 function messageResponse(text: string, id = 'resp-text'): Response {
   return response({
+    object: 'response',
     id,
+    status: 'completed',
+    error: null,
+    incomplete_details: null,
     output: [{
       id: `msg-${id}`,
       type: 'message',
@@ -60,7 +64,11 @@ function functionResponse(
   callId = 'call-function',
 ): Response {
   return response({
+    object: 'response',
     id,
+    status: 'completed',
+    error: null,
+    incomplete_details: null,
     output: [{
       type: 'function_call',
       id: `fc-${id}`,
@@ -68,6 +76,30 @@ function functionResponse(
       name,
       arguments: argumentsValue,
     }],
+  });
+}
+
+function completedResponse(output: unknown[], id = 'resp-completed'): Response {
+  return response({
+    object: 'response',
+    id,
+    status: 'completed',
+    error: null,
+    incomplete_details: null,
+    output,
+  });
+}
+
+function providerErrorResponse(status: number): Response {
+  return new Response(JSON.stringify({
+    error: { message: 'provider-secret-response-body' },
+  }), {
+    status,
+    headers: {
+      'content-type': 'application/json',
+      'retry-after': '3600',
+      'x-provider-secret': 'provider-secret-header',
+    },
   });
 }
 
@@ -149,6 +181,173 @@ async function main(): Promise<void> {
     assert.equal((plain.envelope.metadata as any).source, 'xai');
     assert.doesNotMatch(JSON.stringify(plain), /xai-test-secret/);
 
+    const forcedWeatherFetch = queueFetch([messageResponse('날씨 도구를 확인했습니다.')]);
+    await new GrokResponseEngine({ apiKey: 'forced-tool-secret', fetchImpl: forcedWeatherFetch.fetch })
+      .run(await createInput(itemStore, createAgentServiceFake([]), '날씨 알려줘'));
+    const forcedWeatherRequest = JSON.parse(String(forcedWeatherFetch.calls[0]?.init?.body));
+    assert.deepEqual(
+      forcedWeatherRequest.tool_choice,
+      { type: 'function', function: { name: 'showWeatherCard' } },
+      'Responses API forced tool choice must use the documented nested function.name shape',
+    );
+
+    const responseStatusCases = [
+      { status: 'in_progress' },
+      { status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' } },
+      { status: 'completed', error: { code: 'provider_error', message: 'do not expose this' } },
+    ];
+    for (const [index, fields] of responseStatusCases.entries()) {
+      const statusFetch = queueFetch([response({
+        object: 'response',
+        id: `resp-invalid-status-${index}`,
+        output: [{
+          id: `msg-invalid-status-${index}`,
+          type: 'message',
+          role: 'assistant',
+          status: 'completed',
+          content: [{ type: 'output_text', text: '잘못된 응답' }],
+        }],
+        error: null,
+        incomplete_details: null,
+        ...fields,
+      })]);
+      const invalidStatus = await new GrokResponseEngine({ apiKey: 'status-secret', fetchImpl: statusFetch.fetch })
+        .run(await createInput(itemStore, createAgentServiceFake([]), '응답 상태 검증'));
+      assert.equal(invalidStatus.envelope.kind, 'error');
+      assert.equal(invalidStatus.envelope.metadata.errorCode, 'grok-invalid-response');
+      assert.doesNotMatch(JSON.stringify(invalidStatus), /do not expose this/);
+    }
+
+    const invalidOutputItems = [
+      {
+        id: 'message-role',
+        output: [{
+          id: 'message-role-item',
+          type: 'message',
+          role: 'user',
+          status: 'completed',
+          content: [{ type: 'output_text', text: '잘못된 역할' }],
+        }],
+      },
+      {
+        id: 'message-status',
+        output: [{
+          id: 'message-status-item',
+          type: 'message',
+          role: 'assistant',
+          status: 'in_progress',
+          content: [{ type: 'output_text', text: '완료되지 않은 메시지' }],
+        }],
+      },
+      {
+        id: 'function-status',
+        output: [{
+          id: 'function-status-item',
+          type: 'function_call',
+          status: 'in_progress',
+          call_id: 'call-function-status',
+          name: 'showTaskCard',
+          arguments: '{}',
+        }],
+      },
+      {
+        id: 'function-role',
+        output: [{
+          id: 'function-role-item',
+          type: 'function_call',
+          role: 'tool',
+          call_id: 'call-function-role',
+          name: 'showTaskCard',
+          arguments: '{}',
+        }],
+      },
+    ];
+    for (const itemCase of invalidOutputItems) {
+      const itemFetch = queueFetch([completedResponse(itemCase.output, `resp-${itemCase.id}`)]);
+      const invalidItem = await new GrokResponseEngine({ apiKey: 'item-status-secret', fetchImpl: itemFetch.fetch })
+        .run(await createInput(itemStore, createAgentServiceFake([]), '출력 항목 검증'));
+      assert.equal(invalidItem.envelope.kind, 'error', itemCase.id);
+      assert.equal(invalidItem.envelope.metadata.errorCode, 'grok-invalid-response', itemCase.id);
+    }
+
+    const nonRetryableHttpCases = [
+      [401, 'grok-http-401'],
+      [403, 'grok-http-403'],
+      [404, 'grok-http-404'],
+      [422, 'grok-http-422'],
+    ] as const;
+    for (const [status, errorCode] of nonRetryableHttpCases) {
+      const httpFetch = queueFetch([providerErrorResponse(status)]);
+      const httpFailure = await new GrokResponseEngine({ apiKey: 'http-secret', fetchImpl: httpFetch.fetch })
+        .run(await createInput(itemStore, createAgentServiceFake([]), `HTTP ${status} 검증`));
+      assert.equal(httpFetch.calls.length, 1, `${status} must not be retried`);
+      assert.equal(httpFailure.envelope.metadata.errorCode, errorCode);
+      assert.doesNotMatch(JSON.stringify(httpFailure), /provider-secret/);
+    }
+
+    const retryDelays: number[] = [];
+    const rateLimitFetch = queueFetch([
+      providerErrorResponse(429),
+      providerErrorResponse(429),
+      messageResponse('제한 해제 후 응답'),
+    ]);
+    const rateLimit = await new GrokResponseEngine({
+      apiKey: 'rate-limit-secret',
+      fetchImpl: rateLimitFetch.fetch,
+      sleepImpl: async (delayMs: number) => { retryDelays.push(delayMs); },
+    })
+      .run(await createInput(itemStore, createAgentServiceFake([]), '재시도 가능한 요청'));
+    assert.equal(rateLimit.text, '제한 해제 후 응답');
+    assert.equal(rateLimitFetch.calls.length, 3);
+    assert.deepEqual(retryDelays, [100, 200], '429 backoff must be bounded and ignore undocumented Retry-After');
+
+    const serverRetryFetch = queueFetch([
+      providerErrorResponse(503),
+      messageResponse('일시 장애 후 응답'),
+    ]);
+    const serverRetry = await new GrokResponseEngine({
+      apiKey: 'server-retry-secret',
+      fetchImpl: serverRetryFetch.fetch,
+      sleepImpl: async () => undefined,
+    })
+      .run(await createInput(itemStore, createAgentServiceFake([]), '서버 재시도'));
+    assert.equal(serverRetry.text, '일시 장애 후 응답');
+    assert.equal(serverRetryFetch.calls.length, 2, '5xx may be retried once within the bounded policy');
+
+    const networkRetryCalls: Array<{ url: string; init: RequestInit | undefined }> = [];
+    let networkAttempts = 0;
+    const networkRetryFetch: FakeFetch = async (input, init) => {
+      networkRetryCalls.push({ url: String(input), init });
+      networkAttempts += 1;
+      if (networkAttempts === 1) throw new TypeError('network-secret-response');
+      return messageResponse('네트워크 재시도 후 응답');
+    };
+    const networkRetryDelays: number[] = [];
+    const networkRetry = await new GrokResponseEngine({
+      apiKey: 'network-retry-secret',
+      fetchImpl: networkRetryFetch,
+      sleepImpl: async (delayMs: number) => { networkRetryDelays.push(delayMs); },
+    })
+      .run(await createInput(itemStore, createAgentServiceFake([]), '네트워크 재시도'));
+    assert.equal(networkRetry.text, '네트워크 재시도 후 응답');
+    assert.equal(networkRetryCalls.length, 2, 'a transient network failure may be retried once');
+    assert.deepEqual(networkRetryDelays, [100]);
+    assert.doesNotMatch(JSON.stringify(networkRetry), /network-secret-response/);
+
+    const exhaustedServerFetch = queueFetch([
+      providerErrorResponse(500),
+      providerErrorResponse(502),
+      providerErrorResponse(503),
+    ]);
+    const exhaustedServer = await new GrokResponseEngine({
+      apiKey: 'exhausted-server-secret',
+      fetchImpl: exhaustedServerFetch.fetch,
+      sleepImpl: async () => undefined,
+    })
+      .run(await createInput(itemStore, createAgentServiceFake([]), '서버 장애'));
+    assert.equal(exhaustedServer.envelope.metadata.errorCode, 'grok-http-5xx');
+    assert.equal(exhaustedServerFetch.calls.length, 3);
+
     const taskFetch = queueFetch([
       functionResponse('showTaskCard', '{}', 'resp-task', 'call-task'),
       messageResponse('업무 목록을 확인했습니다.', 'resp-task-final'),
@@ -166,6 +365,36 @@ async function main(): Promise<void> {
       output: followUp.input[0].output,
     }]);
     assert.match(followUp.input[0].output, /업무/);
+
+    const multiRoundFetch = queueFetch([
+      functionResponse('showTaskCard', '{}', 'resp-round-1', 'call-round-1'),
+      functionResponse('showTaskCard', '{}', 'resp-round-2', 'call-round-2'),
+      functionResponse('showTaskCard', '{}', 'resp-round-3', 'call-round-3'),
+      messageResponse('여러 도구 라운드를 처리했습니다.', 'resp-round-final'),
+    ]);
+    const multiRound = await new GrokResponseEngine({ apiKey: 'multi-round-secret', fetchImpl: multiRoundFetch.fetch })
+      .run(await createInput(itemStore, createAgentServiceFake([]), '업무 목록 보여줘'));
+    assert.equal(multiRound.envelope.kind, 'task-list');
+    assert.equal(multiRoundFetch.calls.length, 4, 'Grok must continue through more than one function-call round');
+    const multiRoundFollowUps = multiRoundFetch.calls.slice(1).map((call) => JSON.parse(String(call.init?.body)));
+    assert.deepEqual(multiRoundFollowUps.map((body) => body.previous_response_id), [
+      'resp-round-1',
+      'resp-round-2',
+      'resp-round-3',
+    ]);
+    assert.ok(multiRoundFollowUps.every((body) => body.tool_choice === 'auto'));
+
+    const roundLimitFetch = queueFetch([
+      functionResponse('showTaskCard', '{}', 'resp-limit-1', 'call-limit-1'),
+      functionResponse('showTaskCard', '{}', 'resp-limit-2', 'call-limit-2'),
+      functionResponse('showTaskCard', '{}', 'resp-limit-3', 'call-limit-3'),
+      functionResponse('showTaskCard', '{}', 'resp-limit-4', 'call-limit-4'),
+    ]);
+    const roundLimit = await new GrokResponseEngine({ apiKey: 'round-limit-secret', fetchImpl: roundLimitFetch.fetch })
+      .run(await createInput(itemStore, createAgentServiceFake([]), '업무 목록 보여줘'));
+    assert.equal(roundLimit.envelope.kind, 'error');
+    assert.equal(roundLimit.envelope.metadata.errorCode, 'grok-tool-round-limit');
+    assert.equal(roundLimitFetch.calls.length, 4);
 
     const approvalCalls: Array<{ prompt: string; mode: string }> = [];
     const approvalFetch = queueFetch([
@@ -196,6 +425,49 @@ async function main(): Promise<void> {
       [{ prompt: '파일을 수정해줘', mode: 'workspace-write' }],
     );
 
+    const approvalRetryCalls: Array<{ prompt: string; mode: string }> = [];
+    const approvalRetryFetch = queueFetch([
+      functionResponse('workspaceApproval', JSON.stringify({ prompt: '재시도 중복 승인 금지' }), 'resp-approval-retry', 'call-approval-retry'),
+      providerErrorResponse(503),
+      messageResponse('재시도 후 승인 요청을 만들었습니다.', 'resp-approval-retry-final'),
+    ]);
+    const approvalRetry = await new GrokResponseEngine({
+      apiKey: 'approval-retry-secret',
+      fetchImpl: approvalRetryFetch.fetch,
+      sleepImpl: async () => undefined,
+    })
+      .run({
+        ...(await createInput(itemStore, createAgentServiceFake(approvalRetryCalls), '파일을 수정해줘')),
+        approvalEnvelope: async (job) => GenUiEnvelopeV1Schema.parse({
+          schemaVersion: '1',
+          kind: 'approval',
+          status: 'approval',
+          id: job.id,
+          correlationId: 'grok-approval-retry-correlation',
+          title: '쓰기 작업 승인 필요',
+          sections: [{ type: 'status', title: '승인 경계', status: 'awaiting_approval' }],
+          actions: [],
+          citations: [],
+          aiGenerated: false,
+          fallbackText: '승인 필요',
+          metadata: { source: 'test' },
+        }),
+      });
+    assert.equal(approvalRetry.envelope.kind, 'approval');
+    assert.equal(approvalRetryFetch.calls.length, 3, 'a follow-up HTTP retry must not replay the first tool round');
+    assert.equal(approvalRetryCalls.length, 1, 'HTTP retries after a mutation must not duplicate the mutation');
+
+    const duplicateApprovalCalls: Array<{ prompt: string; mode: string }> = [];
+    const duplicateApprovalFetch = queueFetch([
+      functionResponse('workspaceApproval', JSON.stringify({ prompt: '중복 승인 금지' }), 'resp-duplicate-1', 'call-duplicate'),
+      functionResponse('workspaceApproval', JSON.stringify({ prompt: '중복 승인 금지' }), 'resp-duplicate-2', 'call-duplicate'),
+    ]);
+    const duplicateApproval = await new GrokResponseEngine({ apiKey: 'duplicate-secret', fetchImpl: duplicateApprovalFetch.fetch })
+      .run(await createInput(itemStore, createAgentServiceFake(duplicateApprovalCalls), '파일을 수정해줘'));
+    assert.equal(duplicateApproval.envelope.kind, 'error');
+    assert.equal(duplicateApproval.envelope.metadata.errorCode, 'grok-duplicate-tool-call');
+    assert.equal(duplicateApprovalCalls.length, 1, 'replayed function_call IDs must not repeat a mutation');
+
     const invalidCalls: Array<{ prompt: string; mode: string }> = [];
     const invalid = await new GrokResponseEngine({
       apiKey: 'invalid-tool-secret',
@@ -223,7 +495,7 @@ async function main(): Promise<void> {
       .run(await createInput(itemStore, createAgentServiceFake([]), '환경 설정'));
     assert.equal(JSON.parse(String(configuredFetch.calls[0]?.init?.body)).model, 'grok-test-model');
 
-    console.log('PASS: xAI Responses API text, function-call roundtrip, approval boundary, malformed-tool rejection, and no-key gate');
+    console.log('PASS: xAI Responses API tool choice, response/item validation, bounded tool rounds, HTTP classification/retry redaction, mutation-safe retry, approval boundary, and no-key gate');
   } finally {
     if (originalKey === undefined) delete process.env.XAI_API_KEY;
     else process.env.XAI_API_KEY = originalKey;

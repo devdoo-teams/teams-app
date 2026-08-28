@@ -23,11 +23,14 @@ const MAX_MESSAGE_LENGTH = 4_000;
 const MAX_SYSTEM_CONTEXT_LENGTH = 2_000;
 const MAX_TOOL_ARGUMENTS_LENGTH = 4_000;
 const MAX_TOOL_CALLS = 3;
+const MAX_TOOL_ROUNDS = 3;
 const MAX_MODEL_LENGTH = 120;
 const MAX_API_KEY_LENGTH = 512;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MIN_TIMEOUT_MS = 10;
 const MAX_TIMEOUT_MS = 30_000;
+const MAX_HTTP_ATTEMPTS = 3;
+const RETRY_DELAYS_MS = [100, 200] as const;
 
 type GrokResponseEngineOptions = {
   apiKey?: string;
@@ -35,6 +38,7 @@ type GrokResponseEngineOptions = {
   model?: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  sleepImpl?: (delayMs: number) => Promise<void>;
 };
 
 type GrokConfig = {
@@ -70,7 +74,7 @@ type ParsedGrokResponse = {
   toolCalls: GrokToolCall[];
 };
 
-type GrokToolChoice = 'auto' | 'required' | 'none' | { type: 'function'; name: string };
+type GrokToolChoice = 'auto' | 'required' | 'none' | { type: 'function'; function: { name: string } };
 
 type WeatherToolArgs = {
   location: string;
@@ -97,7 +101,7 @@ type ApprovalToolArgs = {
 };
 
 class GrokProviderError extends Error {
-  constructor(readonly code: 'configuration' | 'invalid-url' | 'timeout' | 'network' | 'http' | 'response' | 'tool' | 'location' | 'cancelled') {
+  constructor(readonly code: 'configuration' | 'invalid-url' | 'timeout' | 'network' | 'response' | 'tool' | 'tool-round-limit' | 'duplicate-tool-call' | 'location' | 'cancelled' | 'http-401' | 'http-403' | 'http-404' | 'http-422' | 'http-429' | 'http-5xx' | 'http-4xx' | 'http-other') {
     super(code);
     this.name = 'GrokProviderError';
   }
@@ -116,6 +120,25 @@ function safeProviderText(value: string, maxLength = MAX_MESSAGE_LENGTH, secret?
 
 function safeProviderValue(value: unknown): unknown {
   return redactSensitiveValue(value);
+}
+
+function httpErrorCode(status: number): 'http-401' | 'http-403' | 'http-404' | 'http-422' | 'http-429' | 'http-5xx' | 'http-4xx' | 'http-other' {
+  if (status === 401) return 'http-401';
+  if (status === 403) return 'http-403';
+  if (status === 404) return 'http-404';
+  if (status === 422) return 'http-422';
+  if (status === 429) return 'http-429';
+  if (status >= 500 && status <= 599) return 'http-5xx';
+  if (status >= 400 && status <= 499) return 'http-4xx';
+  return 'http-other';
+}
+
+function isRetryableHttpCode(code: GrokProviderError['code']): boolean {
+  return code === 'http-429' || code === 'http-5xx';
+}
+
+function isTransientNetworkError(error: unknown): boolean {
+  return error instanceof TypeError;
 }
 
 function boundedModel(value: unknown): string {
@@ -277,8 +300,17 @@ function providerErrorOutput(error: unknown): ResponseEngineOutput {
     }
     if (error.code === 'timeout') return errorOutput('Grok 응답 시간이 초과되었습니다. 잠시 후 다시 시도하세요.', 'grok-timeout');
     if (error.code === 'tool') return errorOutput('Grok이 유효하지 않은 도구 요청을 반환했습니다. 요청을 다시 시도하세요.', 'grok-invalid-tool');
+    if (error.code === 'tool-round-limit') return errorOutput('Grok 도구 처리 라운드가 제한을 초과했습니다. 요청을 다시 시도하세요.', 'grok-tool-round-limit');
+    if (error.code === 'duplicate-tool-call') return errorOutput('Grok이 동일한 도구 요청을 반복했습니다. 요청을 다시 시도하세요.', 'grok-duplicate-tool-call');
     if (error.code === 'location') return errorOutput('현재 위치 날씨 컨텍스트가 없습니다. 탭의 “내 위치 사용” 버튼을 눌러 위치 권한을 허용한 뒤 다시 시도하세요.', 'grok-location-required');
-    if (error.code === 'http') return errorOutput('Grok 제공자에 연결할 수 없습니다. 서버 설정과 제공자 상태를 확인하세요.', 'grok-provider-http');
+    if (error.code === 'http-401') return errorOutput('Grok 인증이 거부되었습니다. 서버의 XAI_API_KEY를 확인하세요.', 'grok-http-401');
+    if (error.code === 'http-403') return errorOutput('Grok 사용 권한이 없습니다. xAI 팀 또는 API 키 권한을 확인하세요.', 'grok-http-403');
+    if (error.code === 'http-404') return errorOutput('Grok 모델 또는 API 주소를 찾을 수 없습니다. 서버 설정을 확인하세요.', 'grok-http-404');
+    if (error.code === 'http-422') return errorOutput('Grok 요청 형식이 올바르지 않습니다. 요청 설정을 확인하세요.', 'grok-http-422');
+    if (error.code === 'http-429') return errorOutput('Grok 요청 한도를 초과했습니다. 잠시 후 다시 시도하세요.', 'grok-http-429');
+    if (error.code === 'http-5xx') return errorOutput('Grok 서비스에 일시적인 장애가 있습니다. 잠시 후 다시 시도하세요.', 'grok-http-5xx');
+    if (error.code === 'http-4xx') return errorOutput('Grok 요청이 거부되었습니다. 서버 설정과 요청을 확인하세요.', 'grok-http-4xx');
+    if (error.code === 'http-other') return errorOutput('Grok 제공자 요청이 실패했습니다. 잠시 후 다시 시도하세요.', 'grok-http-other');
     if (error.code === 'response') return errorOutput('Grok 제공자의 응답 형식을 확인할 수 없습니다. 잠시 후 다시 시도하세요.', 'grok-invalid-response');
     return errorOutput('Grok 제공자 요청에 실패했습니다. 잠시 후 다시 시도하세요.', 'grok-provider-error');
   }
@@ -316,12 +348,12 @@ function buildInstructions(input: ResponseEngineInput): string {
 }
 
 function forcedToolChoice(prompt: string): GrokToolChoice {
-  if (/(날씨|weather)/i.test(prompt)) return { type: 'function', name: 'showWeatherCard' };
+  if (/(날씨|weather)/i.test(prompt)) return { type: 'function', function: { name: 'showWeatherCard' } };
   if (/(업무|할 일|task).*(목록|리스트|보여|확인)|^(list|업무 목록)$/i.test(prompt)) {
-    return { type: 'function', name: 'showTaskCard' };
+    return { type: 'function', function: { name: 'showTaskCard' } };
   }
   if (/^(write|파일|수정|변경|작성|생성)/i.test(prompt)) {
-    return { type: 'function', name: 'workspaceApproval' };
+    return { type: 'function', function: { name: 'workspaceApproval' } };
   }
   return 'auto';
 }
@@ -337,6 +369,8 @@ function grokTools(): Array<Record<string, unknown>> {
 
 function parseToolCall(value: unknown): GrokToolCall {
   if (!isRecord(value) || value.type !== 'function_call') throw new GrokProviderError('tool');
+  if (value.role !== undefined && value.role !== 'assistant') throw new GrokProviderError('response');
+  if (value.status !== undefined && value.status !== 'completed') throw new GrokProviderError('response');
   const callId = boundedText(value.call_id, 200);
   const id = boundedText(value.id, 200) || callId;
   const name = boundedText(value.name, 80);
@@ -349,6 +383,12 @@ function parseToolCall(value: unknown): GrokToolCall {
 
 function parseAssistant(payload: unknown): ParsedGrokResponse {
   if (!isRecord(payload) || !Array.isArray(payload.output)) throw new GrokProviderError('response');
+  if (payload.status !== 'completed') throw new GrokProviderError('response');
+  if (payload.error !== undefined && payload.error !== null) throw new GrokProviderError('response');
+  if (payload.incomplete_details !== undefined && payload.incomplete_details !== null) {
+    throw new GrokProviderError('response');
+  }
+  if (payload.object !== undefined && payload.object !== 'response') throw new GrokProviderError('response');
   const id = boundedText(payload.id, 200);
   if (!id) throw new GrokProviderError('response');
 
@@ -360,14 +400,23 @@ function parseAssistant(payload: unknown): ParsedGrokResponse {
       toolCalls.push(parseToolCall(item));
       continue;
     }
-    if (item.type !== 'message') continue;
+    if (item.type === 'reasoning') {
+      if (item.status !== undefined && item.status !== 'completed') throw new GrokProviderError('response');
+      continue;
+    }
+    if (
+      item.type !== 'message'
+      || item.role !== 'assistant'
+      || (item.status !== undefined && item.status !== 'completed')
+    ) {
+      throw new GrokProviderError('response');
+    }
     if (!Array.isArray(item.content)) throw new GrokProviderError('response');
     for (const part of item.content) {
-      if (!isRecord(part)) throw new GrokProviderError('response');
-      if (part.type === 'output_text') {
-        if (typeof part.text !== 'string') throw new GrokProviderError('response');
-        content.push(part.text);
+      if (!isRecord(part) || part.type !== 'output_text' || typeof part.text !== 'string') {
+        throw new GrokProviderError('response');
       }
+      content.push(part.text);
     }
   }
   if (toolCalls.length > MAX_TOOL_CALLS) throw new GrokProviderError('tool');
@@ -456,9 +505,11 @@ export class GrokResponseEngine implements ResponseEngine {
   readonly mode = 'grok' as const;
 
   private readonly fetchImpl: typeof fetch;
+  private readonly sleepImpl: (delayMs: number) => Promise<void>;
 
   constructor(private readonly options: GrokResponseEngineOptions = {}) {
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.sleepImpl = options.sleepImpl ?? ((delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)));
   }
 
   async run(input: ResponseEngineInput): Promise<ResponseEngineOutput> {
@@ -471,8 +522,10 @@ export class GrokResponseEngine implements ResponseEngine {
       let toolEvents: ResponseToolEvent[] = [];
       let approvalEnvelope: GenUiEnvelopeV1 | undefined;
       let toolChoice: GrokToolChoice = forcedToolChoice(input.prompt);
+      let toolRound = 0;
+      const executedCallIds = new Set<string>();
 
-      for (let attempt = 0; attempt < 2; attempt += 1) {
+      while (true) {
         if (input.isCancelled?.()) return cancelledOutput();
         const completion = await this.requestResponse(config, input, responseInput, previousResponseId, toolChoice);
         const assistant = parseAssistant(completion);
@@ -487,12 +540,17 @@ export class GrokResponseEngine implements ResponseEngine {
           return { text, envelope, toolCalls: toolEvents };
         }
 
-        if (attempt > 0) throw new GrokProviderError('tool');
+        if (toolRound >= MAX_TOOL_ROUNDS) throw new GrokProviderError('tool-round-limit');
 
         // Validate the complete tool batch before executing any call. This is
         // the mutation boundary that prevents an unknown call from allowing a
         // preceding workspaceApproval call to partially change server state.
+        const batchCallIds = new Set<string>();
         const validatedToolCalls = assistant.toolCalls.map((toolCall) => {
+          if (batchCallIds.has(toolCall.callId) || executedCallIds.has(toolCall.callId)) {
+            throw new GrokProviderError('duplicate-tool-call');
+          }
+          batchCallIds.add(toolCall.callId);
           const args = parseArguments(toolCall);
           if (toolCall.name === 'showWeatherCard' && !isLiveWeather(contextValue(input, '날씨'))) {
             throw new GrokProviderError('location');
@@ -506,6 +564,7 @@ export class GrokResponseEngine implements ResponseEngine {
           const executed = await this.executeTool(toolCall, input, args);
           const event = executed.event;
           toolEvents = [...toolEvents, event];
+          executedCallIds.add(toolCall.callId);
           approvalEnvelope = executed.approvalEnvelope ?? approvalEnvelope;
           input.onTool?.(event);
           toolOutputs.push({
@@ -518,6 +577,7 @@ export class GrokResponseEngine implements ResponseEngine {
         previousResponseId = assistant.id;
         responseInput = toolOutputs;
         toolChoice = 'auto';
+        toolRound += 1;
       }
     } catch (error) {
       return providerErrorOutput(error);
@@ -559,48 +619,67 @@ export class GrokResponseEngine implements ResponseEngine {
     previousResponseId: string | undefined,
     toolChoice: GrokToolChoice,
   ): Promise<unknown> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
-    const cancellationPoll = setInterval(() => {
-      if (input.isCancelled?.()) controller.abort();
-    }, 25);
-    try {
-      const body: Record<string, unknown> = {
-        model: config.model,
-        input: this.boundInput(responseInput),
-        tools: grokTools(),
-        tool_choice: toolChoice,
-        parallel_tool_calls: false,
-        max_output_tokens: 900,
-      };
-      if (previousResponseId) body.previous_response_id = previousResponseId;
-      else body.instructions = buildInstructions(input);
+    const body: Record<string, unknown> = {
+      model: config.model,
+      input: this.boundInput(responseInput),
+      tools: grokTools(),
+      tool_choice: toolChoice,
+      parallel_tool_calls: false,
+      max_output_tokens: 900,
+    };
+    if (previousResponseId) body.previous_response_id = previousResponseId;
+    else body.instructions = buildInstructions(input);
 
-      const response = await this.fetchImpl(`${config.baseUrl}/responses`, {
-        method: 'POST',
-        headers: {
-          accept: 'application/json',
-          authorization: `Bearer ${config.apiKey}`,
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new GrokProviderError('http');
-      try {
-        return await response.json();
-      } catch {
-        throw new GrokProviderError('response');
-      }
-    } catch (error) {
+    let lastRetryableError = new GrokProviderError('network');
+    for (let attempt = 0; attempt < MAX_HTTP_ATTEMPTS; attempt += 1) {
       if (input.isCancelled?.()) throw new GrokProviderError('cancelled');
-      if (error instanceof GrokProviderError) throw error;
-      if (controller.signal.aborted) throw new GrokProviderError('timeout');
-      throw new GrokProviderError('network');
-    } finally {
-      clearTimeout(timeout);
-      clearInterval(cancellationPoll);
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+      const cancellationPoll = setInterval(() => {
+        if (input.isCancelled?.()) controller.abort();
+      }, 25);
+      try {
+        const response = await this.fetchImpl(`${config.baseUrl}/responses`, {
+          method: 'POST',
+          headers: {
+            accept: 'application/json',
+            authorization: `Bearer ${config.apiKey}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new GrokProviderError(httpErrorCode(response.status));
+        try {
+          return await response.json();
+        } catch {
+          throw new GrokProviderError('response');
+        }
+      } catch (error) {
+        if (input.isCancelled?.()) throw new GrokProviderError('cancelled');
+        if (error instanceof GrokProviderError) {
+          if (!isRetryableHttpCode(error.code) || attempt === MAX_HTTP_ATTEMPTS - 1) throw error;
+          lastRetryableError = error;
+        } else if (controller.signal.aborted) {
+          throw new GrokProviderError('timeout');
+        } else if (!isTransientNetworkError(error)) {
+          throw new GrokProviderError('network');
+        } else {
+          const networkError = new GrokProviderError('network');
+          if (attempt === MAX_HTTP_ATTEMPTS - 1) throw networkError;
+          lastRetryableError = networkError;
+        }
+      } finally {
+        clearTimeout(timeout);
+        clearInterval(cancellationPoll);
+      }
+
+      if (input.isCancelled?.()) throw new GrokProviderError('cancelled');
+      await this.sleepImpl(RETRY_DELAYS_MS[attempt] ?? RETRY_DELAYS_MS.at(-1)!);
+      if (input.isCancelled?.()) throw new GrokProviderError('cancelled');
     }
+    throw lastRetryableError;
   }
 
   private boundInput(items: GrokRequestItem[]): GrokRequestItem[] {
