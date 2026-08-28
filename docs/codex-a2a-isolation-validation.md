@@ -31,3 +31,26 @@ is macOS-only.
 This is an operator configuration preflight, not proof of a live Teams/A2A
 round trip. The runtime provider still performs its own fail-closed checks at
 job acquisition and launch. The validator does not start or stop services.
+
+## Repeatable login bootstrap
+
+Prepare one worker at a time with the operator helper:
+
+```bash
+npm run a2a:login -- --worker 1
+npm run a2a:login -- --worker 1 --run-login
+```
+
+Use `--worker main`, `--worker 1`, or `--worker 2` for one independent Codex
+home. `--all --run-login` processes `main`, `1`, and `2` sequentially and
+stops at the first failed login; it never shares credentials or runs login
+flows concurrently. Without `--run-login`, the command is a dry run and does
+not create credentials.
+
+The helper requires the operator-provided absolute `CODEX_BIN` and its
+64-character `CODEX_BIN_SHA256`; it does not guess an executable. With
+`--run-login`, the official `codex login --device-auth` process inherits the
+terminal so the operator can complete the browser login, password, and MFA.
+The helper reports only whether `auth.json` metadata is valid. After all
+homes are authenticated, run `npm run check:codex-a2a-isolation`; that gate is
+still required before enabling live A2A execution.

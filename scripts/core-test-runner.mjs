@@ -20,6 +20,7 @@ const plainTests = [
   'scripts/typecheck-boundary-test.mjs',
   'scripts/deployment-env-test.mjs',
   'scripts/codex-a2a-isolation-validation-test.mjs',
+  'scripts/a2a-auth-bootstrap-test.mjs',
   'scripts/validate-manifest-test.mjs',
   'scripts/release-loop-untracked-preservation-test.mjs',
   'scripts/release-loop-test.mjs',
