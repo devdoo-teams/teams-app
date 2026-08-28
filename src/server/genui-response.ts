@@ -31,6 +31,9 @@ export type GenUiA2AProviderFact = Readonly<{
   provider: string;
   agentId: string;
   providerId: string;
+  configured?: boolean;
+  execution?: 'configured' | 'unavailable' | 'unknown';
+  executionReason?: string;
 }>;
 
 export type GenUiStatusFacts = {
@@ -248,7 +251,13 @@ function a2aProviderFacts(providers: readonly GenUiA2AProviderFact[] | undefined
     const key = `${providerName}\u0000${agentId}\u0000${providerId}`;
     if (seen.has(key)) return [];
     seen.add(key);
-    return [{ label: `A2A worker (${providerName})`, value: `${agentId} · ${providerId}` }];
+    const execution = provider.execution
+      ? ` · execution=${displayText(provider.execution, 32, 'unknown')}`
+      : '';
+    const reason = provider.executionReason
+      ? ` · ${displayText(provider.executionReason, 120, 'unavailable')}`
+      : '';
+    return [{ label: `A2A worker (${providerName})`, value: `${agentId} · ${providerId}${execution}${reason}` }];
   });
 }
 

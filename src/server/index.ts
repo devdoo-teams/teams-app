@@ -60,6 +60,10 @@ import { GenUiActionStore, type GenUiActionName } from './genui-action-store.js'
 import { GenUiResponseFactory } from './genui-response.js';
 import { createA2AProviderFacts, type A2AProviderFact } from './a2a-provider-facts.js';
 import {
+  evaluateA2AExecutionReadiness,
+  type A2AProductionProviderContract,
+} from './a2a-execution-readiness.js';
+import {
   createAdaptiveCardActivity,
   createAdaptiveCardCarouselActivity,
   createTextFallbackActivity,
@@ -310,6 +314,7 @@ const agentExecutionPolicy = unsafeTestProcessIsolation
       canMutateScope: (scope) => isOperator(scope),
       canReadScope: (scope) => isOperator(scope),
     });
+const a2aExecutionReadiness = agentExecutionPolicy.readOnlyExecutionReadiness();
 const appVersion = (() => {
   const configured = process.env.APP_VERSION?.trim();
   if (configured) return configured;
@@ -1325,12 +1330,43 @@ const coreA2ARoles = Object.freeze(A2A_ROLE_CATALOG.map((role) => role.id));
 
 function a2aProviderFacts(): A2AProviderFact[] {
   const facts = createA2AProviderFacts(
-    a2aAgentProviders.map((configuredAgent) => ({
-      provider: configuredAgent.provider,
-      agentId: a2aAgentId(configuredAgent),
-      providerId: a2aProviderId(configuredAgent),
-      configured: Boolean(providerRunners[configuredAgent.provider]),
-    })),
+    a2aAgentProviders.map((configuredAgent) => {
+      const agentId = a2aAgentId(configuredAgent);
+      const providerId = a2aProviderId(configuredAgent);
+      const configured = Boolean(providerRunners[configuredAgent.provider]);
+      const registered = a2aAgents.find((agent) => agent.agentId === agentId);
+      const readiness = evaluateA2AExecutionReadiness(
+        {
+          provider: configuredAgent.provider,
+          agentId,
+          providerId,
+          configured,
+          execution: 'unknown',
+        },
+        registered
+          ? {
+              agentId: registered.agentId,
+              providerId: registered.providerId,
+              environment: isProduction ? 'production' : 'local',
+              isolation: a2aExecutionReadiness.state === 'configured' && isProduction ? 'trusted' : 'unknown',
+              executionIdentity: registered.executionIdentity ?? '',
+              executionBoundaryId: registered.executionBoundaryId ?? '',
+              authorize: registered.authorize,
+              authorizationPolicy: registered.authorizationPolicy ?? { evaluate: () => ({ allowed: false }) },
+              executeChild: registered.executeChild,
+              cancelChild: registered.cancelChild ?? (async () => undefined),
+            } as A2AProductionProviderContract
+          : undefined,
+      );
+      return {
+        provider: configuredAgent.provider,
+        agentId,
+        providerId,
+        configured,
+        execution: readiness.runnable ? 'configured' as const : 'unavailable' as const,
+        ...(readiness.runnable ? {} : { executionReason: readiness.reason }),
+      };
+    }),
     configuredRemoteA2AAgent ? {
       provider: 'remote',
       agentId: configuredRemoteA2AAgent.agentId,
@@ -1342,6 +1378,7 @@ function a2aProviderFacts(): A2AProviderFact[] {
     agentId: agent.agentId,
     providerId: agent.providerId,
     configured: true,
+    execution: 'configured' as const,
   })));
   return facts;
 }
@@ -1356,6 +1393,10 @@ const a2aAgents = [
       kind: 'cli',
       executionIdentity: a2aExecutionIdentity(configuredAgent),
       executionBoundaryId: a2aExecutionBoundaryId(configuredAgent),
+      executionReady: a2aExecutionReadiness.state === 'configured',
+      ...(a2aExecutionReadiness.state === 'unavailable'
+        ? { executionUnavailableReason: 'native-isolation-not-configured' }
+        : {}),
       roles: coreA2ARoles,
       capabilities: A2A_CAPABILITIES,
       authorize: ({ scope }: { scope: AgentJobScope }) => isOperator(scope),
@@ -1482,6 +1523,7 @@ http.get('/api/health', async (_request: any, response: any) => {
       }
       : { enabled: false, reason: authenticatedMcpConfig.reason },
     a2aProviders: a2aProviderFacts(),
+    a2aExecution: a2aExecutionReadiness,
     a2aRemoteFailures: a2aRemoteInitializationFailures,
     a2aTelemetry: (() => {
       const snapshot = a2aTelemetry.snapshot();

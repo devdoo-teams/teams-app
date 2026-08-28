@@ -110,6 +110,10 @@ export type A2AProductionAgent = Readonly<{
   providerId: string;
   /** Optional provider kind used for diagnostics and collaboration roster display. */
   kind?: string;
+  /** Startup gate for agents whose execution boundary is not available. */
+  executionReady?: boolean;
+  /** Safe, server-owned explanation shown when executionReady is false. */
+  executionUnavailableReason?: string;
   /** Stable identity of the provider session owned by this registered agent. */
   executionIdentity?: string;
   /** Stable execution boundary (workspace/config/runner) owned by this agent. */
@@ -596,6 +600,12 @@ export function createA2AProductionRuntime(options: A2AProductionRuntimeOptions)
               'A2A independently registered agents must provide an authorization policy.',
             );
           }
+          if (agent.executionReady === false) {
+            throw new A2AContractError(
+              'UnsupportedOperationError',
+              `A2A child execution is unavailable: ${redactAndBoundText(agent.executionUnavailableReason ?? 'trusted execution boundary is not configured.', 300)}`,
+            );
+          }
           const authorizationInput = {
             agentId: agent.agentId,
             scope: { ...selection.scope },
@@ -771,6 +781,7 @@ export function createA2AProductionRuntime(options: A2AProductionRuntimeOptions)
 
   const collaborationWorkers = (scope: A2AScope): readonly A2ACollaborationWorker[] => (
     [...agentRegistry.agents.values()].flatMap((agent) => {
+      if (agent.executionReady === false) return [];
       if (!agent.executionIdentity || !agent.executionBoundaryId || !agent.roles || !agent.capabilities) return [];
       const roles = agent.roles.filter((role) => {
         const definition = A2A_ROLE_CATALOG.find((candidate) => candidate.id === role);
@@ -800,11 +811,19 @@ export function createA2AProductionRuntime(options: A2AProductionRuntimeOptions)
   const startCollaboration = async (
     input: A2AProductionCollaborationInput,
   ): Promise<A2AProductionCollaborationStart> => {
-    const plan = createA2ACollaborationPlan({
+    const workers = collaborationWorkers(input.scope);
+    const unavailableAgents = [...agentRegistry.agents.values()].filter((agent) => agent.executionReady === false);
+    const unavailableReason = unavailableAgents.length > 0 && workers.length === 0
+      ? `Blocked: A2A execution is unavailable because the trusted execution boundary is not configured (${redactAndBoundText(unavailableAgents[0]?.executionUnavailableReason ?? 'native isolation is unavailable.', 300)}).`
+      : undefined;
+    const planned = createA2ACollaborationPlan({
       prompt: input.prompt,
       requestedRoles: input.requestedRoles,
-      workers: collaborationWorkers(input.scope),
+      workers,
     });
+    const plan = unavailableReason && planned.strategy === 'blocked'
+      ? { ...planned, blockedReason: unavailableReason }
+      : planned;
     if (plan.strategy === 'blocked') {
       const blocked = Promise.resolve<A2AProductionCollaborationResult>({ status: 'blocked', plan });
       return { status: 'blocked', plan, created: false, completion: blocked };

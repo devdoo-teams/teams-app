@@ -36,6 +36,10 @@ export type AgentExecutionDecision =
   | { allowed: true }
   | { allowed: false; reason: 'read-forbidden' | 'write-forbidden' | 'isolation-unavailable' };
 
+export type AgentExecutionReadiness =
+  | { state: 'configured'; providerId: string }
+  | { state: 'unavailable'; reason: 'isolation-unavailable' };
+
 export type AgentIsolationSubject = Pick<AgentJobScope, 'tenantId' | 'requesterId' | 'conversationId'> & {
   jobId?: string;
 };
@@ -273,6 +277,18 @@ export class AgentExecutionPolicy {
       projectionHooks?: { afterCopy?: () => Promise<void> | void };
     } = {},
   ) {}
+
+  /**
+   * Reports only startup configuration. A configured provider still performs
+   * its native, per-job preflight in prepareWorkspace(); this method must not
+   * be used as proof that a child process has already run successfully.
+   */
+  readOnlyExecutionReadiness(): AgentExecutionReadiness {
+    const provider = this.options.isolationProvider;
+    return provider
+      ? { state: 'configured', providerId: provider.providerId }
+      : { state: 'unavailable', reason: 'isolation-unavailable' };
+  }
 
   authorize(scope: AgentJobScope, mode: AgentJobMode): AgentExecutionDecision {
     if (mode === 'workspace-write') {

@@ -131,9 +131,9 @@ const statusFacts: GenUiStatusFacts = {
   codex: available.codex,
   ghcp: unknown.ghcp,
   a2aProviders: [
-    { provider: 'codex', agentId: 'teams-core-codex', providerId: 'codex-cli' },
-    { provider: 'copilot', agentId: 'teams-core-copilot', providerId: 'official-copilot-cli' },
-    { provider: 'remote', agentId: 'remote-reviewer', providerId: 'remote-a2a' },
+    { provider: 'codex', agentId: 'teams-core-codex', providerId: 'codex-cli', configured: true, execution: 'configured' },
+    { provider: 'copilot', agentId: 'teams-core-copilot', providerId: 'official-copilot-cli', configured: false, execution: 'unavailable', executionReason: 'isolation-unavailable' },
+    { provider: 'remote', agentId: 'remote-reviewer', providerId: 'remote-a2a', configured: true, execution: 'configured' },
   ],
 };
 const statusEnvelope = factory.status(statusFacts);
@@ -163,9 +163,9 @@ const facts = findFactSet(statusCard?.body);
 const factEntries = facts?.facts as Array<Record<string, unknown>> | undefined;
 assert.ok(factEntries?.some((fact) => fact.title === 'Teams SDK' && fact.value === 'enabled'));
 assert.ok(factEntries?.some((fact) => fact.title === '활성 agent provider' && fact.value === 'codex'));
-assert.ok(factEntries?.some((fact) => fact.title === 'A2A worker (codex)' && fact.value === 'teams-core-codex · codex-cli'));
-assert.ok(factEntries?.some((fact) => fact.title === 'A2A worker (copilot)' && fact.value === 'teams-core-copilot · official-copilot-cli'));
-assert.ok(factEntries?.some((fact) => fact.title === 'A2A worker (remote)' && fact.value === 'remote-reviewer · remote-a2a'));
+assert.ok(factEntries?.some((fact) => fact.title === 'A2A worker (codex)' && fact.value === 'teams-core-codex · codex-cli · execution=configured'));
+assert.ok(factEntries?.some((fact) => fact.title === 'A2A worker (copilot)' && fact.value === 'teams-core-copilot · official-copilot-cli · execution=unavailable · isolation-unavailable'));
+assert.ok(factEntries?.some((fact) => fact.title === 'A2A worker (remote)' && fact.value === 'remote-reviewer · remote-a2a · execution=configured'));
 assert.ok(factEntries?.some((fact) => fact.title === 'Codex CLI' && fact.value === 'unknown'));
 assert.ok(factEntries?.some((fact) => fact.title === 'GHCP CLI' && fact.value === 'unknown'));
 const serializedStatusCard = JSON.stringify(statusCard);

@@ -8,12 +8,15 @@ const localProviders = [
     agentId: 'teams-core-codex',
     providerId: 'codex-cli',
     configured: true,
+    execution: 'configured',
   },
   {
     provider: 'copilot',
     agentId: 'teams-core-copilot',
     providerId: 'official-copilot-cli',
     configured: false,
+    execution: 'unavailable',
+    executionReason: 'isolation-unavailable',
   },
 ] as const;
 
@@ -27,7 +30,7 @@ assert.deepEqual(
   createA2AProviderFacts(localProviders, remote),
   [
     ...localProviders,
-    { ...remote, configured: true },
+    { ...remote, configured: true, execution: 'configured' },
   ],
   'health and status rosters must expose a configured remote A2A identity',
 );
