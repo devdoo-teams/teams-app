@@ -114,6 +114,7 @@
     "test:a2a-send-state-response": "tsx scripts/a2a-send-state-response-test.ts",
     "test:a2a-execution-gate": "tsx scripts/a2a-execution-gate-test.ts",
     "test:a2a-execution-readiness": "tsx scripts/a2a-execution-readiness-test.ts",
+    "test:a2a-codex-execution-profiles": "tsx scripts/a2a-codex-execution-profiles-test.ts",
     "test:a2a-multi-agent-dispatch": "tsx scripts/a2a-multi-agent-dispatch-test.ts",
     "test:provider-neutral-agent-runner": "tsx scripts/provider-neutral-agent-runner-test.ts",
     "test:agent-workspace-lock": "tsx scripts/agent-service-workspace-lock-test.ts",

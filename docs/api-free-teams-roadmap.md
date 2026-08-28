@@ -33,7 +33,7 @@ MCP는 Teams 모바일 화면 표준이 아니다. Microsoft Teams SDK의 MCP cl
 
 ### A2A 다중 실행 경계
 
-A2A 협업은 단일 CLI를 여러 이름으로 호출하는 방식이 아니라, 명시적으로 등록된 trusted agent와 provider runner를 독립적으로 라우팅하는 서버 경계로 관리한다. `TEAMS_A2A_AGENT_PROVIDERS`에 `codex,copilot`을 설정하면 provider별 worker를 등록하고, `codex,codex`처럼 반복하면 동일 Codex runner를 서로 다른 agent ID·execution identity·boundary로 등록해 독립 child를 병렬 실행한다. 환경변수가 없으면 `TEAMS_AGENT_CLI_PROVIDER` 하나만 등록해 기존 동작을 보존한다. 작업 레코드에는 선택된 provider를 함께 저장해 재시작·취소·재시도에서도 다른 runner로 조용히 전환되지 않게 한다. provider가 구성되지 않았거나 작업 provider와 취소 요청 provider가 다르면 fail-closed한다.
+A2A 협업은 단일 CLI를 여러 이름으로 호출하는 방식이 아니라, 명시적으로 등록된 trusted agent와 provider runner를 독립적으로 라우팅하는 서버 경계로 관리한다. `TEAMS_A2A_AGENT_PROVIDERS`에 `codex,copilot`을 설정하면 provider별 worker를 등록하고, `codex,codex`처럼 반복하면 각 Codex worker에 별도 owner-only `AGENT_CODEX_HOME_1`, `AGENT_CODEX_HOME_2`, 별도 격리 provider/runner를 할당해 독립 child를 병렬 실행한다. 두 worker가 같은 홈이나 레거시 `AGENT_CODEX_HOME`을 공유하면 서버는 해당 worker를 fail-closed로 차단한다. 환경변수가 없으면 `TEAMS_AGENT_CLI_PROVIDER` 하나만 등록해 기존 동작을 보존한다. 작업 레코드에는 선택된 provider를 함께 저장해 재시작·취소·재시도에서도 다른 runner로 조용히 전환되지 않게 한다. provider가 구성되지 않았거나 작업 provider와 취소 요청 provider가 다르면 fail-closed한다.
 
 원격 협업 peer는 `TEAMS_A2A_REMOTE_AGENTS` JSON roster로 하나씩 등록할 수 있다. 각 peer는 HTTPS endpoint, `tokenEnv`, 독립적인 `executionIdentity`와 `executionBoundaryId`, Core role/capability 계약을 가져야 한다. 서버는 자격 증명을 환경에서 peer별로 해석하고, 한 peer의 카드 조회 실패나 누락된 token이 정상 peer의 시작을 막지 않도록 `a2aRemoteFailures` health 진단에 안전한 식별자와 오류 코드만 남긴다. 레거시 단일 remote 설정과 roster는 함께 사용하지 않는다. 실제 원격 왕복과 Teams UI 증거가 없으면 등록 자체를 협업 성공으로 판정하지 않는다.
 

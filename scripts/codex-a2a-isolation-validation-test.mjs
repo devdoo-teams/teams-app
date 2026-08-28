@@ -35,6 +35,35 @@ try {
   assert.deepEqual(result, { ok: true, issues: [] });
   assert.deepEqual(await fs.readdir(serviceHome), ['auth.json'], 'validation must not create service-home files');
 
+  const a2aHome1 = path.join(root, 'a2a-home-1');
+  const a2aHome2 = path.join(root, 'a2a-home-2');
+  await fs.mkdir(a2aHome1, { mode: 0o700 });
+  await fs.mkdir(a2aHome2, { mode: 0o700 });
+  await fs.writeFile(path.join(a2aHome1, 'auth.json'), `{"token":"${authSecret}"}\n`, { mode: 0o600 });
+  await fs.writeFile(path.join(a2aHome2, 'auth.json'), `{"token":"${authSecret}"}\n`, { mode: 0o600 });
+  const indexed = await validateCodexA2AIsolation({
+    env: {
+      ...validEnvironment,
+      TEAMS_A2A_AGENT_PROVIDERS: 'codex,codex',
+      AGENT_CODEX_HOME_1: a2aHome1,
+      AGENT_CODEX_HOME_2: a2aHome2,
+    },
+    platform: 'darwin',
+    verifyExecutableSignature: () => undefined,
+  });
+  assert.deepEqual(indexed, { ok: true, issues: [] }, 'indexed A2A homes must be validated independently');
+
+  const missingIndexed = await validateCodexA2AIsolation({
+    env: {
+      ...validEnvironment,
+      TEAMS_A2A_AGENT_PROVIDERS: 'codex,codex',
+      AGENT_CODEX_HOME_1: a2aHome1,
+    },
+    platform: 'darwin',
+    verifyExecutableSignature: () => undefined,
+  });
+  assert.ok(missingIndexed.issues.some(({ code }) => code === 'AGENT_CODEX_HOME_2_REQUIRED'));
+
   const homeLink = path.join(root, 'service-home-link');
   await fs.symlink(serviceHome, homeLink);
   const linkedHome = await validateCodexA2AIsolation({

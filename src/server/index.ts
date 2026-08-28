@@ -30,6 +30,10 @@ import {
   type AgentIsolationLease,
 } from './agent-execution-policy.js';
 import { createProductionAgentExecutionPolicy } from './production-agent-isolation.js';
+import {
+  createA2ACodexExecutionProfiles,
+  type A2ACodexExecutionProfile,
+} from './a2a-codex-execution-profiles.js';
 import { ProviderNeutralAgentRunner } from './provider-neutral-agent-runner.js';
 import type { CliAgentProvider } from './cli-agent-runner.js';
 import {
@@ -59,10 +63,6 @@ import { formatWeatherMessage, getWeather } from './weather-service.js';
 import { GenUiActionStore, type GenUiActionName } from './genui-action-store.js';
 import { GenUiResponseFactory } from './genui-response.js';
 import { createA2AProviderFacts, type A2AProviderFact } from './a2a-provider-facts.js';
-import {
-  evaluateA2AExecutionReadiness,
-  type A2AProductionProviderContract,
-} from './a2a-execution-readiness.js';
 import {
   createAdaptiveCardActivity,
   createAdaptiveCardCarouselActivity,
@@ -133,6 +133,7 @@ import {
   type A2AProductionCollaborationResult,
   type A2AProductionChildCancellationInput,
   type A2AProductionChildExecutionInput,
+  type A2AProductionChildRecoveryInput,
 } from './a2a-production-runtime.js';
 import { deriveServerOwnedRestConversationId } from './rest-scope.js';
 import { buildSecurityHeaders } from './security-headers.js';
@@ -315,6 +316,113 @@ const agentExecutionPolicy = unsafeTestProcessIsolation
       canReadScope: (scope) => isOperator(scope),
     });
 const a2aExecutionReadiness = agentExecutionPolicy.readOnlyExecutionReadiness();
+
+type A2AWorkerReadiness = Readonly<{
+  state: 'configured' | 'unavailable';
+  reason: string;
+}>;
+
+// A2A workers must not reuse the legacy unsuffixed Codex home. Resolve every
+// indexed home before registering the production roster; a missing or unsafe
+// profile keeps the HTTP server available while making only that worker
+// unavailable to collaboration dispatch.
+const a2aCodexOrdinals = Object.freeze([
+  ...new Set(a2aAgentProviders
+    .filter((configuredAgent) => configuredAgent.provider === 'codex')
+  .map((configuredAgent) => configuredAgent.ordinal)),
+]);
+const a2aCodexProfileByOrdinal = new Map<number, A2ACodexExecutionProfile>();
+const a2aCodexProfileErrors = new Map<number, string>();
+if (isProduction && a2aCodexOrdinals.length > 0) {
+  const resolvedProfiles = await Promise.all(a2aCodexOrdinals.map(async (ordinal) => {
+    try {
+      const [profile] = await createA2ACodexExecutionProfiles({ ordinals: [ordinal] });
+      return { ordinal, profile };
+    } catch (error) {
+      return {
+        ordinal,
+        error: error instanceof Error
+          ? error.message.slice(0, 300)
+          : 'indexed Codex execution profile is unavailable.',
+      };
+    }
+  }));
+  for (const resolved of resolvedProfiles) {
+    if (resolved.profile) a2aCodexProfileByOrdinal.set(resolved.ordinal, resolved.profile);
+    else a2aCodexProfileErrors.set(resolved.ordinal, resolved.error);
+  }
+
+  const profilesByHome = new Map<string, number>();
+  for (const [ordinal, profile] of [...a2aCodexProfileByOrdinal.entries()]) {
+    const previousOrdinal = profilesByHome.get(profile.codexHome);
+    if (previousOrdinal !== undefined) {
+      a2aCodexProfileByOrdinal.delete(previousOrdinal);
+      a2aCodexProfileErrors.set(previousOrdinal, 'indexed A2A Codex profiles must use distinct private homes.');
+      a2aCodexProfileByOrdinal.delete(ordinal);
+      a2aCodexProfileErrors.set(ordinal, 'indexed A2A Codex profiles must use distinct private homes.');
+    } else {
+      profilesByHome.set(profile.codexHome, ordinal);
+    }
+  }
+}
+const a2aWorkerExecutionPolicies = new Map<string, AgentExecutionPolicy>();
+const a2aWorkerReadiness = new Map<string, A2AWorkerReadiness>();
+const a2aAgentServices = new Map<string, AgentService>();
+
+for (const configuredAgent of a2aAgentProviders) {
+  const agentId = a2aAgentId(configuredAgent);
+  let policy: AgentExecutionPolicy | undefined;
+  let unavailableReason: string | undefined;
+
+  if (!isProduction && unsafeTestProcessIsolation) {
+    policy = new AgentExecutionPolicy(agentWorkspace, {
+      isolationProvider: new UnsafeLoopbackTestIsolationProvider(),
+      canMutateScope: (scope) => isOperator(scope),
+      canReadScope: (scope) => isOperator(scope),
+    });
+  } else if (isProduction && configuredAgent.provider === 'codex') {
+    const profile = a2aCodexProfileByOrdinal.get(configuredAgent.ordinal);
+    if (!profile) {
+      unavailableReason = `indexed-codex-profile-unavailable: ${a2aCodexProfileErrors.get(configuredAgent.ordinal)
+        ?? 'AGENT_CODEX_HOME_<ordinal> is required.'}`;
+    } else {
+      try {
+        policy = createProductionAgentExecutionPolicy({
+          sourceWorkspace: agentWorkspace,
+          isProduction: true,
+          codexHome: profile.codexHome,
+          codexExecutable: profile.codexExecutable,
+          codexExecutableSha256: profile.codexExecutableSha256,
+          canMutateScope: (scope) => isOperator(scope),
+          canReadScope: (scope) => isOperator(scope),
+        });
+      } catch (error) {
+        unavailableReason = error instanceof Error
+          ? `indexed-codex-profile-unavailable: ${error.message.slice(0, 300)}`
+          : 'indexed-codex-profile-unavailable.';
+      }
+    }
+  } else if (isProduction) {
+    unavailableReason = `provider-isolation-unavailable: ${configuredAgent.provider} has no verified production isolation provider.`;
+  } else {
+    unavailableReason = 'production-execution-required.';
+  }
+
+  if (policy) {
+    const readiness = policy.readOnlyExecutionReadiness();
+    if (readiness.state === 'configured') {
+      a2aWorkerExecutionPolicies.set(agentId, policy);
+      a2aWorkerReadiness.set(agentId, { state: 'configured', reason: 'ready' });
+    } else {
+      a2aWorkerReadiness.set(agentId, { state: 'unavailable', reason: readiness.reason });
+    }
+  } else {
+    a2aWorkerReadiness.set(agentId, {
+      state: 'unavailable',
+      reason: unavailableReason ?? 'execution-boundary-unavailable.',
+    });
+  }
+}
 const appVersion = (() => {
   const configured = process.env.APP_VERSION?.trim();
   if (configured) return configured;
@@ -1334,37 +1442,17 @@ function a2aProviderFacts(): A2AProviderFact[] {
       const agentId = a2aAgentId(configuredAgent);
       const providerId = a2aProviderId(configuredAgent);
       const configured = Boolean(providerRunners[configuredAgent.provider]);
-      const registered = a2aAgents.find((agent) => agent.agentId === agentId);
-      const readiness = evaluateA2AExecutionReadiness(
-        {
-          provider: configuredAgent.provider,
-          agentId,
-          providerId,
-          configured,
-          execution: 'unknown',
-        },
-        registered
-          ? {
-              agentId: registered.agentId,
-              providerId: registered.providerId,
-              environment: isProduction ? 'production' : 'local',
-              isolation: a2aExecutionReadiness.state === 'configured' && isProduction ? 'trusted' : 'unknown',
-              executionIdentity: registered.executionIdentity ?? '',
-              executionBoundaryId: registered.executionBoundaryId ?? '',
-              authorize: registered.authorize,
-              authorizationPolicy: registered.authorizationPolicy ?? { evaluate: () => ({ allowed: false }) },
-              executeChild: registered.executeChild,
-              cancelChild: registered.cancelChild ?? (async () => undefined),
-            } as A2AProductionProviderContract
-          : undefined,
-      );
+      const readiness = a2aWorkerReadiness.get(agentId) ?? {
+        state: 'unavailable' as const,
+        reason: 'execution-boundary-unavailable.',
+      };
       return {
         provider: configuredAgent.provider,
         agentId,
         providerId,
         configured,
-        execution: readiness.runnable ? 'configured' as const : 'unavailable' as const,
-        ...(readiness.runnable ? {} : { executionReason: readiness.reason }),
+        execution: readiness.state === 'configured' ? 'configured' as const : 'unavailable' as const,
+        ...(readiness.state === 'configured' ? {} : { executionReason: readiness.reason }),
       };
     }),
     configuredRemoteA2AAgent ? {
@@ -1385,17 +1473,20 @@ function a2aProviderFacts(): A2AProviderFact[] {
 
 const a2aAgents = [
   ...a2aAgentProviders.map((configuredAgent) => {
-    const { provider } = configuredAgent;
     const agentId = a2aAgentId(configuredAgent);
+    const readiness = a2aWorkerReadiness.get(agentId) ?? {
+      state: 'unavailable' as const,
+      reason: 'execution-boundary-unavailable.',
+    };
     return {
       agentId,
       providerId: a2aProviderId(configuredAgent),
       kind: 'cli',
       executionIdentity: a2aExecutionIdentity(configuredAgent),
       executionBoundaryId: a2aExecutionBoundaryId(configuredAgent),
-      executionReady: a2aExecutionReadiness.state === 'configured',
-      ...(a2aExecutionReadiness.state === 'unavailable'
-        ? { executionUnavailableReason: 'native-isolation-not-configured' }
+      executionReady: readiness.state === 'configured',
+      ...(readiness.state === 'unavailable'
+        ? { executionUnavailableReason: readiness.reason }
         : {}),
       roles: coreA2ARoles,
       capabilities: A2A_CAPABILITIES,
@@ -1409,8 +1500,11 @@ const a2aAgents = [
           && Boolean(input.role && input.capabilities?.length)
         ),
       }),
-      executeChild: (input: A2AProductionChildExecutionInput) => executeA2AProviderChild(provider, input),
-      cancelChild: (input: A2AProductionChildCancellationInput) => cancelA2AProviderChild(provider, input),
+      executeChild: (input: A2AProductionChildExecutionInput) => executeA2AProviderChild(configuredAgent, input),
+      cancelChild: (input: A2AProductionChildCancellationInput) => cancelA2AProviderChild(configuredAgent, input),
+      ...(readiness.state === 'configured'
+        ? { recoverChild: (input: A2AProductionChildRecoveryInput) => recoverA2AProviderChild(configuredAgent, input) }
+        : {}),
     };
   }),
   ...(configuredRemoteA2AAgent ? [configuredRemoteA2AAgent] : []),
@@ -2236,6 +2330,35 @@ agentService = new AgentService(
 );
 await agentService.initialize();
 
+// Each ready production A2A identity owns a distinct AgentService/runner
+// pair. The job store and admission controller remain shared so limits and
+// durable state are process-wide, while the execution policy (and therefore
+// Codex home/lease) is never shared between workers.
+for (const configuredAgent of a2aAgentProviders) {
+  const agentId = a2aAgentId(configuredAgent);
+  const executionPolicy = a2aWorkerExecutionPolicies.get(agentId);
+  if (!executionPolicy || a2aWorkerReadiness.get(agentId)?.state !== 'configured') continue;
+
+  const runner = new ProviderNeutralAgentRunner({ provider: configuredAgent.provider });
+  const service = new AgentService(
+    agentJobStore,
+    runner,
+    agentWorkspace,
+    notifyConversation,
+    gitService,
+    {
+      canMutateScope: (scope) => isOperator(scope),
+      canReadScope: (scope) => isOperator(scope),
+      executionPolicy,
+      admissionController: agentAdmissionController,
+      agentLabel: configuredAgent.provider === 'copilot' ? 'GitHub Copilot CLI' : 'Codex CLI',
+      defaultProvider: configuredAgent.provider,
+      providerRunners: { [configuredAgent.provider]: runner },
+    },
+  );
+  a2aAgentServices.set(agentId, service);
+}
+
 a2aExecutionAdapter = createA2AExecutionAdapter({
   store: a2aStore,
   agentService,
@@ -2334,6 +2457,9 @@ const handleSignal = (signal: NodeJS.Signals): void => {
   if (shutdownPromise) return;
   shutdownPromise = (async () => {
     try {
+      await Promise.allSettled(
+        [...a2aAgentServices.values()].map((service) => service.close({ closeAdmission: false })),
+      );
       await agentService.close();
       await mcpRouter?.close();
     } finally {
@@ -3093,7 +3219,25 @@ async function recoverQueuedA2ACompletions(): Promise<void> {
 async function handleBotA2ACollaboration(activity: any, send: BotSend, scope: AgentJobScope, prompt: string): Promise<void> {
   try {
     if (!a2aProductionRuntime) throw new Error('A2A production runtime is not initialized.');
-    const chatRoles = selectTeamsA2AChatRoles(a2aAgents);
+    const collaborationWorkers = a2aAgents.flatMap((agent) => {
+      const executionReady = 'executionReady' in agent ? agent.executionReady !== false : true;
+      if (
+        !executionReady
+        || typeof agent.executionIdentity !== 'string'
+        || typeof agent.executionBoundaryId !== 'string'
+        || !Array.isArray(agent.roles)
+        || !Array.isArray(agent.capabilities)
+      ) return [];
+      return [{
+        agentId: agent.agentId,
+        providerId: agent.providerId,
+        executionIdentity: agent.executionIdentity,
+        executionBoundaryId: agent.executionBoundaryId,
+        roles: agent.roles,
+        capabilities: agent.capabilities,
+      }];
+    });
+    const chatRoles = selectTeamsA2AChatRoles(collaborationWorkers);
     const started = await a2aProductionRuntime.startCollaboration({
       scope,
       prompt,
@@ -3734,12 +3878,13 @@ const MAX_A2A_CLI_WORKERS = 8;
 
 function parseAgentProviders(rawValue: string | undefined, defaultProvider: CliAgentProvider): readonly ConfiguredA2AProvider[] {
   const raw = rawValue?.trim();
-  const requested = raw ? raw.split(',').map((entry) => entry.trim()) : [defaultProvider];
-  for (const provider of requested) {
+  const requestedValues = raw ? raw.split(',').map((entry) => entry.trim()) : [defaultProvider];
+  for (const provider of requestedValues) {
     if (provider !== 'codex' && provider !== 'copilot') {
       throw new Error('TEAMS_A2A_AGENT_PROVIDERS may contain only codex and copilot.');
     }
   }
+  const requested = requestedValues as CliAgentProvider[];
 
   // Preserve the legacy default worker when callers add only a secondary
   // provider, while allowing repeated entries such as codex,codex to create
@@ -3798,20 +3943,27 @@ function cliProviderFromA2AProviderId(providerId: string): CliAgentProvider | un
 }
 
 async function executeA2AProviderChild(
-  provider: CliAgentProvider,
+  configuredAgent: ConfiguredA2AProvider,
   input: A2AProductionChildExecutionInput,
 ) {
+  const provider = configuredAgent.provider;
+  const agentId = a2aAgentId(configuredAgent);
+  const worker = a2aAgentServices.get(agentId);
+  if (!worker) {
+    const reason = a2aWorkerReadiness.get(agentId)?.reason ?? 'execution-boundary-unavailable.';
+    throw new Error(`A2A agent ${agentId} is unavailable: ${reason}`);
+  }
   let agentJobId: string | undefined;
   const cancelChild = (): void => {
     if (!agentJobId) return;
-    void agentService.cancelStrict(agentJobId, input.scope, {
+    void worker.cancelStrict(agentJobId, input.scope, {
       notify: false,
       provider,
     }).catch(() => undefined);
   };
   input.signal.addEventListener('abort', cancelChild, { once: true });
   try {
-    const job = await agentService.runForCopilot({
+    const job = await worker.runForCopilot({
       provider,
       prompt: input.prompt,
       scope: input.scope,
@@ -3832,13 +3984,46 @@ async function executeA2AProviderChild(
 }
 
 async function cancelA2AProviderChild(
-  provider: CliAgentProvider,
+  configuredAgent: ConfiguredA2AProvider,
   input: A2AProductionChildCancellationInput,
 ): Promise<void> {
-  await agentService.cancelStrict(input.agentJobId, input.scope, {
+  const agentId = a2aAgentId(configuredAgent);
+  const worker = a2aAgentServices.get(agentId);
+  if (!worker) {
+    const reason = a2aWorkerReadiness.get(agentId)?.reason ?? 'execution-boundary-unavailable.';
+    throw new Error(`A2A agent ${agentId} is unavailable: ${reason}`);
+  }
+  await worker.cancelStrict(input.agentJobId, input.scope, {
     notify: false,
-    provider,
+    provider: configuredAgent.provider,
   });
+}
+
+async function recoverA2AProviderChild(
+  configuredAgent: ConfiguredA2AProvider,
+  input: A2AProductionChildRecoveryInput,
+) {
+  const agentId = a2aAgentId(configuredAgent);
+  const worker = a2aAgentServices.get(agentId);
+  if (!worker) {
+    const reason = a2aWorkerReadiness.get(agentId)?.reason ?? 'execution-boundary-unavailable.';
+    throw new Error(`A2A agent ${agentId} is unavailable: ${reason}`);
+  }
+  const existing = worker.get(input.agentJobId, input.scope);
+  if (!existing) throw new Error(`A2A agent ${agentId} child ${input.agentJobId} is not available for recovery.`);
+  const job = existing.status === 'queued' || existing.status === 'running' || existing.status === 'awaiting_approval'
+    ? await worker.waitForTerminal(input.agentJobId, input.scope, Math.max(1, input.deadlineAtMs - Date.now()))
+    : existing;
+  if (job.status === 'completed') {
+    return { taskId: job.id, status: 'completed' as const, result: job.result };
+  }
+  if (job.status === 'cancelled') {
+    return { taskId: job.id, status: 'canceled' as const, error: job.error };
+  }
+  if (job.status === 'failed') {
+    return { taskId: job.id, status: 'failed' as const, error: job.error };
+  }
+  throw new Error(`A2A agent ${agentId} child did not reach a terminal state during recovery.`);
 }
 
 function parseOperatorAllowlist(

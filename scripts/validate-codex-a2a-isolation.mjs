@@ -65,6 +65,7 @@ export async function validateCodexA2AIsolation({
   if (serviceHome) {
     await validateAuthFile(path.join(serviceHome, 'auth.json'), currentUid, issues);
   }
+  await validateIndexedA2AHomes({ env, serviceHome, currentUid, issues });
   if (codexBin) {
     await validateExecutable({
       candidate: codexBin,
@@ -80,6 +81,39 @@ export async function validateCodexA2AIsolation({
     ok: issues.length === 0,
     issues,
   };
+}
+
+async function validateIndexedA2AHomes({ env, serviceHome, currentUid, issues }) {
+  const rawProviders = typeof env.TEAMS_A2A_AGENT_PROVIDERS === 'string'
+    ? env.TEAMS_A2A_AGENT_PROVIDERS.trim()
+    : '';
+  if (!rawProviders) return;
+
+  let ordinal = 0;
+  const indexedHomes = new Set();
+  for (const provider of rawProviders.split(',').map((entry) => entry.trim())) {
+    if (provider !== 'codex') continue;
+    ordinal += 1;
+    const variableName = `AGENT_CODEX_HOME_${ordinal}`;
+    const indexedHome = requiredAbsoluteValue(env[variableName], variableName, issues);
+    if (!indexedHome) continue;
+    const realHome = await validateServiceHome(indexedHome, currentUid, issues);
+    if (!realHome) continue;
+    if (indexedHomes.has(realHome)) {
+      issues.push({
+        code: 'A2A_CODEX_HOME_DUPLICATE',
+        message: 'Indexed A2A Codex homes must be distinct.',
+      });
+    }
+    if (serviceHome && realHome === serviceHome) {
+      issues.push({
+        code: 'A2A_CODEX_HOME_LEGACY_ALIAS',
+        message: 'Indexed A2A Codex homes must be distinct from AGENT_CODEX_HOME.',
+      });
+    }
+    indexedHomes.add(realHome);
+    await validateAuthFile(path.join(realHome, 'auth.json'), currentUid, issues);
+  }
 }
 
 function requiredAbsoluteValue(value, name, issues) {

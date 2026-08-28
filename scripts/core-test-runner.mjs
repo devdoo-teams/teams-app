@@ -100,6 +100,7 @@ const tsTests = [
   'scripts/a2a-send-state-response-test.ts',
   'scripts/a2a-execution-gate-test.ts',
   'scripts/a2a-execution-readiness-test.ts',
+  'scripts/a2a-codex-execution-profiles-test.ts',
   'scripts/a2a-multi-agent-dispatch-test.ts',
   'scripts/rest-scope-security-test.mjs',
   'scripts/security-headers-test.ts',

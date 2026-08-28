@@ -352,9 +352,9 @@ export class AgentService {
     return queued;
   }
 
-  async close(): Promise<void> {
+  async close(options: { closeAdmission?: boolean } = {}): Promise<void> {
     this.closing = true;
-    await this.admissionController.close();
+    if (options.closeAdmission !== false) await this.admissionController.close();
     await this.waitForPendingSubmissions();
     const closed = new Set<CodexRunner>();
     for (const runner of this.providerRunners.values()) {
