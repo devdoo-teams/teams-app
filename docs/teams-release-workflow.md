@@ -125,6 +125,18 @@ npm run release:public      # 공개 /api/health와 /tabs/home/
 npm run release:gate
 ```
 
+기본 릴리스 프로필은 `core`이며 위 명령은 기존 결정형 Teams 서비스를 기준으로 실행한다. Grok을 운영 Bot으로 승격할 때만 배포 환경에서 아래 세 값을 명시적으로 주입해 `optional` 프로필을 선택한다. `XAI_API_KEY`는 저장소·문서·릴리스 상태 파일에 기록하지 않고 호스팅 provider의 secret manager에서만 주입한다.
+
+```bash
+TEAMS_RELEASE_RUNTIME=optional \
+TEAMS_OPTIONAL_RUNTIME=true \
+XAI_API_KEY='(secret manager에서 주입)' \
+TEAMS_RESPONSE_MODE_DEFAULT=grok \
+npm run release:preflight
+```
+
+`TEAMS_RESPONSE_MODE_DEFAULT=grok`은 새 사용자/대화의 서버 소유 응답 모드를 Grok으로 시작하게 하는 선택값이며, 이미 저장된 scope별 모드가 우선한다. 이 값을 생략하면 optional 런타임도 기존처럼 결정형 모드로 시작한다. 이 프로필은 Core 회귀 테스트를 먼저 실행한 뒤 optional 서버를 마지막에 빌드해 `mode=optional` marker를 남긴다. `TEAMS_RELEASE_RUNTIME=optional`인데 optional flag 또는 xAI key가 없으면 게이트가 닫힌 상태로 실패한다. 반대로 Core 프로필에서는 xAI key가 없어도 기존 서비스 검증을 계속할 수 있다. 두 프로필 모두 공개 health, `/tabs/home/`, 패키지 identity, 설치본, 데스크톱·모바일 UI 증거가 필요하며, optional preflight 통과만으로 Grok의 실제 xAI 왕복이나 Teams 배포를 완료로 보고하지 않는다.
+
 게이트는 하위 명령어의 출력·종료 코드·제한시간을 기록한다. timeout 또는 비정상 종료는 `BLOCKED`로 보고하고, 프로세스 그룹만 정리한다. 공개 서버·Dev Tunnel·기존 로그인 탭은 이 과정에서 종료하지 않는다. `release:public`이 HTTP 200을 확인하기 전에는 Teams UI 검증이나 완료 메시지로 넘어가지 않는다.
 
 `release:public`은 `--url`을 우선 사용하고, 없으면 `TEAMS_PUBLIC_URL`, `PUBLIC_BASE_URL`, `.env.runtime`의 `TAB_DOMAIN` 순서로 현재 공개 origin을 해석한다. 별도 URL을 매번 복사해 넣지 않아도 되지만, 실제 `portUri`가 바뀌면 `.env.runtime`을 먼저 갱신하고 패키지·업로드 절차를 다시 시작한다. `typecheck:core`는 direct bounded esbuild CLI stdin transform을 사용하고 workspace tsconfig auto-discovery를 끄며 long-lived service mode를 사용하지 않는다. 실제 패키지 선언은 별도 bounded 진단에서만 확인하고, 필요할 때만 `npm run typecheck:vendor`를 사용한다.

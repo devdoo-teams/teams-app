@@ -182,6 +182,7 @@ try {
     XAI_API_KEY: xaiKey,
     XAI_MODEL: 'grok-runtime-model',
     XAI_BASE_URL: `http://127.0.0.1:${xaiPort}/v1`,
+    TEAMS_RESPONSE_MODE_DEFAULT: 'grok',
     OPENAI_API_KEY: '',
     LOCAL_MODEL_BASE_URL: '',
     TEAMS_USE_SDK: 'false',
@@ -211,7 +212,12 @@ try {
   assert.equal(health.body.genAIProvider?.provider, 'grok');
   assert.equal(health.body.responseProviders?.grok, true);
   assert.equal(health.body.genAIProvider?.model, 'grok-runtime-model');
+  assert.equal(health.body.responseModeDefault, 'grok');
   assert.doesNotMatch(JSON.stringify(health.body), /xai-runtime-test-key/);
+
+  const initialMode = await request(baseUrl, '/api/response-mode', { token: accessToken });
+  assert.equal(initialMode.response.status, 200, JSON.stringify(initialMode.body));
+  assert.equal(initialMode.body.mode, 'grok', 'an explicit optional default must select Grok for a new scope');
 
   const mode = await request(baseUrl, '/api/response-mode', {
     method: 'POST',

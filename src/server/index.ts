@@ -78,6 +78,7 @@ import {
   type GenUiEnvelopeV1,
 } from '../shared/genui.js';
 import {
+  ResponseModeSchema,
   ResponseModeSelectionSchema,
   responseModeLabel,
   type ResponseMode,
@@ -122,6 +123,7 @@ import {
   type A2ARemotePeerCredential,
 } from './a2a-remote-roster.js';
 import { A2A_CAPABILITIES, A2A_ROLE_CATALOG } from './a2a-role-catalog.js';
+import { selectTeamsA2AChatRoles } from './a2a-collaboration-plan.js';
 import {
   mountA2AProductionRuntime,
   type A2AProductionCollaborationResult,
@@ -423,7 +425,19 @@ const responseProviders = {
   local: optionalRuntimeEnabled && localModelConfigured,
   grok: optionalRuntimeEnabled && grokConfigured,
 } as const;
+const defaultResponseMode = (() => {
+  const configured = process.env.TEAMS_RESPONSE_MODE_DEFAULT?.trim() || 'deterministic';
+  const parsed = ResponseModeSchema.safeParse(configured);
+  if (!parsed.success) {
+    throw new Error('TEAMS_RESPONSE_MODE_DEFAULT must be a supported response mode.');
+  }
+  if (!responseProviders[parsed.data]) {
+    throw new Error(`TEAMS_RESPONSE_MODE_DEFAULT=${parsed.data} is not configured in this runtime.`);
+  }
+  return parsed.data;
+})();
 const responseModeStore = new ResponseModeStore(responseModeStorePath, {
+  defaultMode: defaultResponseMode,
   providers: {
     openai: openAiConfigured,
     local: localModelConfigured,
@@ -1443,6 +1457,7 @@ http.get('/api/health', async (_request: any, response: any) => {
       model: (grokConfigured ? grokModel : openAiModel).slice(0, 120),
     },
     responseProviders,
+    responseModeDefault: defaultResponseMode,
     weatherMode,
     genUiMode,
     genUi: 'adaptive-cards',
@@ -3035,13 +3050,14 @@ async function recoverQueuedA2ACompletions(): Promise<void> {
 async function handleBotA2ACollaboration(activity: any, send: BotSend, scope: AgentJobScope, prompt: string): Promise<void> {
   try {
     if (!a2aProductionRuntime) throw new Error('A2A production runtime is not initialized.');
+    const chatRoles = selectTeamsA2AChatRoles(a2aAgents);
     const started = await a2aProductionRuntime.startCollaboration({
       scope,
       prompt,
-      requestedRoles: ['reviewer'],
+      requestedRoles: chatRoles.requestedRoles,
       idempotencyKey: teamsA2AIdempotencyKey(activity, scope, prompt),
       deadlineMs: 60_000,
-      parallelism: 1,
+      parallelism: chatRoles.parallelism,
     });
     if (!started.parentTask) {
       const presentation = a2aCompletionPresentation(await started.completion, scope);

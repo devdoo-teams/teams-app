@@ -46,6 +46,38 @@ export interface A2ACollaborationWorker {
 
 export type A2AWorker = A2ACollaborationWorker;
 
+export type TeamsA2AChatRoleSelection = Readonly<{
+  requestedRoles: readonly A2ARoleId[];
+  parallelism: number;
+}>;
+
+/**
+ * Select the Teams chat collaboration shape from the server-owned roster.
+ *
+ * A single worker must retain the existing reviewer-only behavior. The
+ * two-role plan is enabled only when two workers can actually be assigned
+ * independently; the collaboration planner remains the final assignment and
+ * authorization boundary.
+ */
+export function selectTeamsA2AChatRoles(
+  workers: readonly A2ACollaborationWorker[],
+): TeamsA2AChatRoleSelection {
+  const reviewerWorkers = workers.filter((worker) => worker.roles.includes('reviewer'));
+  const releaseAuditorWorkers = workers.filter((worker) => worker.roles.includes('release-auditor'));
+  const hasIndependentPair = releaseAuditorWorkers.some((releaseAuditor) => (
+    reviewerWorkers.some((reviewer) => (
+      releaseAuditor.agentId !== reviewer.agentId
+      && releaseAuditor.executionIdentity !== reviewer.executionIdentity
+      && releaseAuditor.executionBoundaryId !== reviewer.executionBoundaryId
+    ))
+  ));
+
+  if (hasIndependentPair) {
+    return { requestedRoles: ['release-auditor', 'reviewer'], parallelism: 2 };
+  }
+  return { requestedRoles: ['reviewer'], parallelism: 1 };
+}
+
 export interface A2ACollaborationPlanInput {
   readonly prompt: string;
   readonly requestedRoles?: readonly string[];

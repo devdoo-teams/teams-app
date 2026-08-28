@@ -9,6 +9,7 @@ import {
   MAX_CHILD_PROMPT_LENGTH,
   MAX_NORMALIZED_PROMPT_LENGTH,
   createA2ACollaborationPlan,
+  selectTeamsA2AChatRoles,
   summarizeA2ACollaborationResults,
   type A2ACollaborationChildResult,
   type A2ACollaborationWorker,
@@ -198,6 +199,38 @@ assert.deepEqual(
     ['release-auditor', 'release-only-worker'],
     ['reviewer', 'flexible-worker'],
   ],
+);
+
+const chatWorker: A2ACollaborationWorker = {
+  ...workers[0],
+  roles: ['release-auditor', 'reviewer'],
+  capabilities: [...new Set([...releaseCapabilities, ...reviewCapabilities])],
+};
+assert.deepEqual(
+  selectTeamsA2AChatRoles([chatWorker]),
+  { requestedRoles: ['reviewer'], parallelism: 1 },
+  'one independent worker keeps the existing single-reviewer chat behavior',
+);
+assert.deepEqual(
+  selectTeamsA2AChatRoles([
+    chatWorker,
+    {
+      ...chatWorker,
+      agentId: 'second-worker',
+      executionIdentity: 'second-profile',
+      executionBoundaryId: 'second-boundary',
+    },
+  ]),
+  { requestedRoles: ['release-auditor', 'reviewer'], parallelism: 2 },
+  'two independently bound workers enable the two-role parallel chat plan',
+);
+assert.deepEqual(
+  selectTeamsA2AChatRoles([
+    chatWorker,
+    { ...chatWorker, agentId: 'duplicate-worker' },
+  ]),
+  { requestedRoles: ['reviewer'], parallelism: 1 },
+  'workers sharing an execution identity and boundary are not treated as independent',
 );
 
 const completedAndFailed: readonly A2ACollaborationChildResult[] = [

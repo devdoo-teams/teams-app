@@ -21,7 +21,7 @@ type ResponseModeStore = {
 type ResponseModeModules = {
   DEFAULT_RESPONSE_MODE: ResponseMode;
   ResponseModeSchema: { safeParse(value: unknown): { success: boolean } };
-  ResponseModeStore: new (filePath: string, options?: { providers?: { openai: boolean; local: boolean; grok?: boolean } }) => ResponseModeStore;
+  ResponseModeStore: new (filePath: string, options?: { defaultMode?: ResponseMode; providers?: { openai: boolean; local: boolean; grok?: boolean } }) => ResponseModeStore;
   responseModeLabel(mode: ResponseMode): string;
   isLocalModelBaseUrlConfigured(value: string | undefined): boolean;
 };
@@ -99,6 +99,22 @@ try {
   await store.set(firstScope, 'openai');
   assert.equal(await store.get(firstScope), 'openai', 'a selected mode persists for its scope');
   assert.equal(await store.get(secondScope), 'deterministic', 'a tenant cannot inherit another tenant\'s mode');
+
+  const grokDefaultPath = path.join(root, 'grok-default-response-modes.json');
+  const grokDefaultStore = new modules.ResponseModeStore(grokDefaultPath, {
+    defaultMode: 'grok',
+    providers: { openai: false, local: false, grok: true },
+  });
+  assert.equal(await grokDefaultStore.get(secondScope), 'grok', 'an explicit optional deployment default may select Grok for new scopes');
+  await grokDefaultStore.set(secondScope, 'openai');
+  assert.equal(await grokDefaultStore.get(secondScope), 'openai', 'a persisted scope preference overrides the configured default');
+  const restartedGrokDefaultStore = new modules.ResponseModeStore(grokDefaultPath, { defaultMode: 'grok' });
+  assert.equal(await restartedGrokDefaultStore.get(secondScope), 'openai', 'the explicit preference remains authoritative after restart');
+  assert.throws(
+    () => new modules.ResponseModeStore(path.join(root, 'invalid-default-response-modes.json'), { defaultMode: 'unknown' as ResponseMode }),
+    /response mode/i,
+    'an invalid configured default response mode is rejected',
+  );
 
   const restartedStore = new modules.ResponseModeStore(storePath);
   assert.equal(await restartedStore.get(firstScope), 'openai', 'the preference survives a store restart');

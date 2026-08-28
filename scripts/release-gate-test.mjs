@@ -8,12 +8,14 @@ import {
   assertServerBuildIdentity,
   assertPublicTab,
   assertPublicHealth,
+  assertReleaseRuntimePrerequisites,
   createReleaseSourceEnvironment,
   createPreflightCommands,
   formatReleaseFailure,
   parseDotEnv,
   packageGateTimeoutMs,
   resolvePublicUrl,
+  resolveReleaseProfile,
   runWithTimeout,
   validatePublicTabDeployment,
 } from './release-gate.mjs';
@@ -28,6 +30,32 @@ const expected = {
   botClientId: '32127cdd-f19d-4fce-95c9-431e27cca739',
   applicationIdUri: 'api://runtime.example.com/botid-32127cdd-f19d-4fce-95c9-431e27cca739',
 };
+
+assert.equal(resolveReleaseProfile({}), 'core', 'the release profile must default to Core');
+assert.equal(resolveReleaseProfile({ TEAMS_RELEASE_RUNTIME: 'core' }), 'core');
+assert.equal(resolveReleaseProfile({ TEAMS_RELEASE_RUNTIME: 'optional' }), 'optional');
+assert.throws(
+  () => resolveReleaseProfile({ TEAMS_RELEASE_RUNTIME: 'grok' }),
+  /TEAMS_RELEASE_RUNTIME|core|optional/i,
+  'unsupported release profiles must fail closed',
+);
+assert.doesNotThrow(() => assertReleaseRuntimePrerequisites(
+  { TEAMS_OPTIONAL_RUNTIME: 'true', XAI_API_KEY: 'xai-test-secret' },
+  'optional',
+));
+assert.throws(
+  () => assertReleaseRuntimePrerequisites({ XAI_API_KEY: 'xai-test-secret' }, 'optional'),
+  /TEAMS_OPTIONAL_RUNTIME/i,
+  'optional releases must require the optional runtime flag',
+);
+assert.throws(
+  () => assertReleaseRuntimePrerequisites({ TEAMS_OPTIONAL_RUNTIME: 'true' }, 'optional'),
+  /XAI_API_KEY/i,
+  'optional Grok releases must require a non-empty API key',
+);
+const optionalPreflight = createPreflightCommands(123, 'optional');
+assert.equal(optionalPreflight.find(([, script]) => script === 'build:server')?.[0], 'optional-server-build');
+assert.equal(optionalPreflight.some(([, script]) => script === 'build:core'), false);
 
 assert.deepEqual(
   createPreflightCommands(123),
@@ -86,6 +114,16 @@ const validHealth = {
     assertServerBuildIdentity(marker, entryBytes, expected.sourceCommit),
     { sourceCommit: expected.sourceCommit, serverBundleSha256: bundleSha256 },
   );
+  const optionalMarker = { ...marker, mode: 'optional' };
+  assert.deepEqual(
+    assertServerBuildIdentity(optionalMarker, entryBytes, expected.sourceCommit, 'optional'),
+    { sourceCommit: optionalMarker.sourceCommit, serverBundleSha256: bundleSha256 },
+  );
+  assert.throws(
+    () => assertServerBuildIdentity(optionalMarker, entryBytes, expected.sourceCommit),
+    /Core|mode/i,
+    'an optional marker must not satisfy the default Core identity check',
+  );
   assert.throws(
     () => assertServerBuildIdentity(marker, entryBytes, 'f'.repeat(40)),
     /source.*commit|OID|identity/i,
@@ -105,10 +143,29 @@ const validHealth = {
     },
   );
   assert.equal(releaseSource.sourceCommit, expected.sourceCommit);
+  assert.equal(releaseSource.profile, 'core', 'the default release source must expose the Core profile');
   assert.equal(releaseSource.env.TEAMS_SOURCE_COMMIT, expected.sourceCommit);
   assert.equal(releaseSource.env.EXISTING, 'value');
   assert.equal(calls.length, 1, 'the release gate must pin its source OID exactly once');
   assert.equal(calls[0].options.commitOid, expected.sourceCommit);
+}
+
+{
+  const releaseSource = createReleaseSourceEnvironment(
+    {
+      TEAMS_RELEASE_RUNTIME: 'optional',
+      TEAMS_OPTIONAL_RUNTIME: 'true',
+      XAI_API_KEY: 'xai-test-secret',
+      TEAMS_SOURCE_COMMIT: expected.sourceCommit,
+    },
+    {
+      rootDir: '/repo',
+      verifySource(rootDir, options) {
+        return { verificationMode: 'worktree-index-commit', commitOid: options.commitOid };
+      },
+    },
+  );
+  assert.equal(releaseSource.profile, 'optional', 'optional profile must remain visible in release identity');
 }
 
 assert.deepEqual(parseDotEnv('A=one\nB="two words"\n# ignored\n'), {
@@ -144,6 +201,20 @@ assert.throws(
   /geolocation/,
 );
 assert.doesNotThrow(() => assertPublicHealth(validHealth, expected));
+assert.doesNotThrow(
+  () => assertPublicHealth({
+    ...validHealth,
+    genAI: 'grok-configured',
+    genAIProvider: { provider: 'grok' },
+    responseProviders: { grok: true },
+  }, expected, 'optional'),
+  'optional public health must attest to a configured Grok provider',
+);
+assert.throws(
+  () => assertPublicHealth({ ...validHealth, genAI: 'not-configured' }, expected, 'optional'),
+  /Grok|configured|response provider/i,
+  'optional public health must not accept a non-Grok runtime',
+);
 assert.throws(
   () => assertPublicHealth({ ...validHealth, outbound: 'local-outbox' }, expected),
   /outbound/,
@@ -261,5 +332,17 @@ const reapTimeoutReport = formatReleaseFailure(
 );
 assert.equal(reapTimeoutReport.status, 'BLOCKED', 'a process reap timeout must be blocked');
 assert.equal(reapTimeoutReport.blocker.code, 'EPROCESSREAPTIMEOUT');
+
+const redactionSecret = 'xai-test-secret';
+const redactedFailure = formatReleaseFailure(
+  Object.assign(new Error('optional command failed'), {
+    stdout: `provider key=${redactionSecret}`,
+    stderr: `provider key=${redactionSecret}`,
+  }),
+  'preflight',
+  { XAI_API_KEY: redactionSecret },
+);
+assert.equal(JSON.stringify(redactedFailure).includes(redactionSecret), false, 'release evidence must not leak XAI_API_KEY');
+assert.match(JSON.stringify(redactedFailure), /REDACTED/);
 
 console.log('Release gate contract tests passed.');
