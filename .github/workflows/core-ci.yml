@@ -120,6 +120,29 @@ jobs:
           npm run test:runtime-dist
           npm run test:core-runtime-smoke-isolation
 
+  optional:
+    name: Optional providers and Grok route
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify optional provider contracts without live credentials
+        run: |
+          npm run test:openai-engine
+          npm run test:local-engine
+          npm run test:grok-engine
+          npm run test:grok-bot-runtime
+          npm run test:response-mode-optional-unconfigured
+          npm run build:server
+
   container:
     name: Docker Core runtime build
     needs: [core, a2a, continuity]
