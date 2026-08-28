@@ -92,6 +92,25 @@ export async function createA2ACodexExecutionProfiles(
   return Object.freeze(profiles);
 }
 
+/**
+ * Check the ordinary service Codex home without reading credential bytes.
+ * This is used only to keep the top-level readiness report truthful; the
+ * native provider still performs its full bounded preflight before a job.
+ */
+export async function isPrivateCodexAuthFileMetadataAvailable(
+  candidate: string | undefined,
+  currentUid?: number,
+): Promise<boolean> {
+  if (!candidate?.trim()) return false;
+  try {
+    const home = await fs.realpath(candidate);
+    await requirePrivateAuthFileMetadata(home, 'AGENT_CODEX_HOME', currentUid);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function requirePrivateAuthFileMetadata(
   codexHome: string,
   variableName: string,

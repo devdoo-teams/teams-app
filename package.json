@@ -1,6 +1,6 @@
 {
   "name": "teams-sdk-mvp",
-  "version": "1.0.82",
+  "version": "1.0.83",
   "private": true,
   "type": "module",
   "scripts": {

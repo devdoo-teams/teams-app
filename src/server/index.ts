@@ -32,6 +32,7 @@ import {
 import { createProductionAgentExecutionPolicy } from './production-agent-isolation.js';
 import {
   createA2ACodexExecutionProfiles,
+  isPrivateCodexAuthFileMetadataAvailable,
   type A2ACodexExecutionProfile,
 } from './a2a-codex-execution-profiles.js';
 import { ProviderNeutralAgentRunner } from './provider-neutral-agent-runner.js';
@@ -315,7 +316,13 @@ const agentExecutionPolicy = unsafeTestProcessIsolation
       canMutateScope: (scope) => isOperator(scope),
       canReadScope: (scope) => isOperator(scope),
     });
-const a2aExecutionReadiness = agentExecutionPolicy.readOnlyExecutionReadiness();
+const baseExecutionReadiness = agentExecutionPolicy.readOnlyExecutionReadiness();
+const a2aExecutionReadiness = baseExecutionReadiness.state === 'configured'
+  && isProduction
+  && agentProvider === 'codex'
+  && !(await isPrivateCodexAuthFileMetadataAvailable(process.env.AGENT_CODEX_HOME))
+  ? { state: 'unavailable' as const, reason: 'isolation-unavailable' as const }
+  : baseExecutionReadiness;
 
 type A2AWorkerReadiness = Readonly<{
   state: 'configured' | 'unavailable';
