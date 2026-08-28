@@ -238,11 +238,15 @@ try {
 
   const tempMatch = output.match(/SMOKE_TEMP_DIR=(.+)/);
   const a2aMatch = output.match(/SMOKE_A2A_STORE_PATH=(.+)/);
+  const a2aOutboundMatch = output.match(/SMOKE_A2A_OUTBOUND_STORE_PATH=(.+)/);
   assert.ok(tempMatch, `smoke must report its temporary directory:\n${output}`);
   assert.ok(a2aMatch, `smoke must report its A2A store path:\n${output}`);
+  assert.ok(a2aOutboundMatch, `smoke must report its temporary A2A outbound store path:\n${output}`);
   const tempDir = tempMatch[1].trim();
   const a2aStorePath = a2aMatch[1].trim();
+  const a2aOutboundStorePath = a2aOutboundMatch[1].trim();
   assert.equal(a2aStorePath, path.join(tempDir, 'a2a.json'));
+  assert.equal(a2aOutboundStorePath, path.join(tempDir, 'a2a-outbound.json'));
   assert.equal(path.dirname(tempDir), root);
   assert.equal((await fs.lstat(tempDir).catch((error) => error)).code, 'ENOENT');
   assert.match(output, /SMOKE_CLEANUP=removed/);

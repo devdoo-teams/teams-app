@@ -90,6 +90,7 @@ async function waitForReady(child, output, timeoutMs = 20_000) {
 
 let dataDir;
 let a2aStorePath;
+let a2aOutboundStorePath;
 let child;
 let closePromise;
 let primaryError;
@@ -100,6 +101,7 @@ try {
     dataDir = directory;
   });
   a2aStorePath = path.join(dataDir, 'a2a.json');
+  a2aOutboundStorePath = path.join(dataDir, 'a2a-outbound.json');
   const tabDomain = 'runtime-smoke.example.com';
   const botClientId = '11111111-2222-4333-8444-555555555555';
   const env = {
@@ -125,6 +127,7 @@ try {
     AGENT_JOB_STORE_PATH: path.join(dataDir, 'agent-jobs.json'),
     AGENT_ADMISSION_JOURNAL_PATH: path.join(dataDir, 'agent-admission.json'),
     A2A_STORE_PATH: a2aStorePath,
+    A2A_OUTBOUND_STORE_PATH: a2aOutboundStorePath,
     GENUI_ACTION_STORE_PATH: path.join(dataDir, 'genui-actions.json'),
     RESPONSE_MODE_STORE_PATH: path.join(dataDir, 'response-modes.json'),
   };
@@ -197,6 +200,7 @@ try {
       await removeWorkspaceOwnedDataDir(dataDir);
       console.log(`SMOKE_TEMP_DIR=${dataDir}`);
       console.log(`SMOKE_A2A_STORE_PATH=${a2aStorePath}`);
+      console.log(`SMOKE_A2A_OUTBOUND_STORE_PATH=${a2aOutboundStorePath}`);
       console.log('SMOKE_CLEANUP=removed');
     } catch (cleanupError) {
       if (!primaryError) throw cleanupError;
