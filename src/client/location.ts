@@ -430,7 +430,14 @@ export function createClientLocationService(
       );
     }), 'browser');
 
-    return withTimeout(operation, operationTimeoutMs, '브라우저 위치 확인 시간이 초과되었습니다.');
+    return withTimeout(operation, operationTimeoutMs, '브라우저 위치 확인 시간이 초과되었습니다.').catch((error: unknown) => {
+      if (isLocationTimeoutError(error)) {
+        // HTML5 geolocation cannot be cancelled after the browser operation
+        // deadline. Separate this stale callback from the next user request.
+        attempt.abandon();
+      }
+      throw error;
+    });
   }
 
   async function getTeamsGeoLocation(attempt: TrackedAttempt): Promise<DeviceLocation> {

@@ -382,6 +382,73 @@ async function testAndroidMobileBrowserTimeoutIsExplicit(): Promise<void> {
   assert.match(error instanceof Error ? error.message : '', /Teams|새로고침|다시 열/, 'mobile timeout contains Teams recovery guidance');
 }
 
+async function testBrowserLocationTimeoutStartsFreshRequestAndIgnoresLateCallback(): Promise<void> {
+  let browserCalls = 0;
+  let firstSuccess!: (position: { coords: { latitude: number; longitude: number; accuracy?: number } }) => void;
+  let freshSuccess!: (position: { coords: { latitude: number; longitude: number; accuracy?: number } }) => void;
+  let resolveFreshStarted!: () => void;
+  const freshStarted = new Promise<void>((resolve) => {
+    resolveFreshStarted = resolve;
+  });
+  const dependencies = {
+    teamsApp: {
+      isInitialized: () => true,
+      initialize: async () => undefined,
+      getContext: async () => ({ clientType: 'web', hostName: 'Teams' }),
+    },
+    legacyLocation: {
+      isSupported: () => false,
+      getLocation: () => undefined,
+    },
+    geoLocation: {
+      isSupported: () => false,
+      hasPermission: async () => false,
+      requestPermission: async () => false,
+      getCurrentLocation: async () => ({ latitude: 37.5, longitude: 127 }),
+    },
+    browserGeolocation: () => ({
+      getCurrentPosition: (success) => {
+        browserCalls += 1;
+        if (browserCalls === 1) {
+          firstSuccess = success;
+          return;
+        }
+        freshSuccess = success;
+        resolveFreshStarted();
+      },
+    }),
+  } satisfies ClientLocationDependencies;
+  const service = createClientLocationService(dependencies, { operationTimeoutMs: 10 });
+
+  const first = await service.getCurrentDeviceLocation(new AbortController().signal)
+    .catch((caught: unknown) => caught);
+  const second = service.getCurrentDeviceLocation(new AbortController().signal);
+  const secondOutcome = second.then(() => 'settled' as const, () => 'rejected' as const);
+
+  assert.match(first instanceof Error ? first.message : '', /시간(?:이)? 초과/, 'browser operation timeout is returned to the first caller');
+  const freshStart = await Promise.race([
+    freshStarted.then(() => 'started' as const),
+    new Promise<'test-watchdog'>((resolve) => setTimeout(() => resolve('test-watchdog'), 60)),
+  ]);
+  assert.equal(freshStart, 'started', 'a retry after a browser operation timeout starts a fresh request');
+  assert.equal(browserCalls, 2, 'the browser retry invokes HTML5 geolocation again');
+
+  firstSuccess({ coords: { latitude: 35.1, longitude: 128.1, accuracy: 30 } });
+  const staleCallbackOutcome = await Promise.race([
+    secondOutcome,
+    new Promise<'still-pending'>((resolve) => setTimeout(() => resolve('still-pending'), 0)),
+  ]);
+  assert.equal(staleCallbackOutcome, 'still-pending', 'a late callback from the stale request cannot settle the fresh request');
+
+  freshSuccess({ coords: { latitude: 37.5665, longitude: 126.978, accuracy: 8 } });
+  assert.deepEqual(await second, {
+    latitude: 37.5665,
+    longitude: 126.978,
+    accuracy: 8,
+    source: 'browser',
+  }, 'the fresh browser request resolves with its own callback');
+}
+
 async function testLegacyLocationTimeoutBlocksOverlappingRetry(): Promise<void> {
   let legacyCalls = 0;
   let firstCallback!: (error: null, location: { latitude: number; longitude: number; accuracy?: number }) => void;
@@ -828,6 +895,7 @@ for (const [name, test] of [
   ['teams-context-required', testUnavailableTeamsContextDoesNotUseBrowserLocation],
   ['android-mobile-permission', testAndroidMobileBrowserPermissionDeniedIsExplicit],
   ['android-mobile-timeout', testAndroidMobileBrowserTimeoutIsExplicit],
+  ['browser-timeout-retry', testBrowserLocationTimeoutStartsFreshRequestAndIgnoresLateCallback],
   ['legacy-timeout', testLegacyLocationTimeoutBlocksOverlappingRetry],
   ['preview-stages', testPreviewLocationStagesAreBounded],
   ['native-timeout', testUnresolvedNativePromiseDoesNotReuseRejectedRequest],
