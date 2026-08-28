@@ -32,7 +32,6 @@ import {
 import { createProductionAgentExecutionPolicy } from './production-agent-isolation.js';
 import {
   createA2ACodexExecutionProfiles,
-  isPrivateCodexAuthFileMetadataAvailable,
   type A2ACodexExecutionProfile,
 } from './a2a-codex-execution-profiles.js';
 import { ProviderNeutralAgentRunner } from './provider-neutral-agent-runner.js';
@@ -317,17 +316,47 @@ const agentExecutionPolicy = unsafeTestProcessIsolation
       canReadScope: (scope) => isOperator(scope),
     });
 const baseExecutionReadiness = agentExecutionPolicy.readOnlyExecutionReadiness();
-const a2aExecutionReadiness = baseExecutionReadiness.state === 'configured'
-  && isProduction
-  && agentProvider === 'codex'
-  && !(await isPrivateCodexAuthFileMetadataAvailable(process.env.AGENT_CODEX_HOME))
-  ? { state: 'unavailable' as const, reason: 'isolation-unavailable' as const }
-  : baseExecutionReadiness;
 
 type A2AWorkerReadiness = Readonly<{
   state: 'configured' | 'unavailable';
   reason: string;
 }>;
+
+const A2A_PREFLIGHT_SCOPE: AgentJobScope = Object.freeze({
+  tenantId: 'a2a-native-preflight',
+  requesterId: 'a2a-native-preflight',
+  conversationId: 'a2a-native-preflight',
+});
+const A2A_PREFLIGHT_PROMPT = 'Verify the native read-only Codex execution boundary.';
+
+async function runA2ANativePreflight(policy: AgentExecutionPolicy): Promise<A2AWorkerReadiness> {
+  let preparedWorkspace: Awaited<ReturnType<AgentExecutionPolicy['prepareWorkspace']>> | undefined;
+  try {
+    preparedWorkspace = await policy.prepareWorkspace(
+      'read-only',
+      A2A_PREFLIGHT_SCOPE,
+      A2A_PREFLIGHT_PROMPT,
+    );
+    await preparedWorkspace.dispose();
+    return { state: 'configured', reason: 'ready' };
+  } catch (error) {
+    try {
+      await preparedWorkspace?.dispose();
+    } catch {
+      // Preserve the fail-closed preflight result and avoid startup failure.
+    }
+    const detail = error instanceof Error ? error.message.slice(0, 300) : 'native preflight failed.';
+    return {
+      state: 'unavailable',
+      reason: `native-execution-preflight-unavailable: ${detail}`,
+    };
+  }
+}
+
+const a2aExecutionReadiness = baseExecutionReadiness.state === 'configured' && isProduction
+  && (await runA2ANativePreflight(agentExecutionPolicy)).state === 'unavailable'
+  ? { state: 'unavailable' as const, reason: 'isolation-unavailable' as const }
+  : baseExecutionReadiness;
 
 // A2A workers must not reuse the legacy unsuffixed Codex home. Resolve every
 // indexed home before registering the production roster; a missing or unsafe
@@ -418,8 +447,15 @@ for (const configuredAgent of a2aAgentProviders) {
   if (policy) {
     const readiness = policy.readOnlyExecutionReadiness();
     if (readiness.state === 'configured') {
-      a2aWorkerExecutionPolicies.set(agentId, policy);
-      a2aWorkerReadiness.set(agentId, { state: 'configured', reason: 'ready' });
+      const nativeReadiness = isProduction
+        ? await runA2ANativePreflight(policy)
+        : { state: 'configured' as const, reason: 'ready' };
+      if (nativeReadiness.state === 'configured') {
+        a2aWorkerExecutionPolicies.set(agentId, policy);
+        a2aWorkerReadiness.set(agentId, nativeReadiness);
+      } else {
+        a2aWorkerReadiness.set(agentId, nativeReadiness);
+      }
     } else {
       a2aWorkerReadiness.set(agentId, { state: 'unavailable', reason: readiness.reason });
     }
