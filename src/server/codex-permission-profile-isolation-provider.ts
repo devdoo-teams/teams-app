@@ -5,7 +5,6 @@ import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
-import { promisify } from 'node:util';
 
 import {
   AgentExecutionUnavailableError,
@@ -15,7 +14,6 @@ import {
   type AgentIsolationSpawnOptions,
 } from './agent-execution-policy.js';
 
-const execFileAsync = promisify(execFile);
 const PROVIDER_ID = 'codex-permission-profile';
 const PROFILE_NAME = 'teams-agent-read-only';
 const MAX_AUTH_FILE_BYTES = 1024 * 1024;
@@ -326,6 +324,38 @@ function buildTrustedExecArgs(args: readonly string[], workspace: string): strin
   return [...commandArgs, '--', prompt];
 }
 
+type ExecFileFailure = Error & {
+  code?: string | number | null;
+  killed?: boolean;
+  signal?: NodeJS.Signals | null;
+  stdout?: string | Buffer;
+  stderr?: string | Buffer;
+};
+
+function execFileClosedStdin(
+  file: string,
+  args: readonly string[],
+  options: NodeJS.ExecFileOptionsWithStringEncoding,
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(file, [...args], options, (error, stdout, stderr) => {
+      const output = {
+        stdout: typeof stdout === 'string' ? stdout : stdout.toString('utf8'),
+        stderr: typeof stderr === 'string' ? stderr : stderr.toString('utf8'),
+      };
+      if (error) {
+        const failure = error as ExecFileFailure;
+        failure.stdout = output.stdout;
+        failure.stderr = output.stderr;
+        reject(failure);
+        return;
+      }
+      resolve(output);
+    });
+    child.stdin?.end();
+  });
+}
+
 async function runNativePermissionPreflight(input: {
   codexExecutable: string;
   codexHome: string;
@@ -335,7 +365,7 @@ async function runNativePermissionPreflight(input: {
 }): Promise<void> {
   void input.toolSurfacePolicy;
   const environment = { ...input.environment };
-  const version = await execFileAsync(input.codexExecutable, ['--version'], {
+  const version = await execFileClosedStdin(input.codexExecutable, ['--version'], {
     env: environment,
     encoding: 'utf8',
     timeout: PREFLIGHT_TIMEOUT_MS,
@@ -345,7 +375,7 @@ async function runNativePermissionPreflight(input: {
     throw new Error(`unsupported Codex permission-profile version: ${version.stdout.trim()}`);
   }
 
-  const mcpInventory = await execFileAsync(input.codexExecutable, ['mcp', 'list', '--json'], {
+  const mcpInventory = await execFileClosedStdin(input.codexExecutable, ['mcp', 'list', '--json'], {
     env: environment,
     encoding: 'utf8',
     timeout: PREFLIGHT_TIMEOUT_MS,
@@ -355,7 +385,7 @@ async function runNativePermissionPreflight(input: {
   if (!Array.isArray(mcpServers) || mcpServers.length !== 0) {
     throw new Error('service Codex MCP inventory must be empty');
   }
-  const pluginInventory = await execFileAsync(input.codexExecutable, ['plugin', 'list', '--json'], {
+  const pluginInventory = await execFileClosedStdin(input.codexExecutable, ['plugin', 'list', '--json'], {
     env: environment,
     encoding: 'utf8',
     timeout: PREFLIGHT_TIMEOUT_MS,
@@ -376,7 +406,7 @@ async function runNativePermissionPreflight(input: {
     '-C', input.workspace,
     '--',
   ];
-  await execFileAsync(input.codexExecutable, [
+  await execFileClosedStdin(input.codexExecutable, [
     ...sandboxPrefix,
     '/bin/sh', '-c', 'test -r "$1"', 'workspace-read-canary', workspaceCanary,
   ], { env: environment, timeout: PREFLIGHT_TIMEOUT_MS, maxBuffer: 16 * 1024 });
@@ -394,7 +424,7 @@ async function runNativePermissionPreflight(input: {
     // exit code 1 with no stderr. Prove the same command and listener work
     // outside the sandbox first; only then may this canary accept that silent
     // non-zero result as the expected policy denial.
-    await execFileAsync('/usr/bin/nc', ['-z', '127.0.0.1', String(port)], {
+    await execFileClosedStdin('/usr/bin/nc', ['-z', '127.0.0.1', String(port)], {
       env: environment,
       timeout: PREFLIGHT_TIMEOUT_MS,
       maxBuffer: 16 * 1024,
@@ -405,7 +435,7 @@ async function runNativePermissionPreflight(input: {
     ], environment, 'network', { allowSilentExit: true });
   });
 
-  const authenticated = await execFileAsync(input.codexExecutable, [
+  const authenticated = await execFileClosedStdin(input.codexExecutable, [
     'exec', '--json', ...CODEX_READ_ONLY_PERMISSION_ARGS,
     '--cd', input.workspace,
     '--', 'Reply with exactly TEAMS_CODEX_AUTH_PREFLIGHT_OK. Do not call any tool.',
@@ -700,7 +730,7 @@ async function expectSandboxDenial(
   options: Readonly<{ allowSilentExit?: boolean }> = {},
 ): Promise<void> {
   try {
-    await execFileAsync(executable, [...args], {
+    await execFileClosedStdin(executable, [...args], {
       env: environment,
       timeout: PREFLIGHT_TIMEOUT_MS,
       maxBuffer: 16 * 1024,
