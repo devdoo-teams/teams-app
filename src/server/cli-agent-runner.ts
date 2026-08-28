@@ -399,7 +399,7 @@ export class CliAgentRunner {
       if (!processController) throw new AgentExecutionUnavailableError('process-tree-control-required');
     } catch (error) {
       try {
-        await reapChildProcess(child);
+        await reapChildProcess(child, controllerOptions);
       } catch {
         throw new AgentExecutionUnavailableError('process-tree-control-required');
       }

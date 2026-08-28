@@ -17,6 +17,7 @@ const projectionRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-codex-proj
 const fakeCodexPath = path.join(projectionRoot, 'fake-codex.mjs');
 const homePath = path.join(root, 'home');
 const threadId = '019fd700-51cd-7862-a4ef-74ccae0f2b4e';
+const attachmentGrandchildPidPath = path.join(root, 'attachment-grandchild.pid');
 
 class TestIsolationProvider extends AgentIsolationProvider {
   constructor() {
@@ -83,6 +84,17 @@ if (caseName === 'malformed') {
 } else {
   prefix(); message('SECURITY_FAKE_OK'); completed();
 }
+`;
+
+const attachmentTreeSource = `
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const grandchild = spawn(process.execPath, [
+  '-e',
+  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+], { stdio: 'ignore' });
+fs.writeFileSync(${JSON.stringify(attachmentGrandchildPidPath)}, String(grandchild.pid));
+setInterval(() => {}, 1000);
 `;
 
 const baseEnvironment: Record<string, string> = {
@@ -174,6 +186,47 @@ async function childClosedWithin(child: ReturnType<typeof spawnChild>, timeoutMs
   });
 }
 
+async function waitForPidFile(filePath: string, timeoutMs = 1_000): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const pid = Number((await fs.readFile(filePath, 'utf8')).trim());
+      if (Number.isSafeInteger(pid) && pid > 0) return pid;
+    } catch (error) {
+      if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`attachment fixture did not publish a grandchild PID within ${timeoutMs}ms`);
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'EPERM');
+  }
+}
+
+async function processExitedWithin(pid: number, timeoutMs = 1_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return !isProcessAlive(pid);
+}
+
+function killProcess(pid: number | undefined): void {
+  if (!pid || !isProcessAlive(pid)) return;
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch {
+    // The process may exit between the liveness check and cleanup.
+  }
+}
+
 const negativeCases: Array<[string, RegExp, number?]> = [
   ['malformed', /malformed|protocol/i],
   ['non-object', /object|protocol/i],
@@ -190,6 +243,7 @@ const negativeCases: Array<[string, RegExp, number?]> = [
 ];
 
 let attachmentChild: ReturnType<typeof spawnChild> | undefined;
+let attachmentGrandchildPid: number | undefined;
 
 try {
   await fs.mkdir(path.join(projectionRoot, '.isolated-home', '.codex'), { recursive: true });
@@ -229,12 +283,16 @@ try {
 
   const attachmentFailureRunner = new CodexRunner({
     platform: 'linux',
+    processControllerOptions: { graceMs: 20, cleanupWaitMs: 200, retryDelayMs: 10, maxAttempts: 20 },
     processControllerProvider: {
       preflight: () => undefined,
-      attach: async () => { throw new Error('controller attachment failed'); },
+      attach: async () => {
+        attachmentGrandchildPid = await waitForPidFile(attachmentGrandchildPidPath);
+        throw new Error('controller attachment failed');
+      },
     },
-    spawn: () => {
-      attachmentChild = spawnChild(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+    spawn: (_command, _args, options) => {
+      attachmentChild = spawnChild(process.execPath, ['-e', attachmentTreeSource], options as any);
       return attachmentChild;
     },
   });
@@ -250,6 +308,12 @@ try {
   );
   assert.ok(attachmentChild, 'the attachment regression must spawn a child');
   assert.equal(await childClosedWithin(attachmentChild), true, 'a child is reaped when controller attachment throws');
+  assert.ok(attachmentGrandchildPid, 'the attachment regression must spawn a real grandchild');
+  assert.equal(
+    await processExitedWithin(attachmentGrandchildPid),
+    true,
+    'process-tree cleanup reaps a grandchild after controller attachment fails',
+  );
 
   await assert.rejects(
     () => provider.validateRequest({
@@ -266,6 +330,7 @@ try {
     attachmentChild.kill('SIGKILL');
     await childClosedWithin(attachmentChild);
   }
+  killProcess(attachmentGrandchildPid);
   await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   await fs.rm(projectionRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 }
