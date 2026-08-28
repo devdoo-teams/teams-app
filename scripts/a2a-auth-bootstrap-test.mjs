@@ -44,17 +44,20 @@ assert.deepEqual(
 );
 assert.throws(() => createLoginInvocation({ codexBin: 'codex', codexHome: '/tmp/home' }), /absolute/i);
 
-const executableDigest = crypto.createHash('sha256').update(await fs.readFile(process.execPath)).digest('hex');
+const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-a2a-auth-'));
+const executableFixture = path.join(root, 'codex-bin');
+await fs.copyFile(process.execPath, executableFixture);
+await fs.chmod(executableFixture, 0o755);
+const executableDigest = crypto.createHash('sha256').update(await fs.readFile(executableFixture)).digest('hex');
 assert.equal(
-  await validateExecutableInputs({ CODEX_BIN: process.execPath, CODEX_BIN_SHA256: executableDigest }),
-  process.execPath,
+  await validateExecutableInputs({ CODEX_BIN: executableFixture, CODEX_BIN_SHA256: executableDigest }),
+  executableFixture,
 );
 await assert.rejects(
-  () => validateExecutableInputs({ CODEX_BIN: process.execPath, CODEX_BIN_SHA256: '0'.repeat(64) }),
+  () => validateExecutableInputs({ CODEX_BIN: executableFixture, CODEX_BIN_SHA256: '0'.repeat(64) }),
   /does not match/i,
 );
 
-const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-a2a-auth-'));
 const home = path.join(root, 'worker-1');
 await prepareWorkerHome(home);
 const homeStat = await fs.lstat(home);
