@@ -19,6 +19,8 @@ try {
   await fs.mkdir(legacyHome, { mode: 0o700 });
   await fs.mkdir(insecureHome, { mode: 0o755 });
   await fs.chmod(insecureHome, 0o755);
+  await fs.writeFile(path.join(firstHome, 'auth.json'), '{"fixture":"profile-one"}\n', { mode: 0o600 });
+  await fs.writeFile(path.join(secondHome, 'auth.json'), '{"fixture":"profile-two"}\n', { mode: 0o600 });
 
   const profiles = await createA2ACodexExecutionProfiles({
     ordinals: [1, 2],
@@ -56,6 +58,21 @@ try {
   assert.notEqual(profiles[0]?.codexHome, profiles[1]?.codexHome);
   assert.ok(Object.isFrozen(profiles));
   assert.ok(profiles.every((profile) => Object.isFrozen(profile)));
+
+  const missingAuthHome = path.join(root, 'missing-auth-home');
+  await fs.mkdir(missingAuthHome, { mode: 0o700 });
+  await assert.rejects(
+    () => createA2ACodexExecutionProfiles({
+      ordinals: [1],
+      environment: {
+        AGENT_CODEX_HOME_1: missingAuthHome,
+        CODEX_BIN: sharedExecutable,
+        CODEX_BIN_SHA256: sharedDigest,
+      },
+    }),
+    /AGENT_CODEX_HOME_1\/auth\.json is unavailable/u,
+    'a worker without auth metadata must not be advertised as execution-ready',
+  );
 
   await assert.rejects(
     () => createA2ACodexExecutionProfiles({

@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+const MAX_AUTH_FILE_BYTES = 1024 * 1024;
 
 export type A2ACodexExecutionProfile = Readonly<{
   ordinal: number;
@@ -30,7 +31,9 @@ export class A2ACodexExecutionProfileConfigurationError extends Error {
  * Resolve one isolated Codex configuration for each requested A2A ordinal.
  * Only CODEX_BIN and its digest are shared. Profile homes are read from their
  * indexed variables and are never substituted with the legacy unsuffixed home.
- * Auth files are intentionally not opened, copied, returned, or logged here.
+ * Auth file contents are intentionally never read, copied, returned, or
+ * logged here. Only bounded metadata is checked so a missing/unsafe profile
+ * cannot be advertised as execution-ready by the health roster.
  */
 export async function createA2ACodexExecutionProfiles(
   options: A2ACodexExecutionProfilesOptions,
@@ -45,6 +48,7 @@ export async function createA2ACodexExecutionProfiles(
     const environmentKey = `AGENT_CODEX_HOME_${ordinal}`;
     const configuredHome = requiredAbsolute(environment[environmentKey], environmentKey);
     const codexHome = await requirePrivateDirectory(configuredHome, environmentKey, currentUid);
+    await requirePrivateAuthFileMetadata(codexHome, environmentKey, currentUid);
     return Object.freeze({
       ordinal,
       codexHome,
@@ -86,6 +90,36 @@ export async function createA2ACodexExecutionProfiles(
   }
 
   return Object.freeze(profiles);
+}
+
+async function requirePrivateAuthFileMetadata(
+  codexHome: string,
+  variableName: string,
+  currentUid: number | undefined,
+): Promise<void> {
+  const authPath = path.join(codexHome, 'auth.json');
+  let stat: Awaited<ReturnType<typeof fs.lstat>>;
+  try {
+    stat = await fs.lstat(authPath);
+  } catch {
+    throw new A2ACodexExecutionProfileConfigurationError(
+      `${variableName}/auth.json is unavailable.`,
+    );
+  }
+
+  if (
+    !stat.isFile()
+    || stat.isSymbolicLink()
+    || stat.nlink !== 1
+    || stat.size <= 0
+    || stat.size > MAX_AUTH_FILE_BYTES
+    || (stat.mode & 0o077) !== 0
+    || (currentUid !== undefined && stat.uid !== currentUid)
+  ) {
+    throw new A2ACodexExecutionProfileConfigurationError(
+      `${variableName}/auth.json must be one owner-only regular file.`,
+    );
+  }
 }
 
 function normalizeOrdinals(value: readonly number[]): number[] {
