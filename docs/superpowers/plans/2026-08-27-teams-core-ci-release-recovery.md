@@ -16,9 +16,13 @@ The earlier execution notes below are retained as historical evidence, but they
 must not be read as the current release identity. The current integration
 candidate and the preserved service are separate:
 
-- Candidate branch: `feature/grok-provider-20260828`, HEAD
-  `59a4f4d49bc5f63031dfd15a6df63c8d7e6a12b5`, worktree clean and pushed.
-- Candidate release: app/package/manifest `1.0.85`; package SHA-256
+- Candidate branch: `feature/grok-provider-20260828`, current HEAD
+  `b7093b2` (documentation-only after the release candidate), worktree clean
+  and pushed. The functional release identity remains the parent commit
+  `59a4f4d49bc5f63031dfd15a6df63c8d7e6a12b5` until a new qualifying change
+  is implemented and packaged.
+- Candidate release artifact: app/package/manifest `1.0.85`, bound to
+  functional commit `59a4f4d49bc5f63031dfd15a6df63c8d7e6a12b5`; package SHA-256
   `b5dbdc3828f0aa0d27a3f843e2ee9266d6533779fbe3a8858717b97df67ad77a`.
 - Candidate public origin: `https://q3kj3s3z-3980.jpe1.devtunnels.ms`; health
   reports version `1.0.85`, the same source commit, production Teams
