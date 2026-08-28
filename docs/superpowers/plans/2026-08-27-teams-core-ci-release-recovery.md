@@ -10,6 +10,52 @@
 
 **Spec:** `docs/teams-release-workflow.md`, `docs/api-free-teams-roadmap.md`, and `AGENTS.md`.
 
+## Current execution update — 2026-08-29 (supersedes earlier status blocks)
+
+The earlier execution notes below are retained as historical evidence, but they
+must not be read as the current release identity. The current integration
+candidate and the preserved service are separate:
+
+- Candidate branch: `feature/grok-provider-20260828`, HEAD
+  `59a4f4d49bc5f63031dfd15a6df63c8d7e6a12b5`, worktree clean and pushed.
+- Candidate release: app/package/manifest `1.0.85`; package SHA-256
+  `b5dbdc3828f0aa0d27a3f843e2ee9266d6533779fbe3a8858717b97df67ad77a`.
+- Candidate public origin: `https://q3kj3s3z-3980.jpe1.devtunnels.ms`; health
+  reports version `1.0.85`, the same source commit, production Teams
+  authentication/bot/outbound, and server bundle SHA-256
+  `e40d816462637a664144af711a2217666c12aedc1d952d473964bcb1719009cd`.
+- Preserved service: the existing `1.0.77` process on port `3981` remains
+  running and must not be replaced until every newer release gate passes.
+- Teams registration: `teams app get e915b402-eed4-4ee2-ba1f-c31d75c870a5
+  --json` currently reports registered version `1.0.76` and the q3
+  `/api/messages` endpoint. The candidate ZIP has not been uploaded; no
+  installed-app, desktop, or mobile evidence is credited to `1.0.85` yet.
+- CI: GitHub Actions run `33202779302` passed the Core, A2A/remote,
+  optional/Grok, atomic, and Docker jobs. This is CI evidence only.
+- A2A: `main`, `worker-1`, and `worker-2` indexed Codex homes have no
+  authenticated `auth.json`; candidate health therefore correctly reports
+  `a2aExecution=unavailable`. No auth file may be copied between workers.
+- Grok: the optional route and isolated test-key contract pass, but the public
+  candidate has no `XAI_API_KEY`, so no live xAI round trip is claimed.
+
+### Current gate order
+
+1. In the existing in-app browser tab, the user completes the actual
+   ChatGPT/Codex login and MFA. The orchestrator then verifies each worker
+   home by metadata only and runs `check:codex-a2a-isolation`.
+2. With the same candidate identity, execute authenticated A2A Agent Card,
+   send/task polling, parallel children, cancellation, restart recovery, and
+   telemetry checks. Keep unavailable workers unavailable if the boundary is
+   not proven.
+3. Use the existing Teams Admin Center/Developer Portal session to upload the
+   verified `1.0.85` ZIP through the existing-app new-version path. Read back
+   the registered version and package identity before UI testing.
+4. Verify the public endpoint and installed app in Teams desktop with current
+   accessibility trees and screenshots, then obtain separate mobile/GPS
+   evidence. Do not reuse screenshots or chat records from `1.0.76`.
+5. Reconcile Jira findings and send a Teams completion message only after all
+   required gates pass. Until then, report `PARTIAL/BLOCKED`.
+
 ## Execution update — 2026-08-27
 
 - Candidate implementation commit on branch `recovery/teams-core-1.0.89` is `a5057df7cb3bc7b4e1948ccfb0eeef4c3c69d50a`; package and manifest remain `1.0.76` because this run contains CI/test/control-plane changes only. The branch also contains the pre-existing product delta from `main`; the current recovery commits are not being represented as a replacement for that broader historical diff.
