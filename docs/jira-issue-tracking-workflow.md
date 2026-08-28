@@ -14,6 +14,8 @@ Create or update one Jira issue for each distinct, actionable item:
 - a release blocker such as stale package identity, upload failure, authentication mismatch, or missing same-release evidence;
 - a user-visible defect confirmed in Teams desktop or mobile;
 - a planned Core slice that has a clear acceptance test.
+- a non-blocking improvement that has a concrete current-state observation and independently
+  verifiable acceptance condition.
 
 Do not create issues for every progress message, every retry, or an optional provider that is intentionally `N/A`.
 
@@ -55,24 +57,34 @@ Never put passwords, access tokens, device codes, API keys, or raw bearer tokens
 
 ## Idempotent update key
 
-The automation key is:
+The automation key is stable for the lifetime of one distinct finding:
 
 ```text
-teams-core:<issue-kind>:<stable-test-or-row-id>:<source-commit>
+teams-core:<issue-kind>:<stable-test-or-row-id>
 ```
 
-Store it in a Jira label or a dedicated issue property if the project permits it. Before creating an issue, search for the same key. On a match, add a short comment or update the existing issue instead of creating a duplicate.
+Store it in a Jira label, dedicated issue property, or searchable description field as the project
+permits. Before creating an issue, search for the same key. On a match, add a short comment or
+update the existing issue instead of creating a duplicate. Store discovery/fix commits, app
+versions, and package SHAs as evidence fields rather than in the key. Existing keys that include a
+source commit remain valid aliases and must resolve to the original issue instead of creating a
+replacement.
 
 ## Workflow checkpoints
 
 At the end of each smallest vertical slice:
 
-1. run the focused source and runtime tests;
-2. create/update the matching Jira issue with the actual result;
-3. commit the source and test changes;
-4. update the Jira issue with the commit hash;
-5. only after package/public/desktop/mobile evidence passes, transition the issue to Done;
-6. send the Teams completion message with the Jira issue link.
+1. search for the stable idempotency key, then create or reuse the matching Jira issue;
+2. assign it to the signed-in user and transition it to `In Progress` using an actually exposed
+   Jira transition;
+3. run the focused source and runtime tests;
+4. update the Jira issue with the actual result and discovery evidence;
+5. commit the source and test changes;
+6. update the Jira issue with the fix commit hash;
+7. only after same-release package/public/desktop/mobile evidence passes, transition the issue to
+   `Done`;
+8. reconcile every discovered finding against a confirmed Jira key before sending the Teams
+   completion message with the issue links.
 
 If a process exceeds its bounded checkpoint, record the last observed state and create/update a blocker issue. Do not leave a generic “checking repository” message running without a next action.
 
@@ -91,22 +103,23 @@ Authentication must remain in the existing Jira/Teams UI. Do not request or stor
 
 For every future live write, first resolve the current signed-in user's Jira account ID and the allowed issue type/status transitions from Jira, then use the idempotency key described above. If the Jira surface cannot be reached, record the issue payload in the local evidence ledger and report `JIRA_SYNC_UNVERIFIED` rather than retrying blindly.
 
-## Current release evidence snapshot
+## Current release evidence source
 
-The current Core runtime release is `1.0.26` at app/runtime commit `e4e1265`. Later commits only update the release evidence ledger and matrix documentation; they do not change the packaged runtime. The locally generated package was verified with SHA-256 `f5655b15aa85669de4ce9bc3b806d2a2d480947b60b1f4dfd7d3a82cd213d078`. The same app ID was updated through the authenticated Teams Developer CLI and read back as portal version `1.0.26`; the downloaded portal package manifest contains `geolocation`, the current public tab URL, and `token.botframework.com`. The public runtime also reports `version=1.0.26`, `environment=production`, `auth=teams-authenticated`, `bot=teams-sdk`, and `outbound=teams-sdk`.
+Do not hard-code an old app version, commit, package SHA, or issue state in this workflow and treat
+it as current. Resolve the active identity from `.release/current.json`, the current Git `HEAD`, the
+ZIP's embedded manifest, the package SHA-256, public `/api/health`, and current-surface evidence at
+the time of the write. If these identities disagree, create or update a release-blocker Bug and do
+not transition dependent issues to `Done`.
 
-The remaining release item is a real installed-client/UI evidence blocker, not a source or public-runtime failure:
-
-- idempotency key: `teams-core:release-blocker:installed-ui-evidence:e4e1265`;
-- issue type: `Bug` (only when the live Jira write is available);
-- default assignee: current Jira user (`self`);
-- local state: `BLOCKED` until installed version, desktop screenshots/accessibility evidence, and mobile user confirmation are captured for this exact release;
-- next action: reuse the existing Teams desktop/mobile app surfaces, refresh/reopen the existing app installation if needed, and capture the version plus each required UI branch. Do not close the issue from CLI, portal, or HTTP evidence alone.
-
-The Teams CLI diagnostic currently reports one SSO “fail” and three warnings. They are recorded as a diagnostic discrepancy pending runtime reproduction, not silently “fixed”: [Microsoft’s Teams SSO guidance](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/authentication/bot-sso-manifest) documents `api://<fully-qualified-domain>/botid-<bot-client-id>` for a bot+tab app and the exact `https://token.botframework.com` valid domain. Therefore the CLI’s expectation of a host-less `api://botid-...` resource or `*.botframework.com` wildcard is not sufficient evidence to change the manifest. If a real SSO failure is observed in Teams, open a separate `Bug` with the exact client, token, and manifest evidence (without secrets).
-
-The 1.0.26 runtime fixes are prepared as separate idempotent `Bug` payloads for the location retry, work-item deep link, collaboration loading, and GenUI error/partial-weather branches. Their live Jira keys are intentionally absent until a Jira connector or the existing signed-in Jira tab returns successful create/update responses.
+The release issue ledger must list every finding discovered by code review, automated tests,
+portal validation, Teams desktop, and Teams mobile. A row is reconciled only when Jira has returned
+its key/URL and the row records issue type, owner, status, stable idempotency key, discovery
+evidence, fix commit, and acceptance evidence. Pending payloads are not confirmed Jira issues.
 
 ## Current local Jira payload ledger
 
-The prepared payloads are stored in [`docs/jira-pending-issues.json`](./jira-pending-issues.json). They are not Jira issue keys: no live create/update is claimed until an authenticated Jira connector or an already-open Jira tab returns a successful response. The ledger intentionally contains no password, token, device code, or bearer token.
+Unsynchronized payloads may be stored in [`docs/jira-pending-issues.json`](./jira-pending-issues.json),
+but they are not Jira issue keys: no live create/update is claimed until an authenticated Jira
+connector or an already-open Jira tab returns a successful response. Remove or supersede stale
+release identities instead of presenting them as current. The ledger intentionally contains no
+password, token, device code, or bearer token.

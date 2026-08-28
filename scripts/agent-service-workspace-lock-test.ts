@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { AgentJobStore, type AgentJobScope } from '../src/server/agent-job-store.js';
+import { AgentAdmissionController } from '../src/server/agent-admission-controller.js';
 import { AgentService } from '../src/server/agent-service.js';
 
 type RunResult = { threadId: string; finalMessage: string; eventCount: number };
@@ -79,7 +80,17 @@ const service = new AgentService(
   root,
   async () => undefined,
   git as never,
-  { canMutateScope: () => true },
+  {
+    canMutateScope: () => true,
+    // This fixture intentionally queues two jobs from one requester so it can
+    // prove workspace serialization. Keep production's requester admission
+    // limit unchanged; widen only this isolated concurrency test seam.
+    admissionController: new AgentAdmissionController({
+      globalLimit: 2,
+      perTenantLimit: 2,
+      perRequesterLimit: 2,
+    }),
+  },
 );
 
 try {

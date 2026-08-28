@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 
-import { apiFetch } from './auth.js';
+import { apiFetch, isApiAuthError, runApiOperation, type ApiOperationRequest } from './auth.js';
 import type { WorkItemPresentation } from '../shared/work-item.js';
 
 type WorkItemStatus = 'backlog' | 'todo' | 'open' | 'in_progress' | 'blocked' | 'done' | 'cancelled';
@@ -70,6 +70,84 @@ export function applyStableMutationKey(
   return { path: nextPath, init: nextInit, key };
 }
 
+export type WorkItemMutationOperationOptions = {
+  path: string;
+  init: RequestInit;
+  busyKey: string;
+  pending: Map<string, PendingMutation>;
+  request: (path: string, init: RequestInit) => Promise<Response>;
+  begin: () => void;
+  setBusy: (busy: boolean) => void;
+  onFailure: (caught: unknown, retry: () => Promise<void>) => void;
+  onSuccess: () => void | Promise<void>;
+  reload: () => Promise<void>;
+  fallback: string;
+};
+
+/**
+ * Creates the exact mutation lifecycle used by WorkItemPanel UI handlers.
+ * Each confirmed phase advances an in-memory checkpoint before the next phase
+ * starts. A retry can therefore resume an interrupted cleanup or reload
+ * without replaying a server mutation that already returned success.
+ */
+export function createWorkItemMutationOperation(
+  options: WorkItemMutationOperationOptions,
+): () => Promise<boolean> {
+  type MutationPhase = 'request' | 'success-callback' | 'reload' | 'complete';
+  let phase: MutationPhase = 'request';
+  let stable: ReturnType<typeof applyStableMutationKey> | undefined;
+
+  const run = async (): Promise<boolean> => {
+    if (phase === 'complete') return true;
+    options.begin();
+    options.setBusy(true);
+    try {
+      if (phase === 'request') {
+        stable ??= applyStableMutationKey(
+          options.path,
+          options.init,
+          options.busyKey,
+          options.pending,
+        );
+        const response = await options.request(stable.path, stable.init);
+        if (!response.ok) {
+          let serverError = '';
+          try {
+            serverError = ((await response.json()) as { error?: string }).error ?? '';
+          } catch {
+            // Error rendering is sanitized by classifyWorkItemRequestError.
+          }
+          throw createWorkItemResponseError(response, serverError || options.fallback);
+        }
+        phase = 'success-callback';
+      }
+
+      if (phase === 'success-callback') {
+        // Mark before invoking: React state cleanup is not safely replayable if
+        // a callback throws after applying part of its visible side effects.
+        phase = 'reload';
+        await options.onSuccess();
+      }
+
+      if (phase === 'reload') {
+        await options.reload();
+        phase = 'complete';
+      }
+      options.pending.delete(options.busyKey);
+      return true;
+    } catch (caught) {
+      options.onFailure(caught, async () => {
+        await run();
+      });
+      return false;
+    } finally {
+      options.setBusy(false);
+    }
+  };
+
+  return run;
+}
+
 export function parseWorkItemDeepLinkId(search: string | undefined): string | null {
   if (!search) return null;
   const itemId = new URLSearchParams(search).get('workItemId')?.trim();
@@ -118,9 +196,85 @@ export function createLatestWorkItemLoadController(): {
   };
 }
 
+export type WorkItemPanelLoadOptions = {
+  view: WorkView;
+  query: string;
+  status: WorkItemStatus | '';
+  selectedId: string | null;
+  signal: AbortSignal;
+  request?: (path: string, init: RequestInit) => Promise<Response>;
+};
+
+export type WorkItemPanelLoadResult = {
+  items: WorkItem[];
+  selectedId: string | null;
+  deepLinkNotice: string;
+};
+
+export async function loadWorkItemsForPanel(
+  options: WorkItemPanelLoadOptions,
+): Promise<WorkItemPanelLoadResult> {
+  if (!options.request) {
+    return runApiOperation(
+      (request, signal) => loadWorkItemsForPanel({
+        ...options,
+        signal,
+        request: (path, init) => workFetch(path, init, request),
+      }),
+      options.signal,
+    );
+  }
+
+  const params = new URLSearchParams({ view: options.view });
+  if (options.query.trim()) params.set('q', options.query.trim());
+  if (options.status) params.set('status', options.status);
+
+  const response = await options.request('/api/work-items?' + params.toString(), {
+    signal: options.signal,
+  });
+  const body = (await response.json()) as { items?: WorkItem[]; error?: string };
+  if (!response.ok) {
+    throw createWorkItemResponseError(response, body.error || '업무 항목을 불러오지 못했습니다.');
+  }
+
+  const loadedItems = body.items ?? [];
+  let linkedItem: WorkItem | null = null;
+  let linkedItemMissing = false;
+  if (options.selectedId && !loadedItems.some((item) => item.id === options.selectedId)) {
+    const detailResponse = await options.request(
+      '/api/work-items/' + encodeURIComponent(options.selectedId),
+      { signal: options.signal },
+    );
+    if (detailResponse.ok) {
+      const detailBody = (await detailResponse.json()) as { item?: WorkItem; error?: string };
+      linkedItem = detailBody.item ?? null;
+    } else if (detailResponse.status !== 404) {
+      const detailBody = (await detailResponse.json()) as { error?: string };
+      throw createWorkItemResponseError(detailResponse, detailBody.error || '딥링크 업무를 불러오지 못했습니다.');
+    } else {
+      linkedItemMissing = true;
+    }
+  }
+
+  const items = mergeDeepLinkedWorkItem(loadedItems, options.selectedId, linkedItem);
+  return {
+    items,
+    selectedId: options.selectedId && items.some((item) => item.id === options.selectedId)
+      ? options.selectedId
+      : null,
+    deepLinkNotice: linkedItemMissing
+      ? '요청한 업무를 찾을 수 없거나 현재 계정에서 볼 수 없습니다. 목록을 새로고침해 다시 확인하세요.'
+      : '',
+  };
+}
+
 /** Keep failed comment input available for a retry; only a confirmed mutation clears it. */
 export function shouldClearWorkItemComment(mutationSucceeded: boolean): boolean {
   return mutationSucceeded;
+}
+
+export function validateWorkItemComment(value: string): string | undefined {
+  return value.trim() ? undefined : '댓글 내용을 입력하세요.';
 }
 
 export function getWorkItemAssigneeButtonState(assignedToRequester: boolean): {
@@ -136,11 +290,292 @@ export function validateEditableWorkItemTitle(value: string): string | undefined
   return value.trim() ? undefined : '업무 제목을 입력하세요.';
 }
 
-async function workFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+export type WorkItemRequestProblem = {
+  kind: 'auth-expired' | 'forbidden' | 'transient' | 'generic';
+  message: string;
+  canRetry: boolean;
+};
+
+type WorkItemResponseError = Error & { status?: number };
+
+function createWorkItemResponseError(response: Response, message: string): WorkItemResponseError {
+  const error = new Error(message) as WorkItemResponseError;
+  error.status = response.status;
+  return error;
+}
+
+function isTransientWorkItemRequestError(caught: unknown): boolean {
+  if (!caught || typeof caught !== 'object') return false;
+  const status = (caught as { status?: unknown }).status;
+  if (typeof status === 'number') {
+    return status === 408 || status === 425 || status === 429 || (status >= 500 && status <= 599);
+  }
+  const name = (caught as { name?: unknown }).name;
+  return name === 'TypeError' || name === 'NetworkError' || name === 'TimeoutError';
+}
+
+export function classifyWorkItemRequestError(
+  caught: unknown,
+  fallback: string,
+): WorkItemRequestProblem {
+  if (isApiAuthError(caught)) {
+    return caught.kind === 'auth-expired'
+      ? {
+          kind: 'auth-expired',
+          message: 'Teams 인증이 만료되었습니다. 다시 인증해 계속하세요.',
+          canRetry: true,
+        }
+      : {
+          kind: 'forbidden',
+          message: '현재 계정에는 이 업무를 수행할 권한이 없습니다.',
+          canRetry: false,
+        };
+  }
+  if (isTransientWorkItemRequestError(caught)) {
+    return {
+      kind: 'transient',
+      message: fallback,
+      canRetry: true,
+    };
+  }
+  return {
+    kind: 'generic',
+    // Server and thrown Error text can contain implementation details, tokens,
+    // or upstream payloads. Only render the operation-specific safe copy.
+    message: fallback,
+    canRetry: false,
+  };
+}
+
+export type UserDrivenAuthRetryController = {
+  set: {
+    (operation: () => Promise<void>): void;
+    (operationId: string, operation: () => Promise<void>): void;
+  };
+  clear: (operationId?: string) => void;
+  clearAll: () => void;
+  retry: (operationId?: string) => Promise<boolean>;
+  hasPending: (operationId?: string) => boolean;
+};
+
+export function createUserDrivenAuthRetryController(): UserDrivenAuthRetryController {
+  const defaultOperationId = 'default';
+  const pending = new Map<string, () => Promise<void>>();
+  const retrying = new Set<string>();
+
+  return {
+    set(operationIdOrOperation: string | (() => Promise<void>), operation?: () => Promise<void>) {
+      const operationId = typeof operationIdOrOperation === 'string'
+        ? operationIdOrOperation
+        : defaultOperationId;
+      const retryOperation = typeof operationIdOrOperation === 'function'
+        ? operationIdOrOperation
+        : operation;
+      if (!retryOperation) throw new TypeError('An auth retry operation is required');
+      pending.set(operationId, retryOperation);
+    },
+    clear(operationId = defaultOperationId) {
+      pending.delete(operationId);
+    },
+    clearAll() {
+      pending.clear();
+    },
+    async retry(operationId = defaultOperationId) {
+      if (retrying.has(operationId)) return false;
+      const operation = pending.get(operationId);
+      if (!operation) return false;
+      pending.delete(operationId);
+      retrying.add(operationId);
+      try {
+        await operation();
+        return true;
+      } finally {
+        retrying.delete(operationId);
+      }
+    },
+    hasPending(operationId = defaultOperationId) {
+      return pending.has(operationId);
+    },
+  };
+}
+
+export function captureWorkItemRequestFailure(
+  controller: UserDrivenAuthRetryController,
+  caught: unknown,
+  fallback: string,
+  retry: () => Promise<void>,
+): WorkItemRequestProblem;
+export function captureWorkItemRequestFailure(
+  controller: UserDrivenAuthRetryController,
+  operationId: string,
+  caught: unknown,
+  fallback: string,
+  retry: () => Promise<void>,
+): WorkItemRequestProblem;
+export function captureWorkItemRequestFailure(
+  controller: UserDrivenAuthRetryController,
+  operationIdOrCaught: string | unknown,
+  caughtOrFallback: unknown,
+  fallbackOrRetry: string | (() => Promise<void>),
+  maybeRetry?: () => Promise<void>,
+): WorkItemRequestProblem {
+  const operationScoped = maybeRetry !== undefined;
+  const operationId = operationScoped ? String(operationIdOrCaught) : undefined;
+  const caught = operationScoped ? caughtOrFallback : operationIdOrCaught;
+  const fallback = operationScoped ? String(fallbackOrRetry) : String(caughtOrFallback);
+  const retry = maybeRetry ?? (fallbackOrRetry as () => Promise<void>);
+  const problem = classifyWorkItemRequestError(caught, fallback);
+  if (problem.canRetry) {
+    if (operationId) controller.set(operationId, retry);
+    else controller.set(retry);
+  } else if (operationId) {
+    controller.clear(operationId);
+  } else {
+    controller.clear();
+  }
+  return problem;
+}
+
+export function WorkItemAuthRecoveryNotice({
+  operationId,
+  problem,
+  retrying,
+  focusOnMount = false,
+  onRetry,
+}: {
+  operationId: string;
+  problem: WorkItemRequestProblem;
+  retrying: boolean;
+  focusOnMount?: boolean;
+  onRetry: () => void;
+}) {
+  const [operationKind, operationTarget] = operationId.split(':', 2);
+  const operationLabel = operationKind === 'load'
+    ? '업무 목록'
+    : operationKind === 'create'
+      ? '새 업무 항목'
+      : operationKind === 'comment'
+        ? `업무 댓글 추가${operationTarget ? ` (${operationTarget})` : ''}`
+        : operationKind === 'status'
+          ? `업무 상태 변경${operationTarget ? ` (${operationTarget})` : ''}`
+          : operationKind === 'assign'
+            ? `업무 할당 변경${operationTarget ? ` (${operationTarget})` : ''}`
+            : operationKind === 'watch'
+              ? `업무 watch 변경${operationTarget ? ` (${operationTarget})` : ''}`
+        : operationKind === 'edit'
+          ? `업무 저장${operationTarget ? ` (${operationTarget})` : ''}`
+          : operationKind === 'delete'
+            ? `업무 삭제${operationTarget ? ` (${operationTarget})` : ''}`
+            : `업무 작업 (${operationId})`;
+  const encodedOperationId = encodeURIComponent(operationId).replaceAll('%', '_');
+  const descriptionId = `work-item-auth-${encodedOperationId}-description`;
+  const retryVerb = problem.kind === 'auth-expired' ? '다시 인증' : '다시 시도';
+  const retryLabel = `${operationLabel} ${retryVerb}`;
+
+  return (
+    <div className="error auth-recovery" role="alert">
+      <p><strong>{operationLabel}</strong></p>
+      <p id={descriptionId}>{problem.message}</p>
+      {problem.canRetry && (
+        <button
+          aria-describedby={descriptionId}
+          autoFocus={focusOnMount && !retrying}
+          className="secondary"
+          disabled={retrying}
+          onClick={onRetry}
+          type="button"
+        >
+          {retrying ? `${operationLabel} ${retryVerb} 중…` : retryLabel}
+        </button>
+      )}
+    </div>
+  );
+}
+
+export type WorkItemAuthRecoveryEntry = {
+  operationId: string;
+  problem: WorkItemRequestProblem;
+};
+
+export function WorkItemAuthRecoveryNotices({
+  problems,
+  retrying,
+  onRetry,
+}: {
+  problems: WorkItemAuthRecoveryEntry[];
+  retrying: ReadonlySet<string>;
+  onRetry: (operationId: string) => void;
+}) {
+  let focusAssigned = false;
+  return (
+    <>
+      {[...problems]
+        .sort((left, right) => (
+          left.operationId < right.operationId ? -1 : left.operationId > right.operationId ? 1 : 0
+        ))
+        .map(({ operationId, problem }) => {
+          const isRetrying = retrying.has(operationId);
+          const focusOnMount = !focusAssigned && problem.canRetry && !isRetrying;
+          if (focusOnMount) focusAssigned = true;
+          return (
+            <div data-auth-operation={operationId} key={operationId}>
+              <WorkItemAuthRecoveryNotice
+                focusOnMount={focusOnMount}
+                onRetry={() => onRetry(operationId)}
+                operationId={operationId}
+                problem={problem}
+                retrying={isRetrying}
+              />
+            </div>
+          );
+        })}
+    </>
+  );
+}
+
+export function WorkItemPanelResults({
+  loading,
+  hasItems,
+  hasLoadError,
+  children,
+}: {
+  loading: boolean;
+  hasItems: boolean;
+  hasLoadError: boolean;
+  children: ReactNode;
+}) {
+  const statusMessage = loading
+    ? '업무 항목을 불러오는 중입니다…'
+    : hasLoadError
+      ? ''
+      : !hasItems
+        ? '표시할 업무 항목이 없습니다. 첫 항목을 추가해 보세요.'
+        : '';
+  return (
+    <>
+      {statusMessage && (
+        <div aria-atomic="true" aria-busy={loading} aria-live="polite" className="work-item-status" role="status">
+          <p className="empty">{statusMessage}</p>
+        </div>
+      )}
+      {!loading && (hasItems ? children : null)}
+    </>
+  );
+}
+
+export function WorkItemPanelError({ message }: { message: string }) {
+  return <p className="error" role="alert">{message}</p>;
+}
+
+async function workFetch(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+  request: ApiOperationRequest = apiFetch,
+): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set('x-conversation-id', WORK_CONVERSATION_ID);
   if (init.body && !headers.has('content-type')) headers.set('content-type', 'application/json');
-  return apiFetch(input, { ...init, headers });
+  return request(input, { ...init, headers });
 }
 
 export function WorkItemPanel() {
@@ -156,12 +591,16 @@ export function WorkItemPanel() {
   const [editTitle, setEditTitle] = useState('');
   const [editDescription, setEditDescription] = useState('');
   const [comment, setComment] = useState('');
+  const [commentError, setCommentError] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
+  const [requestProblems, setRequestProblems] = useState<Record<string, WorkItemRequestProblem>>({});
+  const [authRetrying, setAuthRetrying] = useState<ReadonlySet<string>>(() => new Set());
   const [deepLinkNotice, setDeepLinkNotice] = useState('');
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const pendingMutationsRef = useRef(new Map<string, PendingMutation>());
+  const authRetryControllerRef = useRef(createUserDrivenAuthRetryController());
   const selectedIdRef = useRef(selectedId);
   const queryRef = useRef(query);
   const loadControllerRef = useRef(createLatestWorkItemLoadController());
@@ -173,59 +612,99 @@ export function WorkItemPanel() {
     [items, selectedId],
   );
 
+  const clearRequestProblem = useCallback((operationId: string) => {
+    setRequestProblems((current) => {
+      if (!(operationId in current)) return current;
+      const next = { ...current };
+      delete next[operationId];
+      return next;
+    });
+  }, []);
+
+  const beginRequest = useCallback((operationId: string) => {
+    authRetryControllerRef.current.clear(operationId);
+    setError('');
+    clearRequestProblem(operationId);
+  }, [clearRequestProblem]);
+
+  const handleRequestFailure = useCallback((
+    operationId: string,
+    caught: unknown,
+    fallback: string,
+    retry: () => Promise<void>,
+  ) => {
+    const problem = captureWorkItemRequestFailure(
+      authRetryControllerRef.current,
+      operationId,
+      caught,
+      fallback,
+      retry,
+    );
+    setError('');
+    setRequestProblems((current) => ({ ...current, [operationId]: problem }));
+  }, []);
+
+  const retryAuthOperation = useCallback(async (operationId: string) => {
+    if (!authRetryControllerRef.current.hasPending(operationId)) return;
+    setAuthRetrying((current) => new Set(current).add(operationId));
+    setError('');
+    clearRequestProblem(operationId);
+    try {
+      await authRetryControllerRef.current.retry(operationId);
+    } finally {
+      setAuthRetrying((current) => {
+        const next = new Set(current);
+        next.delete(operationId);
+        return next;
+      });
+    }
+  }, [clearRequestProblem]);
+
   const loadItems = useCallback(async (): Promise<void> => {
+    const operationId = 'load';
     const request = loadControllerRef.current.begin();
     setLoading(true);
-    setError('');
+    beginRequest(operationId);
     setDeepLinkNotice('');
-    const params = new URLSearchParams({ view });
-    if (queryRef.current.trim()) params.set('q', queryRef.current.trim());
-    if (status) params.set('status', status);
     try {
-      const response = await workFetch('/api/work-items?' + params.toString(), { signal: request.signal });
-      const body = (await response.json()) as { items?: WorkItem[]; error?: string };
-      if (!response.ok) throw new Error(body.error || '업무 항목을 불러오지 못했습니다.');
-      const currentSelectedId = selectedIdRef.current;
-      const loadedItems = body.items ?? [];
-      let linkedItem: WorkItem | null = null;
-      let linkedItemMissing = false;
-      if (currentSelectedId && !loadedItems.some((item) => item.id === currentSelectedId)) {
-        const detailResponse = await workFetch('/api/work-items/' + encodeURIComponent(currentSelectedId), { signal: request.signal });
-        if (detailResponse.ok) {
-          const detailBody = (await detailResponse.json()) as { item?: WorkItem; error?: string };
-          linkedItem = detailBody.item ?? null;
-        } else if (detailResponse.status !== 404) {
-          const detailBody = (await detailResponse.json()) as { error?: string };
-          throw new Error(detailBody.error || '딥링크 업무를 불러오지 못했습니다.');
-        } else {
-          linkedItemMissing = true;
-        }
-      }
+      const result = await loadWorkItemsForPanel({
+        view,
+        query: queryRef.current,
+        status,
+        selectedId: selectedIdRef.current,
+        signal: request.signal,
+      });
       request.commit(() => {
-        const nextItems = mergeDeepLinkedWorkItem(loadedItems, currentSelectedId, linkedItem);
-        setItems(nextItems);
-        setDeepLinkNotice(linkedItemMissing
-          ? '요청한 업무를 찾을 수 없거나 현재 계정에서 볼 수 없습니다. 목록을 새로고침해 다시 확인하세요.'
-          : '');
-        if (currentSelectedId && !nextItems.some((item) => item.id === currentSelectedId)) setSelectedId(null);
+        setItems(result.items);
+        setDeepLinkNotice(result.deepLinkNotice);
+        if (selectedIdRef.current !== result.selectedId) setSelectedId(result.selectedId);
       });
     } catch (caught) {
-      request.commit(() => setError(caught instanceof Error ? caught.message : '업무 항목을 불러오지 못했습니다.'));
+      request.commit(() => handleRequestFailure(
+        operationId,
+        caught,
+        '업무 항목을 불러오지 못했습니다.',
+        loadItems,
+      ));
     } finally {
       request.commit(() => setLoading(false));
     }
-  }, [status, view]);
+  }, [beginRequest, handleRequestFailure, status, view]);
 
   useEffect(() => {
     void loadItems();
   }, [loadItems]);
 
-  useEffect(() => () => loadControllerRef.current.dispose(), []);
+  useEffect(() => () => {
+    loadControllerRef.current.dispose();
+    authRetryControllerRef.current.clearAll();
+  }, []);
 
   useEffect(() => {
     if (!selected) return;
     setEditTitle(selected.title);
     setEditDescription(selected.description);
+    setCommentError('');
   }, [selected]);
 
   async function createItem(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -243,40 +722,63 @@ export function WorkItemPanel() {
         priority: 'medium',
       }),
     };
-    const stable = applyStableMutationKey('/api/work-items', createInit, 'create', pendingMutationsRef.current);
-    setBusy('create');
-    try {
-      const response = await workFetch(stable.path, stable.init);
-      const body = (await response.json()) as { error?: string };
-      if (!response.ok) throw new Error(body.error || '업무 항목을 만들지 못했습니다.');
-      pendingMutationsRef.current.delete('create');
-      setTitle('');
-      setDueDate('');
-      await loadItems();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : '업무 항목을 만들지 못했습니다.');
-    } finally {
-      setBusy('');
-    }
+    await submitCreateItem(createInit);
   }
 
-  async function mutate(path: string, init: RequestInit, busyKey: string): Promise<boolean> {
-    const stable = applyStableMutationKey(path, init, busyKey, pendingMutationsRef.current);
-    setBusy(busyKey);
-    setError('');
-    try {
-      const response = await workFetch(stable.path, stable.init);
-      const body = (await response.json()) as { error?: string };
-      if (!response.ok) throw new Error(body.error || '업무 항목을 변경하지 못했습니다.');
-      pendingMutationsRef.current.delete(busyKey);
-      await loadItems();
-      return true;
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : '업무 항목을 변경하지 못했습니다.');
-      return false;
-    } finally {
-      setBusy('');
-    }
+  async function submitCreateItem(createInit: RequestInit): Promise<void> {
+    const operation = createWorkItemMutationOperation({
+      path: '/api/work-items',
+      init: createInit,
+      busyKey: 'create',
+      pending: pendingMutationsRef.current,
+      request: workFetch,
+      begin: () => beginRequest('create'),
+      setBusy: (isBusy) => setBusy(isBusy ? 'create' : ''),
+      onFailure: (caught, retry) => {
+        handleRequestFailure(
+          'create',
+          caught,
+          '업무 항목을 만들지 못했습니다.',
+          retry,
+        );
+      },
+      onSuccess: () => {
+        setTitle('');
+        setDueDate('');
+      },
+      reload: loadItems,
+      fallback: '업무 항목을 만들지 못했습니다.',
+    });
+    await operation();
+  }
+
+  async function mutate(
+    path: string,
+    init: RequestInit,
+    busyKey: string,
+    onSuccess: () => void | Promise<void> = () => undefined,
+  ): Promise<boolean> {
+    const operation = createWorkItemMutationOperation({
+      path,
+      init,
+      busyKey,
+      pending: pendingMutationsRef.current,
+      request: workFetch,
+      begin: () => beginRequest(busyKey),
+      setBusy: (isBusy) => setBusy(isBusy ? busyKey : ''),
+      onFailure: (caught, retry) => {
+        handleRequestFailure(
+          busyKey,
+          caught,
+          '업무 항목을 변경하지 못했습니다.',
+          retry,
+        );
+      },
+      onSuccess,
+      reload: loadItems,
+      fallback: '업무 항목을 변경하지 못했습니다.',
+    });
+    return operation();
   }
 
   async function saveSelected(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -297,23 +799,29 @@ export function WorkItemPanel() {
 
   async function addComment(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    if (!selected || !comment.trim()) return;
-    const succeeded = await mutate('/api/work-items/' + encodeURIComponent(selected.id) + '/comments', {
+    if (!selected) return;
+    const commentValidationError = validateWorkItemComment(comment);
+    if (commentValidationError) {
+      setCommentError(commentValidationError);
+      return;
+    }
+    setCommentError('');
+    await mutate('/api/work-items/' + encodeURIComponent(selected.id) + '/comments', {
       method: 'POST',
       body: JSON.stringify({ body: comment.trim() }),
-    }, 'comment:' + selected.id);
-    if (shouldClearWorkItemComment(succeeded)) setComment('');
+    }, 'comment:' + selected.id, () => {
+      if (shouldClearWorkItemComment(true)) setComment('');
+    });
   }
 
   async function deleteItem(itemId: string): Promise<void> {
-    const succeeded = await mutate('/api/work-items/' + encodeURIComponent(itemId), {
+    await mutate('/api/work-items/' + encodeURIComponent(itemId), {
       method: 'DELETE',
       body: JSON.stringify({}),
-    }, 'delete:' + itemId);
-    if (succeeded) {
+    }, 'delete:' + itemId, () => {
       setPendingDeleteId(null);
       if (selectedIdRef.current === itemId) setSelectedId(null);
-    }
+    });
   }
 
   function requestDelete(itemId: string): void {
@@ -364,14 +872,23 @@ export function WorkItemPanel() {
       </div>
 
       <form className="work-item-create" onSubmit={(event) => void createItem(event)}>
-        <input aria-label="새 업무 항목 제목" onChange={(event) => setTitle(event.target.value)} placeholder="새 Jira/Trello 업무 제목" value={title} />
+        <input aria-label="새 업무 항목 제목" onChange={(event) => setTitle(event.target.value)} placeholder="새 업무 제목" value={title} />
         <input aria-label="업무 마감일" onChange={(event) => setDueDate(event.target.value)} type="date" value={dueDate} />
         <button className="primary" disabled={busy === 'create'} type="submit">{busy === 'create' ? '추가 중…' : '추가'}</button>
       </form>
 
-      {error && <p className="error" role="alert">{error}</p>}
-      {deepLinkNotice && <p className="error" role="alert">{deepLinkNotice}</p>}
-      {loading ? <p className="empty">업무 항목을 불러오는 중입니다…</p> : items.length === 0 ? <p className="empty">표시할 업무 항목이 없습니다. 첫 항목을 추가해 보세요.</p> : (
+      <WorkItemAuthRecoveryNotices
+        onRetry={(operationId) => void retryAuthOperation(operationId)}
+        problems={Object.entries(requestProblems).map(([operationId, problem]) => ({ operationId, problem }))}
+        retrying={authRetrying}
+      />
+      {error && <WorkItemPanelError message={error} />}
+      {deepLinkNotice && <WorkItemPanelError message={deepLinkNotice} />}
+      <WorkItemPanelResults
+        hasItems={items.length > 0}
+        hasLoadError={Boolean(requestProblems.load || deepLinkNotice)}
+        loading={loading}
+      >
         <div className="work-item-list">
           {items.map((item) => {
             const selectedItem = item.id === selectedId;
@@ -436,9 +953,22 @@ export function WorkItemPanel() {
                       <strong>댓글 {item.comments.length}</strong>
                       {item.comments.map((entry) => <p key={entry.id}><b>{entry.authorId}</b> {entry.body}</p>)}
                       <form onSubmit={(event) => void addComment(event)}>
-                        <input aria-label="업무 댓글" onChange={(event) => setComment(event.target.value)} placeholder="댓글 추가" value={comment} />
+                        <input
+                          aria-describedby={commentError ? 'work-item-comment-error-' + item.id : undefined}
+                          aria-invalid={commentError ? true : undefined}
+                          aria-label="업무 댓글"
+                          onChange={(event) => {
+                            setComment(event.target.value);
+                            if (commentError) setCommentError('');
+                          }}
+                          placeholder="댓글 추가"
+                          value={comment}
+                        />
                         <button className="secondary" disabled={busy === 'comment:' + item.id} type="submit">댓글</button>
                       </form>
+                      {commentError && (
+                        <p className="error" id={'work-item-comment-error-' + item.id} role="alert">{commentError}</p>
+                      )}
                     </div>
                   </div>
                 )}
@@ -446,7 +976,7 @@ export function WorkItemPanel() {
             );
           })}
         </div>
-      )}
+      </WorkItemPanelResults>
     </section>
   );
 }

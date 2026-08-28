@@ -11,7 +11,7 @@ import type { GenUiStatusFacts } from '../src/server/genui-response.js';
 import type { GenUiActionStore } from '../src/server/genui-action-store.js';
 
 const personalTabUrl = buildTeamsPersonalTabDeepLink({
-  appId: '9b20fd94-2ac9-4423-ac1f-ff528ab245c1',
+  catalogAppId: '9b20fd94-2ac9-4423-ac1f-ff528ab245c1',
   tabDomain: 'example.com',
   tenantId: '72f988bf-86f1-41af-91ab-2d7cd011db47',
 });
@@ -19,37 +19,51 @@ assert.ok(personalTabUrl);
 assert.match(new URL(personalTabUrl).searchParams.get('webUrl') ?? '', /\/tabs\/home\/$/);
 
 function result(outcome: CliCommandResult['outcome'], output = ''): CliCommandResult {
-  return { outcome, stdout: output, stderr: output };
+  return { outcome, stdout: output, stderr: '' };
 }
 
 const available = await probeCliCapabilities({
   codexCommand: { command: 'codex' },
   ghcpCommand: { command: 'gh', args: ['copilot'] },
+  environment: { TEAMS_GHCP_CAPABILITY_PROBE: 'true' },
   runCommand: async (_command, args) => {
-    if (args[0] === 'login') return result('success', 'Logged in');
-    if (args[0] === 'copilot') return result('success', 'GitHub Copilot CLI');
+    if (args[0] === 'login') return result('success', 'Logged in using ChatGPT');
+    if (args[0] === 'copilot') {
+      return result('success', [
+        JSON.stringify({ type: 'session.start', data: { sessionId: '019fd700-51cd-7862-a4ef-74ccae0f2b4e' } }),
+        JSON.stringify({ type: 'assistant.turn_start', data: { turnId: 'turn-1' } }),
+        JSON.stringify({ type: 'assistant.message', data: { content: 'GHCP_CAPABILITY_OK' } }),
+        JSON.stringify({ type: 'assistant.turn_end', data: { turnId: 'turn-1' } }),
+      ].join('\n'));
+    }
     if (args[0] === 'auth') return result('success', 'Logged in to github.com');
     return result('error', 'unexpected command');
   },
 });
-assert.equal(available.codex.state, 'available');
+assert.equal(available.codex.state, 'unknown');
 assert.equal(available.codex.executable, 'present');
+assert.equal(available.codex.probe, 'not-run');
+assert.equal(available.codex.entitlement, 'unknown');
 assert.equal(available.codex.login, 'authenticated');
 assert.equal(available.ghcp.state, 'available');
 assert.equal(available.ghcp.executable, 'present');
+assert.equal(available.ghcp.probe, 'passed');
+assert.equal(available.ghcp.authentication, 'authenticated');
+assert.equal(available.ghcp.entitlement, 'allowed');
 assert.equal(available.ghcp.login, 'authenticated');
 
 const officialGhcp = await probeCliCapabilities({
   codexCommand: { command: 'codex' },
   ghcpCommand: { command: 'copilot' },
   runCommand: async (command, args) => {
-    if (command === 'codex' && args[0] === 'login') return result('success', 'Logged in');
+    if (command === 'codex' && args[0] === 'login') return result('success', 'Logged in using ChatGPT');
     if (command === 'copilot' && args[0] === '--help') return result('success', 'GitHub Copilot CLI');
     return result('error', `unexpected command: ${command} ${args.join(' ')}`);
   },
 });
 assert.equal(officialGhcp.ghcp.state, 'unknown', 'official Copilot CLI help must not pretend login is verified');
-assert.equal(officialGhcp.ghcp.executable, 'present');
+assert.equal(officialGhcp.ghcp.executable, 'unknown', 'normal Core health does not execute the optional GHCP probe');
+assert.equal(officialGhcp.ghcp.probe, 'not-run');
 assert.equal(officialGhcp.ghcp.login, 'unknown');
 
 let defaultGhcpCommand = '';
@@ -58,15 +72,25 @@ await probeCliCapabilities({
   codexCommand: { command: 'codex' },
   runCommand: async (command, args) => {
     if (command === 'copilot') {
-      defaultGhcpCommand = command;
-      defaultGhcpArgs = args;
-      return result('success', 'GitHub Copilot CLI');
+      if (args[0] === '--help') {
+        defaultGhcpCommand = command;
+        defaultGhcpArgs = args;
+        return result('success', 'GitHub Copilot CLI');
+      }
+      if (args[0] === '--prompt') {
+        return result('success', [
+          JSON.stringify({ type: 'session.start', data: { sessionId: '019fd700-51cd-7862-a4ef-74ccae0f2b4e' } }),
+          JSON.stringify({ type: 'assistant.turn_start', data: { turnId: 'turn-1' } }),
+          JSON.stringify({ type: 'assistant.message', data: { content: 'GHCP_CAPABILITY_OK' } }),
+          JSON.stringify({ type: 'assistant.turn_end', data: { turnId: 'turn-1' } }),
+        ].join('\n'));
+      }
     }
-    return result('success', 'Logged in');
+    return result('success', 'Logged in using ChatGPT');
   },
 });
-assert.equal(defaultGhcpCommand, 'copilot', 'GHCP defaults to the official executable');
-assert.deepEqual(defaultGhcpArgs, ['--help'], 'GHCP probe uses the official help command');
+assert.equal(defaultGhcpCommand, '', 'normal Core health does not invoke GHCP');
+assert.deepEqual(defaultGhcpArgs, [], 'normal Core health does not invoke optional GHCP commands');
 
 const unavailable = await probeCliCapabilities({
   codexCommand: { command: 'codex' },
@@ -80,7 +104,7 @@ const unavailable = await probeCliCapabilities({
 assert.equal(unavailable.codex.state, 'unavailable');
 assert.equal(unavailable.codex.executable, 'absent');
 assert.equal(unavailable.codex.login, 'unknown');
-assert.equal(unavailable.ghcp.state, 'unavailable');
+assert.equal(unavailable.ghcp.state, 'unknown', 'optional GHCP remains unprobed in normal Core health');
 
 const unknown = await probeCliCapabilities({
   codexCommand: { command: 'codex' },
@@ -103,8 +127,14 @@ const statusFacts: GenUiStatusFacts = {
   authMode: 'teams-authenticated',
   storage: 'file-json-single-process',
   deterministic: true,
+  agentProvider: 'codex',
   codex: available.codex,
   ghcp: unknown.ghcp,
+  a2aProviders: [
+    { provider: 'codex', agentId: 'teams-core-codex', providerId: 'codex-cli', configured: true, execution: 'configured' },
+    { provider: 'copilot', agentId: 'teams-core-copilot', providerId: 'official-copilot-cli', configured: false, execution: 'unavailable', executionReason: 'isolation-unavailable' },
+    { provider: 'remote', agentId: 'remote-reviewer', providerId: 'remote-a2a', configured: true, execution: 'configured' },
+  ],
 };
 const statusEnvelope = factory.status(statusFacts);
 const statusActivity = createAdaptiveCardActivity(statusEnvelope);
@@ -132,8 +162,15 @@ function findFactSet(elements: Array<Record<string, unknown>> | undefined): Reco
 const facts = findFactSet(statusCard?.body);
 const factEntries = facts?.facts as Array<Record<string, unknown>> | undefined;
 assert.ok(factEntries?.some((fact) => fact.title === 'Teams SDK' && fact.value === 'enabled'));
-assert.ok(factEntries?.some((fact) => fact.title === 'Codex CLI' && fact.value === 'available'));
+assert.ok(factEntries?.some((fact) => fact.title === '활성 agent provider' && fact.value === 'codex'));
+assert.ok(factEntries?.some((fact) => fact.title === 'A2A worker (codex)' && fact.value === 'teams-core-codex · codex-cli · execution=configured'));
+assert.ok(factEntries?.some((fact) => fact.title === 'A2A worker (copilot)' && fact.value === 'teams-core-copilot · official-copilot-cli · execution=unavailable · isolation-unavailable'));
+assert.ok(factEntries?.some((fact) => fact.title === 'A2A worker (remote)' && fact.value === 'remote-reviewer · remote-a2a · execution=configured'));
+assert.ok(factEntries?.some((fact) => fact.title === 'Codex CLI' && fact.value === 'unknown'));
 assert.ok(factEntries?.some((fact) => fact.title === 'GHCP CLI' && fact.value === 'unknown'));
+const serializedStatusCard = JSON.stringify(statusCard);
+assert.match(serializedStatusCard, /GHCP bounded capability probe/);
+assert.match(serializedStatusCard, /GHCP policy\/license\/entitlement/);
 
 const invalidStatus = factory.status({
   ...statusFacts,

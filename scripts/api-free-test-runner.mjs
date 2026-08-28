@@ -1,7 +1,9 @@
 import { spawnSync } from 'node:child_process';
 import { execFileSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { isFullCommitOid, resolvePinnedCommitOid } from './fileprovider-git-clean.mjs';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 import { parseServerBuildMarker } from './server-build-marker.mjs';
 
@@ -28,13 +30,16 @@ function hasDatalessSource() {
 function hasReusableServerBundle() {
   const serverRoot = path.join(resolveRuntimeDistRoot(process.cwd()), 'server');
   try {
-    const entry = fs.statSync(path.join(serverRoot, 'index.js'));
+    const entryPath = path.join(serverRoot, 'index.js');
+    const entry = fs.statSync(entryPath);
+    const bundleSha256 = crypto.createHash('sha256').update(fs.readFileSync(entryPath)).digest('hex');
     const marker = parseServerBuildMarker(fs.readFileSync(path.join(serverRoot, '.teams-server-build-commit'), 'utf8'));
     const currentCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: process.cwd(), encoding: 'utf8' }).trim();
     return Boolean(
       marker?.commit === currentCommit
       && marker.mode === 'core'
       && marker.worktree === 'clean'
+      && marker.bundleSha256 === bundleSha256
       && entry.size > 0
       && (!Number.isInteger(entry.blocks) || entry.blocks > 0),
     );
@@ -59,6 +64,8 @@ const tests = [
   'test:build-client-atomic',
   'test:release-gate',
   'test:release-loop',
+  'test:release-update',
+  'test:codex-ghcp-capability',
   'build',
   'test:troubleshooting',
   'test:atomic-stores',
@@ -72,6 +79,10 @@ const tests = [
   'test:item-store-ownership',
   'test:process-lease-hardening',
   'test:agent-transitions',
+  'test:a2a-orchestrator',
+  'test:a2a-independent-agent-identity',
+  'test:a2a-durable-dispatch',
+  'test:a2a-role-catalog',
   'test:work-item-parity',
   'test:collaboration-parity',
   'test:genui-contract',
@@ -94,6 +105,11 @@ const tests = [
 
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const childEnv = { ...process.env };
+const pinnedSourceCommit = childEnv.TEAMS_SOURCE_COMMIT ?? resolvePinnedCommitOid(process.cwd(), { env: childEnv });
+if (!isFullCommitOid(pinnedSourceCommit)) {
+  throw new Error(`API-free test runner requires one full pinned source OID, got ${pinnedSourceCommit || '<empty>'}`);
+}
+childEnv.TEAMS_SOURCE_COMMIT = pinnedSourceCommit;
 if (
   childEnv.TEAMS_FILEPROVIDER_SERVER_REUSE !== '1'
   && (hasDatalessSource() || resolveRuntimeDistRoot(process.cwd()) !== path.join(process.cwd(), 'dist'))

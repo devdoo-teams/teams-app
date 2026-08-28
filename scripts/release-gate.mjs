@@ -4,19 +4,96 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  assertCleanTrackedWorktreeForFileProvider,
+  isFullCommitOid,
+  resolvePinnedCommitOid,
+} from './fileprovider-git-clean.mjs';
+import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
+import { parseServerBuildMarker } from './server-build-marker.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const packagePath = path.join(root, 'appPackage', 'build', 'teams-sdk-mvp.zip');
 const runtimeEnvPath = path.join(root, '.env.runtime');
+let activeFailureEnvironment = process.env;
 const defaultTimeouts = {
   typecheck: 60_000,
   build: 300_000,
   test: 300_000,
+  serverDeterminism: 300_000,
   deployment: 30_000,
-  package: 30_000,
+  package: 300_000,
   shell: 30_000,
   public: 15_000,
 };
+
+const RELEASE_PROFILES = new Set(['core', 'optional']);
+
+export function resolveReleaseProfile(env = process.env) {
+  const configured = String(env.TEAMS_RELEASE_RUNTIME ?? '').trim().toLowerCase();
+  const profile = configured || 'core';
+  if (!RELEASE_PROFILES.has(profile)) {
+    throw new Error('TEAMS_RELEASE_RUNTIME must be either core or optional.');
+  }
+  return profile;
+}
+
+export function assertReleaseRuntimePrerequisites(env = process.env, profile = resolveReleaseProfile(env)) {
+  if (!RELEASE_PROFILES.has(profile)) {
+    throw new Error('release profile must be either core or optional');
+  }
+  if (profile === 'core') return true;
+
+  if (env.TEAMS_OPTIONAL_RUNTIME !== 'true') {
+    throw new Error('optional release requires TEAMS_OPTIONAL_RUNTIME=true');
+  }
+  if (typeof env.XAI_API_KEY !== 'string' || !env.XAI_API_KEY.trim()) {
+    throw new Error('optional Grok release requires XAI_API_KEY');
+  }
+  return true;
+}
+
+/**
+ * The package phase is a serial gate: two cheap checks, package creation, and
+ * three bounded package contracts. Keep outer runners longer than that exact
+ * sequence so a healthy FileProvider/build path is not mistaken for a hang.
+ */
+export function packageGateTimeoutMs({
+  checkTimeout = defaultTimeouts.deployment,
+  commandTimeout = defaultTimeouts.package,
+  overheadMs = 60_000,
+} = {}) {
+  return (checkTimeout * 2) + (commandTimeout * 4) + overheadMs;
+}
+
+export function createReleaseSourceEnvironment(
+  env = process.env,
+  {
+    rootDir = root,
+    verifySource = assertCleanTrackedWorktreeForFileProvider,
+    resolveSource = resolvePinnedCommitOid,
+  } = {},
+) {
+  const profile = resolveReleaseProfile(env);
+  assertReleaseRuntimePrerequisites(env, profile);
+  const sourceCommit = env.TEAMS_SOURCE_COMMIT ?? resolveSource(rootDir, { env });
+  assert.equal(isFullCommitOid(sourceCommit), true, 'release source resolver must return a full Git OID');
+  const verification = verifySource(rootDir, {
+    commitOid: sourceCommit,
+    env,
+  });
+  assert.equal(
+    verification?.commitOid,
+    sourceCommit,
+    'release source verification must retain the exact pinned Git OID',
+  );
+  return {
+    sourceCommit,
+    profile,
+    verificationMode: verification.verificationMode,
+    env: { ...env, TEAMS_SOURCE_COMMIT: sourceCommit, TEAMS_RELEASE_RUNTIME: profile },
+  };
+}
 
 export function parseDotEnv(text) {
   const values = {};
@@ -173,7 +250,10 @@ export function assertPublicAsset(response, bytes, tabIdentity) {
   return { finalUrl, sha256, buildId: tabIdentity.buildId };
 }
 
-export function assertPublicHealth(health, expectedVersion) {
+export function assertPublicHealth(health, expected, profile = 'core') {
+  if (!RELEASE_PROFILES.has(profile)) {
+    throw new Error('public health profile must be either core or optional');
+  }
   const required = {
     ok: true,
     service: 'teams-sdk-mvp',
@@ -186,7 +266,18 @@ export function assertPublicHealth(health, expectedVersion) {
   for (const [field, expected] of Object.entries(required)) {
     assert.equal(health?.[field], expected, `public health ${field} must be ${expected}`);
   }
-  assert.equal(health.version, expectedVersion, 'public health version must match the packaged version');
+  assert.equal(health.version, expected.version, 'public health version must match the packaged version');
+  assert.equal(health.sourceCommit, expected.sourceCommit, 'public health source commit must match the built server identity');
+  assert.equal(
+    health.serverBundleSha256,
+    expected.serverBundleSha256,
+    'public health server bundle SHA-256 must match the built server identity',
+  );
+  if (profile === 'optional') {
+    assert.equal(health.genAI, 'grok-configured', 'optional public health must report Grok as configured');
+    assert.equal(health.genAIProvider?.provider, 'grok', 'optional public health must identify the Grok provider');
+    assert.equal(health.responseProviders?.grok, true, 'optional public health must expose the Grok response provider');
+  }
   return true;
 }
 
@@ -194,16 +285,20 @@ function commandText(command, args) {
   return [command, ...args].join(' ');
 }
 
-function terminateProcessGroup(child) {
-  if (!child.pid) return;
+function terminateProcessGroup(child, { force = false } = {}) {
+  if (!child.pid) return false;
   try {
-    if (process.platform === 'win32') child.kill('SIGTERM');
-    else process.kill(-child.pid, 'SIGTERM');
+    const signal = force ? 'SIGKILL' : 'SIGTERM';
+    if (process.platform === 'win32') child.kill(signal);
+    else process.kill(-child.pid, signal);
+    return true;
   } catch {
     try {
-      child.kill('SIGTERM');
+      child.kill(force ? 'SIGKILL' : 'SIGTERM');
+      return true;
     } catch {
       // The process may have exited between the timeout and cleanup.
+      return false;
     }
   }
 }
@@ -213,8 +308,18 @@ export function runWithTimeout(command, args = [], options = {}) {
     cwd = root,
     env = process.env,
     timeoutMs = defaultTimeouts.shell,
+    terminationGraceMs = 500,
+    reapTimeoutMs = 5_000,
     maxOutputChars = 12_000,
   } = options;
+
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('timeoutMs must be positive');
+  if (!Number.isFinite(terminationGraceMs) || terminationGraceMs < 0) {
+    throw new Error('terminationGraceMs must be non-negative');
+  }
+  if (!Number.isFinite(reapTimeoutMs) || reapTimeoutMs <= 0) {
+    throw new Error('reapTimeoutMs must be positive');
+  }
 
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -225,8 +330,26 @@ export function runWithTimeout(command, args = [], options = {}) {
     });
     let stdout = '';
     let stderr = '';
-    let finished = false;
-    let timer;
+    let settled = false;
+    let closeSeen = false;
+    let timeoutTriggered = false;
+    let timeoutTimer;
+    let graceTimer;
+    let reapTimer;
+    const termination = { sentTerm: false, sentKill: false, reaped: false };
+
+    const clearTimers = () => {
+      clearTimeout(timeoutTimer);
+      clearTimeout(graceTimer);
+      clearTimeout(reapTimer);
+    };
+
+    const finishReject = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimers();
+      reject(error);
+    };
 
     const append = (target, chunk) => `${target}${chunk}`.slice(-maxOutputChars);
     child.stdout.on('data', (chunk) => {
@@ -236,29 +359,49 @@ export function runWithTimeout(command, args = [], options = {}) {
       stderr = append(stderr, chunk.toString());
     });
     child.once('error', (error) => {
-      if (finished) return;
-      finished = true;
-      clearTimeout(timer);
-      reject(error);
+      finishReject(error);
     });
     child.once('close', (code, signal) => {
-      if (finished) return;
-      finished = true;
-      clearTimeout(timer);
+      closeSeen = true;
+      termination.reaped = true;
+      clearTimers();
+      if (settled) return;
+      if (timeoutTriggered) {
+        const error = new Error(`Command timed out after ${timeoutMs}ms: ${commandText(command, args)}`);
+        error.code = 'ETIMEDOUT';
+        error.command = commandText(command, args);
+        error.timeoutMs = timeoutMs;
+        error.stdout = stdout;
+        error.stderr = stderr;
+        error.termination = { ...termination };
+        finishReject(error);
+        return;
+      }
+      settled = true;
       resolve({ code, signal, stdout, stderr, command: commandText(command, args) });
     });
 
-    timer = setTimeout(() => {
-      if (finished) return;
-      finished = true;
-      terminateProcessGroup(child);
-      const error = new Error(`Command timed out after ${timeoutMs}ms: ${commandText(command, args)}`);
-      error.code = 'ETIMEDOUT';
-      error.command = commandText(command, args);
-      error.timeoutMs = timeoutMs;
-      error.stdout = stdout;
-      error.stderr = stderr;
-      reject(error);
+    timeoutTimer = setTimeout(() => {
+      if (settled || closeSeen || timeoutTriggered) return;
+      timeoutTriggered = true;
+      termination.sentTerm = terminateProcessGroup(child);
+      graceTimer = setTimeout(() => {
+        if (closeSeen || settled) return;
+        termination.sentKill = terminateProcessGroup(child, { force: true });
+        reapTimer = setTimeout(() => {
+          if (closeSeen || settled) return;
+          const error = new Error(
+            `Command process did not reap after SIGKILL within ${reapTimeoutMs}ms: ${commandText(command, args)}`,
+          );
+          error.code = 'EPROCESSREAPTIMEOUT';
+          error.command = commandText(command, args);
+          error.timeoutMs = timeoutMs;
+          error.stdout = stdout;
+          error.stderr = stderr;
+          error.termination = { ...termination };
+          finishReject(error);
+        }, reapTimeoutMs);
+      }, terminationGraceMs);
     }, timeoutMs);
   });
 }
@@ -273,6 +416,16 @@ async function readRuntimeEnv() {
   return { ...fileValues, ...process.env };
 }
 
+function redactReleaseText(value, env = process.env) {
+  let output = String(value ?? '');
+  const secrets = Object.entries(env ?? {})
+    .filter(([name, secret]) => /(?:KEY|TOKEN|SECRET|PASSWORD)/i.test(name) && typeof secret === 'string' && secret.trim().length >= 8)
+    .map(([, secret]) => secret.trim())
+    .sort((left, right) => right.length - left.length);
+  for (const secret of secrets) output = output.split(secret).join('[REDACTED]');
+  return output;
+}
+
 export function resolvePublicUrl(env = process.env) {
   const explicit = env.TEAMS_PUBLIC_URL || env.PUBLIC_BASE_URL;
   if (explicit) return String(explicit).replace(/\/$/, '');
@@ -280,15 +433,20 @@ export function resolvePublicUrl(env = process.env) {
   return undefined;
 }
 
-async function readSourceManifest() {
-  return JSON.parse(await fs.readFile(path.join(root, 'appPackage', 'manifest.json'), 'utf8'));
+async function readSourceManifest(sourceCommit, env) {
+  const result = await runCommand('git', ['show', `${sourceCommit}:appPackage/manifest.json`], {
+    timeoutMs: defaultTimeouts.shell,
+    env: { ...env, GIT_OPTIONAL_LOCKS: '0' },
+  });
+  return JSON.parse(result.stdout);
 }
 
-async function expectedDeployment(env) {
-  const sourceManifest = await readSourceManifest();
+async function expectedDeployment(env, sourceCommit) {
+  const sourceManifest = await readSourceManifest(sourceCommit, env);
   const expected = {
     version: sourceManifest.version,
     appId: env.TEAMS_APP_ID,
+    catalogAppId: env.TEAMS_CATALOG_APP_ID,
     tabDomain: env.TAB_DOMAIN,
     clientId: env.CLIENT_ID,
     botClientId: env.BOT_CLIENT_ID,
@@ -329,10 +487,10 @@ async function runNpmScript(script, timeoutMs, env) {
   return runCommand(invocation.command, invocation.args, { timeoutMs, env });
 }
 
-function tailOutput(error) {
+function tailOutput(error, env = process.env) {
   return {
-    stdout: String(error.stdout ?? '').slice(-2_000),
-    stderr: String(error.stderr ?? '').slice(-2_000),
+    stdout: redactReleaseText(error.stdout, env).slice(-2_000),
+    stderr: redactReleaseText(error.stderr, env).slice(-2_000),
   };
 }
 
@@ -348,43 +506,96 @@ async function sha256(filePath) {
   return crypto.createHash('sha256').update(data).digest('hex');
 }
 
-export function createPreflightCommands(timeoutOverride) {
+export function assertServerBuildIdentity(marker, entryBytes, expectedSourceCommit, expectedMode = 'core') {
+  if (!RELEASE_PROFILES.has(expectedMode)) {
+    throw new Error('expected server build mode must be either core or optional');
+  }
+  assert.ok(marker, 'local server build identity marker is missing or invalid');
+  assert.equal(marker.mode, expectedMode, `local server build identity must be ${expectedMode} mode`);
+  assert.equal(
+    marker.sourceCommit,
+    expectedSourceCommit,
+    'local server build source commit must match the release-pinned Git OID',
+  );
+  const serverBundleSha256 = crypto.createHash('sha256').update(entryBytes).digest('hex');
+  assert.equal(
+    marker.bundleSha256,
+    serverBundleSha256,
+    'local server bundle SHA-256 does not match its build identity marker',
+  );
+  return { sourceCommit: marker.sourceCommit, serverBundleSha256 };
+}
+
+async function readExpectedServerBuildIdentity(expectedSourceCommit, expectedMode = 'core') {
+  const serverDir = path.join(resolveRuntimeDistRoot(root), 'server');
+  const entryPath = path.join(serverDir, 'index.js');
+  const markerPath = path.join(serverDir, '.teams-server-build-commit');
+  const [entryBytes, markerRaw] = await Promise.all([
+    fs.readFile(entryPath),
+    fs.readFile(markerPath, 'utf8'),
+  ]);
+  const marker = parseServerBuildMarker(markerRaw);
+  return assertServerBuildIdentity(marker, entryBytes, expectedSourceCommit, expectedMode);
+}
+
+export function createPreflightCommands(timeoutOverride, profile = 'core') {
+  if (!RELEASE_PROFILES.has(profile)) {
+    throw new Error('release profile must be either core or optional');
+  }
+  if (profile === 'optional') {
+    // Keep the Core regression suite in the optional promotion gate, then
+    // rebuild the server in optional mode last so the marker cannot be
+    // accidentally left at Core after a test/build helper runs.
+    return [
+      ['core-source-check', 'typecheck:core', timeoutOverride ?? defaultTimeouts.typecheck],
+      ['core-test', 'test:core', timeoutOverride ?? defaultTimeouts.test],
+      ['optional-test', 'test:optional', timeoutOverride ?? defaultTimeouts.test],
+      ['optional-server-build', 'build:server', timeoutOverride ?? defaultTimeouts.build],
+      ['deployment', 'check:deployment', timeoutOverride ?? defaultTimeouts.deployment],
+    ];
+  }
   return [
     ['core-source-check', 'typecheck:core', timeoutOverride ?? defaultTimeouts.typecheck],
     ['core-build', 'build:core', timeoutOverride ?? defaultTimeouts.build],
+    ['server-build-determinism', 'test:server-build-determinism', timeoutOverride ?? defaultTimeouts.serverDeterminism],
     ['core-test', 'test:core', timeoutOverride ?? defaultTimeouts.test],
     ['deployment', 'check:deployment', timeoutOverride ?? defaultTimeouts.deployment],
   ];
 }
 
-async function runPreflight({ timeoutOverride } = {}) {
-  const env = await readRuntimeEnv();
-  const commands = createPreflightCommands(timeoutOverride);
+async function runPreflight({ timeoutOverride, releaseSource } = {}) {
+  const { env, sourceCommit } = releaseSource;
+  const commands = createPreflightCommands(timeoutOverride, releaseSource.profile);
   const evidence = [];
   for (const [label, script, timeoutMs] of commands) {
     const invocation = npmInvocation(['run', script]);
     const result = await runCommand(invocation.command, invocation.args, { timeoutMs, env });
     evidence.push({
       command: label,
+      profile: releaseSource.profile,
       exitCode: result.code,
+      sourceCommit,
       output: `${result.stdout}\n${result.stderr}`.trim().slice(-2_000),
     });
   }
   return { evidence, uiGates: ['DESKTOP_UNVERIFIED', 'MOBILE_UNVERIFIED'] };
 }
 
-async function runPackage({ timeoutOverride } = {}) {
-  const env = await readRuntimeEnv();
-  const expected = await expectedDeployment(env);
+async function runPackage({ timeoutOverride, releaseSource } = {}) {
+  const { env, sourceCommit } = releaseSource;
+  const expected = await expectedDeployment(env, sourceCommit);
   const checkTimeout = timeoutOverride ?? defaultTimeouts.deployment;
   await runNpmScript('check:deployment', checkTimeout, env);
   await runNpmScript('validate:manifest', checkTimeout, env);
   await runNpmScript('package:app', timeoutOverride ?? defaultTimeouts.package, env);
+  await runNpmScript('test:package-determinism', timeoutOverride ?? defaultTimeouts.package, env);
+  await runNpmScript('test:package-atomic', timeoutOverride ?? defaultTimeouts.package, env);
+  await runNpmScript('test:release-timeout', timeoutOverride ?? defaultTimeouts.package, env);
   const manifest = await readZipManifest();
   assertPackagedManifest(manifest, expected);
   return {
     evidence: [
-      { package: packagePath, version: manifest.version, sha256: await sha256(packagePath) },
+      { package: packagePath, version: manifest.version, sha256: await sha256(packagePath), sourceCommit, profile: releaseSource.profile },
       {
         manifest: {
           version: manifest.version,
@@ -428,12 +639,12 @@ export async function validatePublicTabDeployment({
   return { tabResult, tab, asset };
 }
 
-async function runPublic({ url, timeoutOverride } = {}) {
+async function runPublic({ url, timeoutOverride, releaseSource } = {}) {
   assert.ok(url, 'public phase requires --url or TEAMS_PUBLIC_URL');
   const baseUrl = String(url).replace(/\/$/, '');
   const timeoutMs = timeoutOverride ?? defaultTimeouts.public;
-  const env = await readRuntimeEnv();
-  const expected = await expectedDeployment(env);
+  const { env, sourceCommit } = releaseSource;
+  const expected = await expectedDeployment(env, sourceCommit);
   const packageShaBefore = await sha256(packagePath);
   const packageManifest = await readZipManifest();
   assertPackagedManifest(packageManifest, expected);
@@ -447,7 +658,8 @@ async function runPublic({ url, timeoutOverride } = {}) {
   const healthResult = await fetchWithTimeout(`${baseUrl}/api/health`, timeoutMs);
   assert.equal(healthResult.response.status, 200, 'public health endpoint must return HTTP 200');
   const health = JSON.parse(healthResult.text);
-  assertPublicHealth(health, packageManifest.version);
+  const serverBuildIdentity = await readExpectedServerBuildIdentity(sourceCommit, releaseSource.profile);
+  assertPublicHealth(health, { version: packageManifest.version, ...serverBuildIdentity }, releaseSource.profile);
 
   const websiteRootResult = await fetchWithTimeout(`${baseUrl}/`, timeoutMs);
   assert.equal(websiteRootResult.response.status, 200, 'public website root must resolve after following its canonical tab redirect');
@@ -466,17 +678,20 @@ async function runPublic({ url, timeoutOverride } = {}) {
   assert.equal(packageShaAfter, packageShaBefore, 'package SHA changed during public validation');
   return {
     evidence: [
-      { package: packagePath, version: packageManifest.version, sha256: packageShaAfter },
+      { package: packagePath, version: packageManifest.version, sha256: packageShaAfter, sourceCommit, profile: releaseSource.profile },
       {
         health: {
           status: healthResult.response.status,
           service: health.service,
           version: health.version,
+          sourceCommit: health.sourceCommit,
+          serverBundleSha256: health.serverBundleSha256,
           auth: health.auth,
           userAuth: health.userAuth,
           bot: health.bot,
           outbound: health.outbound,
           environment: health.environment,
+          profile: releaseSource.profile,
         },
       },
       {
@@ -514,19 +729,27 @@ function parseArgs(argv) {
 }
 
 async function runPhase(options) {
-  if (options.phase === 'preflight') return runPreflight(options);
-  if (options.phase === 'package') return runPackage(options);
+  const runtimeEnv = await readRuntimeEnv();
+  activeFailureEnvironment = runtimeEnv;
+  const releaseSource = createReleaseSourceEnvironment(runtimeEnv);
+  const phaseOptions = { ...options, releaseSource };
+  if (options.phase === 'preflight') return { profile: releaseSource.profile, ...(await runPreflight(phaseOptions)) };
+  if (options.phase === 'package') return { profile: releaseSource.profile, ...(await runPackage(phaseOptions)) };
   if (options.phase === 'public') {
-    const env = await readRuntimeEnv();
-    return runPublic({ ...options, url: options.url ?? resolvePublicUrl(env) });
+    return {
+      profile: releaseSource.profile,
+      ...(await runPublic({ ...phaseOptions, url: options.url ?? resolvePublicUrl(releaseSource.env) })),
+    };
   }
   if (options.phase === 'all') {
     const phases = [];
-    phases.push({ phase: 'preflight', ...(await runPreflight(options)) });
-    phases.push({ phase: 'package', ...(await runPackage(options)) });
-    const env = await readRuntimeEnv();
-    phases.push({ phase: 'public', ...(await runPublic({ ...options, url: options.url ?? resolvePublicUrl(env) })) });
-    return { evidence: phases, uiGates: ['PORTAL_UPLOAD_UNVERIFIED', 'INSTALLED_VERSION_UNVERIFIED', 'DESKTOP_UNVERIFIED', 'MOBILE_UNVERIFIED'] };
+    phases.push({ phase: 'preflight', ...(await runPreflight(phaseOptions)) });
+    phases.push({ phase: 'package', ...(await runPackage(phaseOptions)) });
+    phases.push({
+      phase: 'public',
+      ...(await runPublic({ ...phaseOptions, url: options.url ?? resolvePublicUrl(releaseSource.env) })),
+    });
+    return { profile: releaseSource.profile, evidence: phases, uiGates: ['PORTAL_UPLOAD_UNVERIFIED', 'INSTALLED_VERSION_UNVERIFIED', 'DESKTOP_UNVERIFIED', 'MOBILE_UNVERIFIED'] };
   }
   throw new Error(`Unknown release gate phase: ${options.phase}`);
 }
@@ -535,21 +758,21 @@ function isMainModule() {
   return process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 }
 
-export function formatReleaseFailure(error, phase = 'all') {
-  const status = error.code === 'ETIMEDOUT' || error.code === 'ECOMMAND' ? 'BLOCKED' : 'FAILED';
+export function formatReleaseFailure(error, phase = 'all', env = process.env) {
+  const status = ['ETIMEDOUT', 'EPROCESSREAPTIMEOUT', 'ECOMMAND'].includes(error.code) ? 'BLOCKED' : 'FAILED';
   return {
     status,
     phase,
-    evidence: tailOutput(error),
+    evidence: tailOutput(error, env),
     blocker: {
       code: error.code ?? 'EUNKNOWN',
-      message: error.message,
-      command: error.command ?? null,
+      message: redactReleaseText(error.message, env),
+      command: error.command ? redactReleaseText(error.command, env) : null,
       timeoutMs: error.timeoutMs ?? null,
       exitCode: error.exitCode ?? null,
     },
-    nextAction: error.code === 'ETIMEDOUT'
-      ? 'Fix or isolate the timed-out command, then rerun the same bounded release phase.'
+    nextAction: error.code === 'ETIMEDOUT' || error.code === 'EPROCESSREAPTIMEOUT'
+      ? 'Fix or isolate the timed-out command/process cleanup, then rerun the same bounded release phase.'
       : 'Inspect the reported command output before continuing.',
   };
 }
@@ -566,7 +789,7 @@ if (isMainModule()) {
       nextAction: result.uiGates.length > 0 ? `Complete UI gates: ${result.uiGates.join(', ')}` : 'None',
     }, null, 2));
   } catch (error) {
-    console.error(JSON.stringify(formatReleaseFailure(error, process.argv[2] ?? 'all'), null, 2));
+    console.error(JSON.stringify(formatReleaseFailure(error, process.argv[2] ?? 'all', activeFailureEnvironment), null, 2));
     process.exitCode = 1;
   }
 }

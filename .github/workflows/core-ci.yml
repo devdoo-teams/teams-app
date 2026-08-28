@@ -1,0 +1,313 @@
+name: Teams Core, A2A, and Continuity CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: teams-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: 24.x
+
+jobs:
+  core:
+    name: Core verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run bounded source checks
+        run: |
+          npm run typecheck:core
+          npm run test:typecheck-boundary
+          npm run test:core-source-check
+          npm run test:ci-workflow-contract
+          npm run test:docker-build-contract
+          npm run test:image-publish-workflow-contract
+      - name: Build Core
+        run: npm run build:core
+      - name: Run Core tests
+        run: npm run test:core
+      - name: Validate Teams manifest
+        run: npm run validate:manifest
+      - name: Verify deterministic Teams package
+        run: npm run test:package-determinism
+
+  a2a:
+    name: A2A collaboration and remote contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build Core for integration runtime fixtures
+        run: npm run build:core
+      - name: Verify tracked A2A contracts and orchestration
+        run: |
+          npm run test:a2a-official-contract-audit
+          npm run test:a2a-core-contract
+          npm run test:a2a-role-catalog
+          npm run test:a2a-orchestrator
+          npm run test:a2a-execution
+          npm run test:a2a-observability
+          npm run test:a2a-jsonrpc-route
+          npm run test:a2a-http-scope
+          npm run test:a2a-v1-list-tasks
+          npm run test:a2a-index-integration
+          npm run test:a2a-route
+          npm run test:a2a-store
+          npm run test:a2a-orchestration-identity
+      - name: Verify durable lifecycle and authorization
+        run: |
+          npm run test:a2a-independent-agent-identity
+          npm run test:a2a-durable-dispatch
+          npm run test:a2a-parent-lifecycle
+          npm run test:a2a-admission-restart
+          npm run test:a2a-deadline-cancellation
+          npm run test:a2a-submission-durability
+          npm run test:a2a-agent-authorization-policy
+          npm run test:a2a-telemetry
+      - name: Verify remote peer contracts
+        run: |
+          npm run test:a2a-remote-client
+          npm run test:a2a-remote-http-roundtrip
+          npm run test:a2a-remote-agent-adapter
+
+  continuity:
+    name: Atomic build and runtime continuity
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify atomic and deterministic builds
+        run: |
+          npm run test:build-client-atomic
+          npm run test:server-build-determinism
+      - name: Verify tracked remote adapter boundary
+        run: npm run test:a2a-remote-agent-adapter
+      - name: Build and smoke Core runtime
+        run: |
+          npm run build:core
+          npm run test:runtime-dist
+          npm run test:core-runtime-smoke-isolation
+
+  optional:
+    name: Optional providers and Grok route
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify optional provider contracts without live credentials
+        run: |
+          npm run test:openai-engine
+          npm run test:local-engine
+          npm run test:grok-engine
+          npm run test:grok-bot-runtime
+          npm run test:response-mode-optional-unconfigured
+          npm run build:server
+
+  container:
+    name: Docker Core runtime build
+    needs: [core, a2a, continuity]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build the exact runtime image without publishing
+        uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4 # v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: true
+          tags: teams-sdk-mvp:${{ github.sha }}
+          build-args: |
+            TEAMS_SOURCE_COMMIT=${{ github.sha }}
+      - name: Smoke the exact runtime image
+        env:
+          IMAGE_TAG: teams-sdk-mvp:${{ github.sha }}
+        run: |
+          set -euo pipefail
+          container_id=""
+          cleanup() {
+            if [ -n "$container_id" ]; then
+              docker logs "$container_id" || true
+              docker rm --force "$container_id" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT
+
+          bot_client_id='11111111-2222-4333-8444-555555555555'
+          client_id='66666666-7777-4888-8999-000000000000'
+          tenant_id='99999999-aaaa-4bbb-8ccc-dddddddddddd'
+          tab_domain='runtime-smoke.example.com'
+          application_id_uri="api://${tab_domain}/botid-${bot_client_id}"
+          container_id="$(docker run --detach \
+            --publish 3978:3978 \
+            --env NODE_ENV=production \
+            --env PORT=3978 \
+            --env TEAMS_USE_SDK=true \
+            --env TEAMS_SKIP_OUTBOUND=true \
+            --env TEAMS_APP_ID=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee \
+            --env TEAMS_CATALOG_APP_ID=bbbbbbbb-cccc-4ddd-8eee-ffffffffffff \
+            --env BOT_ID="$bot_client_id" \
+            --env BOT_CLIENT_ID="$bot_client_id" \
+            --env CLIENT_ID="$client_id" \
+            --env CLIENT_SECRET=core-runtime-smoke-secret \
+            --env TENANT_ID="$tenant_id" \
+            --env TAB_DOMAIN="$tab_domain" \
+            --env APPLICATION_ID_URI="$application_id_uri" \
+            --env TEAMS_USER_AUTH_ACCEPTED_AUDIENCES="$application_id_uri" \
+            "$IMAGE_TAG")"
+
+          health_file="$(mktemp)"
+          tab_file="$(mktemp)"
+          asset_file="$(mktemp)"
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error --max-time 2 http://127.0.0.1:3978/api/health >"$health_file"; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              echo 'container did not become healthy within 30 seconds' >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          node --input-type=module -e '
+            import fs from "node:fs";
+            const health = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            if (health.ok !== true) throw new Error("container health did not report ok=true");
+            if (health.environment !== "production") throw new Error("container health is not production");
+            if (health.sourceCommit !== process.env.GITHUB_SHA) throw new Error(`container source identity mismatch: ${health.sourceCommit}`);
+            if (health.auth !== "teams-authenticated" || health.bot !== "teams-sdk") throw new Error("container production auth/bot contract mismatch");
+          ' "$health_file"
+          curl --fail --silent --show-error --max-time 5 http://127.0.0.1:3978/tabs/home/ >"$tab_file"
+          asset_path="$(sed -n 's/.*src="\([^\"]*assets\/main\.js[^\"]*\)".*/\1/p' "$tab_file" | head -n 1)"
+          if [ -z "$asset_path" ]; then
+            echo 'container tab did not expose a hashed main.js asset' >&2
+            exit 1
+          fi
+          curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:3978/tabs/home/${asset_path#./}" >"$asset_file"
+          test -s "$asset_file"
+
+  artifact:
+    name: Immutable release candidate
+    if: github.event_name != 'pull_request'
+    needs: [core, a2a, continuity, container]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TEAMS_SOURCE_COMMIT: ${{ github.sha }}
+      TEAMS_APP_ID: ${{ vars.TEAMS_APP_ID }}
+      TEAMS_CATALOG_APP_ID: ${{ vars.TEAMS_CATALOG_APP_ID }}
+      BOT_ID: ${{ vars.BOT_ID }}
+      BOT_CLIENT_ID: ${{ vars.BOT_CLIENT_ID }}
+      TENANT_ID: ${{ vars.TENANT_ID }}
+      TAB_DOMAIN: ${{ vars.TAB_DOMAIN }}
+      CLIENT_ID: ${{ vars.CLIENT_ID }}
+      APPLICATION_ID_URI: ${{ vars.APPLICATION_ID_URI }}
+    steps:
+      - name: Check out the verified commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build and verify the exact artifact
+        run: |
+          npm run build:core
+          npm run test:core-runtime-smoke-isolation
+          npm run check:deployment
+          npm run validate:manifest
+          npm run package:app
+          npm run test:package-determinism
+          npm run test:package-output-determinism
+          npm run test:package-atomic
+          npm run test:release-timeout
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          const packagePath = 'appPackage/build/teams-sdk-mvp.zip';
+          const manifest = JSON.parse(execFileSync('unzip', ['-p', packagePath, 'manifest.json'], { encoding: 'utf8' }));
+          const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const placeholder = '$' + '{{';
+          assert.equal(manifest.version, packageJson.version, 'artifact manifest version must match package version');
+          assert.equal(manifest.devicePermissions?.includes('geolocation'), true, 'artifact manifest must declare geolocation');
+          assert.equal(JSON.stringify(manifest).includes(placeholder), false, 'artifact manifest contains unresolved placeholders');
+          console.log(`exact artifact manifest verified: v${manifest.version}, geolocation`);
+          NODE
+      - name: Record release identity and checksums
+        run: |
+          mkdir -p dist/evidence
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const zip = fs.readFileSync('appPackage/build/teams-sdk-mvp.zip');
+          const identity = {
+            schema: 1,
+            sourceCommit: process.env.GITHUB_SHA,
+            version: pkg.version,
+            teamsPackageSha256: crypto.createHash('sha256').update(zip).digest('hex'),
+          };
+          fs.writeFileSync('dist/evidence/release-identity.json', JSON.stringify(identity, null, 2) + '\n');
+          NODE
+          find dist appPackage/build -type f ! -name SHA256SUMS -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > dist/evidence/SHA256SUMS
+      - name: Upload immutable release candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: teams-core-${{ github.sha }}
+          path: |
+            dist/
+            appPackage/build/teams-sdk-mvp.zip
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

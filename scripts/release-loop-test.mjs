@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,12 +10,14 @@ import { deflateSync } from 'node:zlib';
 import {
   applyEvidence,
   applyPhaseSuccess,
+  assertReleaseUpdateCompletionContract,
   assertCurrentReleaseArtifacts,
   assertPackageIntegrity,
   assertPublicProbeMatches,
   completionMessage,
   completeRun,
   completeReleaseState,
+  createGitSnapshot,
   createInitialState,
   classifyGitStatus,
   deriveStatus,
@@ -25,6 +28,11 @@ import {
   probePublicTabRoutes,
   rasterDimensions,
   resetAfterPhaseFailure,
+  requestedSourceIoMode,
+  assertReleaseVersionAdvanced,
+  readPreviousSourceVersion,
+  readSourceVersion,
+  splitBrowserEvidenceInput,
   reverifyEvidenceArtifacts,
   runGatePhase,
   summarizePhase,
@@ -36,6 +44,110 @@ assert.deepEqual(
   parseArgs(['public', '--url', 'https://runtime.example.com']),
   { command: 'public', file: undefined, reason: undefined, url: 'https://runtime.example.com' },
   'release loop public phase accepts an explicit URL for reproducible probes',
+);
+assert.equal(
+  requestedSourceIoMode({ TEAMS_FILEPROVIDER_SERVER_REUSE: '1' }),
+  'index-tree-fileprovider-fallback',
+  'an explicit FileProvider fallback must be recorded in the release identity',
+);
+assert.equal(
+  requestedSourceIoMode({}),
+  'normal',
+  'a release without an explicit fallback request starts in normal source-I/O mode',
+);
+
+assert.doesNotThrow(
+  () => assertReleaseVersionAdvanced('1.0.62', '1.0.61'),
+  'a release version must advance from the immediately previous source version',
+);
+assert.throws(
+  () => assertReleaseVersionAdvanced('1.0.61', '1.0.61'),
+  (error) => error?.code === 'EVERSIONNOTBUMPED' && /1\.0\.61.*1\.0\.61/.test(error.message),
+  'a same-version source commit must be rejected before any package or portal work',
+);
+assert.throws(
+  () => assertReleaseVersionAdvanced('1.0.60', '1.0.61'),
+  (error) => error?.code === 'EVERSIONNOTBUMPED',
+  'a release version cannot move backwards',
+);
+
+{
+  const sourceCommit = '0123456789abcdef0123456789abcdef01234567';
+  const gitCalls = [];
+  const snapshot = createGitSnapshot({
+    rootDir: '/repo',
+    env: { TEAMS_SOURCE_COMMIT: sourceCommit },
+    verifySource(rootDir, options) {
+      assert.equal(rootDir, '/repo');
+      assert.equal(options.commitOid, sourceCommit);
+      return { verificationMode: 'worktree-index-commit', commitOid: sourceCommit };
+    },
+    runGit(args) {
+      gitCalls.push(args);
+      if (args[0] === 'ls-files') return 'user artifact.txt\0';
+      throw new Error(`unexpected Git call: ${args.join(' ')}`);
+    },
+  });
+  assert.equal(snapshot.commit, sourceCommit);
+  assert.equal(snapshot.shortCommit, sourceCommit.slice(0, 7));
+  assert.deepEqual(snapshot.untracked, ['?? user artifact.txt']);
+  assert.equal(snapshot.dirty, false);
+  assert.deepEqual(gitCalls, [['ls-files', '--others', '--exclude-standard', '-z', '--']]);
+
+  const versionCalls = [];
+  assert.equal(readSourceVersion(sourceCommit, {
+    rootDir: '/repo',
+    runGit(args) {
+      versionCalls.push(args);
+      return JSON.stringify({ version: '1.2.3' });
+    },
+  }), '1.2.3');
+  assert.deepEqual(versionCalls, [['show', `${sourceCommit}:appPackage/manifest.json`]]);
+
+  const previousVersionCalls = [];
+  assert.deepEqual(readPreviousSourceVersion(sourceCommit, {
+    rootDir: '/repo',
+    runGit(args) {
+      previousVersionCalls.push(args);
+      if (args[0] === 'rev-parse') return 'fedcba9876543210fedcba9876543210fedcba98\n';
+      if (args[0] === 'show') return JSON.stringify({ version: '1.2.2' });
+      throw new Error(`unexpected Git call: ${args.join(' ')}`);
+    },
+  }), {
+    commit: 'fedcba9876543210fedcba9876543210fedcba98',
+    version: '1.2.2',
+  });
+  assert.deepEqual(previousVersionCalls, [
+    ['rev-parse', `${sourceCommit}^`],
+    ['show', 'fedcba9876543210fedcba9876543210fedcba98:appPackage/manifest.json'],
+  ]);
+}
+
+let machineGateOptions;
+await runGatePhase('machine', {
+  runGate: async (_command, _args, options) => {
+    machineGateOptions = options;
+    return {
+      code: 0,
+      stdout: JSON.stringify({ status: 'READY', evidence: [] }),
+      stderr: '',
+    };
+  },
+});
+assert.ok(
+  machineGateOptions.timeoutMs >= 690_000,
+  'the outer machine gate must cover the sum of all sequential inner preflight timeouts',
+);
+await assert.rejects(
+  () => runGatePhase('package', {
+    runGate: async () => ({
+      code: 1,
+      stdout: JSON.stringify({ status: 'BLOCKED', blocker: { code: 'EPROCESSREAPTIMEOUT' } }),
+      stderr: '',
+    }),
+  }),
+  (error) => error?.code === 'EPROCESSREAPTIMEOUT',
+  'the outer release loop must preserve a bounded child failure code for retry/reporting',
 );
 
 const routeProbeRequests = [];
@@ -186,6 +298,15 @@ const rowEvidencePaths = Object.fromEntries(
     runtime: path.join(tempDir, `${surface}-row-${index}-runtime.log`),
   }))]),
 );
+const fullRowEvidencePaths = Object.fromEntries(
+  Object.keys(surfaceArtifactPaths).map((surface) => [surface, Array.from({ length: 4 }, (_, index) => ({
+    screenshotBefore: path.join(tempDir, `full-${surface}-row-${index}-before.png`),
+    screenshotAfter: path.join(tempDir, `full-${surface}-row-${index}-after.png`),
+    accessibilityBefore: path.join(tempDir, `full-${surface}-row-${index}-accessibility-before.txt`),
+    accessibilityAfter: path.join(tempDir, `full-${surface}-row-${index}-accessibility-after.txt`),
+    runtime: path.join(tempDir, `full-${surface}-row-${index}-runtime.log`),
+  }))]),
+);
 const fakeArtifactPath = path.join(tempDir, 'fake-proof.png');
 const packagePath = path.join(tempDir, 'teams-sdk-mvp.zip');
 const artifactBytes = Buffer.from([
@@ -315,11 +436,45 @@ const identity = {
   startedAt: '2026-08-09T00:00:00.000Z',
 };
 
-function coverageMatrixBytes(surface, { mutateRow, evidenceScope, sourceCommit = identity.commit } = {}) {
-  const matrixEvidence = (evidencePath, reason) => ({
+const scopedRequiredCoverageKeys = {
+  portal: ['deep-link.trailing-slash', 'deep-link.static-tab'],
+  installed: ['chat.install', 'deep-link.open-tab-action', 'chat.card.tab-link'],
+  desktop: [
+    'chat.card.no-top-level-duplicate',
+    'chat.commands.status.summary',
+    'personal.home.hero',
+    'personal.home.runtime-panel',
+  ],
+  mobile: [
+    'personal.mobile.narrow-home',
+    'personal.mobile.narrow-card',
+    'personal.auth.expired',
+    'personal.auth.retry',
+  ],
+};
+
+function rowEvidenceFixtureBytes(surface, index, namespace = surface) {
+  return {
+    screenshotBefore: pngFixture(`${namespace}-row-${index}-before`),
+    screenshotAfter: pngFixture(`${namespace}-row-${index}-after`),
+    accessibilityBefore: Buffer.from(`AX before evidence for ${namespace} row ${index}\nrole=button\n`),
+    accessibilityAfter: Buffer.from(`AX after evidence for ${namespace} row ${index}\nrole=button\n`),
+    runtime: Buffer.from(`Runtime evidence for ${namespace} row ${index}\nstatus=pass\n`),
+  };
+}
+
+function coverageMatrixBytes(surface, {
+  mutateRow,
+  mutateMatrix,
+  evidenceScope,
+  sourceCommit = identity.commit,
+} = {}) {
+  const matrixEvidence = (evidencePath, reason, source) => ({
     fresh: true,
     state: 'captured',
     path: evidencePath,
+    sha256: crypto.createHash('sha256').update(source).digest('hex'),
+    bytes: source.length,
     capturedAt: '2026-08-09T00:04:00.000Z',
     reason,
     releaseIdentity: {
@@ -329,11 +484,18 @@ function coverageMatrixBytes(surface, { mutateRow, evidenceScope, sourceCommit =
       installedVersion: null,
     },
   });
-  const rows = Array.from({ length: 4 }, (_, index) => {
-    const rowPaths = rowEvidencePaths[surface]?.[index] ?? rowEvidencePaths.portal[index];
+  const effectiveScope = evidenceScope ?? surface;
+  const matrixSurfaces = effectiveScope === 'full'
+    ? ['portal', 'installed', 'desktop', 'mobile']
+    : [surface];
+  const rows = matrixSurfaces.flatMap((rowSurface) => Array.from({ length: 4 }, (_, index) => {
+    const fullScope = effectiveScope === 'full';
+    const rowPaths = (fullScope ? fullRowEvidencePaths : rowEvidencePaths)[rowSurface][index];
+    const rowBytes = rowEvidenceFixtureBytes(rowSurface, index, fullScope ? `full-${rowSurface}` : rowSurface);
     const row = {
-      id: `${surface}-row-${index}`,
+      id: `${rowSurface}-row-${index}`,
       feature: `fixture feature ${index}`,
+      evidenceSurface: rowSurface,
       surface: 'personal-tab',
       location: `fixture location ${index}`,
       branch: `fixture branch ${index}`,
@@ -364,14 +526,34 @@ function coverageMatrixBytes(surface, { mutateRow, evidenceScope, sourceCommit =
         server: `fixture server state ${index}`,
         failure: `fixture failure state ${index}`,
       },
-      screenshotBefore: matrixEvidence(rowPaths.screenshotBefore, 'fixture before screenshot captured'),
-      screenshotAfter: matrixEvidence(rowPaths.screenshotAfter, 'fixture after screenshot captured'),
+      screenshotBefore: matrixEvidence(
+        rowPaths.screenshotBefore,
+        'fixture before screenshot captured',
+        rowBytes.screenshotBefore,
+      ),
+      screenshotAfter: matrixEvidence(
+        rowPaths.screenshotAfter,
+        'fixture after screenshot captured',
+        rowBytes.screenshotAfter,
+      ),
       accessibilityEvidence: {
         schema: 'paired-before-after-v1',
-        before: matrixEvidence(rowPaths.accessibilityBefore, 'fixture accessibility before evidence captured'),
-        after: matrixEvidence(rowPaths.accessibilityAfter, 'fixture accessibility after evidence captured'),
+        before: matrixEvidence(
+          rowPaths.accessibilityBefore,
+          'fixture accessibility before evidence captured',
+          rowBytes.accessibilityBefore,
+        ),
+        after: matrixEvidence(
+          rowPaths.accessibilityAfter,
+          'fixture accessibility after evidence captured',
+          rowBytes.accessibilityAfter,
+        ),
       },
-      runtimeEvidence: matrixEvidence(rowPaths.runtime, 'fixture runtime evidence captured'),
+      runtimeEvidence: matrixEvidence(
+        rowPaths.runtime,
+        'fixture runtime evidence captured',
+        rowBytes.runtime,
+      ),
       result: {
         status: 'PASS',
         reason: 'fixture row passed with fresh evidence',
@@ -379,14 +561,31 @@ function coverageMatrixBytes(surface, { mutateRow, evidenceScope, sourceCommit =
         serverAction: 'the fixture server action returned its result',
         nextAction: 'continue to the next fixture row',
       },
-      coverage: REQUIRED_COVERAGE_KEYS.filter((_, keyIndex) => keyIndex % 4 === index),
+      coverage: [],
     };
-    return mutateRow ? mutateRow(row, index) : row;
-  });
-  return Buffer.from(JSON.stringify({
-    schemaVersion: 1,
+    return row;
+  }));
+
+  for (const rowSurface of matrixSurfaces) {
+    for (const [index, key] of scopedRequiredCoverageKeys[rowSurface].entries()) {
+      rows.find((row) => row.evidenceSurface === rowSurface && row.id.endsWith(`-${index}`)).coverage.push(key);
+    }
+  }
+  const requiredKeys = effectiveScope === 'full'
+    ? [...REQUIRED_COVERAGE_KEYS]
+    : [...scopedRequiredCoverageKeys[surface]];
+  for (const [keyIndex, key] of requiredKeys.entries()) {
+    if (rows.some((row) => row.coverage.includes(key))) continue;
+    rows[keyIndex % rows.length].coverage.push(key);
+  }
+  for (const row of rows) {
+    if (row.coverage.length === 0) row.coverage.push(requiredKeys[0]);
+  }
+  const mutatedRows = rows.map((row, index) => mutateRow ? mutateRow(row, index) : row);
+  const matrix = {
+    schemaVersion: 2,
     matrixId: `fixture-${surface}`,
-    ...(evidenceScope ? { evidenceScope } : {}),
+    evidenceScope: effectiveScope,
     releaseIdentity: {
       appVersion: identity.version,
       sourceCommit,
@@ -395,29 +594,43 @@ function coverageMatrixBytes(surface, { mutateRow, evidenceScope, sourceCommit =
     },
     evidencePolicy: { fixture: 'fresh evidence is required for every PASS row' },
     coverage: {
-      count: rows.length,
-      requiredKeys: [...REQUIRED_COVERAGE_KEYS],
+      count: mutatedRows.length,
+      requiredKeys,
     },
-    rows,
-  }) + '\n');
+    rows: mutatedRows,
+  };
+  return Buffer.from(JSON.stringify(mutateMatrix ? mutateMatrix(structuredClone(matrix)) : matrix) + '\n');
 }
 
 for (const surface of Object.keys(surfaceCoveragePaths)) {
-  await fs.writeFile(surfaceCoveragePaths[surface], coverageMatrixBytes(surface));
   for (const [index, rowPaths] of rowEvidencePaths[surface].entries()) {
-    await fs.writeFile(rowPaths.screenshotBefore, pngFixture(`${surface}-row-${index}-before`));
-    await fs.writeFile(rowPaths.screenshotAfter, pngFixture(`${surface}-row-${index}-after`));
-    await fs.writeFile(rowPaths.accessibilityBefore, `AX before evidence for ${surface} row ${index}\nrole=button\n`);
-    await fs.writeFile(rowPaths.accessibilityAfter, `AX after evidence for ${surface} row ${index}\nrole=button\n`);
-    await fs.writeFile(rowPaths.runtime, `Runtime evidence for ${surface} row ${index}\nstatus=pass\n`);
+    const rowBytes = rowEvidenceFixtureBytes(surface, index);
+    await fs.writeFile(rowPaths.screenshotBefore, rowBytes.screenshotBefore);
+    await fs.writeFile(rowPaths.screenshotAfter, rowBytes.screenshotAfter);
+    await fs.writeFile(rowPaths.accessibilityBefore, rowBytes.accessibilityBefore);
+    await fs.writeFile(rowPaths.accessibilityAfter, rowBytes.accessibilityAfter);
+    await fs.writeFile(rowPaths.runtime, rowBytes.runtime);
   }
+  for (const [index, rowPaths] of fullRowEvidencePaths[surface].entries()) {
+    const rowBytes = rowEvidenceFixtureBytes(surface, index, `full-${surface}`);
+    await fs.writeFile(rowPaths.screenshotBefore, rowBytes.screenshotBefore);
+    await fs.writeFile(rowPaths.screenshotAfter, rowBytes.screenshotAfter);
+    await fs.writeFile(rowPaths.accessibilityBefore, rowBytes.accessibilityBefore);
+    await fs.writeFile(rowPaths.accessibilityAfter, rowBytes.accessibilityAfter);
+    await fs.writeFile(rowPaths.runtime, rowBytes.runtime);
+  }
+  await fs.writeFile(
+    surfaceCoveragePaths[surface],
+    coverageMatrixBytes(surface, { evidenceScope: surface === 'mobile' ? 'full' : surface }),
+  );
 }
 
 function machineReadyState() {
   const state = createInitialState(identity);
-  state.machine = { status: 'READY', completedAt: '2026-08-09T00:01:00.000Z' };
+  state.machine = { status: 'READY', sourceCommit: identity.commit, completedAt: '2026-08-09T00:01:00.000Z' };
   state.package = {
     status: 'READY',
+    sourceCommit: identity.commit,
     packagePath,
     version: identity.version,
     sha256: packageSha256,
@@ -429,6 +642,7 @@ function machineReadyState() {
   };
   state.public = {
     status: 'READY',
+    sourceCommit: identity.commit,
     version: identity.version,
     health: {
       auth: 'teams-authenticated',
@@ -451,7 +665,9 @@ function machineReadyState() {
 }
 
 function evidence(surface, overrides = {}) {
-  const coverageBytes = coverageMatrixBytes(surface);
+  const scope = surface === 'mobile' ? 'full' : surface;
+  const coverageBytes = coverageMatrixBytes(surface, { evidenceScope: scope });
+  const coverageMatrix = JSON.parse(coverageBytes.toString('utf8'));
   return {
     surface,
     observedAt: '2026-08-09T00:04:00.000Z',
@@ -464,12 +680,13 @@ function evidence(surface, overrides = {}) {
     accessibilityPath: surfaceAccessibilityPaths[surface],
     runtimeLogPath: surfaceRuntimePaths[surface],
     coverage: {
+      scope,
       matrixPath: surfaceCoveragePaths[surface],
       matrixSha256: crypto.createHash('sha256').update(coverageBytes).digest('hex'),
       commit: identity.commit,
       version: identity.version,
-      totalRows: 4,
-      passedRows: 4,
+      totalRows: coverageMatrix.rows.length,
+      passedRows: coverageMatrix.rows.length,
       notApplicableRows: 0,
       blockedRows: 0,
       unverifiedRows: 0,
@@ -487,6 +704,8 @@ function isEvidenceFile(surface, candidate) {
     surfaceAccessibilityPaths[surface],
     surfaceRuntimePaths[surface],
     surfaceCoveragePaths[surface],
+    ...rowEvidencePaths[surface].flatMap((rowPaths) => Object.values(rowPaths)),
+    ...fullRowEvidencePaths[surface].flatMap((rowPaths) => Object.values(rowPaths)),
   ]).has(candidate);
 }
 
@@ -498,6 +717,305 @@ const invalidRowCoverageBytes = coverageMatrixBytes('portal', {
 });
 await fs.writeFile(invalidRowCoveragePath, invalidRowCoverageBytes);
 const validPortalEvidence = evidence('portal');
+const reviewGuardFailures = [];
+function expectReleaseGuard(label, operation, expectedError) {
+  try {
+    operation();
+    reviewGuardFailures.push(`${label}: invalid evidence was accepted`);
+  } catch (error) {
+    if (!expectedError.test(String(error?.message ?? error))) {
+      reviewGuardFailures.push(`${label}: wrong failure: ${String(error?.message ?? error)}`);
+    }
+  }
+}
+
+const topLevelCopyPath = path.join(tempDir, 'portal-top-level-copy.png');
+await fs.writeFile(topLevelCopyPath, surfaceBeforeBytes.portal);
+expectReleaseGuard(
+  'MP-4 top-level content copy before identity deduplication',
+  () => validateEvidence({
+    ...validPortalEvidence,
+    artifactPaths: [topLevelCopyPath],
+  }, machineReadyState(), {
+    fileExists: () => true,
+    now: new Date('2026-08-09T00:05:00.000Z'),
+  }),
+  /reus|identical|content.*hash|SHA-256/i,
+);
+
+expectReleaseGuard(
+  'MP-4 top-level artifact cannot reuse a nested matrix artifact',
+  () => validateEvidence({
+    ...validPortalEvidence,
+    artifactPaths: [rowEvidencePaths.portal[0].screenshotBefore],
+  }, machineReadyState(), {
+    fileExists: () => true,
+    now: new Date('2026-08-09T00:05:00.000Z'),
+  }),
+  /reus|nested|matrix|same.*artifact/i,
+);
+
+const tooManyTopLevelArtifactPaths = Array.from(
+  { length: 65 },
+  (_, index) => path.join(tempDir, `top-level-count-${index}.png`),
+);
+let countBoundReads = 0;
+expectReleaseGuard(
+  'MP-4 top-level artifact count preflight',
+  () => validateEvidence({
+    ...validPortalEvidence,
+    artifactPaths: tooManyTopLevelArtifactPaths,
+  }, machineReadyState(), {
+    fileExists: () => true,
+    statArtifact: () => ({ size: surfaceArtifactBytes.portal.length, dev: 1, ino: 100, isFile: () => true }),
+    readArtifact: () => {
+      countBoundReads += 1;
+      return surfaceArtifactBytes.portal;
+    },
+    now: new Date('2026-08-09T00:05:00.000Z'),
+  }),
+  /top-level.*count|artifact.*count|count.*limit/i,
+);
+if (countBoundReads > 0) reviewGuardFailures.push('MP-4 top-level count preflight read an artifact before rejecting');
+
+const oversizedTopLevelPath = path.join(tempDir, 'top-level-oversized.png');
+await fs.writeFile(oversizedTopLevelPath, surfaceArtifactBytes.portal);
+let oversizedTopLevelReads = 0;
+expectReleaseGuard(
+  'MP-4 top-level per-file size preflight',
+  () => validateEvidence({
+    ...validPortalEvidence,
+    artifactPaths: [oversizedTopLevelPath],
+  }, machineReadyState(), {
+    fileExists: () => true,
+    statArtifact: (candidate) => candidate === oversizedTopLevelPath
+      ? { size: 20 * 1024 * 1024 + 1, dev: 1, ino: 200, isFile: () => true }
+      : fsSync.statSync(candidate),
+    readArtifact: (candidate) => {
+      if (candidate === oversizedTopLevelPath) oversizedTopLevelReads += 1;
+      return fsSync.readFileSync(candidate);
+    },
+    now: new Date('2026-08-09T00:05:00.000Z'),
+  }),
+  /top-level|file size|20 MiB|size limit/i,
+);
+if (oversizedTopLevelReads > 0) reviewGuardFailures.push('MP-4 top-level per-file preflight read an oversized artifact');
+
+const aggregateTopLevelPaths = [
+  path.join(tempDir, 'top-level-aggregate-1.png'),
+  path.join(tempDir, 'top-level-aggregate-2.png'),
+];
+for (const aggregatePath of aggregateTopLevelPaths) await fs.writeFile(aggregatePath, surfaceArtifactBytes.portal);
+let aggregateTopLevelReads = 0;
+const aggregateTopLevelSet = new Set([
+  ...aggregateTopLevelPaths,
+  surfaceBeforePaths.portal,
+  surfaceAfterPaths.portal,
+]);
+expectReleaseGuard(
+  'MP-4 top-level aggregate byte preflight',
+  () => validateEvidence({
+    ...validPortalEvidence,
+    artifactPaths: aggregateTopLevelPaths,
+  }, machineReadyState(), {
+    fileExists: () => true,
+    statArtifact: (candidate) => aggregateTopLevelSet.has(candidate)
+      ? { size: 20 * 1024 * 1024, dev: 3, ino: aggregateTopLevelSet.has(candidate) ? [...aggregateTopLevelSet].indexOf(candidate) + 1 : 1, isFile: () => true }
+      : fsSync.statSync(candidate),
+    readArtifact: (candidate) => {
+      if (aggregateTopLevelSet.has(candidate)) aggregateTopLevelReads += 1;
+      return fsSync.readFileSync(candidate);
+    },
+    now: new Date('2026-08-09T00:05:00.000Z'),
+  }),
+  /aggregate|byte budget|total evidence.*size|64 MiB/i,
+);
+if (aggregateTopLevelReads > 0) reviewGuardFailures.push('MP-4 top-level aggregate preflight read artifacts before rejecting');
+
+const portalOnlyFullCoveragePath = path.join(tempDir, 'full-scope-portal-only.md');
+const portalOnlyFullCoverageBytes = coverageMatrixBytes('portal', {
+  evidenceScope: 'full',
+  mutateMatrix: (matrix) => ({
+    ...matrix,
+    rows: matrix.rows.map((row) => ({ ...row, evidenceSurface: 'portal' })),
+  }),
+});
+await fs.writeFile(portalOnlyFullCoveragePath, portalOnlyFullCoverageBytes);
+expectReleaseGuard(
+  'MP-4 full scope surface completeness',
+  () => validateEvidence({
+    ...validPortalEvidence,
+    coverage: {
+      ...validPortalEvidence.coverage,
+      scope: 'full',
+      matrixPath: portalOnlyFullCoveragePath,
+      matrixSha256: crypto.createHash('sha256').update(portalOnlyFullCoverageBytes).digest('hex'),
+    },
+  }, machineReadyState(), {
+    fileExists: () => true,
+    now: new Date('2026-08-09T00:05:00.000Z'),
+  }),
+  /full.*(?:surface|portal|installed|desktop|mobile)|missing.*surface/i,
+);
+
+const duplicateContentPath = path.join(tempDir, 'portal-row-duplicate-content.png');
+const duplicateContentBytes = await fs.readFile(rowEvidencePaths.portal[0].screenshotBefore);
+await fs.writeFile(duplicateContentPath, duplicateContentBytes);
+const duplicateContentCoveragePath = path.join(tempDir, 'portal-duplicate-content.md');
+const duplicateContentCoverageBytes = coverageMatrixBytes('portal', {
+  mutateRow: (row, index) => index === 1
+    ? {
+      ...row,
+      screenshotBefore: {
+        ...row.screenshotBefore,
+        path: duplicateContentPath,
+        sha256: crypto.createHash('sha256').update(duplicateContentBytes).digest('hex'),
+      },
+    }
+    : row,
+});
+await fs.writeFile(duplicateContentCoveragePath, duplicateContentCoverageBytes);
+expectReleaseGuard(
+  'MP-4 identical nested bytes under different paths',
+  () => validateEvidence({
+    ...validPortalEvidence,
+    coverage: {
+      ...validPortalEvidence.coverage,
+      matrixPath: duplicateContentCoveragePath,
+      matrixSha256: crypto.createHash('sha256').update(duplicateContentCoverageBytes).digest('hex'),
+    },
+  }, machineReadyState(), {
+    fileExists: () => true,
+    now: new Date('2026-08-09T00:05:00.000Z'),
+  }),
+  /duplicate|reus|identical|content.*hash|SHA-256.*reus/i,
+);
+
+for (const [aliasKind, createAlias] of [
+  ['symlink', async (aliasPath, targetPath) => fs.symlink(targetPath, aliasPath)],
+  ['hardlink', async (aliasPath, targetPath) => fs.link(targetPath, aliasPath)],
+]) {
+  const aliasPath = path.join(tempDir, `portal-row-${aliasKind}-alias.png`);
+  const aliasTarget = rowEvidencePaths.portal[0].screenshotBefore;
+  const aliasBytes = await fs.readFile(aliasTarget);
+  await createAlias(aliasPath, aliasTarget);
+  const aliasCoveragePath = path.join(tempDir, `portal-${aliasKind}-alias.md`);
+  const aliasCoverageBytes = coverageMatrixBytes('portal', {
+    mutateRow: (row, index) => index === 1
+      ? {
+        ...row,
+        screenshotBefore: {
+          ...row.screenshotBefore,
+          path: aliasPath,
+          sha256: 'e'.repeat(64),
+          bytes: aliasBytes.length,
+        },
+      }
+      : row,
+  });
+  await fs.writeFile(aliasCoveragePath, aliasCoverageBytes);
+  expectReleaseGuard(
+    `MP-4 ${aliasKind} canonical artifact alias`,
+    () => validateEvidence({
+      ...validPortalEvidence,
+      coverage: {
+        ...validPortalEvidence.coverage,
+        matrixPath: aliasCoveragePath,
+        matrixSha256: crypto.createHash('sha256').update(aliasCoverageBytes).digest('hex'),
+      },
+    }, machineReadyState(), {
+      fileExists: () => true,
+      now: new Date('2026-08-09T00:05:00.000Z'),
+    }),
+    /reus|canonical|inode|same.*artifact/i,
+  );
+}
+
+const escapedEvidenceDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-release-loop-outside-'));
+const escapedEvidenceTarget = path.join(escapedEvidenceDirectory, 'outside.png');
+const escapedEvidenceLink = path.join(tempDir, 'escaped-row-evidence.png');
+const escapedEvidenceBytes = pngFixture('outside-evidence-root');
+await fs.writeFile(escapedEvidenceTarget, escapedEvidenceBytes);
+await fs.symlink(escapedEvidenceTarget, escapedEvidenceLink);
+const escapedCoveragePath = path.join(tempDir, 'portal-symlink-escape.md');
+const escapedCoverageBytes = coverageMatrixBytes('portal', {
+  mutateRow: (row, index) => index === 1
+    ? {
+      ...row,
+      screenshotBefore: {
+        ...row.screenshotBefore,
+        path: escapedEvidenceLink,
+        sha256: crypto.createHash('sha256').update(escapedEvidenceBytes).digest('hex'),
+      },
+    }
+    : row,
+});
+await fs.writeFile(escapedCoveragePath, escapedCoverageBytes);
+expectReleaseGuard(
+  'MP-4 symlink evidence-root escape',
+  () => validateEvidence({
+    ...validPortalEvidence,
+    coverage: {
+      ...validPortalEvidence.coverage,
+      matrixPath: escapedCoveragePath,
+      matrixSha256: crypto.createHash('sha256').update(escapedCoverageBytes).digest('hex'),
+    },
+  }, machineReadyState(), {
+    fileExists: () => true,
+    now: new Date('2026-08-09T00:05:00.000Z'),
+  }),
+  /evidence root|outside.*root|symlink.*escape|path.*escape/i,
+);
+
+const traversalCoveragePath = path.join(tempDir, 'portal-path-traversal.md');
+const traversalCoverageBytes = coverageMatrixBytes('portal', {
+  mutateRow: (row, index) => index === 2
+    ? {
+      ...row,
+      screenshotBefore: {
+        ...row.screenshotBefore,
+        path: path.relative(tempDir, escapedEvidenceTarget),
+        sha256: crypto.createHash('sha256').update(escapedEvidenceBytes).digest('hex'),
+      },
+    }
+    : row,
+});
+await fs.writeFile(traversalCoveragePath, traversalCoverageBytes);
+expectReleaseGuard(
+  'MP-4 relative path traversal outside evidence root',
+  () => validateEvidence({
+    ...validPortalEvidence,
+    coverage: {
+      ...validPortalEvidence.coverage,
+      matrixPath: traversalCoveragePath,
+      matrixSha256: crypto.createHash('sha256').update(traversalCoverageBytes).digest('hex'),
+    },
+  }, machineReadyState(), {
+    fileExists: () => true,
+    now: new Date('2026-08-09T00:05:00.000Z'),
+  }),
+  /evidence root|outside.*root|path traversal|path.*escape/i,
+);
+
+let oversizedArtifactRead = false;
+expectReleaseGuard(
+  'MP-4 file-size preflight before nested read',
+  () => validateEvidence(validPortalEvidence, machineReadyState(), {
+    fileExists: () => true,
+    statArtifact: (candidate) => candidate === rowEvidencePaths.portal[0].screenshotBefore
+      ? { size: 20 * 1024 * 1024 + 1, dev: 1, ino: 999, isFile: () => true }
+      : fsSync.statSync(candidate),
+    readArtifact: (candidate) => {
+      if (candidate === rowEvidencePaths.portal[0].screenshotBefore) oversizedArtifactRead = true;
+      return fsSync.readFileSync(candidate);
+    },
+    now: new Date('2026-08-09T00:05:00.000Z'),
+  }),
+  /preflight|file size|20 MiB|size limit/i,
+);
+if (oversizedArtifactRead) {
+  reviewGuardFailures.push('MP-4 file-size preflight before nested read: oversized artifact was read');
+}
 assert.throws(
   () => validateEvidence({
     ...validPortalEvidence,
@@ -531,6 +1049,33 @@ assert.throws(
   }),
   /sourceCommit|release identity|release run.*commit/i,
   'coverage matrix sourceCommit must equal the release identity commit',
+);
+
+const abbreviatedSourceCommitPath = path.join(tempDir, 'portal-source-commit-abbreviated.md');
+const abbreviatedSourceCommitBytes = coverageMatrixBytes('portal', { sourceCommit: identity.shortCommit });
+await fs.writeFile(abbreviatedSourceCommitPath, abbreviatedSourceCommitBytes);
+const abbreviatedSourceState = machineReadyState();
+abbreviatedSourceState.commit = identity.shortCommit;
+abbreviatedSourceState.shortCommit = identity.shortCommit;
+abbreviatedSourceState.machine.sourceCommit = identity.shortCommit;
+abbreviatedSourceState.package.sourceCommit = identity.shortCommit;
+abbreviatedSourceState.public.sourceCommit = identity.shortCommit;
+assert.throws(
+  () => validateEvidence({
+    ...validPortalEvidence,
+    commit: identity.shortCommit,
+    coverage: {
+      ...validPortalEvidence.coverage,
+      matrixPath: abbreviatedSourceCommitPath,
+      matrixSha256: crypto.createHash('sha256').update(abbreviatedSourceCommitBytes).digest('hex'),
+      commit: identity.shortCommit,
+    },
+  }, abbreviatedSourceState, {
+    fileExists: () => true,
+    now: new Date('2026-08-09T00:05:00.000Z'),
+  }),
+  /sourceCommit|full Git OID|release identity/i,
+  'coverage matrix sourceCommit must reject abbreviated Git OIDs even when the release state repeats them',
 );
 
 for (const [artifactLabel, mutateRow] of [
@@ -568,6 +1113,27 @@ for (const [artifactLabel, mutateRow] of [
     /duplicate|reus|same.*(?:path|artifact)|artifact.*(?:path|row)/i,
     `a ${artifactLabel} artifact cannot be reused across matrix rows`,
   );
+}
+
+for (const [artifactLabel, artifactPath, tamperedBytes] of [
+  ['screenshot', rowEvidencePaths.portal[0].screenshotBefore, pngFixture('tampered-row-screenshot')],
+  ['accessibility', rowEvidencePaths.portal[0].accessibilityBefore, Buffer.from('tampered AX evidence\n')],
+  ['runtime', rowEvidencePaths.portal[0].runtime, Buffer.from('tampered runtime evidence\n')],
+]) {
+  const originalBytes = await fs.readFile(artifactPath);
+  await fs.writeFile(artifactPath, tamperedBytes);
+  try {
+    assert.throws(
+      () => validateEvidence(validPortalEvidence, machineReadyState(), {
+        fileExists: () => true,
+        now: new Date('2026-08-09T00:05:00.000Z'),
+      }),
+      /row.*(?:artifact|evidence).*(?:SHA-256|hash|byte)|(?:SHA-256|hash|byte).*row/i,
+      `tampered row-level ${artifactLabel} evidence must fail content-integrity verification`,
+    );
+  } finally {
+    await fs.writeFile(artifactPath, originalBytes);
+  }
 }
 
 const initial = createInitialState(identity);
@@ -611,6 +1177,49 @@ const portalEvidence = validateEvidence(evidence('portal'), machineReady, {
   fileExists: (candidate) => isEvidenceFile('portal', candidate),
   now: new Date('2026-08-09T00:05:00.000Z'),
 });
+const browserEvidenceEnvelope = splitBrowserEvidenceInput({
+  attestation: {
+    surface: 'portal',
+    runId: identity.runId,
+    appId: 'e915b402-eed4-4ee2-ba1f-c31d75c870a5',
+    version: identity.version,
+    packageSha256,
+    observedAt: '2026-08-09T00:04:00.000Z',
+    titleBefore: 'Teams Admin Center',
+    titleAfter: 'Teams Admin Center',
+    observedAction: 'uploaded the verified package',
+    observedResult: 'the published version was read back',
+    tabIdBefore: 'release-loop-test-tab',
+    tabIdAfter: 'release-loop-test-tab',
+    urlBefore: 'https://admin.teams.microsoft.com/apps/example',
+    urlAfter: 'https://admin.teams.microsoft.com/apps/example',
+    submissionStatus: 'read-back-confirmed',
+    remoteOperationIdUnavailableReason: 'fixture does not expose an operation ID',
+  },
+  evidence: evidence('portal'),
+}, { requireFullEvidence: true });
+assert.equal(browserEvidenceEnvelope.format, 'envelope');
+assert.deepEqual(browserEvidenceEnvelope.evidence, evidence('portal'));
+assert.deepEqual(
+  validateEvidence(browserEvidenceEnvelope.evidence, machineReady, {
+    fileExists: (candidate) => isEvidenceFile('portal', candidate),
+    now: new Date('2026-08-09T00:05:00.000Z'),
+  }).surface,
+  'portal',
+  'the release-loop child contract must validate the evidence member of a browser envelope, not the attestation member',
+);
+if (!Array.isArray(portalEvidence.matrixArtifacts) || portalEvidence.matrixArtifacts.length !== 20) {
+  reviewGuardFailures.push('MP-4 nested artifact metadata persistence: expected 20 row artifacts');
+} else if (portalEvidence.matrixArtifacts.some((artifact) => (
+  typeof artifact.realPath !== 'string'
+  || !Number.isSafeInteger(artifact.bytes)
+  || !Number.isSafeInteger(artifact.device)
+  || !Number.isSafeInteger(artifact.inode)
+  || typeof artifact.rowId !== 'string'
+  || artifact.evidenceSurface !== 'portal'
+))) {
+  reviewGuardFailures.push('MP-4 nested artifact metadata persistence: canonical identity fields are incomplete');
+}
 assert.throws(
   () => validateEvidence(evidence('portal', { screenshotBeforePath: undefined }), machineReady, {
     fileExists: (candidate) => isEvidenceFile('portal', candidate),
@@ -641,6 +1250,7 @@ assert.deepEqual(Object.keys(portalEvidence).sort(), [
   'artifacts',
   'commit',
   'coverage',
+  'matrixArtifacts',
   'observedAt',
   'packageSha256',
   'runtimeLogPath',
@@ -661,15 +1271,88 @@ assert.deepEqual(portalEvidence.artifacts.map(({ path: artifactPathValue, role, 
   { path: artifactPath, role: 'screenshot-after', width: 1, height: 1 },
 ]);
 assert.equal(applyEvidence(machineReady, portalEvidence).status, 'PORTAL_READY');
+assert.equal(
+  applyEvidence(machineReady, portalEvidence).evidence.portal.status,
+  'READY',
+  'applied surface evidence must retain READY so the resumable release updater can advance the phase',
+);
 const portalReady = applyEvidence(machineReady, portalEvidence);
+const crossSurfaceNestedCopyPath = path.join(tempDir, 'installed-row-copy-of-portal.png');
+const crossSurfaceNestedCopyBytes = await fs.readFile(rowEvidencePaths.portal[0].screenshotBefore);
+await fs.writeFile(crossSurfaceNestedCopyPath, crossSurfaceNestedCopyBytes);
+const crossSurfaceNestedCoveragePath = path.join(tempDir, 'installed-cross-surface-row-reuse.md');
+const crossSurfaceNestedCoverageBytes = coverageMatrixBytes('installed', {
+  mutateRow: (row, index) => index === 1
+    ? {
+      ...row,
+      screenshotBefore: {
+        ...row.screenshotBefore,
+        path: crossSurfaceNestedCopyPath,
+        sha256: crypto.createHash('sha256').update(crossSurfaceNestedCopyBytes).digest('hex'),
+        bytes: crossSurfaceNestedCopyBytes.length,
+      },
+    }
+    : row,
+});
+await fs.writeFile(crossSurfaceNestedCoveragePath, crossSurfaceNestedCoverageBytes);
+expectReleaseGuard(
+  'MP-4 nested artifact reuse across prior surfaces',
+  () => validateEvidence(evidence('installed', {
+    installedVersion: identity.version,
+    coverage: {
+      ...evidence('installed').coverage,
+      matrixPath: crossSurfaceNestedCoveragePath,
+      matrixSha256: crypto.createHash('sha256').update(crossSurfaceNestedCoverageBytes).digest('hex'),
+    },
+  }), portalReady, {
+    fileExists: () => true,
+    now: new Date('2026-08-09T00:05:00.000Z'),
+  }),
+  /cross-surface|already used|reus|identical.*prior/i,
+);
 const scopedPortalCoveragePath = path.join(tempDir, 'portal-scoped-coverage.md');
 const scopedPortalCoverageBytes = coverageMatrixBytes('portal', { evidenceScope: 'portal' });
 await fs.writeFile(scopedPortalCoveragePath, scopedPortalCoverageBytes);
+const scopedPortalEvidence = validateEvidence(evidence('portal', {
+  coverage: {
+    ...evidence('portal').coverage,
+    scope: 'portal',
+    matrixPath: scopedPortalCoveragePath,
+    matrixSha256: crypto.createHash('sha256').update(scopedPortalCoverageBytes).digest('hex'),
+  },
+}), machineReady, {
+  fileExists: () => true,
+  now: new Date('2026-08-09T00:05:00.000Z'),
+});
+const scopedPortalState = applyEvidence(machineReady, scopedPortalEvidence);
+assert.equal(scopedPortalState.status, 'PORTAL_READY');
+assert.ok(!missingGates(scopedPortalState).includes('PORTAL_READY'));
+const crossSurfacePortalCoveragePath = path.join(tempDir, 'portal-scoped-cross-surface-coverage.md');
+const crossSurfacePortalCoverageBytes = coverageMatrixBytes('portal', {
+  evidenceScope: 'portal',
+  mutateRow: (row, index) => index === 0 ? { ...row, evidenceSurface: 'desktop' } : row,
+});
+await fs.writeFile(crossSurfacePortalCoveragePath, crossSurfacePortalCoverageBytes);
 assert.throws(
   () => validateEvidence(evidence('portal', {
     coverage: {
       ...evidence('portal').coverage,
       scope: 'portal',
+      matrixPath: crossSurfacePortalCoveragePath,
+      matrixSha256: crypto.createHash('sha256').update(crossSurfacePortalCoverageBytes).digest('hex'),
+    },
+  }), machineReady, {
+    fileExists: () => true,
+    now: new Date('2026-08-09T00:05:00.000Z'),
+  }),
+  /row.*(?:evidence )?surface|surface.*row|scope.*row/i,
+  'a surface-scoped coverage matrix cannot contain a row captured for another evidence surface',
+);
+assert.throws(
+  () => validateEvidence(evidence('portal', {
+    coverage: {
+      ...evidence('portal').coverage,
+      scope: undefined,
       matrixPath: scopedPortalCoveragePath,
       matrixSha256: crypto.createHash('sha256').update(scopedPortalCoverageBytes).digest('hex'),
     },
@@ -677,15 +1360,22 @@ assert.throws(
     fileExists: () => true,
     now: new Date('2026-08-09T00:05:00.000Z'),
   }),
-  /full.*coverage|coverage.*full|scope/i,
-  'surface-scoped evidence cannot bypass the full UI matrix contract',
+  /scope/i,
+  'omitting coverage.scope must not promote a surface-scoped matrix to full coverage',
 );
-const scopedPortalState = applyEvidence(machineReady, {
-  ...portalEvidence,
-  coverage: { ...portalEvidence.coverage, scope: 'portal' },
-});
-assert.equal(scopedPortalState.status, 'PUBLIC_READY');
-assert.ok(missingGates(scopedPortalState).includes('PORTAL_READY'));
+assert.throws(
+  () => validateEvidence(evidence('portal', {
+    coverage: {
+      ...evidence('portal').coverage,
+      scope: 'desktop',
+    },
+  }), machineReady, {
+    fileExists: () => true,
+    now: new Date('2026-08-09T00:05:00.000Z'),
+  }),
+  /scope.*does not match surface|surface.*scope/i,
+  'surface-scoped evidence must match the evidence surface',
+);
 assert.throws(
   () => validateEvidence(evidence('installed'), portalReady, {
     fileExists: () => true,
@@ -750,7 +1440,7 @@ assert.throws(
   /artifact/i,
 );
 assert.throws(
-  () => validateEvidence(evidence('unknown'), machineReady, {
+  () => validateEvidence({ ...evidence('portal'), surface: 'unknown' }, machineReady, {
     fileExists: () => true,
     now: new Date('2026-08-09T00:05:00.000Z'),
   }),
@@ -780,7 +1470,8 @@ for (const surface of ['portal', 'installed', 'desktop', 'mobile']) {
   const surfaceOverrides = surface === 'installed' ? { installedVersion: identity.version } : {};
   assert.throws(
     () => validateEvidence(evidence(surface, { ...surfaceOverrides, artifactPaths: [fakeArtifactPath] }), completeState, {
-      fileExists: (candidate) => candidate === fakeArtifactPath || isEvidenceFile(surface, candidate),
+      fileExists: (candidate) => candidate === fakeArtifactPath
+        || Object.keys(surfaceArtifactPaths).some((candidateSurface) => isEvidenceFile(candidateSurface, candidate)),
       now: new Date('2026-08-09T00:05:00.000Z'),
     }),
     /evidence artifact must be .*PNG, JPEG, or WebP .* image/,
@@ -793,6 +1484,164 @@ for (const surface of ['portal', 'installed', 'desktop', 'mobile']) {
 }
 assert.equal(completeState.status, 'MOBILE_READY');
 assert.deepEqual(missingGates(completeState), []);
+assert.throws(
+  () => assertReleaseUpdateCompletionContract(completeState),
+  /package\/public identity|Jira reconciliation|browser attestations/i,
+  'raw completion must not bypass the resumable release:update contract',
+);
+
+const missingSupportingRoleState = structuredClone(completeState);
+missingSupportingRoleState.evidence.portal.supportingArtifacts = missingSupportingRoleState.evidence.portal.supportingArtifacts
+  .filter((artifact) => artifact.role !== 'accessibility');
+expectReleaseGuard(
+  'MP-4 completion requires the exact supporting artifact role set',
+  () => reverifyEvidenceArtifacts(missingSupportingRoleState),
+  /exact|supporting.*(?:role|artifact)|accessibility/i,
+);
+
+const wrongSupportingPathState = structuredClone(completeState);
+const wrongSupportingPath = wrongSupportingPathState.evidence.portal.supportingArtifacts
+  .find((artifact) => artifact.role === 'accessibility');
+wrongSupportingPath.path = wrongSupportingPathState.evidence.portal.runtimeLogPath;
+expectReleaseGuard(
+  'MP-4 completion requires supporting artifact roles to use their declared paths',
+  () => reverifyEvidenceArtifacts(wrongSupportingPathState),
+  /exact|supporting.*path|accessibility/i,
+);
+
+for (const [surface, requiredKeys] of Object.entries(scopedRequiredCoverageKeys)) {
+  if (surface === 'mobile') continue;
+  const missingKey = requiredKeys.at(-1);
+  const missingRequiredPath = path.join(tempDir, `${surface}-missing-required-row.md`);
+  const missingRequiredBytes = coverageMatrixBytes(surface, {
+    evidenceScope: surface,
+    mutateRow: (row) => ({ ...row, coverage: row.coverage.filter((key) => key !== missingKey) }),
+  });
+  await fs.writeFile(missingRequiredPath, missingRequiredBytes);
+  expectReleaseGuard(
+    `MP-3 ${surface} scoped missing required coverage`,
+    () => validateEvidence(evidence(surface, {
+      ...(surface === 'installed' ? { installedVersion: identity.version } : {}),
+      coverage: {
+        ...evidence(surface).coverage,
+        scope: surface,
+        matrixPath: missingRequiredPath,
+        matrixSha256: crypto.createHash('sha256').update(missingRequiredBytes).digest('hex'),
+      },
+    }), completeState, {
+      fileExists: () => true,
+      now: new Date('2026-08-09T00:05:00.000Z'),
+    }),
+    new RegExp(`missing.*${missingKey.replaceAll('.', '\\.') }|${surface}.*required coverage`, 'i'),
+  );
+
+  const singleRowPath = path.join(tempDir, `${surface}-single-self-declared-row.md`);
+  const singleRowBytes = coverageMatrixBytes(surface, {
+    evidenceScope: surface,
+    mutateMatrix: (matrix) => ({
+      ...matrix,
+      coverage: {
+        ...matrix.coverage,
+        count: 1,
+        requiredKeys: [...matrix.rows[0].coverage],
+      },
+      rows: [matrix.rows[0]],
+    }),
+  });
+  await fs.writeFile(singleRowPath, singleRowBytes);
+  expectReleaseGuard(
+    `MP-3 ${surface} scoped single self-declared row`,
+    () => validateEvidence(evidence(surface, {
+      ...(surface === 'installed' ? { installedVersion: identity.version } : {}),
+      coverage: {
+        ...evidence(surface).coverage,
+        scope: surface,
+        matrixPath: singleRowPath,
+        matrixSha256: crypto.createHash('sha256').update(singleRowBytes).digest('hex'),
+        totalRows: 1,
+        passedRows: 1,
+      },
+    }), completeState, {
+      fileExists: () => true,
+      now: new Date('2026-08-09T00:05:00.000Z'),
+    }),
+    new RegExp(`${surface}.*required coverage|missing coverage`, 'i'),
+  );
+}
+
+const tooManyRowsCoveragePath = path.join(tempDir, 'portal-too-many-rows.md');
+const tooManyRowsCoverageBytes = coverageMatrixBytes('portal', {
+  mutateMatrix: (matrix) => {
+    const rows = Array.from({ length: 513 }, (_, index) => ({
+      ...structuredClone(matrix.rows[index % matrix.rows.length]),
+      id: `portal-overflow-row-${index}`,
+    }));
+    return { ...matrix, coverage: { ...matrix.coverage, count: rows.length }, rows };
+  },
+});
+await fs.writeFile(tooManyRowsCoveragePath, tooManyRowsCoverageBytes);
+expectReleaseGuard(
+  'MP-4 matrix row-count preflight',
+  () => validateEvidence({
+    ...validPortalEvidence,
+    coverage: {
+      ...validPortalEvidence.coverage,
+      matrixPath: tooManyRowsCoveragePath,
+      matrixSha256: crypto.createHash('sha256').update(tooManyRowsCoverageBytes).digest('hex'),
+      totalRows: 513,
+      passedRows: 513,
+    },
+  }, machineReadyState(), {
+    fileExists: () => true,
+    now: new Date('2026-08-09T00:05:00.000Z'),
+  }),
+  /row count|rows.*512|too many rows|row limit/i,
+);
+
+let aggregateNestedReads = 0;
+const aggregateCoveragePath = path.join(tempDir, 'portal-aggregate-byte-budget.md');
+const aggregateCoverageBytes = coverageMatrixBytes('portal', {
+  mutateRow: (row) => ({
+    ...row,
+    screenshotBefore: { ...row.screenshotBefore, bytes: 4 * 1024 * 1024 },
+    screenshotAfter: { ...row.screenshotAfter, bytes: 4 * 1024 * 1024 },
+    accessibilityEvidence: {
+      ...row.accessibilityEvidence,
+      before: { ...row.accessibilityEvidence.before, bytes: 4 * 1024 * 1024 },
+      after: { ...row.accessibilityEvidence.after, bytes: 4 * 1024 * 1024 },
+    },
+    runtimeEvidence: { ...row.runtimeEvidence, bytes: 4 * 1024 * 1024 },
+  }),
+});
+await fs.writeFile(aggregateCoveragePath, aggregateCoverageBytes);
+const aggregateNestedPaths = rowEvidencePaths.portal.flatMap((rowPaths) => Object.values(rowPaths));
+expectReleaseGuard(
+  'MP-4 aggregate nested byte preflight',
+  () => validateEvidence({
+    ...validPortalEvidence,
+    coverage: {
+      ...validPortalEvidence.coverage,
+      matrixPath: aggregateCoveragePath,
+      matrixSha256: crypto.createHash('sha256').update(aggregateCoverageBytes).digest('hex'),
+    },
+  }, machineReadyState(), {
+    fileExists: () => true,
+    statArtifact: (candidate) => aggregateNestedPaths.includes(candidate)
+      ? { size: 4 * 1024 * 1024, dev: 2, ino: aggregateNestedPaths.indexOf(candidate) + 1, isFile: () => true }
+      : fsSync.statSync(candidate),
+    readArtifact: (candidate) => {
+      if (aggregateNestedPaths.includes(candidate)) {
+        aggregateNestedReads += 1;
+      }
+      return fsSync.readFileSync(candidate);
+    },
+    now: new Date('2026-08-09T00:05:00.000Z'),
+  }),
+  /aggregate|byte budget|total evidence.*size|64 MiB/i,
+);
+if (aggregateNestedReads > 0) {
+  reviewGuardFailures.push('MP-4 aggregate nested byte preflight: nested files were read before aggregate rejection');
+}
 assert.throws(
   () => validateEvidence(evidence('mobile', {
     userConfirmed: true,
@@ -869,11 +1718,26 @@ assert.doesNotThrow(() => assertCurrentReleaseArtifacts(completeState));
 await fs.writeFile(artifactPath, Buffer.from(`${surfaceArtifactBytes.portal.toString('binary')}tampered`, 'binary'));
 assert.throws(() => reverifyEvidenceArtifacts(completeState), /hash|sha|changed|trailing|invalid|decode/i);
 await fs.writeFile(artifactPath, surfaceArtifactBytes.portal);
+for (const [role, artifactPathValue, tamperedBytes] of [
+  ['screenshot', rowEvidencePaths.portal[0].screenshotBefore, pngFixture('completion-tampered-row-screenshot')],
+  ['accessibility', rowEvidencePaths.portal[0].accessibilityBefore, Buffer.from('completion tampered AX evidence\n')],
+  ['runtime', rowEvidencePaths.portal[0].runtime, Buffer.from('completion tampered runtime evidence\n')],
+]) {
+  const originalBytes = await fs.readFile(artifactPathValue);
+  await fs.writeFile(artifactPathValue, tamperedBytes);
+  assert.throws(
+    () => reverifyEvidenceArtifacts(completeState),
+    /row.*(?:artifact|evidence).*(?:SHA-256|hash|byte)|(?:SHA-256|hash|byte).*row|supporting evidence artifact.*invalid/i,
+    `persisted release evidence must reverify row-level ${role} content before completion`,
+  );
+  await fs.writeFile(artifactPathValue, originalBytes);
+}
 await fs.writeFile(packagePath, Buffer.from('replacement package'));
 assert.throws(() => assertPackageIntegrity(completeState), /package.*sha|sha.*package|changed/i);
 await fs.writeFile(packagePath, packageBytes);
 assert.doesNotThrow(() => assertPublicProbeMatches(completeState, {
   version: identity.version,
+  sourceCommit: identity.commit,
   packageSha256,
   tab: { finalUrl: 'https://runtime.example.com/tabs/home' },
   tabRoutes: structuredClone(publicTabRoutes),
@@ -882,6 +1746,7 @@ assert.doesNotThrow(() => assertPublicProbeMatches(completeState, {
 assert.throws(
   () => assertPublicProbeMatches(completeState, {
     version: identity.version,
+    sourceCommit: identity.commit,
     packageSha256,
     tab: { finalUrl: 'https://wrong.example.com/tabs/home' },
     tabRoutes: structuredClone(publicTabRoutes),
@@ -894,6 +1759,7 @@ staleRecordedPublic.package.sha256 = 'c'.repeat(64);
 assert.throws(
   () => assertPublicProbeMatches(staleRecordedPublic, {
     version: identity.version,
+    sourceCommit: identity.commit,
     packageSha256: staleRecordedPublic.package.sha256,
     tab: { finalUrl: 'https://runtime.example.com/tabs/home' },
     tabRoutes: structuredClone(publicTabRoutes),
@@ -905,6 +1771,7 @@ assert.throws(
 assert.throws(
   () => assertPublicProbeMatches(completeState, {
     version: identity.version,
+    sourceCommit: identity.commit,
     packageSha256,
     tab: { finalUrl: 'https://runtime.example.com/tabs/home' },
     tabRoutes: structuredClone(publicTabRoutes),
@@ -919,6 +1786,7 @@ const completedAgain = await completeReleaseState(completeState, {
     publicProbeCount += 1;
     return {
       version: identity.version,
+      sourceCommit: identity.commit,
       packageSha256,
       tab: { finalUrl: 'https://runtime.example.com/tabs/home' },
       tabRoutes: structuredClone(publicTabRoutes),
@@ -928,6 +1796,24 @@ const completedAgain = await completeReleaseState(completeState, {
 });
 assert.equal(publicProbeCount, 1);
 assert.equal(completedAgain.status, 'COMPLETE');
+let completionCoverageReopens = 0;
+const completedWithExplicitCoverageReopen = await completeReleaseState(completeState, {
+  verifyEvidence: () => {},
+  readArtifact: (candidate) => {
+    if (Object.values(surfaceCoveragePaths).includes(candidate)) completionCoverageReopens += 1;
+    return fsSync.readFileSync(candidate);
+  },
+  probePublic: async () => ({
+    version: identity.version,
+    sourceCommit: identity.commit,
+    packageSha256,
+    tab: { finalUrl: 'https://runtime.example.com/tabs/home' },
+    tabRoutes: structuredClone(publicTabRoutes),
+    asset: { ...publicAsset },
+  }),
+});
+assert.equal(completedWithExplicitCoverageReopen.status, 'COMPLETE');
+assert.equal(completionCoverageReopens, 4, 'completion must reopen every persisted coverage.matrixPath');
 const completionFailureStatePath = path.join(tempDir, 'completion-failure.json');
 await fs.writeFile(completionFailureStatePath, JSON.stringify(completeState, null, 2));
 const publicProbeFailure = Object.assign(new Error('fresh public probe failed'), { code: 'ELOOPPHASE' });
@@ -979,7 +1865,7 @@ await assert.rejects(
     assertGit: () => true,
     log: () => {},
   }),
-  /evidence artifact hash changed/i,
+  /evidence artifact (?:hash|bytes) changed|evidence artifact is invalid/i,
 );
 const persistedMobileTamper = JSON.parse(await fs.readFile(mobileTamperStatePath, 'utf8'));
 assert.equal(persistedMobileTamper.status, 'DESKTOP_READY');
@@ -994,6 +1880,7 @@ await assert.rejects(
   completeReleaseState(completeState, {
     probePublic: async () => ({
       version: identity.version,
+      sourceCommit: identity.commit,
       packageSha256,
       tab: { finalUrl: 'https://wrong.example.com/tabs/home' },
       tabRoutes: structuredClone(publicTabRoutes),
@@ -1013,16 +1900,17 @@ assert.equal(gatePhaseForLoop('package'), 'package');
 assert.equal(gatePhaseForLoop('public'), 'public');
 const packageSummary = summarizePhase('package', {
   evidence: [
-    { package: '/absolute/teams-sdk-mvp.zip', version: identity.version, sha256: packageSha256 },
+    { package: '/absolute/teams-sdk-mvp.zip', version: identity.version, sha256: packageSha256, sourceCommit: identity.commit },
     { manifest: { version: identity.version, appId: 'app-id' } },
   ],
 });
 assert.equal(packageSummary.version, identity.version);
 assert.equal(packageSummary.sha256, packageSha256);
+assert.equal(packageSummary.sourceCommit, identity.commit);
 const publicPayloadWithoutAsset = {
   evidence: [
-    { package: packagePath, version: identity.version, sha256: packageSha256 },
-    { health: { version: identity.version, environment: 'production' } },
+    { package: packagePath, version: identity.version, sha256: packageSha256, sourceCommit: identity.commit },
+    { health: { version: identity.version, sourceCommit: identity.commit, environment: 'production' } },
     { tab: { status: 200, finalUrl: 'https://runtime.example.com/tabs/home', buildId: publicBuildId } },
     { tabRoutes: structuredClone(publicTabRoutes) },
   ],
@@ -1037,6 +1925,7 @@ const publicSummary = summarizePhase('public', {
 });
 assert.deepEqual(publicSummary.asset, publicAsset);
 assert.deepEqual(publicSummary.tabRoutes, publicTabRoutes);
+assert.equal(publicSummary.sourceCommit, identity.commit);
 assert.deepEqual(parseGatePayload('', JSON.stringify({ status: 'BLOCKED', phase: 'public' })), {
   status: 'BLOCKED',
   phase: 'public',
@@ -1044,29 +1933,99 @@ assert.deepEqual(parseGatePayload('', JSON.stringify({ status: 'BLOCKED', phase:
 
 const cliStatePath = path.join(tempDir, 'current.json');
 const cleanGitPath = path.join(tempDir, 'git');
-await fs.writeFile(cleanGitPath, '#!/bin/sh\nif [ "$1" = "status" ]; then exit 0; fi\nexec /usr/bin/git "$@"\n');
+const versionGuardStatePath = path.join(tempDir, 'version-guard.json');
+const currentCommit = spawnSync('git', ['rev-parse', 'HEAD'], {
+  cwd: process.cwd(),
+  encoding: 'utf8',
+  timeout: 5_000,
+  killSignal: 'SIGKILL',
+}).stdout.trim();
+const parentCommit = 'fedcba9876543210fedcba9876543210fedcba98';
+const currentShortCommit = spawnSync('git', ['rev-parse', '--short=7', 'HEAD'], {
+  cwd: process.cwd(),
+  encoding: 'utf8',
+  timeout: 5_000,
+  killSignal: 'SIGKILL',
+}).stdout.trim();
+await fs.writeFile(cleanGitPath, `#!/bin/sh
+case "$1" in
+  rev-parse)
+    if [ "$2" = '${currentCommit}^' ]; then
+      if [ "\${FAKE_GIT_PARENT:-0}" = '1' ]; then printf '%s\\n' '${parentCommit}'; exit 0; fi
+      exit 128
+    fi
+    printf '%s\\n' '${currentCommit}'
+    ;;
+  diff-index)
+    if [ "\${FAKE_GIT_TRACKED_DIRTY:-0}" = '1' ]; then exit 1; fi
+    if [ "$4" = '${currentCommit}' ]; then exit 0; fi
+    exit 1
+    ;;
+  diff-files)
+    exit 0
+    ;;
+  ls-files)
+    exit 0
+    ;;
+  show)
+    if [ "$2" = '${currentCommit}:appPackage/manifest.json' ]; then
+      printf '%s\\n' '{"version":"${identity.version}"}'
+      exit 0
+    fi
+    if [ "$2" = '${parentCommit}:appPackage/manifest.json' ]; then
+      printf '%s\\n' '{"version":"${identity.version}"}'
+      exit 0
+    fi
+    exit 128
+    ;;
+  *)
+    exec /usr/bin/git "$@"
+    ;;
+esac
+`);
 await fs.chmod(cleanGitPath, 0o755);
-const runCli = (args) => spawnSync(
+const runCli = (args, extraEnv = {}) => spawnSync(
   process.execPath,
   ['scripts/release-loop.mjs', ...args],
   {
     cwd: process.cwd(),
-    env: { ...process.env, PATH: `${tempDir}:${process.env.PATH}`, RELEASE_LOOP_STATE_PATH: cliStatePath },
+    env: {
+      ...process.env,
+      ...extraEnv,
+      PATH: `${tempDir}:${process.env.PATH}`,
+      RELEASE_UPDATE_DRIVER: '1',
+      RELEASE_LOOP_STATE_PATH: extraEnv.RELEASE_LOOP_STATE_PATH ?? cliStatePath,
+    },
     encoding: 'utf8',
+    timeout: 5_000,
+    killSignal: 'SIGKILL',
   },
 );
-
-const currentCommit = spawnSync('git', ['rev-parse', 'HEAD'], {
-  cwd: process.cwd(),
-  encoding: 'utf8',
-}).stdout.trim();
-const currentShortCommit = spawnSync('git', ['rev-parse', '--short=7', 'HEAD'], {
-  cwd: process.cwd(),
-  encoding: 'utf8',
-}).stdout.trim();
+const directEntryPointResult = spawnSync(
+  process.execPath,
+  ['scripts/release-loop.mjs', 'status'],
+  {
+    cwd: process.cwd(),
+    env: Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !['RELEASE_LOOP_STATE_PATH', 'RELEASE_UPDATE_DRIVER'].includes(key)),
+    ),
+    encoding: 'utf8',
+    timeout: 5_000,
+    killSignal: 'SIGKILL',
+  },
+);
+assert.notEqual(directEntryPointResult.status, 0);
+assert.match(
+  `${directEntryPointResult.stdout}\n${directEntryPointResult.stderr}`,
+  /ERELEASEENTRYPOINT|release:update/,
+  'the low-level release loop must reject direct use so it cannot create a second state file',
+);
 const currentState = machineReadyState();
 currentState.commit = currentCommit;
 currentState.shortCommit = currentShortCommit;
+currentState.machine.sourceCommit = currentCommit;
+currentState.package.sourceCommit = currentCommit;
+currentState.public.sourceCommit = currentCommit;
 await fs.writeFile(cliStatePath, JSON.stringify(currentState, null, 2));
 const statusResult = runCli(['status']);
 assert.equal(statusResult.status, 0);
@@ -1079,10 +2038,17 @@ assert.deepEqual(statusPayload.missingGates, [
   'DESKTOP_READY',
   'MOBILE_READY',
 ]);
+const trackedDirtyStatus = runCli(['status'], { FAKE_GIT_TRACKED_DIRTY: '1' });
+assert.notEqual(trackedDirtyStatus.status, 0);
+assert.match(
+  `${trackedDirtyStatus.stdout}\n${trackedDirtyStatus.stderr}`,
+  /EWORKTREEDIRTY|clean.*worktree|tracked/i,
+  'tracked changes must remain a release blocker even when the run commit is current',
+);
 const blockedComplete = runCli(['complete']);
 assert.notEqual(blockedComplete.status, 0);
 assert.match(`${blockedComplete.stdout}\n${blockedComplete.stderr}`, /BLOCKED/);
-assert.match(`${blockedComplete.stdout}\n${blockedComplete.stderr}`, /PORTAL_READY/);
+assert.match(`${blockedComplete.stdout}\n${blockedComplete.stderr}`, /PORTAL_READY|identity|Jira/i);
 
 const staleState = machineReadyState();
 await fs.writeFile(cliStatePath, JSON.stringify(staleState, null, 2));
@@ -1093,7 +2059,8 @@ for (const args of [['status'], ['evidence', '--file', staleEvidencePath], ['com
   assert.notEqual(staleResult.status, 0);
   assert.match(
     `${staleResult.stdout}\n${staleResult.stderr}`,
-    /current Git commit does not match the release run/,
+    /ESTALERELEASE|stale.*release|release.*(?:stale|commit).*HEAD|supersede/i,
+    'a release run pinned to an older commit must report a stale run/commit mismatch before clean-worktree inspection',
   );
 }
 const supersedeResult = runCli(['supersede', '--reason', 'source commit changed after the previous run']);
@@ -1106,5 +2073,22 @@ const restartedResult = runCli(['start']);
 assert.equal(restartedResult.status, 0);
 assert.match(restartedResult.stdout, /MACHINE_READY/);
 
+const sameVersionStart = runCli(['start'], {
+  FAKE_GIT_PARENT: '1',
+  RELEASE_LOOP_STATE_PATH: versionGuardStatePath,
+});
+assert.notEqual(sameVersionStart.status, 0);
+assert.match(
+  `${sameVersionStart.stdout}\n${sameVersionStart.stderr}`,
+  /EVERSIONNOTBUMPED|must be greater than the previous source version/i,
+  'the canonical start command must reject a same-version source commit before creating a release identity',
+);
+
 await fs.rm(tempDir, { recursive: true, force: true });
+await fs.rm(escapedEvidenceDirectory, { recursive: true, force: true });
+assert.deepEqual(
+  reviewGuardFailures,
+  [],
+  `independent MP-3/MP-4 review guards are still missing:\n${reviewGuardFailures.join('\n')}`,
+);
 console.log('Release loop contract tests passed.');

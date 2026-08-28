@@ -106,6 +106,9 @@ async function startServer(extraEnv = {}, options = {}) {
       WORK_ITEM_STORE_PATH: path.join(tempRoot, 'work-items.json'),
       COLLABORATION_STORE_PATH: path.join(tempRoot, 'collaboration.json'),
       AGENT_JOB_STORE_PATH: agentJobStorePath,
+      A2A_STORE_PATH: path.join(tempRoot, 'a2a.json'),
+      A2A_OUTBOUND_STORE_PATH: path.join(tempRoot, 'a2a-outbound.json'),
+      AGENT_ADMISSION_JOURNAL_PATH: path.join(tempRoot, 'agent-admission.json'),
       GENUI_ACTION_STORE_PATH: path.join(tempRoot, 'genui-actions.json'),
       RESPONSE_MODE_STORE_PATH: path.join(tempRoot, 'response-modes.json'),
       AGENT_WORKSPACE: root,
@@ -169,8 +172,9 @@ try {
     method: 'POST',
     body: JSON.stringify(activity('run read only inspection', emptyAllowlist.baseUrl, 'run-open')),
   });
-  assert.equal(readOnly.response.status, 200, 'read-only bot command remains available to authenticated users');
-  assert.match(readOnly.body.messages?.[0] ?? '', /읽기 전용|status/, 'read-only run still starts normally');
+  assert.equal(readOnly.response.status, 200, 'read-only bot command returns a safe response without an operator allowlist');
+  assert.match(readOnly.body.messages?.[0] ?? '', /운영자|권한|허용/, 'read-only Codex execution is operator-scoped and fails closed');
+  assert.equal(adaptiveCardFromActivity(readOnly.body.activities?.[0])?.type, 'AdaptiveCard', 'blocked read-only execution returns an error card');
 
   const list = await request(emptyAllowlist.baseUrl, emptyAllowlist.token, '/api/messages', {
     method: 'POST',
@@ -244,7 +248,7 @@ try {
     body: JSON.stringify(activity('write operator-owned change', operatorScoped.baseUrl, 'write-allowed', 'allowed-user')),
   });
   const jobId = writeRequest.body.messages?.[0]?.match(/task-[\w-]+/)?.[0];
-  assert.ok(jobId, 'allowed operator can create a workspace-write job');
+  assert.ok(jobId, `allowed operator can create a workspace-write job: ${JSON.stringify(writeRequest.body)}`);
 
   const crossTenant = await request(operatorScoped.baseUrl, operatorScoped.token, '/api/messages', {
     method: 'POST',

@@ -1,237 +1,234 @@
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { promisify } from 'node:util';
 
 import { AgentJobStore, type AgentJobScope } from '../src/server/agent-job-store.js';
 import {
   AgentMutationAuthorizationError,
   AgentService,
 } from '../src/server/agent-service.js';
+import {
+  AgentExecutionPolicy,
+  AgentExecutionUnavailableError,
+  AgentIsolationProvider,
+  type AgentIsolationAcquireInput,
+} from '../src/server/agent-execution-policy.js';
+import { AgentAdmissionController } from '../src/server/agent-admission-controller.js';
 import { CodexRunner } from '../src/server/codex-runner.js';
 import { GitService } from '../src/server/git-service.js';
 
-const execFileAsync = promisify(execFile);
-
 class NoopRunner {
+  runs = 0;
+
   async run(): Promise<{ threadId: string; finalMessage: string; eventCount: number }> {
+    this.runs += 1;
     return { threadId: 'thread-noop', finalMessage: 'noop', eventCount: 1 };
   }
 
-  cancel(): boolean {
-    return true;
+  cancel(): boolean { return true; }
+}
+
+class ProjectionRunner {
+  runs = 0;
+  observedWorkspace?: string;
+  sourceText?: string;
+  exposedCanaries: string[] = [];
+
+  async run(options: { workspace: string }): Promise<{ threadId: string; finalMessage: string; eventCount: number }> {
+    this.runs += 1;
+    this.observedWorkspace = options.workspace;
+    this.sourceText = await fs.readFile(path.join(options.workspace, 'src', 'visible.ts'), 'utf8');
+    for (const relativePath of ['.env', '.git/config', 'data/secret.json', 'private.key']) {
+      try {
+        await fs.access(path.join(options.workspace, relativePath));
+        this.exposedCanaries.push(relativePath);
+      } catch {
+        // The projection must not contain canaries.
+      }
+    }
+    return { threadId: 'thread-projection', finalMessage: 'projection inspected', eventCount: 1 };
+  }
+
+  cancel(): boolean { return true; }
+}
+
+class TestIsolationProvider extends AgentIsolationProvider {
+  constructor() { super('authorization-test-provider'); }
+
+  async acquire(input: AgentIsolationAcquireInput) {
+    await this.validateRequest(input);
+    return this.issueLease({
+      subject: input.subject,
+      workspace: input.workspace,
+      protectedRoots: input.protectedRoots,
+      environmentOverrides: input.environmentOverrides,
+      spawn: () => { throw new Error('authorization tests use a fake runner'); },
+    });
   }
 }
 
-class FileWritingRunner {
-  constructor(private readonly workspace: string) {}
-
-  async run(): Promise<{ threadId: string; finalMessage: string; eventCount: number }> {
-    await fs.writeFile(path.join(this.workspace, 'agent-owned.txt'), 'agent-owned v1\n', 'utf8');
-    return { threadId: 'thread-file-write', finalMessage: 'created agent-owned.txt', eventCount: 1 };
-  }
-
-  cancel(): boolean {
-    return true;
-  }
-}
-
-async function currentHead(workspace: string): Promise<string> {
-  return (await execFileAsync('git', ['rev-parse', '--short', 'HEAD'], { cwd: workspace })).stdout.trim();
-}
-
-async function waitForCompletedExecution(
-  store: AgentJobStore,
-  storePath: string,
-  id: string,
-  scope: AgentJobScope,
-): Promise<void> {
+async function waitFor(condition: () => boolean | Promise<boolean>, message: string): Promise<void> {
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
-    const job = store.get(id, scope);
-    const persisted = JSON.parse(await fs.readFile(storePath, 'utf8')) as Array<{ id?: string; progress?: string[] }>;
-    const persistedJob = persisted.find((entry) => entry.id === id);
-    if (
-      job?.status === 'completed'
-      && persistedJob?.progress?.some((entry) => entry.includes('Codex 작업 완료'))
-    ) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      return;
-    }
-    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    if (await condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  assert.fail(`job ${id} did not finish completion persistence: ${JSON.stringify(store.get(id, scope))}`);
+  assert.fail(message);
+}
+
+async function waitForRemoved(target: string): Promise<void> {
+  await waitFor(async () => {
+    try {
+      await fs.access(target);
+      return false;
+    } catch {
+      return true;
+    }
+  }, `projection was not removed: ${target}`);
 }
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-agent-authz-'));
-const workspace = path.join(root, 'workspace');
-await fs.mkdir(workspace, { recursive: true });
-await execFileAsync('git', ['init'], { cwd: workspace });
-await execFileAsync('git', ['config', 'user.name', 'Agent Test'], { cwd: workspace });
-await execFileAsync('git', ['config', 'user.email', 'agent@example.test'], { cwd: workspace });
-await fs.writeFile(path.join(workspace, 'owned.txt'), 'owned v1\n', 'utf8');
-await fs.writeFile(path.join(workspace, 'unrelated.txt'), 'unrelated v1\n', 'utf8');
-await fs.writeFile(path.join(workspace, 'concurrent.txt'), 'concurrent v1\n', 'utf8');
-await fs.writeFile(path.join(workspace, 'preexisting.txt'), 'preexisting v1\n', 'utf8');
-await execFileAsync('git', ['add', 'owned.txt', 'unrelated.txt', 'concurrent.txt', 'preexisting.txt'], { cwd: workspace });
-await execFileAsync('git', ['commit', '-m', 'test: seed workspace'], { cwd: workspace });
-
-const allowedScope: AgentJobScope = {
-  requesterId: 'allowed-user',
-  conversationId: 'conversation-a',
-  tenantId: 'tenant-a',
-};
-const blockedScope: AgentJobScope = {
-  requesterId: 'blocked-user',
-  conversationId: 'conversation-b',
-  tenantId: 'tenant-a',
-};
-
-const store = new AgentJobStore(path.join(root, 'agent-jobs.json'));
-const gitService = new GitService(workspace);
-const service = new AgentService(
-  store,
-  new NoopRunner() as unknown as CodexRunner,
-  workspace,
-  async () => undefined,
-  gitService,
-  {
-    canMutateScope: (scope) => scope.requesterId === allowedScope.requesterId,
-  },
-);
-
 try {
-  await service.initialize();
+  const workspace = path.join(root, 'workspace');
+  await fs.mkdir(path.join(workspace, 'src'), { recursive: true });
+  await fs.mkdir(path.join(workspace, 'data'), { recursive: true });
+  await fs.writeFile(path.join(workspace, 'src', 'visible.ts'), 'export const visible = true;\n', 'utf8');
+  await fs.writeFile(path.join(workspace, '.env'), 'TOKEN=env-canary\n', 'utf8');
+  await fs.writeFile(path.join(workspace, 'data', 'secret.json'), '{"secret":"data-canary"}\n', 'utf8');
+  await fs.writeFile(path.join(workspace, 'private.key'), 'key-canary\n', 'utf8');
 
-  await assert.rejects(
-    () => service.submit({ prompt: 'write forbidden change', mode: 'workspace-write', scope: blockedScope }),
-    AgentMutationAuthorizationError,
-    'non-operators cannot submit workspace-write jobs',
-  );
+  const allowed: AgentJobScope = { requesterId: 'allowed-user', conversationId: 'conversation-a', tenantId: 'tenant-a' };
+  const blocked: AgentJobScope = { requesterId: 'blocked-user', conversationId: 'conversation-b', tenantId: 'tenant-a' };
+  const gitService = new GitService(workspace);
 
-  const blockedReadOnlyCancel = await store.create({
-    prompt: 'read-only cancellation authorization',
-    mode: 'read-only',
-    scope: blockedScope,
-  });
-  await assert.rejects(
-    () => service.cancelStrict(blockedReadOnlyCancel.id, blockedScope),
-    AgentMutationAuthorizationError,
-    'user-facing strict cancellation is operator-only even for read-only jobs',
-  );
-
-  const headBeforeReadOnlyCommit = await currentHead(workspace);
-  const readOnlyJob = await store.create({ prompt: 'inspect only', mode: 'read-only', scope: allowedScope });
-  await store.update(readOnlyJob.id, allowedScope, {
-    status: 'completed',
-    threadId: 'thread-read-only',
-    result: 'done',
-    finishedAt: new Date().toISOString(),
-  });
-  const readOnlyCommit = await service.commit(readOnlyJob.id, 'test: read-only commit', allowedScope);
-  assert.match(readOnlyCommit?.commitMessage ?? '', /읽기 전용|workspace-write/, 'read-only jobs cannot be committed');
-  assert.equal(await currentHead(workspace), headBeforeReadOnlyCommit, 'read-only commit never creates a Git commit');
-
-  const headBeforeUnownedCommit = await currentHead(workspace);
-  const writeJob = await store.create({ prompt: 'write without path ownership', mode: 'workspace-write', scope: allowedScope });
-  await store.update(writeJob.id, allowedScope, {
-    status: 'completed',
-    threadId: 'thread-write',
-    result: 'changed file but no recorded ownership',
-    finishedAt: new Date().toISOString(),
-  });
-  await fs.writeFile(path.join(workspace, 'owned.txt'), 'owned v2\n', 'utf8');
-  const blockedCommit = await service.commit(writeJob.id, 'test: blocked write commit', allowedScope);
-  assert.match(blockedCommit?.commitMessage ?? '', /변경 경로|소유권|증명/, 'write commits fail closed when the job has no recorded changed paths');
-  assert.equal(await currentHead(workspace), headBeforeUnownedCommit, 'unowned write commit never creates a Git commit');
-
-  await execFileAsync('git', ['restore', '--', 'owned.txt'], { cwd: workspace });
-  await fs.writeFile(path.join(workspace, 'preexisting.txt'), 'preexisting dirty before agent\n', 'utf8');
-  const persistedJobPath = path.join(root, 'captured-agent-jobs.json');
-  const capturingStore = new AgentJobStore(persistedJobPath);
-  const capturingService = new AgentService(
-    capturingStore,
-    new FileWritingRunner(workspace) as unknown as CodexRunner,
+  const blockedStore = new AgentJobStore(path.join(root, 'blocked-jobs.json'));
+  const blockedRunner = new NoopRunner();
+  const blockedService = new AgentService(
+    blockedStore,
+    blockedRunner as unknown as CodexRunner,
     workspace,
     async () => undefined,
     gitService,
-    { canMutateScope: () => true },
+    { canMutateScope: (scope) => scope.requesterId === allowed.requesterId, admissionJournalPath: path.join(root, 'blocked-admission.json') },
   );
-  await capturingService.initialize();
-  const capturedJob = await capturingService.submit({
-    prompt: 'create an owned file',
-    mode: 'workspace-write',
-    scope: allowedScope,
-  });
-  await capturingService.approve(capturedJob.id, allowedScope);
-  await waitForCompletedExecution(capturingStore, persistedJobPath, capturedJob.id, allowedScope);
-  assert.deepEqual(
-    capturingStore.get(capturedJob.id, allowedScope)?.changedPaths,
-    ['agent-owned.txt'],
-    'workspace-write completion records only paths that became dirty during that execution',
+  await blockedService.initialize();
+  await assert.rejects(
+    () => blockedService.submit({ prompt: 'read forbidden', mode: 'read-only', scope: blocked }),
+    AgentMutationAuthorizationError,
+  );
+  assert.equal(blockedStore.listLocalOnly(20).length, 0);
+  assert.equal(blockedRunner.runs, 0);
+  await assert.rejects(
+    () => blockedService.runForCopilot({ prompt: 'natural language read', scope: blocked, timeoutMs: 100 }),
+    AgentMutationAuthorizationError,
   );
 
-  const reloadedStore = new AgentJobStore(persistedJobPath);
-  const reloadedService = new AgentService(
-    reloadedStore,
+  const unavailableStore = new AgentJobStore(path.join(root, 'unavailable-jobs.json'));
+  const unavailableRunner = new NoopRunner();
+  const unavailableService = new AgentService(
+    unavailableStore,
+    unavailableRunner as unknown as CodexRunner,
+    workspace,
+    async () => undefined,
+    gitService,
+    { canMutateScope: () => true, canReadScope: () => true, admissionJournalPath: path.join(root, 'unavailable-admission.json') },
+  );
+  await unavailableService.initialize();
+  await assert.rejects(
+    () => unavailableService.submit({ prompt: 'read without provider', mode: 'read-only', scope: allowed }),
+    (error: unknown) => error instanceof AgentExecutionUnavailableError && error.code === 'UNAVAILABLE',
+  );
+  assert.equal(unavailableStore.listLocalOnly(20).length, 0, 'missing production provider rejects before persistence');
+  assert.equal(unavailableRunner.runs, 0, 'missing production provider rejects before spawn');
+
+  const provider = new TestIsolationProvider();
+  const projectionStorePath = path.join(root, 'projection-jobs.json');
+  const projectionStore = new AgentJobStore(projectionStorePath);
+  const projectionRunner = new ProjectionRunner();
+  const projectionPolicy = new AgentExecutionPolicy(workspace, {
+    canMutateScope: () => true,
+    canReadScope: () => true,
+    isolationProvider: provider,
+  });
+  const projectionController = new AgentAdmissionController(
+    { globalLimit: 2, perTenantLimit: 2, perRequesterLimit: 1 },
+    { journalPath: path.join(root, 'projection-admission.json') },
+  );
+  const projectionService = new AgentService(
+    projectionStore,
+    projectionRunner as unknown as CodexRunner,
+    workspace,
+    async () => undefined,
+    gitService,
+    { canMutateScope: () => true, canReadScope: () => true, executionPolicy: projectionPolicy, admissionController: projectionController },
+  );
+  await projectionService.initialize();
+  const projected = await projectionService.submit({ prompt: 'inspect allowlisted source', mode: 'read-only', scope: allowed });
+  await waitFor(() => projectionStore.get(projected.id, allowed)?.status === 'completed', 'projection job did not complete');
+  assert.notEqual(projectionRunner.observedWorkspace, workspace);
+  assert.equal(projectionRunner.sourceText, 'export const visible = true;\n');
+  assert.deepEqual(projectionRunner.exposedCanaries, []);
+  assert.equal(projectionRunner.runs, 1);
+  await waitForRemoved(projectionRunner.observedWorkspace!);
+
+  const persistedBeforeAbsolute = projectionStore.listLocalOnly(20).length;
+  await assert.rejects(
+    () => projectionService.submit({ prompt: `inspect ${workspace}/owned.txt`, mode: 'read-only', scope: allowed }),
+    (error: unknown) => error instanceof AgentExecutionUnavailableError && error.code === 'UNAVAILABLE',
+  );
+  assert.equal(projectionStore.listLocalOnly(20).length, persistedBeforeAbsolute, 'absolute source path has persistence=0');
+  assert.equal(projectionRunner.runs, 1, 'absolute source path has spawn=0');
+
+  const unstableStore = new AgentJobStore(path.join(root, 'unstable-jobs.json'));
+  const unstablePolicy = new AgentExecutionPolicy(workspace, {
+    canMutateScope: () => true,
+    canReadScope: () => true,
+    isolationProvider: provider,
+    projectionHooks: { afterCopy: async () => fs.writeFile(path.join(workspace, 'src', 'visible.ts'), 'changed during projection\n', 'utf8') },
+  });
+  const unstableService = new AgentService(
+    unstableStore,
     new NoopRunner() as unknown as CodexRunner,
     workspace,
     async () => undefined,
     gitService,
-    { canMutateScope: () => true },
+    { canMutateScope: () => true, canReadScope: () => true, executionPolicy: unstablePolicy, admissionJournalPath: path.join(root, 'unstable-admission.json') },
   );
-  await reloadedService.initialize();
-  assert.deepEqual(
-    reloadedStore.get(capturedJob.id, allowedScope)?.changedPaths,
-    ['agent-owned.txt'],
-    'captured path ownership survives an AgentJobStore restart',
+  await unstableService.initialize();
+  await assert.rejects(
+    () => unstableService.submit({ prompt: 'detect source mutation', mode: 'read-only', scope: allowed }),
+    /작업공간을 안전하게 준비하지 못했습니다/,
   );
-  const capturedCommit = await reloadedService.commit(capturedJob.id, 'test: captured agent path', allowedScope);
-  assert.ok(capturedCommit?.commitHash, 'a completed workspace-write job can commit its persisted changed paths');
-  const capturedCommitPaths = (await execFileAsync('git', ['show', '--name-only', '--format=', 'HEAD'], { cwd: workspace })).stdout
-    .trim()
-    .split('\n');
-  assert.deepEqual(capturedCommitPaths, ['agent-owned.txt'], 'positive agent commit contains only the captured job path');
-  assert.match(
-    (await execFileAsync('git', ['status', '--porcelain', '--', 'preexisting.txt'], { cwd: workspace })).stdout,
-    /preexisting\.txt/,
-    'a dirty path present before execution remains outside the agent commit',
-  );
+  assert.equal(unstableStore.listLocalOnly(20).length, 0);
+  await fs.writeFile(path.join(workspace, 'src', 'visible.ts'), 'export const visible = true;\n', 'utf8');
 
-  await execFileAsync('git', ['restore', '--', 'owned.txt', 'unrelated.txt', 'concurrent.txt', 'preexisting.txt'], { cwd: workspace });
-  await fs.writeFile(path.join(workspace, 'owned.txt'), 'owned v3\n', 'utf8');
-  await fs.writeFile(path.join(workspace, 'unrelated.txt'), 'unrelated v2\n', 'utf8');
-  await fs.writeFile(path.join(workspace, 'concurrent.txt'), 'concurrent v2\n', 'utf8');
-  await execFileAsync('git', ['add', '--', 'unrelated.txt'], { cwd: workspace });
-  const postIndexChangeHook = path.join(workspace, '.git', 'hooks', 'post-index-change');
-  await fs.writeFile(
-    postIndexChangeHook,
-    '#!/bin/sh\nmarker=.git/hooks/.concurrent-staged\nif [ ! -f "$marker" ]; then\n  touch "$marker"\n  git add -- concurrent.txt\nfi\n',
-    'utf8',
+  await fs.symlink(path.join(root, 'outside'), path.join(workspace, 'src', 'escape-link'));
+  await assert.rejects(
+    () => projectionService.submit({ prompt: 'unsafe symlink', mode: 'read-only', scope: allowed }),
+    /작업공간을 안전하게 준비하지 못했습니다/,
   );
-  await fs.chmod(postIndexChangeHook, 0o755);
-  const scopedCommit = await gitService.commit('test: owned paths only', { ownedPaths: ['owned.txt'] });
-  assert.equal(scopedCommit.committed, true, 'GitService can commit only the job-owned paths');
-  const committedPaths = (await execFileAsync('git', ['show', '--name-only', '--format=', 'HEAD'], { cwd: workspace })).stdout
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
-  assert.deepEqual(committedPaths, ['owned.txt'], 'unrelated pre-existing diffs are never staged into the job commit');
-  const remainingStatus = (await execFileAsync('git', ['status', '--porcelain'], { cwd: workspace })).stdout;
-  assert.match(remainingStatus, /unrelated\.txt/, 'unrelated pre-staged changes remain staged for their original owner');
-  assert.match(remainingStatus, /concurrent\.txt/, 'entries staged concurrently during commit remain outside the job commit');
-  const remainingStagedPaths = (await execFileAsync('git', ['diff', '--cached', '--name-only'], { cwd: workspace })).stdout
-    .trim()
-    .split('\n');
-  assert.deepEqual(
-    remainingStagedPaths,
-    ['concurrent.txt', 'unrelated.txt'],
-    'pre-staged and post-index-change entries both remain staged after the isolated commit',
-  );
+  assert.equal(projectionStore.listLocalOnly(20).length, persistedBeforeAbsolute);
+  await fs.unlink(path.join(workspace, 'src', 'escape-link'));
 
-  console.log('PASS: AgentService enforces operator-only mutations, blocks read-only or unowned commits, and GitService commits only owned paths');
+  await fs.link(path.join(workspace, '.env'), path.join(workspace, 'src', 'hardlink-canary.ts'));
+  await assert.rejects(
+    () => projectionService.submit({ prompt: 'unsafe hardlink', mode: 'read-only', scope: allowed }),
+    /작업공간을 안전하게 준비하지 못했습니다/,
+  );
+  assert.equal(projectionStore.listLocalOnly(20).length, persistedBeforeAbsolute);
+  await fs.unlink(path.join(workspace, 'src', 'hardlink-canary.ts'));
+
+  const failedRead = await blockedStore.create({ prompt: 'retry policy', provider: 'codex', mode: 'read-only', scope: blocked });
+  await blockedStore.update(failedRead.id, blocked, { status: 'failed', error: 'expected', finishedAt: new Date().toISOString() });
+  await assert.rejects(() => blockedService.retry(failedRead.id, blocked), AgentMutationAuthorizationError);
+  const completedRead = await blockedStore.create({ prompt: 'continue policy', provider: 'codex', mode: 'read-only', scope: blocked });
+  await blockedStore.update(completedRead.id, blocked, { status: 'completed', threadId: 'thread-forbidden', result: 'done', finishedAt: new Date().toISOString() });
+  await assert.rejects(() => blockedService.continue(completedRead.id, 'continue', blocked), AgentMutationAuthorizationError);
+  await assert.rejects(() => blockedService.submit({ prompt: 'write forbidden', mode: 'workspace-write', scope: blocked }), AgentMutationAuthorizationError);
+
+  await Promise.all([blockedService.close(), unavailableService.close(), projectionService.close(), unstableService.close()]);
+  console.log('PASS: AgentService central policy blocks unauthorized/missing-provider/absolute-path read-only work before persistence or spawn and verifies projection canaries/TOCTOU/symlink/hardlink rejection');
 } finally {
   await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 }

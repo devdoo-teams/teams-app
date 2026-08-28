@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
@@ -15,6 +15,7 @@ const execFileAsync = promisify(execFile);
 const root = process.cwd();
 const runtimeDistRoot = resolveRuntimeDistRoot(root);
 const ACCESS_TOKEN_HEADER = 'x-teams-local-access-token';
+const optionalRuntimeUnconfigured = process.argv.includes('--optional-runtime-unconfigured');
 
 function assertPass(condition: unknown, message: string): asserts condition {
   assert.ok(condition, `FAIL: ${message}`);
@@ -82,23 +83,6 @@ async function request(
   return { response, body };
 }
 
-async function waitForOutboxCompletion(
-  baseUrl: string,
-  token: string,
-  conversationId: string,
-  expectedText: string,
-): Promise<string[]> {
-  const messages: string[] = [];
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    const result = await request(baseUrl, `/api/debug/agent-outbox/${conversationId}`, token);
-    messages.push(...(result.body.messages ?? []));
-    if (messages.some((message) => message.includes(expectedText))) return messages;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  throw new Error(`proactive completion did not arrive for ${conversationId}`);
-}
-
 function activity(baseUrl: string, text: string, suffix: string, value?: unknown) {
   return {
     type: 'message',
@@ -164,15 +148,33 @@ async function testProductionMiddlewareRejectsUnauthenticated(): Promise<void> {
 
 async function main(): Promise<void> {
   await testProductionMiddlewareRejectsUnauthenticated();
-  await execFileAsync(process.execPath, ['scripts/build-server.mjs'], { cwd: root });
+  const expectedCommit = process.env.TEAMS_SOURCE_COMMIT?.trim();
+  if (expectedCommit) {
+    const marker = JSON.parse(await readFile(
+      join(runtimeDistRoot, 'server', '.teams-server-build-commit'),
+      'utf8',
+    )) as { commit?: unknown; mode?: unknown; worktree?: unknown };
+    assert.equal(marker.commit, expectedCommit, 'response-mode runtime bundle matches the Core runner source commit');
+    assert.equal(
+      marker.mode,
+      optionalRuntimeUnconfigured ? 'optional' : 'core',
+      'response-mode runtime test uses the requested server bundle mode',
+    );
+    assert.equal(marker.worktree, 'clean', 'response-mode Core gate uses a clean-worktree server bundle');
+  } else {
+    await execFileAsync(
+      process.execPath,
+      ['scripts/build-server.mjs', ...(optionalRuntimeUnconfigured ? [] : ['--core'])],
+      { cwd: root },
+    );
+  }
 
   const dataRoot = await mkdtemp(join(tmpdir(), 'response-mode-api-test-'));
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const token = 'response-mode-local-test-token-0123456789';
-  const child = spawn(process.execPath, [join(runtimeDistRoot, 'server', 'index.js')], {
-    cwd: root,
-    env: {
+  const grokExpected = optionalRuntimeUnconfigured && Boolean(process.env.XAI_API_KEY?.trim());
+  const serverEnv = {
       ...process.env,
       NODE_ENV: 'development',
       PORT: String(port),
@@ -180,23 +182,28 @@ async function main(): Promise<void> {
       WORK_ITEM_STORE_PATH: join(dataRoot, 'work-items.json'),
       COLLABORATION_STORE_PATH: join(dataRoot, 'collaboration.json'),
       AGENT_JOB_STORE_PATH: join(dataRoot, 'agent-jobs.json'),
+      A2A_STORE_PATH: join(dataRoot, 'a2a.json'),
+      A2A_OUTBOUND_STORE_PATH: join(dataRoot, 'a2a-outbound.json'),
+      AGENT_ADMISSION_JOURNAL_PATH: join(dataRoot, 'agent-admission.json'),
       GENUI_ACTION_STORE_PATH: join(dataRoot, 'genui-actions.json'),
       RESPONSE_MODE_STORE_PATH: join(dataRoot, 'response-modes.json'),
       AGENT_WORKSPACE: root,
       CODEX_BIN: process.execPath,
       CODEX_SCRIPT: join(root, 'scripts/fake-codex.mjs'),
       WEATHER_MODE: 'demo',
-      COPILOTKIT_DETERMINISTIC_MODE: 'true',
+      COPILOTKIT_DETERMINISTIC_MODE: '',
       OPENAI_API_KEY: '',
       OPENAI_MODEL: '',
       LOCAL_MODEL_BASE_URL: '',
       LOCAL_MODEL_NAME: '',
+      TEAMS_OPTIONAL_RUNTIME: optionalRuntimeUnconfigured ? 'true' : '',
       TEAMS_USE_SDK: 'false',
       TEAMS_SKIP_OUTBOUND: 'true',
       TEAMS_SKIP_AUTH: 'true',
       TEAMS_LOCAL_DEV: 'true',
       TEAMS_BIND_HOST: '127.0.0.1',
       TEAMS_LOCAL_ACCESS_TOKEN: token,
+      TEAMS_OPERATOR_REQUESTER_ALLOWLIST: 'response-mode-tenant/response-mode-user',
       // The release gate loads .env.runtime before invoking npm test. Keep
       // public deployment hints out of this intentionally local test process;
       // the server must reject skip-auth when those hints are present.
@@ -205,12 +212,19 @@ async function main(): Promise<void> {
       BOT_DOMAIN: '',
       DEV_TUNNEL_ID: '',
       MCP_PUBLIC_ENABLED: '',
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  };
   let output = '';
-  child.stdout?.on('data', (chunk) => { output += chunk.toString(); });
-  child.stderr?.on('data', (chunk) => { output += chunk.toString(); });
+  const startServer = (): ChildProcess => {
+    const server = spawn(process.execPath, [join(runtimeDistRoot, 'server', 'index.js')], {
+      cwd: root,
+      env: serverEnv,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    server.stdout?.on('data', (chunk) => { output += chunk.toString(); });
+    server.stderr?.on('data', (chunk) => { output += chunk.toString(); });
+    return server;
+  };
+  let child = startServer();
 
   try {
     await waitForHealth(baseUrl, token, () => ({ exitCode: child.exitCode, output }));
@@ -226,7 +240,18 @@ async function main(): Promise<void> {
       ['deterministic', true],
       ['openai', false],
       ['local', false],
+      ['grok', grokExpected],
     ]);
+    const health = await request(baseUrl, '/api/health', token);
+    assert.equal(health.response.status, 200);
+    if (grokExpected) {
+      assert.equal(health.body.genAI, 'grok-configured');
+      assert.equal(health.body.genAIProvider?.provider, 'grok');
+      assert.equal(health.body.responseProviders?.grok, true);
+      assert.equal(health.body.genAIProvider?.model, process.env.XAI_MODEL?.trim() || 'grok-4.6');
+      const configuredGrokKey = process.env.XAI_API_KEY?.trim() ?? '';
+      assertPass(!configuredGrokKey || !JSON.stringify(health.body).includes(configuredGrokKey), 'Grok health does not expose the xAI key');
+    }
     const publicJson = JSON.stringify(initial.body);
     assertPass(!publicJson.includes('OPENAI_API_KEY') && !publicJson.includes('LOCAL_MODEL_BASE_URL'), 'response-mode status has no secret or provider URL credential');
     assertPass(initial.body.mode === 'deterministic', 'new authenticated scope defaults to deterministic mode');
@@ -273,7 +298,7 @@ async function main(): Promise<void> {
     const modeActivity = modeCard.body.activities?.[0];
     assertPass(!('text' in (modeActivity ?? {})) && modeActivity?.attachmentLayout === 'list', 'mode card activity is attachment-only with list layout');
     assertPass(card?.type === 'AdaptiveCard' && card.version === '1.2', 'Teams mode command returns an Adaptive Card 1.2 card');
-    assertPass(card.actions?.length === 1, 'mode card exposes actions only for configured modes');
+    assertPass(card.actions?.length === 1 + (grokExpected ? 1 : 0), 'mode card exposes actions only for configured modes');
     assertPass(card.actions.every((action: any) => action.type === 'Action.Submit' && typeof action.data?.mode === 'string' && !('isEnabled' in action)), 'mode card actions carry only configured validated choices');
     const facts = card.body?.find((element: any) => element.type === 'FactSet')?.facts ?? [];
     assertPass(facts.some((fact: any) => fact.title === 'OpenAI') && facts.some((fact: any) => fact.title === '로컬/사내 모델'), 'unconfigured modes remain visible as facts');
@@ -290,27 +315,41 @@ async function main(): Promise<void> {
       body: JSON.stringify(activity(baseUrl, '현재 업무 목록 보여줘', 'natural-language')),
     });
     assert.equal(naturalLanguage.response.status, 200, JSON.stringify(naturalLanguage.body));
+    const naturalActivities = naturalLanguage.body.activities ?? [];
+    assert.equal(naturalActivities.length, 1, JSON.stringify(naturalLanguage.body));
+    const naturalActivity = naturalActivities[0];
+    const naturalCard = naturalActivity?.attachments?.find(
+      (attachment: any) => attachment.contentType === 'application/vnd.microsoft.card.adaptive',
+    )?.content;
+    const naturalCardJson = JSON.stringify(naturalCard ?? {});
     assertPass(
-      JSON.stringify(naturalLanguage.body.activities).includes('업무 목록'),
-      'Teams Bot natural-language messages use the persisted response-engine selection and return GenUI',
+      !('text' in (naturalActivity ?? {}))
+        && naturalCard?.type === 'AdaptiveCard'
+        && naturalCard?.version === '1.2'
+        && naturalCardJson.includes('업무 목록')
+        && !/A2A|협업.*접수|신뢰된 격리/.test(naturalCardJson),
+      `Teams Bot natural-language messages honor deterministic mode with one attachment-only task-list card: ${naturalCardJson}`,
+    );
+    const a2aState = JSON.parse(await readFile(join(dataRoot, 'a2a.json'), 'utf8')) as {
+      tasks?: Record<string, unknown>;
+    };
+    assertPass(
+      Object.keys(a2aState.tasks ?? {}).length === 0,
+      'ordinary natural-language messages do not create A2A parent tasks',
     );
 
     const asyncSuffix = 'natural-agent-async';
-    const asyncConversationId = `response-mode-conversation-${asyncSuffix}`;
     const naturalAgent = await request(baseUrl, '/api/messages', token, {
       method: 'POST',
       body: JSON.stringify(activity(baseUrl, '현재 구현 상태를 분석해줘', asyncSuffix)),
     });
     const immediatePayload = JSON.stringify(naturalAgent.body);
-    const asyncJobId = immediatePayload.match(/task-[\w-]+/)?.[0];
-    assertPass(naturalAgent.response.status === 200 && Boolean(asyncJobId), 'Teams Bot acknowledges a natural Codex job immediately with its job id');
-    assertPass(!immediatePayload.includes('FAKE_CODEX_OK'), 'Teams Bot immediate acknowledgement does not wait for or embed the final Codex result');
-    assertPass(immediatePayload.includes('로딩 중'), 'Teams Bot immediate acknowledgement renders a loading job card');
-    const proactiveMessages = await waitForOutboxCompletion(baseUrl, token, asyncConversationId, 'FAKE_CODEX_OK');
     assertPass(
-      proactiveMessages.some((message) => message.includes(asyncJobId!)),
-      'natural Codex completion is delivered proactively to the same Teams conversation',
+      naturalAgent.response.status === 200
+        && immediatePayload.includes('신뢰된 격리'),
+      `Teams Bot fails closed when a natural Codex job has no trusted isolation provider: ${immediatePayload}`,
     );
+    assertPass(!immediatePayload.includes('FAKE_CODEX_OK'), 'Teams Bot immediate acknowledgement does not wait for or embed the final Codex result');
 
     const storePath = join(dataRoot, 'cross-tenant.json');
     const store = new ResponseModeStore(storePath);
@@ -319,6 +358,53 @@ async function main(): Promise<void> {
     await store.set(scopeA, 'openai');
     assert.equal(await store.get(scopeB), 'deterministic');
     assertPass(await store.get(scopeB) === 'deterministic', 'response mode preferences cannot leak across tenants');
+
+    await stop(child);
+    const persistedBotMode = new ResponseModeStore(join(dataRoot, 'response-modes.json'));
+    await persistedBotMode.set({
+      tenantId: 'response-mode-tenant',
+      requesterId: 'response-mode-user',
+    }, 'openai');
+    output = '';
+    child = startServer();
+    await waitForHealth(baseUrl, token, () => ({ exitCode: child.exitCode, output }));
+
+    const unavailablePersistedMode = await request(baseUrl, '/api/messages', token, {
+      method: 'POST',
+      body: JSON.stringify(activity(baseUrl, '현재 업무 목록 보여줘', 'persisted-unavailable-mode')),
+    });
+    assert.equal(unavailablePersistedMode.response.status, 200, JSON.stringify(unavailablePersistedMode.body));
+    assert.equal(unavailablePersistedMode.body.activities?.length, 1);
+    const unavailableModeActivity = unavailablePersistedMode.body.activities[0];
+    const unavailableModeCard = unavailableModeActivity?.attachments?.find(
+      (attachment: any) => attachment.contentType === 'application/vnd.microsoft.card.adaptive',
+    )?.content;
+    const unavailableModeJson = JSON.stringify(unavailableModeCard ?? {});
+    const unavailableModeFacts = unavailableModeCard?.body?.find(
+      (element: any) => element.type === 'FactSet',
+    )?.facts ?? [];
+    const unavailableOpenAiFact = unavailableModeFacts.find((fact: any) => fact.title === 'OpenAI');
+    assertPass(
+      !('text' in (unavailableModeActivity ?? {}))
+        && unavailableModeCard?.type === 'AdaptiveCard'
+        && unavailableModeJson.includes('응답 모드')
+        && unavailableModeJson.includes('OpenAI')
+        && unavailableModeJson.includes('서버')
+        && unavailableModeCard.actions?.some((action: any) => action.data?.mode === 'deterministic')
+        && !unavailableModeCard.actions?.some((action: any) => action.data?.mode === 'openai'),
+      `a persisted unavailable provider returns an actionable attachment-only mode card without silent fallback: ${unavailableModeJson}`,
+    );
+    assertPass(
+      unavailableOpenAiFact?.value === 'OpenAI: 서버 설정 필요 · 현재 선택',
+      `an unavailable provider does not advertise a misleading model name: ${JSON.stringify(unavailableOpenAiFact)}`,
+    );
+    const unavailableModeA2a = JSON.parse(await readFile(join(dataRoot, 'a2a.json'), 'utf8')) as {
+      tasks?: Record<string, unknown>;
+    };
+    assertPass(
+      Object.keys(unavailableModeA2a.tasks ?? {}).length === 0,
+      'an unavailable persisted response mode does not create an A2A parent task',
+    );
 
     console.log('PASS: response-mode API, card selection, scoped persistence, and safe provider status');
   } finally {

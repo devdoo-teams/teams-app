@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 
 const base = {
   TEAMS_APP_ID: '00000000-0000-4000-8000-000000000001',
+  TEAMS_CATALOG_APP_ID: '00000000-0000-4000-8000-000000000006',
   BOT_ID: '00000000-0000-4000-8000-000000000002',
   TAB_DOMAIN: 'runtime.example.com',
   CLIENT_ID: '00000000-0000-4000-8000-000000000003',
@@ -20,6 +21,20 @@ function run(overrides = {}) {
 
 const valid = run();
 assert.equal(valid.status, 0, valid.stderr || valid.stdout);
+
+const missingCatalogAppId = run({ TEAMS_CATALOG_APP_ID: '' });
+assert.notEqual(missingCatalogAppId.status, 0, 'an org-catalog deep-link ID is required separately from the manifest ID');
+assert.match(
+  `${missingCatalogAppId.stdout}\n${missingCatalogAppId.stderr}`,
+  /TEAMS_CATALOG_APP_ID/,
+);
+
+const malformedCatalogAppId = run({ TEAMS_CATALOG_APP_ID: 'external-id-is-not-a-guid' });
+assert.notEqual(malformedCatalogAppId.status, 0, 'the org-catalog deep-link ID must be a UUID');
+assert.match(
+  `${malformedCatalogAppId.stdout}\n${malformedCatalogAppId.stderr}`,
+  /TEAMS_CATALOG_APP_ID/,
+);
 
 const mismatched = run({ APPLICATION_ID_URI: 'api://runtime.example.com/00000000-0000-4000-8000-000000000003' });
 assert.notEqual(mismatched.status, 0, 'a non-botid Application ID URI must fail preflight for a Teams SDK bot app');

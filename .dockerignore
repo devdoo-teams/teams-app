@@ -1,9 +1,9 @@
 node_modules
 dist
-data
+data/*
 appPackage/build
 .env
 .env.*
-.git
-.gitignore
+!.env.example
+!data/.gitkeep
 *.log

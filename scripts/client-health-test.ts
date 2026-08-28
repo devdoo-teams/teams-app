@@ -27,6 +27,7 @@ const {
   healthStorageLabel,
   healthUserAuthLabel,
   genAiLabel,
+  releaseIdentityLabel,
   runtimeBadgeLabel,
 } = await import('../src/client/App.js');
 
@@ -46,6 +47,22 @@ assert.equal(healthStorageLabel('file-json-single-process'), '파일 JSON (단�
 assert.equal(genAiLabel('not-configured'), '미사용 · 결정형 기본');
 assert.equal(genAiLabel('deterministic-test'), '결정형 테스트');
 assert.equal(genAiLabel('openai-configured'), 'OpenAI (선택형)');
+assert.equal(genAiLabel('grok-configured'), 'Grok (xAI) 선택형');
+assert.equal(
+  releaseIdentityLabel({ version: '1.0.45', sourceCommit: '9576052b55327b0ca5c40dc326fb4926a26ee864' }),
+  '1.0.45 · 9576052',
+  'release identity exposes the app version and a short source commit',
+);
+assert.equal(
+  releaseIdentityLabel({ version: '1.0.45' }),
+  '1.0.45 · 소스 확인 필요',
+  'release identity does not imply source verification when the commit is absent',
+);
+assert.equal(
+  releaseIdentityLabel(null),
+  '릴리스 identity 확인 필요',
+  'missing health does not render a false release identity',
+);
 assert.equal(
   runtimeBadgeLabel({ healthLoading: false, teamsHost: false, auth: 'not-configured' }),
   '인증 설정 필요',

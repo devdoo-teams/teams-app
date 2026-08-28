@@ -276,6 +276,9 @@ export async function getWeather(
   longitude: number,
   options: WeatherRequestOptions = {},
 ): Promise<WeatherResponse> {
+  if (!validateCoordinates(latitude, longitude)) {
+    throw new Error('날씨 요청 좌표가 올바르지 않습니다. 위도는 -90~90, 경도는 -180~180 범위여야 합니다.');
+  }
   if (options.demo || process.env.WEATHER_MODE === 'demo') {
     return createDemoWeather(latitude, longitude);
   }

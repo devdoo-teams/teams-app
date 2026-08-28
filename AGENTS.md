@@ -58,13 +58,17 @@ Teams 앱 변경 요청에는 별도 예외 승인이 없는 한 다음 순서�
 - 공개 서버·Dev Tunnel·업로드 세션·UI 검증을 서로 독립된 작업으로 취급한다. 한 작업이 대기하거나 잠겨도 다른 작업을 중단하지 않고, `ps`/포트/`/api/health`/최근 로그로 각 작업의 생존 여부를 따로 판정한다.
 - 하위 에이전트는 작업 ID별로 `pending_init`, `running`, `needs_attention`, `completed`, `errored`, `interrupted`를 기록한다. 에이전트가 필요하지 않은 단계에서는 새 에이전트를 만들지 않으며, 동일한 대기 상태를 반복 보고하지 않는다.
 - 하위 에이전트는 즉시 결과가 필요한 경우에만 제한된 대기를 사용하고, 그 외에는 부모 작업이 비중복 측면 작업을 진행한다. 동일 작업에 대한 중복 위임·중복 검증을 금지한다.
+- 독립적으로 실행할 감사·검증·구현 작업이 대기 중이면 쓰기 범위를 분리해 가용 하위 에이전트 슬롯까지 병렬 배정한다. 부모 오케스트레이터는 즉시 필요한 임계 경로를 직접 진행하고, 하위 에이전트 결과를 기다리며 같은 작업을 다시 수행하지 않는다.
+- `completed`/`errored`/`interrupted` 결과는 발견 즉시 회수·검토하고 해당 에이전트를 종료해 슬롯을 비운다. 대기열에 비중복 작업이 남아 있으면 확보된 슬롯을 가장 높은 우선순위 작업으로 즉시 다시 채우며, 병렬화할 일이 없을 때만 슬롯을 비워 둔다.
 - 두 번 연속 진행률·로그·상태 변화가 없으면 해당 작업을 `BLOCKED` 또는 `STALE_PROCESS_SUSPECTED`로 분리하고, 원인·PID·마지막 활동 시각·대체 가능한 다음 작업을 기록한다. 공개 서버나 사용자가 사용 중인 브라우저 세션은 근거 없이 종료하지 않는다.
+- `STALE_PROCESS_SUSPECTED` 하위 에이전트는 마지막 체크포인트를 요청하고도 변화가 없을 때 이전 상태를 회수해 종료한 뒤 더 좁은 범위로 재배정한다. 종료하지 않은 에이전트가 동시성 슬롯을 무기한 점유하게 두지 않는다.
 - 모니터링 결과는 각 단계 보고에 `process`, `pid`, `elapsed`, `lastActivity`, `health`, `nextAction`을 포함한다. 이 기록이 없으면 장기 작업을 완료로 판정하지 않는다.
 
 ## Teams Bot Codex 트러블슈팅 지침
 
 ## 빌드 출처·FileProvider 재발 방지 게이트
 
+- iCloud/FileProvider는 로컬 원본 작업공간의 source I/O 위험일 뿐 배포·GitHub Actions·Docker·안정 호스팅의 필수 조건이 아니다. 로컬 source가 불안정하면 CI의 pinned Git checkout과 컨테이너 내용 검증을 독립적으로 진행하되, 이를 공개 배포 성공의 증거로 혼동하지 않는다.
 - FileProvider/iCloud dataless placeholder가 하나라도 관찰되면 원본 소스를 정상 로컬 파일로 간주하지 않는다. `blocks=0`, 읽기 지연, esbuild `The service was stopped`, 무출력 장기 대기는 모두 `SOURCE_IO_UNSTABLE` 증거로 기록한다.
 - FileProvider fallback 빌드는 Git `HEAD` 소스를 임시 로컬 디렉터리에 materialize하므로, 추적 파일을 수정한 채 실행하면 현재 작업이 아니라 이전 커밋을 빌드할 수 있다. 따라서 fallback build/package 전에 추적 worktree를 clean으로 확인하고, clean 확인이 timeout되면 빌드하지 말고 `SOURCE_IO_UNSTABLE` blocker로 중단한다.
 - 서버 bundle 재사용은 커밋 SHA만 비교하지 않는다. `.teams-server-build-commit`의 schema, full commit, `mode=core|optional`, `worktree=clean`을 모두 현재 명령과 대조한다. 이전 형식 marker나 dirty/불명확 marker는 재사용하지 않는다.
@@ -78,6 +82,10 @@ Teams 앱 변경 요청에는 별도 예외 승인이 없는 한 다음 순서�
 - GitHub Copilot CLI는 공식 `copilot` 실행 파일을 기준으로 한다. `copilot --help`는 실행 파일 존재만 증명하며 로그인·Copilot 라이선스·조직 정책을 증명하지 않는다. health probe에서 `copilot login` 또는 `/login`을 자동 실행하지 말고, 실제 bounded read-only 실행의 결과가 확인되기 전에는 `unknown`/사용 불가로 표시한다. `gh copilot`은 환경에서 명시적으로 지정된 레거시 호환 경로일 때만 사용하며 공식 GHCP 기본값으로 추정하지 않는다.
 - Jira Cloud는 Teams Core의 런타임 의존성이 아니라 이슈·릴리스·검증 증거 추적 시스템으로만 사용한다. 실패 테스트·재현된 사용자 버그·실제 릴리스 blocker·검증 가능한 Core slice만 idempotent key로 생성/갱신하며, 진행 메시지와 선택 provider의 `N/A`는 이슈로 남발하지 않는다. 프로젝트 표시명으로 key를 추측하지 않고 기존 Jira/Teams 로그인 탭에서 site·project key·workflow·assignee를 확인한다. Jira에는 비밀번호·API token·device code·bearer token을 기록하지 않는다.
 - 현재 Jira 추적 대상은 `https://devdoo.atlassian.net`, 프로젝트 키 `MP`다. 기본 담당자는 Jira에서 현재 로그인한 사용자(`self`)로 해석하며 계정 ID를 추측하거나 저장하지 않는다. 이슈 타입은 재현된 결함/릴리스 blocker=`Bug`, 계획된 Core 단위=`Task`, 비차단 개선=`Improvement`로 선택한다. 허용된 실제 workflow transition은 Jira에서 조회한 값만 사용한다. Jira connector 또는 기존 로그인 탭의 실제 쓰기와 응답을 확인하기 전에는 이슈 생성·동기화를 완료로 보고하지 않고 `JIRA_SYNC_UNVERIFIED`로 분리한다.
+- 코드 리뷰, 테스트, 공개 런타임, 포털, Teams 데스크톱, 모바일에서 새로 발견한 각 재현 결함·릴리스 blocker·검증 가능한 개선은 구현을 계속하기 전에 기존 Jira 이슈를 검색해 재사용하거나 별도 이슈를 만든다. 서로 다른 원인·재현 절차·수락 조건은 한 이슈로 합치지 않는다. 진행 메시지, 단순 재시도, 선택 provider의 의도된 `N/A`는 이슈로 만들지 않는다.
+- Jira idempotency key는 결함의 수명 동안 바뀌지 않는 `teams-core:<issue-kind>:<stable-test-or-row-id>` 형식을 우선한다. 발견 커밋, 수정 커밋, 앱 버전, ZIP SHA는 별도 증거로 갱신하며 키에 넣어 커밋마다 중복 이슈를 만들지 않는다. 이미 Jira에 기록된 legacy key는 같은 이슈의 alias로 유지한다.
+- 구현 시작 시 이슈를 현재 로그인 사용자에게 할당하고 Jira에서 실제 제공하는 transition으로 `In Progress`에 둔다. 코드 수정·로컬 테스트만 끝난 상태는 완료가 아니며, 같은 릴리스 identity의 패키지·공개 런타임·필수 UI 증거가 모두 통과한 뒤에만 `Done`으로 전환한다.
+- 릴리스 완료 직전에 발견 항목 전수와 Jira 이슈를 대조한다. 각 항목에는 Jira key/URL, 유형, 담당자, 상태, idempotency key, 발견 증거, 수정 커밋, 수락 증거가 있어야 한다. 현재 릴리스 blocker가 열려 있거나 Jira에 매핑되지 않은 발견 항목이 있으면 `release:loop complete`와 Teams 완료 메시지를 진행하지 않는다. 비차단 개선을 후속 릴리스로 미루면 Jira `Improvement` 상태와 이유를 완료 메시지에 명시한다.
 - 업로드 요청 전에는 `codex login status`, 필요한 경우 `teams status`, 패키지 ZIP의 실제 매니페스트 버전·`devicePermissions`, 배포 환경 검증을 각각 확인한다.
 - `sideloading not allowed` 또는 `Upload custom apps`는 코드 오류가 아니라 Teams Admin Center 정책이다. Developer Portal 업로드와 CLI sideload를 구분하고 CLI 재시도 루프를 만들지 않는다.
 - `APPLICATION_ID_URI`는 추측값으로 덮어쓰지 않는다. 먼저 Teams SDK 봇 Entra 앱의 `Expose an API` 실제 Application ID URI가 Microsoft의 결합 봇+탭 계약인 `api://<TAB_DOMAIN>/botid-<BOT_CLIENT_ID>`인지 확인한다. 관리자 접근이 작업 범위에 있고 SSO 불일치가 실제 런타임에서 재현되면 봇 리소스 URI, `access_as_user` 범위, Teams Web/Desktop 사전 승인, Bot Framework redirect URI, 매니페스트 `webApplicationInfo.resource`와 `token.botframework.com` valid domain, 서버 환경값을 같은 계약으로 맞춘 뒤 버전 증가·새 패키지 생성·재업로드를 수행한다. 관리자 접근이 없으면 추측 변경 없이 BLOCKER로 보고한다.
@@ -94,11 +102,11 @@ Teams 앱 변경 요청에는 별도 예외 승인이 없는 한 다음 순서�
 
 - 반복 가능한 검사는 Computer Use나 화면 잠금 상태에 의존하지 않는다. 구현·타입체크·전체 테스트·배포 환경·ZIP 내부 매니페스트·공개 health·공개 탭 HTTP 응답은 명령어로 먼저 검증한다.
 - `/Users/doosansmacbookpro/Documents/TeamsApp`은 이 프로젝트의 로컬 원본 소스이자 유일한 Git 이력 기준이다. 이를 사본·미러·동기화 대상이라고 추정하거나 다른 경로를 원본으로 취급하지 않는다.
-- 이 저장소에는 아직 Git 원격이 구성되어 있지 않다. 사용자는 Bitbucket 추가를 승인했지만, 인증된 Bitbucket 화면에서 workspace·repository slug·visibility·clone URL을 확인하기 전에는 `origin`을 만들거나 원격 브랜치·clone·pull·push를 전제로 설명하지 않는다. 정확한 Bitbucket 저장소가 확인될 때까지 로컬 커밋만 관리한다.
+- 이 저장소의 현재 Git `origin`은 `https://github.com/devdoo-teams/teams-app.git`이다. Bitbucket은 선택적인 추가 remote일 뿐이며, 인증된 Bitbucket 화면에서 workspace·repository slug·visibility·clone URL을 확인하기 전에는 추론·추가하지 않는다. 이후 PR이 필요해지면 저장소 설정이 명시적으로 바뀌지 않은 한 현재 구성된 GitHub `origin` 워크플로우를 사용한다.
 - 빌드·테스트·소스 수정은 원본 작업공간에서 수행한다. `/tmp`는 일회성 로그, 격리 검증, 새 ZIP 산출물에만 사용할 수 있고 `/tmp`의 Git 이력이나 파일을 원본 상태로 보고하지 않는다. 검증된 최종 변경과 커밋은 반드시 원본 작업공간에 존재해야 한다.
 - 파일 업로드는 원본에서 생성해 검증한 최신 ZIP의 명시적 로컬 경로를 브라우저 파일 선택기에 직접 전달한다. Finder, 동기화 상태, 다운로드 대기 또는 별도 소스 복제를 업로드 선행 조건으로 만들지 않는다.
 - 릴리스 판정에는 다음 제한시간 게이트를 사용한다. `release:preflight`는 API/MCP 선택 경로와 분리된 core source compile check(60초), `build:core`(300초), `test:core`(300초), 배포 환경(30초)을 순서대로 실행한다. `test:core`에는 API 키 없이 실제 production Teams SDK 번들을 기동하는 `core-runtime-smoke.mjs`가 포함되어 `listen()`, `/api/health`, `/tabs/home/`을 확인한다. 서버 core 번들은 Teams SDK·필수 런타임을 포함하고 CopilotKit/MCP는 선택 청크로 분리한다. `test:optional`/`build:optional`은 별도 실험 경로이며 core 통과를 막지 않는다. `release:package`는 검증된 새 ZIP과 내부 매니페스트·SHA-256을 생성하며, `release:public`은 공개 health와 `/tabs/home/`을 확인한다. 전부 실행할 때는 `npm run release:gate`를 사용한다.
-- `release:public`은 명시적 `--url` 다음 `TEAMS_PUBLIC_URL`, `PUBLIC_BASE_URL`, `.env.runtime`의 `TAB_DOMAIN`에서 공개 origin을 해석한다. core 게이트는 `typecheck:core`의 제한된 esbuild source compile check와 `build:core`의 React/Teams SDK/Codex 경로를 사용한다. 전체 `typecheck`는 현재 Node 24/TypeScript 선언 그래프에서 장시간 대기할 수 있으므로 별도 진단으로 실행하며, core source check를 semantic TypeScript 전체 통과로 과장하지 않는다. vendor 선언 그래프 진단은 `typecheck:vendor`로 분리한다.
+- `release:public`은 명시적 `--url` 다음 `TEAMS_PUBLIC_URL`, `PUBLIC_BASE_URL`, `.env.runtime`의 `TAB_DOMAIN`에서 공개 origin을 해석한다. core 게이트는 `typecheck:core`의 bounded esbuild CLI stdin transform과 `build:core`의 React/Teams SDK/Codex 경로를 사용한다. `typecheck:core`는 workspace tsconfig auto-discovery를 끄고 long-lived service mode를 사용하지 않는다. 전체 `typecheck`는 현재 Node 24/TypeScript 선언 그래프에서 장시간 대기할 수 있으므로 별도 진단으로 실행하며, core source check를 semantic TypeScript 전체 통과로 과장하지 않는다. vendor 선언 그래프 진단은 `typecheck:vendor`로 분리한다.
 - 기본 `npm test`/`npm run test:api-free`는 무제한 전체 `typecheck`를 호출하지 않고 bounded `typecheck:core`와 API-free 기능 검증을 실행한다. 전체 `npm run typecheck`는 별도 bounded 진단이며, 정체되면 `TYPECHECK_DIAGNOSTIC_BLOCKED`로 기록하고 Core 릴리스 게이트와 분리한다.
 - 공개 서버는 반드시 `npm start`로 실행한다. 이 명령은 존재하는 `.env.runtime`을 자동 로드한다. `node dist/server/index.js`를 직접 실행해 인증 설정을 누락하지 않으며, 재시작 직후 `/api/health`의 `environment=production`, `auth=teams-authenticated`, `userAuth=entra-sso`, `bot=teams-sdk`, `outbound=teams-sdk`를 확인한다.
 - Teams 개인 탭 `contentUrl`은 `/tabs/home/`처럼 trailing slash를 포함해야 한다. `/tabs/home`의 301 리디렉션에 의존하면 Teams Web/Desktop iframe이 빈 화면에 머물 수 있으므로 매니페스트 검증에서 이를 차단한다.
@@ -111,14 +119,14 @@ Teams 앱 변경 요청에는 별도 예외 승인이 없는 한 다음 순서�
 - 화면이 잠겨 있으면 명령어 게이트·공개 HTTPS·이미 로그인된 인앱 브라우저 탭 검증은 계속할 수 있다. 로그인·Auth 앱 승인·파일 선택·Teams 데스크톱 스크린샷처럼 네이티브 UI가 필요한 항목만 `DESKTOP_UNVERIFIED` 또는 `BLOCKED`로 분리하고 잠금 해제 우회나 자격 증명 추측을 하지 않는다.
 - macOS FileProvider가 파일을 `dataless`로 되돌린 경우에는 코드 결함으로 단정하지 않는다. 빌드 전 `package.json`, `package-lock.json`, `appPackage/manifest.json`, `src/`, `scripts/`, `types/`와 실제 ZIP에 대해 `stat`의 `blocks`·플래그를 확인하고, `blocks=0`인 핵심 입력은 `SOURCE_IO_BLOCKED`로 기록한다. `cp`, Git 객체 읽기, 빌드·서버 시작을 파일별로 무기한 반복하지 말고 PID·경과 시간·마지막 로그를 30초 간격으로 확인한다. 두 번 연속 변화가 없으면 stale로 분리하고 의존성 재구성·이미 로컬인 산출물 검증 같은 독립 작업을 계속한다.
 - `dist`가 `blocks=0`인 FileProvider 경로이면 생성된 서버·탭 자산을 동기화 폴더에서 직접 서빙하지 않는다. `build:core`는 안정된 OS 런타임 경로로 산출물을 만들고 `npm start`는 같은 경로의 `scripts/start-server.mjs`를 통해 실행한다. 클라이언트·서버 Git materialize와 그 실행 의존성은 작업공간 안에 만들지 말고 OS 임시 경로에 만들며, esbuild와 런타임에는 `scripts/fileprovider-runtime-deps.mjs`가 준비한 로컬 dependency cache를 `nodePaths`/symlink로 명시한다. 이는 소스 원본을 옮기는 것이 아니며, `/tmp`/캐시 경로의 파일은 재생성 가능한 런타임 산출물일 뿐 Git 원본·업로드 원본으로 취급하지 않는다.
-- 테스트가 서버를 기동할 때는 반드시 `resolveRuntimeDistRoot()`가 반환한 검증된 런타임 번들을 사용한다. `dist/server/index.js`를 직접 실행하면 dataless placeholder나 오래된 산출물을 검사하게 되므로 금지한다. 기본 `npm test`에는 CopilotKit Channels shadow 같은 선택 provider 테스트를 포함하지 않으며 선택 경로는 명시적 명령으로 별도 실행한다. `typecheck:core`의 esbuild 서비스 중단은 한 번만 서비스 재시작 후 재시도하고, 두 번 실패하면 즉시 게이트를 실패시킨다.
+- 테스트가 서버를 기동할 때는 반드시 `resolveRuntimeDistRoot()`가 반환한 검증된 런타임 번들을 사용한다. `dist/server/index.js`를 직접 실행하면 dataless placeholder나 오래된 산출물을 검사하게 되므로 금지한다. 기본 `npm test`에는 CopilotKit Channels shadow 같은 선택 provider 테스트를 포함하지 않으며 선택 경로는 명시적 명령으로 별도 실행한다. `typecheck:core`에서 정확히 legacy `The service was stopped` 시그니처가 나오면 새 CLI invocation 하나로만 재시도하고, 두 번째 실패나 timeout은 즉시 게이트 실패로 기록한다.
 - 매니페스트의 developer/static-tab website root와 canonical `/tabs/home/`를 모두 공개 HTTP로 확인한다. `/`가 404이면 `TAB_RUNTIME_UNAVAILABLE`로 처리하고 포털·설치본·데스크톱·모바일 검증을 진행하지 않는다.
 - `/Users/doosansmacbookpro/Documents/TeamsApp`은 항상 원본이다. `/tmp`, iCloud/동기화 폴더, Git 객체 복구 결과를 사본·원격 저장소·새 원본으로 취급하지 않으며, 복구 과정에서 만든 임시 파일은 원본 worktree 밖의 recoverable 경로로 이동한 뒤 clean worktree를 다시 확인한다.
 - FileProvider 다운로드 대기 때문에 Finder·새 브라우저 탭·새 로그인 세션을 만들지 않는다. 업로드는 원본에서 생성·검증한 최신 ZIP의 절대 경로를 직접 선택하는 단계이고, 화면 잠금이면 파일 선택기를 우회하지 않고 `PORTAL_UPLOAD_UNVERIFIED`로 보류한다.
 - 명령어 게이트 통과는 포털 업로드·설치 버전·Teams 데스크톱·모바일 사용자 확인을 대신하지 않는다. 최종 완료 상태에는 `PORTAL_UPLOAD_UNVERIFIED`, `INSTALLED_VERSION_UNVERIFIED`, `DESKTOP_UNVERIFIED`, `MOBILE_UNVERIFIED`가 남아 있지 않아야 한다.
-- 모든 버그 수정·신규 기능은 `release:loop start → machine → package → public → evidence(portal/installed/desktop/mobile) → complete` 순서로 진행한다. `.release/current.json`의 run identity와 현재 Git commit·앱 버전·ZIP SHA가 일치하지 않으면 다음 단계로 넘어가지 않는다. `installed` 증거에는 Teams 앱 정보 화면의 `installedVersion`을 반드시 기록하고, 게시 카탈로그 버전이나 Bot 왕복만으로 설치본 버전을 추정하지 않는다.
-- `release:loop complete`가 `READY`를 반환하기 전에는 Teams 완료 메시지를 보내지 않는다. 이 명령은 실제 UI 증거를 만들지 않으며, 포털 업로드·설치본·데스크톱·모바일을 직접 확인한 뒤 제공된 증거 파일만 검증한다.
-- 오래된 커밋을 가리키는 활성 run 때문에 새 릴리스를 시작할 수 없으면 상태 파일을 삭제하거나 `COMPLETE`로 바꾸지 않는다. 원인을 확인한 뒤 `npm run release:loop -- supersede --reason "..."`로 기존 run을 명시적으로 `SUPERSEDED` 처리하고, 같은 상태 경로에서 새 `start`를 실행한다. `SUPERSEDED`는 완료·배포 성공을 의미하지 않는다.
+- 모든 버그 수정·신규 기능은 `release:update start → machine → package → public → evidence(portal/installed/desktop/mobile) → jira → complete` 순서로 진행한다. `.release/update-current.json`의 run identity와 현재 Git commit·앱 버전·ZIP SHA가 일치하지 않으면 다음 단계로 넘어가지 않는다. `installed` 증거에는 Teams 앱 정보 화면의 `installedVersion`을 반드시 기록하고, 게시 카탈로그 버전이나 Bot 왕복만으로 설치본 버전을 추정하지 않는다. 실행 진입점은 `npm run release:update` 하나로 고정한다.
+- `release:update complete`가 `READY`를 반환하기 전에는 Teams 완료 메시지를 보내지 않는다. 이 명령은 실제 UI 증거를 만들지 않으며, 포털 업로드·설치본·데스크톱·모바일을 직접 확인한 뒤 제공된 증거 파일만 검증한다.
+- 오래된 커밋을 가리키는 활성 run 때문에 새 릴리스를 시작할 수 없으면 상태 파일을 삭제하거나 `COMPLETE`로 바꾸지 않는다. 원인을 확인한 뒤 `npm run release:update -- supersede --reason "..."`로 기존 run을 명시적으로 `SUPERSEDED` 처리하고, 같은 상태 경로에서 새 `start`를 실행한다. `SUPERSEDED`는 완료·배포 성공을 의미하지 않는다.
 
 ## Agent skills
 

@@ -11,10 +11,16 @@ updating, linking, or transitioning an issue.
 - Default assignee: the currently signed-in Jira user (`self`)
 - Issue types: reproducible defect or release blocker=`Bug`; planned Core slice=`Task`;
   non-blocking optimization=`Improvement`
-- Bitbucket is the user-approved Git hosting target, but `origin` remains unconfigured until an
-  authenticated Bitbucket page confirms the workspace, repository slug, visibility, and clone URL.
-  Pull requests are not a request surface until that exact remote is configured and this document
-  is updated with its workflow. GitHub and GitLab must not be inferred.
+- Live project metadata checked on 2026-08-20 exposes `Epic`, `Subtask`, `Task`, `Story`,
+  `Feature`, and `Bug`; it does not expose an `Improvement` issue type. Until Jira adds that
+  type, record a non-blocking optimization as a `Task` with an explicit `Classification:
+  Improvement` section and report the fallback in the release ledger. Do not invent an issue
+  type or silently map a release blocker to this fallback.
+- Git hosting source of truth: `origin=https://github.com/devdoo-teams/teams-app.git`. Treat
+  Bitbucket as an optional additional remote only after an authenticated Bitbucket view confirms
+  the workspace, repository slug, visibility, and clone URL. If a pull request is requested, use
+  the configured GitHub `origin` workflow unless the repository configuration is explicitly
+  changed. Do not infer or add Bitbucket before that confirmation.
 
 ## Live writes
 
@@ -25,8 +31,13 @@ Never store or request passwords, API tokens, device codes, bearer tokens, or ac
 Search for the idempotency key before creating an issue:
 
 ```text
-teams-core:<issue-kind>:<stable-test-or-row-id>:<source-commit>
+teams-core:<issue-kind>:<stable-test-or-row-id>
 ```
+
+The key identifies the defect or improvement across its whole lifecycle. Record the discovery
+commit, fix commit, app version, and package SHA as evidence fields; do not append a new commit to
+the key and create a duplicate. Treat an already-published legacy key containing a commit as an
+alias of that same Jira issue.
 
 If Jira cannot confirm a write, preserve the payload in the local evidence ledger and report
 `JIRA_SYNC_UNVERIFIED`. A local payload or browser form is not a Jira issue.
@@ -36,6 +47,23 @@ If Jira cannot confirm a write, preserve the payload in the local evidence ledge
 Use the canonical-to-tracker mapping in [`docs/agents/triage-labels.md`](triage-labels.md). Each
 issue carries one triage state label. Apply only labels that Jira confirms exist; do not create or
 rename project labels implicitly.
+
+## Release reconciliation
+
+- Before implementation, search by idempotency key, then create or reuse one issue per distinct
+  root cause and acceptance condition. Assign it to the signed-in user and use only an observed
+  workflow transition to mark it `In Progress`.
+- Keep distinct bugs, release blockers, and independently verifiable improvements separate. A
+  retry or progress update is evidence on the existing issue, not another issue.
+- Record every code-review, test, portal, desktop, and mobile finding in the release issue ledger.
+  Every ledger row must resolve to a confirmed Jira key/URL or explicitly remain
+  `JIRA_SYNC_UNVERIFIED`; an unconfirmed browser form is not a key.
+- A fix remains `In Progress` until the current commit, package SHA, public runtime, and all
+  required UI evidence satisfy its acceptance condition. Only then transition it to `Done` and
+  attach the evidence summary.
+- Do not complete the release or send the Teams completion report while a release blocker is open
+  or a discovered finding has no Jira mapping. A non-blocking improvement may remain scheduled,
+  but its Jira key, state, owner, and deferral reason must be present in the final report.
 
 ## Wayfinding operations
 

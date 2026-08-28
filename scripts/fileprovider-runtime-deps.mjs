@@ -1,46 +1,41 @@
-import { execFileSync } from 'node:child_process';
-import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import fs from 'node:fs/promises';
 
-const RUNTIME_DEPENDENCY_ROOT = path.join(os.tmpdir(), 'teams-sdk-mvp-runtime-deps');
-const RUNTIME_PACKAGES = [
-  'express',
-  'zod',
-  '@microsoft/teams.apps',
-  'react',
-  'react-dom',
-  '@microsoft/teams-js',
-];
+import {
+  captureRuntimeClosure,
+  prepareRuntimeDependencyStaging,
+  verifyRuntimeClosure,
+} from './runtime-closure.mjs';
+
+export {
+  captureRuntimeClosure,
+  createRuntimeDependencyStagingPlan,
+  prepareRuntimeDependencyStaging,
+  verifyRuntimeClosure,
+} from './runtime-closure.mjs';
+
+const RUNTIME_CLOSURE_LIMITS = Object.freeze({
+  maxEntries: 100_000,
+  maxFileBytes: 64 * 1_024 * 1_024,
+  maxTotalBytes: 1_024 * 1_024 * 1_024,
+  maxPathBytes: 4_096,
+});
+const APPROVED_NATIVE_ADDONS = Object.freeze([]);
 
 export async function ensureFileProviderRuntimeDependencies(root) {
-  const packageJson = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
-  const specs = RUNTIME_PACKAGES.map((name) => `${name}@${packageJson.dependencies?.[name] ?? ''}`);
-  let installed = false;
-
-  try {
-    const packageStats = await Promise.all(
-      RUNTIME_PACKAGES.map((name) => fs.stat(path.join(RUNTIME_DEPENDENCY_ROOT, 'node_modules', name, 'package.json'))),
-    );
-    installed = packageStats.every((stat) => stat.isFile() && (!Number.isInteger(stat.blocks) || stat.blocks > 0));
-  } catch {
-    installed = false;
-  }
-
-  if (!installed) {
-    await fs.mkdir(RUNTIME_DEPENDENCY_ROOT, { recursive: true });
-    execFileSync('npm', [
-      'install',
-      '--prefix', RUNTIME_DEPENDENCY_ROOT,
-      '--no-save',
-      '--package-lock=false',
-      '--ignore-scripts',
-      '--no-audit',
-      '--no-fund',
-      '--loglevel=error',
-      ...specs,
-    ], { cwd: root, stdio: 'inherit' });
-  }
-
-  return path.join(RUNTIME_DEPENDENCY_ROOT, 'node_modules');
+  const stagingRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-sdk-mvp-runtime-deps-'));
+  const prepared = await prepareRuntimeDependencyStaging({ pinnedSourceRoot: root, stagingRoot });
+  const attestation = await captureRuntimeClosure({
+    root: prepared.nodeModulesRoot,
+    limits: RUNTIME_CLOSURE_LIMITS,
+    approvedNativeAddons: APPROVED_NATIVE_ADDONS,
+  });
+  await verifyRuntimeClosure({
+    root: prepared.nodeModulesRoot,
+    expected: attestation,
+    limits: RUNTIME_CLOSURE_LIMITS,
+    approvedNativeAddons: APPROVED_NATIVE_ADDONS,
+  });
+  return prepared.nodeModulesRoot;
 }

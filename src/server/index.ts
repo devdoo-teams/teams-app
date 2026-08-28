@@ -1,7 +1,9 @@
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 import express from 'express';
 
@@ -20,11 +22,36 @@ import {
   normalizeAgentPrompt,
   type AgentNotification,
 } from './agent-service.js';
-import { CodexRunner } from './codex-runner.js';
-import { probeCliCapabilities } from './codex-capability.js';
+import {
+  AgentExecutionPolicy,
+  AgentExecutionUnavailableError,
+  AgentIsolationProvider,
+  type AgentIsolationAcquireInput,
+  type AgentIsolationLease,
+} from './agent-execution-policy.js';
+import { createProductionAgentExecutionPolicy } from './production-agent-isolation.js';
+import {
+  createA2ACodexExecutionProfiles,
+  type A2ACodexExecutionProfile,
+} from './a2a-codex-execution-profiles.js';
+import { ProviderNeutralAgentRunner } from './provider-neutral-agent-runner.js';
+import type { CliAgentProvider } from './cli-agent-runner.js';
+import {
+  AGENT_ADMISSION_LIMIT_MAXIMA,
+  AgentAdmissionController,
+  AgentCapacityError,
+  publicAgentCapacityError as mapAgentCapacityError,
+  agentCapacityText as mapAgentCapacityText,
+} from './agent-admission-controller.js';
+import { probeCliCapabilities, unknownCliCapabilities, type CliCapabilities } from './codex-capability.js';
 import { GitService } from './git-service.js';
+import {
+  configureResponseEngineRouter,
+  ResponseEngineNotConfiguredError,
+  ResponseEngineRouter,
+  type ResponseEngineInput,
+} from './response-engine.js';
 import { DeterministicResponseEngine } from './response-engine-deterministic.js';
-import { ResponseEngineRouter, configureResponseEngineRouter } from './response-engine.js';
 import { ResponseModeStore } from './response-mode-store.js';
 import {
   createResponseModeCardActivity,
@@ -35,6 +62,7 @@ import {
 import { formatWeatherMessage, getWeather } from './weather-service.js';
 import { GenUiActionStore, type GenUiActionName } from './genui-action-store.js';
 import { GenUiResponseFactory } from './genui-response.js';
+import { createA2AProviderFacts, type A2AProviderFact } from './a2a-provider-facts.js';
 import {
   createAdaptiveCardActivity,
   createAdaptiveCardCarouselActivity,
@@ -54,6 +82,7 @@ import {
   type GenUiEnvelopeV1,
 } from '../shared/genui.js';
 import {
+  ResponseModeSchema,
   ResponseModeSelectionSchema,
   responseModeLabel,
   type ResponseMode,
@@ -80,7 +109,61 @@ import {
 } from './collaboration-service.js';
 import { CollaborationStore } from './collaboration-store.js';
 import type { CollaborationScope } from '../shared/collaboration.js';
-import type { RunAgentInput } from '@ag-ui/core';
+import { A2AStore } from './a2a-store.js';
+import type { A2ATask } from './a2a-contract.js';
+import { TeamsA2AOutboundStore } from './teams-a2a-outbound-store.js';
+import { createA2AExecutionAdapter } from './a2a-execution.js';
+import { serializeA2ADispatchAudit } from './a2a-observability.js';
+import { createA2AAgentAuthorizationPolicy } from './a2a-agent-authorization.js';
+import { A2ATelemetryCollector } from './a2a-telemetry.js';
+import {
+  createConfiguredA2ARemoteAgent,
+  createConfiguredA2ARemoteAgents,
+  type A2AConfiguredRemoteAgentFailure,
+} from './a2a-remote-agent-adapter.js';
+import {
+  parseA2ARemotePeerRoster,
+  resolveA2ARemotePeerCredentials,
+  type A2ARemotePeerCredential,
+} from './a2a-remote-roster.js';
+import { A2A_CAPABILITIES, A2A_ROLE_CATALOG } from './a2a-role-catalog.js';
+import { selectTeamsA2AChatRoles } from './a2a-collaboration-plan.js';
+import {
+  mountA2AProductionRuntime,
+  type A2AProductionCollaborationResult,
+  type A2AProductionChildCancellationInput,
+  type A2AProductionChildExecutionInput,
+  type A2AProductionChildRecoveryInput,
+} from './a2a-production-runtime.js';
+import { deriveServerOwnedRestConversationId } from './rest-scope.js';
+import { buildSecurityHeaders } from './security-headers.js';
+import {
+  resolveMcpAuthConfig,
+  type McpAuthConfig,
+} from './mcp-auth-config.js';
+import { mountMcpAuthenticatedBoundary } from './mcp-authenticated-route.js';
+
+/**
+ * Same-UID process fixture for token-protected loopback integration tests.
+ * It is intentionally private to this composition root and is never exported
+ * through the general production isolation factory.
+ */
+class UnsafeLoopbackTestIsolationProvider extends AgentIsolationProvider {
+  constructor() {
+    super('unsafe-test-process');
+  }
+
+  override async acquire(input: AgentIsolationAcquireInput): Promise<AgentIsolationLease> {
+    await this.validateRequest(input);
+    return this.issueLease({
+      subject: input.subject,
+      workspace: input.workspace,
+      protectedRoots: input.protectedRoots,
+      environmentOverrides: input.environmentOverrides,
+      spawn: (command, args, options) => spawn(command, [...args], options as any),
+    });
+  }
+}
 
 const port = Number(process.env.PORT ?? 3978);
 const isProduction = process.env.NODE_ENV === 'production';
@@ -94,6 +177,7 @@ const LOCAL_ACCESS_TOKEN_HEADER = 'x-teams-local-access-token';
 const MIN_LOCAL_ACCESS_TOKEN_LENGTH = 32;
 const localAccessToken = process.env.TEAMS_LOCAL_ACCESS_TOKEN?.trim() ?? '';
 const legacyPublicMcp = process.env.MCP_PUBLIC_ENABLED?.trim().toLowerCase() === 'true';
+const authenticatedMcpRequested = process.env.TEAMS_MCP_AUTHENTICATED_ENABLED?.trim().toLowerCase() === 'true';
 const fileJsonMultiWorker = numericEnvGreaterThan('WEB_CONCURRENCY', 1)
   || numericEnvGreaterThan('NODE_APP_INSTANCE', 0);
 const runtimeDistRoot = process.env.TEAMS_RUNTIME_DIST_DIR?.trim()
@@ -104,8 +188,18 @@ const itemStorePath = process.env.ITEM_STORE_PATH ?? path.resolve(process.cwd(),
 const workItemStorePath = process.env.WORK_ITEM_STORE_PATH ?? path.resolve(process.cwd(), 'data/work-items.json');
 const collaborationStorePath = process.env.COLLABORATION_STORE_PATH ?? path.resolve(process.cwd(), 'data/collaboration.json');
 const agentJobStorePath = process.env.AGENT_JOB_STORE_PATH ?? path.resolve(process.cwd(), 'data/agent-jobs.json');
+const a2aStorePath = process.env.A2A_STORE_PATH ?? path.resolve(process.cwd(), 'data/a2a.json');
+const a2aOutboundStorePath = process.env.A2A_OUTBOUND_STORE_PATH ?? path.resolve(process.cwd(), 'data/a2a-outbound.json');
+const agentAdmissionJournalPath = process.env.AGENT_ADMISSION_JOURNAL_PATH ?? path.resolve(process.cwd(), 'data/agent-admission.json');
 const genUiActionStorePath = process.env.GENUI_ACTION_STORE_PATH ?? path.resolve(process.cwd(), 'data/genui-actions.json');
 const responseModeStorePath = process.env.RESPONSE_MODE_STORE_PATH ?? path.resolve(process.cwd(), 'data/response-modes.json');
+const providerMutationReplayStorePath = process.env.PROVIDER_MUTATION_REPLAY_STORE_PATH ?? path.resolve(process.cwd(), 'data/provider-mutation-replay.json');
+const configuredAgentProvider = process.env.TEAMS_AGENT_CLI_PROVIDER?.trim() || 'codex';
+if (configuredAgentProvider !== 'codex' && configuredAgentProvider !== 'copilot') {
+  throw new Error('TEAMS_AGENT_CLI_PROVIDER must be either codex or copilot.');
+}
+const agentProvider = configuredAgentProvider;
+const agentLabel = agentProvider === 'copilot' ? 'GitHub Copilot CLI' : 'Codex CLI';
 const itemStore = new ItemStore(
   itemStorePath,
 );
@@ -157,14 +251,39 @@ const workItemService = new WorkItemService(new WorkItemStore(workItemStorePath)
 });
 const agentJobStore = new AgentJobStore(
   agentJobStorePath,
+  { legacyProvider: agentProvider },
 );
-const codexRunner = new CodexRunner();
+const a2aStore = new A2AStore(a2aStorePath);
+const a2aOutboundStore = new TeamsA2AOutboundStore(a2aOutboundStorePath);
+const codexRunner = new ProviderNeutralAgentRunner({ provider: agentProvider });
+const a2aAgentProviders = parseAgentProviders(
+  process.env.TEAMS_A2A_AGENT_PROVIDERS,
+  agentProvider,
+);
+const providerRunners: Partial<Record<CliAgentProvider, ProviderNeutralAgentRunner>> = {
+  [agentProvider]: codexRunner,
+};
+for (const configuredAgent of a2aAgentProviders) {
+  if (!providerRunners[configuredAgent.provider]) {
+    providerRunners[configuredAgent.provider] = new ProviderNeutralAgentRunner({ provider: configuredAgent.provider });
+  }
+}
 const agentWorkspace = path.resolve(process.env.AGENT_WORKSPACE ?? process.cwd());
 const gitService = new GitService(agentWorkspace);
+const agentAdmissionController = new AgentAdmissionController({
+  globalLimit: boundedAgentLimitEnv('TEAMS_AGENT_GLOBAL_LIMIT', 4, AGENT_ADMISSION_LIMIT_MAXIMA.global),
+  perTenantLimit: boundedAgentLimitEnv('TEAMS_AGENT_TENANT_LIMIT', 2, AGENT_ADMISSION_LIMIT_MAXIMA.tenant),
+  perRequesterLimit: boundedAgentLimitEnv('TEAMS_AGENT_REQUESTER_LIMIT', 2, AGENT_ADMISSION_LIMIT_MAXIMA.requester),
+}, { journalPath: agentAdmissionJournalPath, retryLeaseMs: 60_000 });
 const explicitBotClientId = process.env.BOT_CLIENT_ID?.trim() ?? '';
 const configuredClientId = process.env.CLIENT_ID?.trim() ?? '';
 const configuredTenantId = process.env.TENANT_ID?.trim() ?? '';
 const configuredApplicationIdUri = process.env.APPLICATION_ID_URI?.trim() ?? '';
+const configuredCatalogAppId = process.env.TEAMS_CATALOG_APP_ID?.trim() ?? '';
+const mcpAuthClientId = process.env.TEAMS_MCP_AUTH_CLIENT_ID?.trim() ?? '';
+const mcpAuthApplicationIdUri = process.env.TEAMS_MCP_AUTH_APPLICATION_ID_URI?.trim() ?? '';
+const mcpAuthAcceptedAudiences = parseAcceptedAudiences(process.env.TEAMS_MCP_AUTH_ACCEPTED_AUDIENCES);
+const mcpAuthRequiredScope = process.env.TEAMS_MCP_AUTH_REQUIRED_SCOPE?.trim() ?? '';
 const botClientId = explicitBotClientId || (!isProduction ? configuredClientId : '');
 const tabDomain = process.env.TAB_DOMAIN?.trim() ?? '';
 const botConfigured = Boolean(botClientId && process.env.CLIENT_SECRET?.trim() && configuredTenantId);
@@ -175,6 +294,178 @@ const operatorAllowlist = parseOperatorAllowlist(
   process.env.TEAMS_OPERATOR_REQUESTER_ALLOWLIST,
   configuredTenantId,
 );
+const unsafeTestProcessIsolation = safeLocal
+  && process.env.NODE_ENV === 'test'
+  && process.env.TEAMS_TEST_PROCESS_ISOLATION === 'true';
+const agentExecutionPolicy = unsafeTestProcessIsolation
+  ? new AgentExecutionPolicy(agentWorkspace, {
+      isolationProvider: new UnsafeLoopbackTestIsolationProvider(),
+      canMutateScope: (scope) => isOperator(scope),
+      canReadScope: (scope) => isOperator(scope),
+    })
+  : createProductionAgentExecutionPolicy({
+      sourceWorkspace: agentWorkspace,
+      isProduction,
+      codexHome: agentProvider === 'codex' && isProduction ? process.env.AGENT_CODEX_HOME : undefined,
+      codexExecutable: agentProvider === 'codex' && isProduction ? process.env.CODEX_BIN : undefined,
+      codexExecutableSha256: agentProvider === 'codex' && isProduction ? process.env.CODEX_BIN_SHA256 : undefined,
+      allowLegacySeatbeltTestProvider: safeLocal,
+      profilePath: safeLocal ? process.env.AGENT_ISOLATION_PROFILE : undefined,
+      sandboxExecPath: safeLocal ? process.env.AGENT_SANDBOX_EXEC_PATH : undefined,
+      canMutateScope: (scope) => isOperator(scope),
+      canReadScope: (scope) => isOperator(scope),
+    });
+const baseExecutionReadiness = agentExecutionPolicy.readOnlyExecutionReadiness();
+
+type A2AWorkerReadiness = Readonly<{
+  state: 'configured' | 'unavailable';
+  reason: string;
+}>;
+
+const A2A_PREFLIGHT_SCOPE: AgentJobScope = Object.freeze({
+  tenantId: 'a2a-native-preflight',
+  requesterId: 'a2a-native-preflight',
+  conversationId: 'a2a-native-preflight',
+});
+const A2A_PREFLIGHT_PROMPT = 'Verify the native read-only Codex execution boundary.';
+
+async function runA2ANativePreflight(policy: AgentExecutionPolicy): Promise<A2AWorkerReadiness> {
+  let preparedWorkspace: Awaited<ReturnType<AgentExecutionPolicy['prepareWorkspace']>> | undefined;
+  try {
+    preparedWorkspace = await policy.prepareWorkspace(
+      'read-only',
+      A2A_PREFLIGHT_SCOPE,
+      A2A_PREFLIGHT_PROMPT,
+    );
+    await preparedWorkspace.dispose();
+    return { state: 'configured', reason: 'ready' };
+  } catch (error) {
+    try {
+      await preparedWorkspace?.dispose();
+    } catch {
+      // Preserve the fail-closed preflight result and avoid startup failure.
+    }
+    const detail = error instanceof Error ? error.message.slice(0, 300) : 'native preflight failed.';
+    return {
+      state: 'unavailable',
+      reason: `native-execution-preflight-unavailable: ${detail}`,
+    };
+  }
+}
+
+const a2aExecutionReadiness = baseExecutionReadiness.state === 'configured' && isProduction
+  && (await runA2ANativePreflight(agentExecutionPolicy)).state === 'unavailable'
+  ? { state: 'unavailable' as const, reason: 'isolation-unavailable' as const }
+  : baseExecutionReadiness;
+
+// A2A workers must not reuse the legacy unsuffixed Codex home. Resolve every
+// indexed home before registering the production roster; a missing or unsafe
+// profile keeps the HTTP server available while making only that worker
+// unavailable to collaboration dispatch.
+const a2aCodexOrdinals = Object.freeze([
+  ...new Set(a2aAgentProviders
+    .filter((configuredAgent) => configuredAgent.provider === 'codex')
+  .map((configuredAgent) => configuredAgent.ordinal)),
+]);
+const a2aCodexProfileByOrdinal = new Map<number, A2ACodexExecutionProfile>();
+const a2aCodexProfileErrors = new Map<number, string>();
+if (isProduction && a2aCodexOrdinals.length > 0) {
+  const resolvedProfiles = await Promise.all(a2aCodexOrdinals.map(async (ordinal) => {
+    try {
+      const [profile] = await createA2ACodexExecutionProfiles({ ordinals: [ordinal] });
+      return { ordinal, profile };
+    } catch (error) {
+      return {
+        ordinal,
+        error: error instanceof Error
+          ? error.message.slice(0, 300)
+          : 'indexed Codex execution profile is unavailable.',
+      };
+    }
+  }));
+  for (const resolved of resolvedProfiles) {
+    if (resolved.profile) a2aCodexProfileByOrdinal.set(resolved.ordinal, resolved.profile);
+    else a2aCodexProfileErrors.set(resolved.ordinal, resolved.error);
+  }
+
+  const profilesByHome = new Map<string, number>();
+  for (const [ordinal, profile] of [...a2aCodexProfileByOrdinal.entries()]) {
+    const previousOrdinal = profilesByHome.get(profile.codexHome);
+    if (previousOrdinal !== undefined) {
+      a2aCodexProfileByOrdinal.delete(previousOrdinal);
+      a2aCodexProfileErrors.set(previousOrdinal, 'indexed A2A Codex profiles must use distinct private homes.');
+      a2aCodexProfileByOrdinal.delete(ordinal);
+      a2aCodexProfileErrors.set(ordinal, 'indexed A2A Codex profiles must use distinct private homes.');
+    } else {
+      profilesByHome.set(profile.codexHome, ordinal);
+    }
+  }
+}
+const a2aWorkerExecutionPolicies = new Map<string, AgentExecutionPolicy>();
+const a2aWorkerReadiness = new Map<string, A2AWorkerReadiness>();
+const a2aAgentServices = new Map<string, AgentService>();
+
+for (const configuredAgent of a2aAgentProviders) {
+  const agentId = a2aAgentId(configuredAgent);
+  let policy: AgentExecutionPolicy | undefined;
+  let unavailableReason: string | undefined;
+
+  if (!isProduction && unsafeTestProcessIsolation) {
+    policy = new AgentExecutionPolicy(agentWorkspace, {
+      isolationProvider: new UnsafeLoopbackTestIsolationProvider(),
+      canMutateScope: (scope) => isOperator(scope),
+      canReadScope: (scope) => isOperator(scope),
+    });
+  } else if (isProduction && configuredAgent.provider === 'codex') {
+    const profile = a2aCodexProfileByOrdinal.get(configuredAgent.ordinal);
+    if (!profile) {
+      unavailableReason = `indexed-codex-profile-unavailable: ${a2aCodexProfileErrors.get(configuredAgent.ordinal)
+        ?? 'AGENT_CODEX_HOME_<ordinal> is required.'}`;
+    } else {
+      try {
+        policy = createProductionAgentExecutionPolicy({
+          sourceWorkspace: agentWorkspace,
+          isProduction: true,
+          codexHome: profile.codexHome,
+          codexExecutable: profile.codexExecutable,
+          codexExecutableSha256: profile.codexExecutableSha256,
+          canMutateScope: (scope) => isOperator(scope),
+          canReadScope: (scope) => isOperator(scope),
+        });
+      } catch (error) {
+        unavailableReason = error instanceof Error
+          ? `indexed-codex-profile-unavailable: ${error.message.slice(0, 300)}`
+          : 'indexed-codex-profile-unavailable.';
+      }
+    }
+  } else if (isProduction) {
+    unavailableReason = `provider-isolation-unavailable: ${configuredAgent.provider} has no verified production isolation provider.`;
+  } else {
+    unavailableReason = 'production-execution-required.';
+  }
+
+  if (policy) {
+    const readiness = policy.readOnlyExecutionReadiness();
+    if (readiness.state === 'configured') {
+      const nativeReadiness = isProduction
+        ? await runA2ANativePreflight(policy)
+        : { state: 'configured' as const, reason: 'ready' };
+      if (nativeReadiness.state === 'configured') {
+        a2aWorkerExecutionPolicies.set(agentId, policy);
+        a2aWorkerReadiness.set(agentId, nativeReadiness);
+      } else {
+        a2aWorkerReadiness.set(agentId, nativeReadiness);
+      }
+    } else {
+      a2aWorkerReadiness.set(agentId, { state: 'unavailable', reason: readiness.reason });
+    }
+  } else {
+    a2aWorkerReadiness.set(agentId, {
+      state: 'unavailable',
+      reason: unavailableReason ?? 'execution-boundary-unavailable.',
+    });
+  }
+}
 const appVersion = (() => {
   const configured = process.env.APP_VERSION?.trim();
   if (configured) return configured;
@@ -190,11 +481,42 @@ const appVersion = (() => {
     return 'unknown';
   }
 })();
+const serverBuildIdentity = (() => {
+  const unavailable = { sourceCommit: 'unavailable', serverBundleSha256: 'unavailable' };
+  try {
+    const entryPath = fileURLToPath(import.meta.url);
+    const markerPath = path.join(path.dirname(entryPath), '.teams-server-build-commit');
+    const marker = JSON.parse(readFileSync(markerPath, 'utf8')) as {
+      schemaVersion?: unknown;
+      commit?: unknown;
+      mode?: unknown;
+      worktree?: unknown;
+      bundleSha256?: unknown;
+    };
+    if (
+      marker.schemaVersion !== 3
+      || typeof marker.commit !== 'string'
+      || !/^[a-f0-9]{40}$/.test(marker.commit)
+      || (marker.mode !== 'core' && marker.mode !== 'optional')
+      || marker.worktree !== 'clean'
+      || typeof marker.bundleSha256 !== 'string'
+      || !/^[a-f0-9]{64}$/.test(marker.bundleSha256)
+    ) return unavailable;
+    const actualBundleSha256 = crypto.createHash('sha256').update(readFileSync(entryPath)).digest('hex');
+    if (actualBundleSha256 !== marker.bundleSha256) return unavailable;
+    return {
+      sourceCommit: marker.commit,
+      serverBundleSha256: actualBundleSha256,
+    };
+  } catch {
+    return unavailable;
+  }
+})();
 // The core artifact must not carry optional MCP/CopilotKit runtime graphs. A
-// normal source/optional build keeps the environment-gated local MCP route;
-// the `--core` bundle replaces this constant at build time with `true`.
+// normal source/optional build keeps MCP behind either the loopback-only local
+// gate or an explicit authenticated-provider contract; the `--core` bundle
+// replaces this constant at build time with `true`.
 const coreBuild = process.env.TEAMS_CORE_BUILD === 'true';
-const mcpEnabled = coreBuild ? false : safeLocal;
 // Optional CopilotKit/LLM runtime is explicitly opt-in in every environment.
 // The deterministic Teams Bot and tab must start without an OpenAI/API key and
 // must not load an optional provider graph merely because the process is local.
@@ -203,18 +525,26 @@ const optionalRuntimeEnabled = process.env.TEAMS_CORE_BUILD !== 'true'
 const genUiMode = process.env.TEAMS_GENUI_MODE === 'legacy' || process.env.TEAMS_GENUI_MODE === 'channels-shadow'
   ? process.env.TEAMS_GENUI_MODE
   : 'hybrid';
+const openAiConfigured = process.env.TEAMS_CORE_BUILD !== 'true'
+  && optionalRuntimeEnabled
+  && Boolean(process.env.OPENAI_API_KEY?.trim());
+const grokConfigured = process.env.TEAMS_CORE_BUILD !== 'true'
+  && optionalRuntimeEnabled
+  && Boolean(process.env.XAI_API_KEY?.trim());
 let optionalResponseEngines: Array<import('./response-engine.js').ResponseEngine> = [];
 let localModelConfigured = false;
 if (process.env.TEAMS_CORE_BUILD !== 'true' && optionalRuntimeEnabled) {
-  const [{ LocalCompatibleResponseEngine }, { OpenAIResponseEngine }, { isLocalModelBaseUrlConfigured }] = await Promise.all([
+  const [{ LocalCompatibleResponseEngine }, { OpenAIResponseEngine }, { GrokResponseEngine }, { isLocalModelBaseUrlConfigured }] = await Promise.all([
     import('./response-engine-local.js'),
     import('./response-engine-openai.js'),
+    import('./response-engine-grok.js'),
     import('./local-model-url.js'),
   ]);
   localModelConfigured = isLocalModelBaseUrlConfigured(process.env.LOCAL_MODEL_BASE_URL);
   optionalResponseEngines = [
-    new LocalCompatibleResponseEngine(),
-    new OpenAIResponseEngine(),
+    ...(localModelConfigured ? [new LocalCompatibleResponseEngine()] : []),
+    ...(openAiConfigured ? [new OpenAIResponseEngine()] : []),
+    ...(grokConfigured ? [new GrokResponseEngine()] : []),
   ];
 }
 type ChannelsShadowRenderer = typeof import('./copilot-channels-shadow.js')['renderChannelsShadow'];
@@ -226,20 +556,21 @@ const genUiActionStore = new GenUiActionStore(
   genUiActionStorePath,
 );
 const personalTabDeepLink = buildTeamsPersonalTabDeepLink({
-  appId: process.env.TEAMS_APP_ID ?? '',
+  catalogAppId: configuredCatalogAppId,
   tabDomain: process.env.TAB_DOMAIN ?? '',
   tenantId: configuredTenantId || undefined,
 });
 const genUi = new GenUiResponseFactory(genUiActionStore, {
   openTabUrl: personalTabDeepLink,
+  agentLabel,
 });
 const channelsShadowMonitor = new ChannelsShadowMonitor();
-const openAiConfigured = process.env.TEAMS_CORE_BUILD !== 'true'
-  && optionalRuntimeEnabled
-  && Boolean(process.env.OPENAI_API_KEY?.trim());
 const openAiModel = process.env.TEAMS_CORE_BUILD === 'true'
   ? 'deterministic'
   : process.env.OPENAI_MODEL?.trim() || 'gpt-4o-mini';
+const grokModel = process.env.TEAMS_CORE_BUILD === 'true'
+  ? 'deterministic'
+  : process.env.XAI_MODEL?.trim() || 'grok-4.6';
 const localModelName = process.env.TEAMS_CORE_BUILD === 'true'
   ? 'local-model'
   : process.env.LOCAL_MODEL_NAME?.trim() || 'local-model';
@@ -248,11 +579,25 @@ const responseProviders = {
   deterministic: true,
   openai: optionalRuntimeEnabled && openAiConfigured,
   local: optionalRuntimeEnabled && localModelConfigured,
+  grok: optionalRuntimeEnabled && grokConfigured,
 } as const;
+const defaultResponseMode = (() => {
+  const configured = process.env.TEAMS_RESPONSE_MODE_DEFAULT?.trim() || 'deterministic';
+  const parsed = ResponseModeSchema.safeParse(configured);
+  if (!parsed.success) {
+    throw new Error('TEAMS_RESPONSE_MODE_DEFAULT must be a supported response mode.');
+  }
+  if (!responseProviders[parsed.data]) {
+    throw new Error(`TEAMS_RESPONSE_MODE_DEFAULT=${parsed.data} is not configured in this runtime.`);
+  }
+  return parsed.data;
+})();
 const responseModeStore = new ResponseModeStore(responseModeStorePath, {
+  defaultMode: defaultResponseMode,
   providers: {
     openai: openAiConfigured,
     local: localModelConfigured,
+    grok: grokConfigured,
   },
 });
 
@@ -301,6 +646,10 @@ if (isProduction && !isDeploymentGuid(configuredTenantId)) {
   throw new Error('Production TENANT_ID must be a UUID.');
 }
 
+if (isProduction && !isDeploymentGuid(configuredCatalogAppId)) {
+  throw new Error('Production TEAMS_CATALOG_APP_ID must be an observed Teams org catalog UUID.');
+}
+
 if (isProduction && acceptedUserAudiences.length === 0) {
   throw new Error('Production requires TEAMS_USER_AUTH_ACCEPTED_AUDIENCES for delegated user-token audience validation.');
 }
@@ -347,6 +696,9 @@ storeProcessLease = await acquireStoreProcessLease([
   workItemStorePath,
   collaborationStorePath,
   agentJobStorePath,
+  a2aStorePath,
+  a2aOutboundStorePath,
+  agentAdmissionJournalPath,
   genUiActionStorePath,
   responseModeStorePath,
 ]);
@@ -355,11 +707,15 @@ process.once('exit', () => storeProcessLease?.releaseSync());
 await itemStore.initialize();
 await workItemService.initialize();
 await collaborationService.initialize();
+await a2aStore.initialize();
+await a2aOutboundStore.initialize();
 await genUiActionStore.initialize();
 await responseModeStore.initialize();
 
+const coreResponseEngine = new DeterministicResponseEngine();
+const configuredResponseEngines = [coreResponseEngine, ...optionalResponseEngines];
 configureResponseEngineRouter({
-  engines: optionalResponseEngines,
+  engines: configuredResponseEngines,
   resolveMode: async (input) => {
     // This environment flag is intentionally retained only for the existing
     // deterministic test harness. Production users are resolved from the
@@ -371,21 +727,25 @@ configureResponseEngineRouter({
     });
   },
 });
-
-// Bot messages and CopilotKit runs must use the same server-owned resolver.
-// The router constructor also includes the globally configured local engine.
-const botResponseEngineRouter = new ResponseEngineRouter([
-  new DeterministicResponseEngine(),
-  ...optionalResponseEngines,
-]);
+const botResponseEngineRouter = new ResponseEngineRouter(configuredResponseEngines);
 
 let http: any;
 let teamsApp: any;
 let userAuthValidator: any;
+let mcpAuthValidator: any;
+let a2aExecutionAdapter: ReturnType<typeof createA2AExecutionAdapter> | undefined;
 const localOutbox = new Map<string, string[]>();
 const localOutboxActivities = new Map<string, unknown[]>();
 
-type BotSend = (text: string, envelope?: GenUiEnvelopeV1, activityOverride?: unknown) => Promise<void>;
+type BotDeliveryReceipt = Readonly<{
+  state: 'connector-accepted' | 'connector-rejected' | 'ambiguous';
+  activityId?: string;
+}>;
+type BotSend = (
+  text: string,
+  envelope?: GenUiEnvelopeV1,
+  activityOverride?: unknown,
+) => Promise<BotDeliveryReceipt>;
 type GenUiCardAction = Extract<GenUiActionName, 'approve' | 'cancel' | 'refresh' | 'retry' | 'feedback'> | 'command';
 type GenUiActionPayload = {
   schemaVersion: typeof GENUI_SCHEMA_VERSION;
@@ -477,15 +837,46 @@ function restScope(request: any, response: any): { scope?: AgentJobScope; status
   const requesterId = nonEmptyString(claims?.requesterId) ?? nonEmptyString(claims?.oid) ?? nonEmptyString(claims?.sub);
   const tenantId = nonEmptyString(claims?.tid);
   const conversation = restConversationId(request);
-  if (conversation.error) return { status: 400, error: conversation.error };
 
   // Local deterministic tests have no token validator. Use a fixed server-side
   // principal; production always requires validated oid/sub and tid claims.
   if (skipAuth && !claims) {
+    if (conversation.error) return { status: 400, error: conversation.error };
     return { scope: { ...localRestScope(), conversationId: conversation.conversationId! } };
   }
   if (!requesterId || !tenantId) return { status: 401, error: 'validated user identity is required' };
-  return { scope: { requesterId, tenantId, conversationId: conversation.conversationId! } };
+  // A tab/browser request has no authenticated Teams conversation reference.
+  // Never let its body or headers select the conversation used by outbound
+  // notifications; use an opaque principal-owned REST scope instead.
+  return {
+    scope: {
+      requesterId,
+      tenantId,
+      conversationId: deriveServerOwnedRestConversationId({ tenantId, requesterId }),
+    },
+  };
+}
+
+function restPrincipal(request: any, response: any): { principal?: { requesterId: string; tenantId: string }; status?: number; error?: string } {
+  const claims = asRecord(response.locals?.user) as UserClaims | undefined;
+  const requesterId = nonEmptyString(claims?.requesterId) ?? nonEmptyString(claims?.oid) ?? nonEmptyString(claims?.sub);
+  const tenantId = nonEmptyString(claims?.tid);
+  if (skipAuth && !claims) return { principal: { requesterId: 'local-user', tenantId: 'local-tenant' } };
+  if (!requesterId || !tenantId) return { status: 401, error: 'validated user identity is required' };
+  return { principal: { requesterId, tenantId } };
+}
+
+function a2aScopeFromRequest(request: any): AgentJobScope | undefined {
+  const claims = asRecord(request.res?.locals?.user) as UserClaims | undefined;
+  const requesterId = nonEmptyString(claims?.requesterId)
+    ?? nonEmptyString(claims?.oid)
+    ?? nonEmptyString(claims?.sub);
+  const tenantId = nonEmptyString(claims?.tid);
+  if (skipAuth && !claims) {
+    return { requesterId: 'local-user', tenantId: 'local-tenant', conversationId: 'a2a-http' };
+  }
+  if (!requesterId || !tenantId) return undefined;
+  return { requesterId, tenantId, conversationId: 'a2a-http' };
 }
 
 function workItemRestScope(request: any, response: any): { scope?: WorkItemScope; status?: number; error?: string } {
@@ -591,9 +982,11 @@ async function buildStatusEnvelope(): Promise<GenUiEnvelopeV1> {
     environment: isProduction ? 'production' : 'local',
     authMode: safeLocal ? 'local-bypass' : teamsApp ? 'teams-authenticated' : 'not-configured',
     storage: 'file-json-single-process',
+    agentProvider,
     deterministic: true,
     codex: capabilities.codex,
     ghcp: capabilities.ghcp,
+    a2aProviders: a2aProviderFacts(),
   });
 }
 
@@ -699,12 +1092,103 @@ function recordChannelsShadowComparison(envelope: GenUiEnvelopeV1, nativeActivit
   }
 }
 
+type AdaptiveCardDeliveryErrorClassification = 'confirmed-rejection' | 'ambiguous-transport' | 'unknown';
+
+const AMBIGUOUS_ADAPTIVE_CARD_DELIVERY_CODES = new Set([
+  'ECONNABORTED',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'EHOSTDOWN',
+  'EHOSTUNREACH',
+  'ENETDOWN',
+  'ENETUNREACH',
+  'EPIPE',
+  'ETIMEDOUT',
+  'UND_ERR_BODY_TIMEOUT',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_SOCKET',
+]);
+
+/**
+ * The Teams SDK sender is Axios-backed. Only its rejected `response.status`
+ * (or the same response nested under `cause`) proves that the provider
+ * returned an HTTP rejection. Top-level status fields and response-body
+ * statusCode metadata are deliberately not treated as delivery provenance.
+ */
+type AdaptiveCardDeliveryHttpResponseError = {
+  response?: { status?: unknown };
+  cause?: { response?: { status?: unknown } };
+};
+
+function adaptiveCardDeliveryHttpResponseStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const candidate = error as AdaptiveCardDeliveryHttpResponseError;
+  const possibleStatuses = [candidate.response?.status, candidate.cause?.response?.status];
+
+  for (const value of possibleStatuses) {
+    const status = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+    if (Number.isInteger(status) && status >= 400 && status <= 599) return status;
+  }
+  return undefined;
+}
+
+function adaptiveCardDeliveryErrorClassification(error: unknown): AdaptiveCardDeliveryErrorClassification {
+  if (!error || typeof error !== 'object') return 'unknown';
+
+  // A known transport signal wins over any status metadata, because the
+  // provider may have accepted the card before the sender lost the response.
+  const candidates = [
+    error,
+    (error as { cause?: unknown }).cause,
+  ];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object') continue;
+    const transportError = candidate as { code?: unknown; name?: unknown };
+    if (
+      (typeof transportError.code === 'string'
+        && AMBIGUOUS_ADAPTIVE_CARD_DELIVERY_CODES.has(transportError.code))
+      || transportError.name === 'AbortError'
+      || transportError.name === 'TimeoutError'
+    ) {
+      return 'ambiguous-transport';
+    }
+  }
+
+  if (adaptiveCardDeliveryHttpResponseStatus(error) !== undefined) return 'confirmed-rejection';
+  return 'unknown';
+}
+
+async function deliverAdaptiveCardWithFallback(
+  deliver: (activity: unknown) => Promise<unknown>,
+  activity: unknown,
+  fallback: unknown,
+): Promise<BotDeliveryReceipt> {
+  try {
+    return connectorAcceptedReceipt(await deliver(activity));
+  } catch (error) {
+    // A timeout/reset leaves delivery ambiguous: the remote service may have
+    // accepted the card before the transport failed. Only an explicit HTTP
+    // rejection is safe to follow with one user-visible text fallback.
+    if (adaptiveCardDeliveryErrorClassification(error) !== 'confirmed-rejection') {
+      return { state: 'ambiguous' };
+    }
+    try {
+      return connectorAcceptedReceipt(await deliver(fallback));
+    } catch (fallbackError) {
+      return adaptiveCardDeliveryErrorClassification(fallbackError) === 'confirmed-rejection'
+        ? { state: 'connector-rejected' }
+        : { state: 'ambiguous' };
+    }
+  }
+}
+
 async function deliverGenUiActivity(
   deliver: ((activity: unknown) => Promise<unknown>) | undefined,
   text: string,
   envelope?: GenUiEnvelopeV1,
-): Promise<void> {
-  if (!deliver) return;
+): Promise<BotDeliveryReceipt> {
+  if (!deliver) return { state: 'ambiguous' };
 
   const normalized = envelope ? GenUiEnvelopeV1Schema.parse(envelope) : undefined;
   const activity = normalized && genUiMode !== 'legacy'
@@ -712,13 +1196,23 @@ async function deliverGenUiActivity(
     : { type: 'message', text };
 
   if (normalized) recordChannelsShadowComparison(normalized, activity);
-
-  try {
-    await deliver(activity);
-  } catch (error) {
-    if (!normalized) throw error;
-    await deliver(createTextFallbackActivity(normalized));
+  if (!normalized) {
+    try {
+      return connectorAcceptedReceipt(await deliver(activity));
+    } catch (error) {
+      return adaptiveCardDeliveryErrorClassification(error) === 'confirmed-rejection'
+        ? { state: 'connector-rejected' }
+        : { state: 'ambiguous' };
+    }
   }
+  return deliverAdaptiveCardWithFallback(deliver, activity, createTextFallbackActivity(normalized));
+}
+
+function connectorAcceptedReceipt(value: unknown): BotDeliveryReceipt {
+  const activityId = nonEmptyString(asRecord(value)?.id, 200);
+  return activityId
+    ? { state: 'connector-accepted', activityId }
+    : { state: 'connector-accepted' };
 }
 
 function createBotSender(
@@ -737,21 +1231,48 @@ function createBotSender(
       if (normalized) recordChannelsShadowComparison(normalized, activity);
       messages.push(text);
       activities?.push(activity);
-      return;
+      return { state: 'connector-accepted' };
     }
 
     if (effectiveOverride) {
-      if (!deliver) return;
-      try {
-        await deliver(effectiveOverride);
-      } catch {
-        await deliver({ type: 'message', text });
-      }
-      return;
+      if (!deliver) return { state: 'ambiguous' };
+      return deliverAdaptiveCardWithFallback(deliver, effectiveOverride, { type: 'message', text });
     }
 
-    await deliverGenUiActivity(deliver, text, normalized);
+    return deliverGenUiActivity(deliver, text, normalized);
   };
+}
+
+function createRuntimeBotSender(
+  activity: any,
+  deliver?: (activity: unknown) => Promise<unknown>,
+): BotSend {
+  if (!skipOutbound) return createBotSender(deliver);
+  if (!safeLocal) return async () => ({ state: 'ambiguous' });
+
+  const conversationId = typeof activity?.conversation?.id === 'string'
+    ? activity.conversation.id.trim()
+    : '';
+  if (!conversationId) return async () => ({ state: 'ambiguous' });
+
+  const messages = localOutbox.get(conversationId) ?? [];
+  localOutbox.set(conversationId, messages);
+  const activities = localOutboxActivities.get(conversationId) ?? [];
+  localOutboxActivities.set(conversationId, activities);
+  return createBotSender(undefined, messages, activities);
+}
+
+function createConversationBotSender(conversationId: string): BotSend {
+  if (teamsApp && !skipOutbound) {
+    return createBotSender((activity) => teamsApp.send(conversationId, activity));
+  }
+  if (!safeLocal) return async () => ({ state: 'ambiguous' });
+
+  const messages = localOutbox.get(conversationId) ?? [];
+  localOutbox.set(conversationId, messages);
+  const activities = localOutboxActivities.get(conversationId) ?? [];
+  localOutboxActivities.set(conversationId, activities);
+  return createBotSender(undefined, messages, activities);
 }
 
 if (useTeamsSdk) {
@@ -781,11 +1302,61 @@ if (useTeamsSdk) {
     applicationIdUri: configuredApplicationIdUri || undefined,
   });
   userAuthValidator = userAuthApp.entraTokenValidator;
+  if (authenticatedMcpRequested && mcpAuthClientId && mcpAuthApplicationIdUri) {
+    const loadedMcpTeams = await import('@microsoft/teams.apps');
+    const mcpTeams = (loadedMcpTeams as any).default ?? loadedMcpTeams;
+    const mcpAuthApp = new mcpTeams.App({
+      clientId: mcpAuthClientId,
+      tenantId: configuredTenantId || undefined,
+      applicationIdUri: mcpAuthApplicationIdUri,
+    });
+    mcpAuthValidator = mcpAuthApp.entraTokenValidator;
+  }
 } else {
   // Local mode keeps the browser and API fully runnable even when the host machine
   // has an incompatible optional auth dependency. Production Teams traffic uses the SDK branch above.
   http = express();
 }
+
+const mcpResourceOrigin = process.env.MCP_RESOURCE_ORIGIN?.trim()
+  || (tabDomain ? `https://${tabDomain}` : process.env.PUBLIC_BASE_URL?.trim());
+const authenticatedMcpConfig: McpAuthConfig = resolveMcpAuthConfig({
+  requested: authenticatedMcpRequested,
+  coreBuild,
+  isProduction,
+  userAuthConfigured: Boolean(configuredTenantId && mcpAuthClientId && mcpAuthApplicationIdUri),
+  userAuthValidatorConfigured: Boolean(mcpAuthValidator),
+  acceptedAudiences: mcpAuthAcceptedAudiences,
+  resourceOrigin: mcpResourceOrigin,
+  authorizationServerUrl: process.env.MCP_AUTHORIZATION_SERVER_URL?.trim(),
+  requiredScope: mcpAuthRequiredScope,
+  providerToolsEnabled: process.env.TEAMS_MCP_PROVIDER_TOOLS === 'true',
+  providerEndpointConfigured: Boolean(process.env.ATLASSIAN_SITE_URL?.trim()),
+  providerCredentialConfigured: Boolean(
+    process.env.ATLASSIAN_ACCESS_TOKEN?.trim() || process.env.BITBUCKET_ACCESS_TOKEN?.trim(),
+  ),
+});
+if (authenticatedMcpRequested && !coreBuild && !authenticatedMcpConfig.enabled) {
+  throw new Error(`TEAMS_MCP_AUTHENTICATED_ENABLED=true cannot start: ${authenticatedMcpConfig.reason}`);
+}
+const mcpEnabled = !coreBuild && (safeLocal || authenticatedMcpConfig.enabled);
+
+// Keep the tab embeddable in Teams while applying response-level security
+// headers. The SDK adapter wraps an Express application and exposes the
+// middleware surface, but its wrapped app is intentionally not public in the
+// type definition; use the runtime property only for Express fingerprint
+// hardening.
+const httpApplication = (http as any).express ?? http;
+if (typeof httpApplication.disable === 'function') {
+  httpApplication.disable('x-powered-by');
+}
+const securityHeaders = buildSecurityHeaders();
+http.use((_request: any, response: any, next: any) => {
+  for (const [name, value] of Object.entries(securityHeaders)) {
+    response.setHeader(name, value);
+  }
+  next();
+});
 
 const loopbackOnly = safeLocal || process.env.TEAMS_BIND_HOST === '127.0.0.1';
 
@@ -828,32 +1399,244 @@ if (safeLocal) {
   });
 }
 
+const a2aPublicOrigin = (() => {
+  if (tabDomain) return `https://${tabDomain}`;
+  const configured = process.env.PUBLIC_BASE_URL?.trim();
+  if (configured) {
+    try {
+      const parsed = new URL(configured);
+      if (parsed.protocol === 'https:') return parsed.origin;
+    } catch {
+      // Local Core discovery uses the explicit loopback placeholder below.
+    }
+  }
+  return 'https://localhost';
+})();
+const a2aAuthenticate = createUserAuthMiddleware({
+  allowUnauthenticated: skipAuth,
+  validator: userAuthValidator,
+  configuredTenantId: configuredTenantId || undefined,
+  acceptedAudiences: acceptedUserAudiences,
+});
+let a2aProductionRuntime: ReturnType<typeof mountA2AProductionRuntime> | undefined;
+const a2aTelemetry = new A2ATelemetryCollector();
+const remoteA2AEndpoint = process.env.TEAMS_A2A_REMOTE_AGENT_ENDPOINT?.trim();
+const remoteA2ABearerToken = process.env.TEAMS_A2A_REMOTE_AGENT_BEARER_TOKEN?.trim();
+if (Boolean(remoteA2AEndpoint) !== Boolean(remoteA2ABearerToken)) {
+  throw new Error('TEAMS_A2A_REMOTE_AGENT_ENDPOINT and TEAMS_A2A_REMOTE_AGENT_BEARER_TOKEN must be configured together.');
+}
+const remoteA2ARoster = parseA2ARemotePeerRoster(process.env.TEAMS_A2A_REMOTE_AGENTS);
+if ((remoteA2AEndpoint || remoteA2ABearerToken) && remoteA2ARoster.length > 0) {
+  throw new Error('Use either the legacy single A2A remote configuration or TEAMS_A2A_REMOTE_AGENTS, not both.');
+}
+const remoteA2AAgentId = process.env.TEAMS_A2A_REMOTE_AGENT_ID?.trim() || 'teams-core-remote';
+const remoteA2AProviderId = process.env.TEAMS_A2A_REMOTE_PROVIDER_ID?.trim() || 'remote-a2a';
+const configuredRemoteA2AAgent = remoteA2AEndpoint && remoteA2ABearerToken
+  ? await createConfiguredA2ARemoteAgent({
+    endpoint: remoteA2AEndpoint,
+    bearerToken: remoteA2ABearerToken,
+    agentId: remoteA2AAgentId,
+    providerId: remoteA2AProviderId,
+    authorizationPolicy: createA2ARemoteAuthorizationPolicy(remoteA2AAgentId),
+    telemetry: a2aTelemetry,
+  })
+  : undefined;
+const remoteA2ARosterCredentials: A2ARemotePeerCredential[] = [];
+const remoteA2ARosterFailures: A2AConfiguredRemoteAgentFailure[] = [];
+for (const peer of remoteA2ARoster) {
+  try {
+    const credential = resolveA2ARemotePeerCredentials([peer], process.env)[0];
+    if (!credential) throw new Error('A2A remote peer credential was not resolved.');
+    remoteA2ARosterCredentials.push(credential);
+  } catch {
+    // Keep startup available for healthy peers and expose only safe labels in health.
+    remoteA2ARosterFailures.push({
+      agentId: peer.agentId,
+      providerId: peer.providerId,
+      kind: peer.kind,
+      code: 'CONFIGURATION_ERROR',
+    });
+  }
+}
+const configuredRemoteA2ABatch = await createConfiguredA2ARemoteAgents(
+  remoteA2ARosterCredentials.map((peer) => ({
+    endpoint: peer.endpoint,
+    bearerToken: peer.bearerToken,
+    agentId: peer.agentId,
+    providerId: peer.providerId,
+    kind: peer.kind,
+    executionIdentity: peer.executionIdentity,
+    executionBoundaryId: peer.executionBoundaryId,
+    roles: peer.roles,
+    capabilities: peer.capabilities,
+    authorizationPolicy: createA2ARemoteAuthorizationPolicy(peer.agentId),
+    telemetry: a2aTelemetry,
+  })),
+);
+const a2aRemoteInitializationFailures: readonly A2AConfiguredRemoteAgentFailure[] = Object.freeze([
+  ...remoteA2ARosterFailures,
+  ...configuredRemoteA2ABatch.failures,
+]);
+const coreA2ARoles = Object.freeze(A2A_ROLE_CATALOG.map((role) => role.id));
+
+function a2aProviderFacts(): A2AProviderFact[] {
+  const facts = createA2AProviderFacts(
+    a2aAgentProviders.map((configuredAgent) => {
+      const agentId = a2aAgentId(configuredAgent);
+      const providerId = a2aProviderId(configuredAgent);
+      const configured = Boolean(providerRunners[configuredAgent.provider]);
+      const readiness = a2aWorkerReadiness.get(agentId) ?? {
+        state: 'unavailable' as const,
+        reason: 'execution-boundary-unavailable.',
+      };
+      return {
+        provider: configuredAgent.provider,
+        agentId,
+        providerId,
+        configured,
+        execution: readiness.state === 'configured' ? 'configured' as const : 'unavailable' as const,
+        ...(readiness.state === 'configured' ? {} : { executionReason: readiness.reason }),
+      };
+    }),
+    configuredRemoteA2AAgent ? {
+      provider: 'remote',
+      agentId: configuredRemoteA2AAgent.agentId,
+      providerId: configuredRemoteA2AAgent.providerId,
+    } : undefined,
+  );
+  facts.push(...configuredRemoteA2ABatch.agents.map((agent) => ({
+    provider: 'remote',
+    agentId: agent.agentId,
+    providerId: agent.providerId,
+    configured: true,
+    execution: 'configured' as const,
+  })));
+  return facts;
+}
+
+const a2aAgents = [
+  ...a2aAgentProviders.map((configuredAgent) => {
+    const agentId = a2aAgentId(configuredAgent);
+    const readiness = a2aWorkerReadiness.get(agentId) ?? {
+      state: 'unavailable' as const,
+      reason: 'execution-boundary-unavailable.',
+    };
+    return {
+      agentId,
+      providerId: a2aProviderId(configuredAgent),
+      kind: 'cli',
+      executionIdentity: a2aExecutionIdentity(configuredAgent),
+      executionBoundaryId: a2aExecutionBoundaryId(configuredAgent),
+      executionReady: readiness.state === 'configured',
+      ...(readiness.state === 'unavailable'
+        ? { executionUnavailableReason: readiness.reason }
+        : {}),
+      roles: coreA2ARoles,
+      capabilities: A2A_CAPABILITIES,
+      authorize: ({ scope }: { scope: AgentJobScope }) => isOperator(scope),
+      authorizationPolicy: createA2AAgentAuthorizationPolicy({
+        authorize: (input) => (
+          input.agentId === agentId
+          && Boolean(input.scope.tenantId && input.scope.requesterId && input.scope.conversationId)
+          && (skipAuth || !configuredTenantId || input.scope.tenantId === configuredTenantId)
+          && isOperator(input.scope)
+          && Boolean(input.role && input.capabilities?.length)
+        ),
+      }),
+      executeChild: (input: A2AProductionChildExecutionInput) => executeA2AProviderChild(configuredAgent, input),
+      cancelChild: (input: A2AProductionChildCancellationInput) => cancelA2AProviderChild(configuredAgent, input),
+      ...(readiness.state === 'configured'
+        ? { recoverChild: (input: A2AProductionChildRecoveryInput) => recoverA2AProviderChild(configuredAgent, input) }
+        : {}),
+    };
+  }),
+  ...(configuredRemoteA2AAgent ? [configuredRemoteA2AAgent] : []),
+  ...configuredRemoteA2ABatch.agents,
+];
+a2aProductionRuntime = mountA2AProductionRuntime(http, {
+  publicOrigin: a2aPublicOrigin,
+  appVersion,
+  configuredApplicationIdUri: configuredApplicationIdUri || undefined,
+  configuredTenantId: configuredTenantId || undefined,
+  store: a2aStore,
+  authenticate: a2aAuthenticate,
+  resolveScope: a2aScopeFromRequest,
+  v026Execution: {
+    submit: async (event) => {
+      if (!a2aExecutionAdapter) throw new Error('A2A execution adapter is not ready.');
+      await a2aExecutionAdapter(event);
+    },
+    cancel: async ({ task }) => {
+      if (!a2aExecutionAdapter) throw new Error('A2A execution adapter is not ready.');
+      return a2aExecutionAdapter.cancel({ taskId: task.id, scope: task.scope });
+    },
+  },
+  legacyOnTaskSubmitted: async (event) => {
+    if (!a2aExecutionAdapter) throw new Error('A2A execution adapter is not ready.');
+    await a2aExecutionAdapter(event);
+  },
+  legacyOnTaskCancel: async ({ task, authenticatedScope }) => {
+    const cancelledDispatch = await a2aProductionRuntime?.cancelDispatch({
+      task,
+      authenticatedScope,
+    });
+    if (cancelledDispatch) return cancelledDispatch;
+    if (!a2aExecutionAdapter) throw new Error('A2A execution adapter is not ready.');
+    return a2aExecutionAdapter.cancel({ taskId: task.id, scope: task.scope });
+  },
+  coreA2A: {
+    agents: a2aAgents,
+    defaultAgentId: a2aAgents[0]?.agentId,
+    onDispatchAudit: (audit) => {
+      console.info('A2A orchestration audit', serializeA2ADispatchAudit(audit));
+    },
+  },
+  requireScopedAgentAuthorization: !skipAuth,
+  telemetry: a2aTelemetry,
+});
+
 http.use(express.json());
 
-http.get('/api/health', (_request: any, response: any) => {
+http.get('/api/health', async (_request: any, response: any) => {
+  let cliCapabilities: CliCapabilities;
+  try {
+    cliCapabilities = await probeCliCapabilities();
+  } catch {
+    // A capability probe is diagnostic only. If the runner itself fails, keep
+    // health available and report the dimensions as unknown rather than
+    // turning health into an implicit login or provider-availability claim.
+    cliCapabilities = unknownCliCapabilities();
+  }
+
   response.json({
     ok: true,
     service: 'teams-sdk-mvp',
     version: appVersion,
+    sourceCommit: serverBuildIdentity.sourceCommit,
+    serverBundleSha256: serverBuildIdentity.serverBundleSha256,
     environment: process.env.NODE_ENV ?? 'development',
     auth: safeLocal ? 'local-bypass' : teamsApp ? 'teams-authenticated' : 'not-configured',
     userAuth: safeLocal ? 'local-bypass' : userAuthConfigured && userAuthValidator ? 'entra-sso' : 'not-configured',
     bot: teamsApp ? 'teams-sdk' : safeLocal ? 'local-handler' : 'not-configured',
     outbound: teamsApp ? (skipOutbound ? 'disabled' : 'teams-sdk') : safeLocal ? 'local-outbox' : 'not-configured',
+    cliCapabilities,
     storage: 'file-json-single-process',
     copilotKit: optionalRuntimeEnabled ? 'enabled' : 'disabled',
     copilotKitRuntime: optionalRuntimeEnabled ? '/api/copilotkit' : 'disabled',
     genAI: process.env.COPILOTKIT_DETERMINISTIC_MODE === 'true'
       ? 'deterministic-test'
-      : openAiConfigured
+      : grokConfigured
+        ? 'grok-configured'
+        : openAiConfigured
         ? 'openai-configured'
         : 'not-configured',
     genAIProvider: {
-      provider: 'openai',
-      configured: openAiConfigured,
-      model: openAiModel.slice(0, 120),
+      provider: grokConfigured ? 'grok' : 'openai',
+      configured: grokConfigured || openAiConfigured,
+      model: (grokConfigured ? grokModel : openAiModel).slice(0, 120),
     },
     responseProviders,
+    responseModeDefault: defaultResponseMode,
     weatherMode,
     genUiMode,
     genUi: 'adaptive-cards',
@@ -862,6 +1645,32 @@ http.get('/api/health', (_request: any, response: any) => {
       : { enabled: false },
     mcpEnabled,
     mcp: mcpEnabled ? '/mcp' : 'disabled',
+    mcpMode: authenticatedMcpConfig.enabled
+      ? 'authenticated-provider'
+      : safeLocal
+        ? 'local'
+        : 'disabled',
+    mcpAuth: authenticatedMcpConfig.enabled
+      ? {
+        enabled: true,
+        resource: authenticatedMcpConfig.resourceUrl,
+        metadata: authenticatedMcpConfig.metadataUrl,
+        authorizationServer: authenticatedMcpConfig.authorizationServerUrl,
+        requiredScope: authenticatedMcpConfig.requiredScope,
+      }
+      : { enabled: false, reason: authenticatedMcpConfig.reason },
+    a2aProviders: a2aProviderFacts(),
+    a2aExecution: a2aExecutionReadiness,
+    a2aRemoteFailures: a2aRemoteInitializationFailures,
+    a2aTelemetry: (() => {
+      const snapshot = a2aTelemetry.snapshot();
+      return {
+        schemaVersion: snapshot.schemaVersion,
+        totalEvents: snapshot.totalEvents,
+        retainedEvents: snapshot.retainedEvents,
+        droppedEvents: snapshot.droppedEvents,
+      };
+    })(),
     timestamp: new Date().toISOString(),
   });
 });
@@ -877,10 +1686,12 @@ function publicModelLabel(value: string | undefined, fallback: string): string {
 function publicResponseModeAvailability(): PublicResponseModeAvailability[] {
   return responseModeStore.availability().map((entry) => ({
     ...entry,
-    ...(entry.mode === 'openai'
+    ...(entry.configured && entry.mode === 'openai'
       ? { model: publicModelLabel(openAiModel, openAiModel) }
-      : entry.mode === 'local'
+      : entry.configured && entry.mode === 'local'
         ? { model: publicModelLabel(localModelName, 'local-model') }
+        : entry.configured && entry.mode === 'grok'
+          ? { model: publicModelLabel(grokModel, 'grok-4.6') }
         : {}),
   }));
 }
@@ -1541,20 +2352,7 @@ const notifyConversation = async (notification: AgentNotification): Promise<void
   const envelope = genUiMode === 'legacy'
     ? undefined
     : genUi.notification(notification);
-  if (teamsApp && !skipOutbound) {
-    await deliverGenUiActivity(
-      (activity) => teamsApp.send(conversationId, activity),
-      message,
-      envelope,
-    );
-    return;
-  }
-
-  const messages = localOutbox.get(conversationId) ?? [];
-  localOutbox.set(conversationId, messages);
-  const activities = localOutboxActivities.get(conversationId) ?? [];
-  localOutboxActivities.set(conversationId, activities);
-  await createBotSender(undefined, messages, activities)(message, envelope);
+  await createConversationBotSender(conversationId)(message, envelope);
 };
 
 agentService = new AgentService(
@@ -1565,21 +2363,135 @@ agentService = new AgentService(
   gitService,
   {
     canMutateScope: (scope) => isOperator(scope),
+    canReadScope: (scope) => isOperator(scope),
+    executionPolicy: agentExecutionPolicy,
+    admissionController: agentAdmissionController,
+    agentLabel,
+    defaultProvider: agentProvider,
+    providerRunners,
   },
 );
 await agentService.initialize();
 
+// Each ready production A2A identity owns a distinct AgentService/runner
+// pair. The job store and admission controller remain shared so limits and
+// durable state are process-wide, while the execution policy (and therefore
+// Codex home/lease) is never shared between workers.
+for (const configuredAgent of a2aAgentProviders) {
+  const agentId = a2aAgentId(configuredAgent);
+  const executionPolicy = a2aWorkerExecutionPolicies.get(agentId);
+  if (!executionPolicy || a2aWorkerReadiness.get(agentId)?.state !== 'configured') continue;
+
+  const runner = new ProviderNeutralAgentRunner({ provider: configuredAgent.provider });
+  const service = new AgentService(
+    agentJobStore,
+    runner,
+    agentWorkspace,
+    notifyConversation,
+    gitService,
+    {
+      canMutateScope: (scope) => isOperator(scope),
+      canReadScope: (scope) => isOperator(scope),
+      executionPolicy,
+      admissionController: agentAdmissionController,
+      agentLabel: configuredAgent.provider === 'copilot' ? 'GitHub Copilot CLI' : 'Codex CLI',
+      defaultProvider: configuredAgent.provider,
+      providerRunners: { [configuredAgent.provider]: runner },
+    },
+  );
+  a2aAgentServices.set(agentId, service);
+}
+
+a2aExecutionAdapter = createA2AExecutionAdapter({
+  store: a2aStore,
+  agentService,
+  resolveProviderForRecovery: cliProviderFromA2AProviderId,
+  recoverChildForReconciliation: (input) => a2aProductionRuntime?.recoverChild(input) ?? Promise.resolve(undefined),
+  onDispatchAudit: (audit) => {
+    console.info('A2A dispatch audit', serializeA2ADispatchAudit(audit));
+  },
+});
+await a2aExecutionAdapter.initialize();
+
 let mcpRouter: McpGenUiRouter | undefined;
 if (mcpEnabled) {
   const { createMcpGenUiRouter } = await import('./mcp-genui.js');
+  let providerTools: import('./mcp-provider-tools.js').McpProviderToolRegistry | undefined;
+  let providerToolsForPrincipal: ((principal: import('./mcp-genui.js').McpPrincipal) => import('./mcp-provider-tools.js').McpProviderToolRegistry) | undefined;
+  if (process.env.TEAMS_MCP_PROVIDER_TOOLS === 'true') {
+    const { createMcpProviderToolRegistry } = await import('./mcp-provider-tools.js');
+    const { createPrincipalScopedProviderHttpBroker } = await import('./mcp-provider-http-broker.js');
+    const { ProviderMutationReplayStore } = await import('./provider-mutation-replay-store.js');
+    const atlassianSiteUrl = process.env.ATLASSIAN_SITE_URL?.trim();
+    if (!atlassianSiteUrl) {
+      throw new Error('TEAMS_MCP_PROVIDER_TOOLS=true requires ATLASSIAN_SITE_URL.');
+    }
+    const bitbucketBaseUrl = process.env.BITBUCKET_API_BASE_URL?.trim() || 'https://api.bitbucket.org/2.0/';
+    const atlassianOrigin = new URL(atlassianSiteUrl).origin;
+    const bitbucketOrigin = new URL(bitbucketBaseUrl).origin;
+    const mutationReplayStore = new ProviderMutationReplayStore(providerMutationReplayStorePath);
+    await mutationReplayStore.initialize();
+    const createProviderTools = (principal: import('./mcp-genui.js').McpPrincipal) => {
+      const providerBroker = createPrincipalScopedProviderHttpBroker({
+        principal,
+        resolveCredential: (provider) => provider === 'atlassian'
+          ? process.env.ATLASSIAN_ACCESS_TOKEN?.trim()
+          : process.env.BITBUCKET_ACCESS_TOKEN?.trim(),
+        allowedOrigins: {
+          atlassian: [atlassianOrigin],
+          bitbucket: [bitbucketOrigin],
+        },
+      });
+      return createMcpProviderToolRegistry({
+        principal,
+        ...(authenticatedMcpConfig.enabled ? { allowMutations: isOperator } : {}),
+        atlassianSiteUrl,
+        ...(process.env.BITBUCKET_API_BASE_URL?.trim()
+          ? { bitbucketBaseUrl }
+        : {}),
+        providerBroker,
+        mutationReplayStore,
+      });
+    };
+
+    if (authenticatedMcpConfig.enabled) {
+      providerToolsForPrincipal = createProviderTools;
+    } else {
+      const tenantId = process.env.TEAMS_MCP_PROVIDER_TENANT_ID?.trim();
+      const requesterId = process.env.TEAMS_MCP_PROVIDER_REQUESTER_ID?.trim();
+      if (!tenantId || !requesterId) {
+        throw new Error('TEAMS_MCP_PROVIDER_TOOLS=true in local mode requires TEAMS_MCP_PROVIDER_TENANT_ID and TEAMS_MCP_PROVIDER_REQUESTER_ID.');
+      }
+      providerTools = createProviderTools({ tenantId, requesterId });
+    }
+  }
   mcpRouter = createMcpGenUiRouter({
     itemStore,
     agentService,
     getWeather,
+    ...(providerTools ? { providerTools } : {}),
+    ...(providerToolsForPrincipal ? { providerToolsForPrincipal } : {}),
+    ...(authenticatedMcpConfig.enabled
+      ? {
+        includeWorkspaceTools: false,
+        resolvePrincipal: (_request: import('express').Request, response: import('express').Response) => copilotIdentity(undefined, response),
+      }
+      : {}),
     sessionMode: process.env.MCP_SESSION_MODE === 'stateless' ? 'stateless' : 'stateful',
     enableJsonResponse: true,
     serverVersion: appVersion,
   });
+
+  if (authenticatedMcpConfig.enabled) {
+    const authenticateMcp = createUserAuthMiddleware({
+      allowUnauthenticated: false,
+      validator: mcpAuthValidator,
+      configuredTenantId: configuredTenantId || undefined,
+      acceptedAudiences: mcpAuthAcceptedAudiences,
+      requiredDelegatedScope: authenticatedMcpConfig.requiredScope,
+    });
+    mountMcpAuthenticatedBoundary(http, authenticatedMcpConfig, authenticateMcp);
+  }
   http.use('/mcp', mcpRouter);
 }
 
@@ -1588,6 +2500,10 @@ const handleSignal = (signal: NodeJS.Signals): void => {
   if (shutdownPromise) return;
   shutdownPromise = (async () => {
     try {
+      await Promise.allSettled(
+        [...a2aAgentServices.values()].map((service) => service.close({ closeAdmission: false })),
+      );
+      await agentService.close();
       await mcpRouter?.close();
     } finally {
       await storeProcessLease?.release();
@@ -1672,14 +2588,59 @@ http.use(
     acceptedAudiences: acceptedUserAudiences,
   }),
 );
-http.post('/api/agent-jobs/:id/approve', async (request: any, response: any) => {
+http.post('/api/agent-jobs', async (request: any, response: any) => {
   const resolved = restScope(request, response);
   if (!resolved.scope) {
-    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid job scope' });
+    response.status(resolved.status ?? 400).json({ error: { code: 'INVALID_SCOPE', retryable: false } });
+    return;
+  }
+  const mode = request.body?.mode === 'workspace-write' ? 'workspace-write' : 'read-only';
+  try {
+    const job = await agentService.submit({
+      prompt: normalizeAgentPrompt(request.body?.prompt),
+      mode,
+      scope: resolved.scope,
+    });
+    response.status(201).json({ job });
+  } catch (error) {
+    if (error instanceof AgentCapacityError) {
+      response.set('Cache-Control', 'no-store');
+      response.status(429).json(publicAgentCapacityError(error));
+      return;
+    }
+    if (error instanceof AgentExecutionUnavailableError) {
+      response.status(503).json({ error: publicAgentUnavailableError(error) });
+      return;
+    }
+    if (error instanceof AgentMutationAuthorizationError) {
+      response.status(403).json({ error: { code: error.code, retryable: false } });
+      return;
+    }
+    if (error instanceof Error && 'code' in error && (error as { code?: unknown }).code === 'INVALID_AGENT_PROMPT') {
+      response.status(400).json({ error: { code: 'INVALID_AGENT_PROMPT', retryable: false } });
+      return;
+    }
+    console.error('Agent submission failed', error);
+    response.status(500).json({ error: { code: 'AGENT_SUBMISSION_FAILED', retryable: false } });
+  }
+});
+http.post('/api/agent-jobs/:id/approve', async (request: any, response: any) => {
+  const resolved = restPrincipal(request, response);
+  if (!resolved.principal) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid job principal' });
     return;
   }
   try {
-    const job = await agentService.approve(request.params.id, resolved.scope);
+    const owned = agentJobStore.getForPrincipal(request.params.id, resolved.principal);
+    if (!owned || typeof owned.tenantId !== 'string') {
+      response.status(404).json({ error: 'approval target not found' });
+      return;
+    }
+    const job = await agentService.approve(request.params.id, {
+      requesterId: owned.requesterId,
+      tenantId: owned.tenantId,
+      conversationId: owned.conversationId,
+    });
     if (!job) {
       response.status(404).json({ error: 'approval target not found' });
       return;
@@ -1700,13 +2661,22 @@ http.post('/api/agent-jobs/:id/approve', async (request: any, response: any) => 
   }
 });
 http.post('/api/agent-jobs/:id/cancel', async (request: any, response: any) => {
-  const resolved = restScope(request, response);
-  if (!resolved.scope) {
-    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid job scope' });
+  const resolved = restPrincipal(request, response);
+  if (!resolved.principal) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid job principal' });
     return;
   }
   try {
-    const job = await agentService.cancelStrict(request.params.id, resolved.scope);
+    const owned = agentJobStore.getForPrincipal(request.params.id, resolved.principal);
+    if (!owned || typeof owned.tenantId !== 'string') {
+      response.status(404).json({ error: 'cancellation target not found' });
+      return;
+    }
+    const job = await agentService.cancelStrict(request.params.id, {
+      requesterId: owned.requesterId,
+      tenantId: owned.tenantId,
+      conversationId: owned.conversationId,
+    });
     if (!job) {
       response.status(404).json({ error: 'cancellation target not found' });
       return;
@@ -1734,7 +2704,7 @@ function formatAgentJob(job: AgentJob): string {
     `권한: ${job.mode}`,
   ];
 
-  if (job.threadId) lines.push(`Codex thread: ${job.threadId}`);
+  if (job.threadId) lines.push(`${agentLabel} thread: ${job.threadId}`);
   if (job.commitHash) lines.push(`Git commit: ${job.commitHash}`);
   if (job.commitMessage && !job.commitHash) lines.push(`Git: ${job.commitMessage}`);
   if (job.progress.length > 0) lines.push(`최근 진행: ${job.progress[job.progress.length - 1]}`);
@@ -1871,6 +2841,54 @@ function mutationConflictEnvelope(error: unknown, fallbackId = 'agent-mutation-e
   return genUi.error('작업 상태가 변경되어 요청을 처리하지 못했습니다. 최신 상태를 확인하세요.', fallbackId);
 }
 
+function publicAgentCapacityError(error: AgentCapacityError): {
+  code: string;
+  dimension: string;
+  limit: number;
+  retryable: boolean;
+} {
+  return mapAgentCapacityError(error);
+}
+
+function publicAgentUnavailableError(error: AgentExecutionUnavailableError): {
+  code: string;
+  reason: string;
+  retryable: boolean;
+} {
+  return { code: error.code, reason: error.reason, retryable: false };
+}
+
+function agentCapacityText(error: AgentCapacityError): string {
+  return mapAgentCapacityText(error);
+}
+
+function agentUnavailableText(): string {
+  return `읽기 전용 ${agentLabel}는 신뢰된 격리 경계가 준비된 경우에만 사용할 수 있습니다. 결정형 Core 기능은 계속 사용할 수 있습니다.`;
+}
+
+function agentCapacityEnvelope(error: AgentCapacityError, id: string): GenUiEnvelopeV1 {
+  const details = publicAgentCapacityError(error);
+  const envelope = genUi.error(agentCapacityText(error), id);
+  return {
+    ...envelope,
+    metadata: {
+      ...envelope.metadata,
+      code: details.code,
+      dimension: details.dimension,
+      limit: details.limit,
+      retryable: details.retryable,
+    },
+  };
+}
+
+function agentUnavailableEnvelope(id: string): GenUiEnvelopeV1 {
+  const envelope = genUi.error(agentUnavailableText(), id);
+  return {
+    ...envelope,
+    metadata: { ...envelope.metadata, code: 'UNAVAILABLE', reason: 'trusted-isolation-required', retryable: false },
+  };
+}
+
 async function replayedGenUiAction(action: GenUiCardAction, job: AgentJob | undefined): Promise<GenUiEnvelopeV1> {
   if (!job) return genUi.error('작업을 찾을 수 없습니다.');
   if (action === 'refresh' || action === 'retry') return genUi.jobStatus(job);
@@ -1975,6 +2993,12 @@ async function resolveGenUiAction(activity: any): Promise<GenUiEnvelopeV1> {
     if (error instanceof AgentMutationAuthorizationError) {
       return genUi.error(error.message, `action-${payload.entityId}-forbidden`);
     }
+    if (error instanceof AgentCapacityError) {
+      return agentCapacityEnvelope(error, `action-${payload.entityId}-capacity`);
+    }
+    if (error instanceof AgentExecutionUnavailableError) {
+      return agentUnavailableEnvelope(`action-${payload.entityId}-unavailable`);
+    }
     if (error instanceof AgentJobConflictError) {
       return mutationConflictEnvelope(error);
     }
@@ -2036,43 +3060,333 @@ async function handleResponseModeSubmit(activity: any, send: BotSend): Promise<v
   await send(text, undefined, createResponseModeCardActivity(parsed.mode, publicResponseModeAvailability(), text, personalTabDeepLink));
 }
 
-function botResponseRequest(activity: any, prompt: string, scope: AgentJobScope): RunAgentInput {
+function teamsA2AIdempotencyKey(activity: any, scope: AgentJobScope, prompt: string): string {
+  const sourceActivityId = nonEmptyString(activity?.id, 200);
+  const fallbackIdentity = {
+    timestamp: nonEmptyString(activity?.timestamp, 80) ?? '',
+    prompt,
+  };
+  const digest = crypto.createHash('sha256').update(JSON.stringify({
+    scope,
+    activityId: sourceActivityId ?? fallbackIdentity,
+  }), 'utf8').digest('hex');
+  return `${TEAMS_A2A_ASYNC_IDEMPOTENCY_PREFIX}${digest}`;
+}
+
+const TEAMS_A2A_ASYNC_IDEMPOTENCY_PREFIX = 'teams-activity-async-v1:';
+
+function a2aCompletionPresentation(
+  result: A2AProductionCollaborationResult,
+  scope: AgentJobScope,
+): { text: string; envelope: GenUiEnvelopeV1 } {
+  const parent = result.parentTask;
+  if (!parent) {
+    const reason = result.plan.strategy === 'blocked'
+      ? result.plan.blockedReason
+      : 'A2A parent task was not created.';
+    const text = `A2A 협업을 시작하지 못했습니다. ${reason ?? '등록된 reviewer를 확인하세요.'}`;
+    return { text, envelope: genUi.error(text, 'a2a-collaboration-blocked') };
+  }
+
+  return a2aParentCompletionPresentation(parent, scope);
+}
+
+function a2aParentCompletionPresentation(
+  parent: A2ATask,
+  scope: AgentJobScope,
+): { text: string; envelope: GenUiEnvelopeV1 } {
+  const dispatch = a2aStore.getDispatchIntent(parent.id, scope);
+  const childJobId = dispatch?.children.find((child) => child.role === 'reviewer')?.agentJobId;
+  const childJob = childJobId ? agentService.get(childJobId, scope) : undefined;
+  const childResult = typeof childJob?.result === 'string' && childJob.result.trim()
+    ? childJob.result.trim()
+    : parent.artifacts.find((artifact) => artifact.content?.mediaType === 'text/plain')?.content?.text;
+  const terminalLabel = parent.status === 'completed' ? 'completed' : parent.status;
+  const text = [
+    `A2A 작업 ${parent.id} ${terminalLabel}.`,
+    childJob ? `Codex 작업 ${childJob.id}: ${childJob.status}` : undefined,
+    childResult,
+    parent.error,
+  ].filter((value): value is string => typeof value === 'string' && value.length > 0).join('\n\n');
+
+  if (childJob) {
+    const kind: AgentNotification['kind'] = parent.status === 'completed' ? 'result' : 'error';
+    const phase: AgentNotification['phase'] = parent.status === 'completed' ? 'completed' : 'failed';
+    return {
+      text,
+      envelope: genUi.notification({
+        conversationId: scope.conversationId,
+        job: childJob,
+        kind,
+        phase,
+        message: text,
+      }),
+    };
+  }
+
   return {
-    threadId: scope.conversationId,
-    runId: `teams-bot-${crypto.randomUUID()}`,
-    state: {},
-    messages: [{ id: `teams-bot-message-${crypto.randomUUID()}`, role: 'user', content: prompt }],
-    tools: [],
-    context: [],
-    forwardedProps: {
-      channelId: nonEmptyString(activity?.channelId) ?? 'msteams',
-      conversationType: nonEmptyString(activity?.conversation?.conversationType) ?? 'personal',
-    },
+    text,
+    envelope: parent.status === 'completed'
+      ? genUi.answer(text, parent.id)
+      : genUi.error(text, parent.id),
   };
 }
 
-async function handleBotNaturalLanguage(activity: any, send: BotSend, scope: AgentJobScope, prompt: string): Promise<void> {
+function a2aAcceptedPresentation(parentTaskId: string): { text: string; envelope: GenUiEnvelopeV1 } {
+  const text = [
+    `A2A 작업 ${parentTaskId}을 접수했습니다.`,
+    '검토 에이전트를 백그라운드에서 실행하고 완료되면 이 대화에 결과를 전송합니다.',
+  ].join('\n');
+  return {
+    text,
+    envelope: genUi.answer(text, `a2a-accepted-${parentTaskId}`),
+  };
+}
+
+function a2aCompletionIntentFingerprint(parentTaskId: string, scope: AgentJobScope): string {
+  return crypto.createHash('sha256').update(JSON.stringify({
+    schemaVersion: 'teams-a2a-completion-intent.v1',
+    parentTaskId,
+    scope,
+  }), 'utf8').digest('hex');
+}
+
+async function dispatchA2ACompletion(
+  completion: Promise<A2AProductionCollaborationResult>,
+  parentTaskId: string,
+  scope: AgentJobScope,
+  outboundIntentId: string,
+): Promise<void> {
+  let presentation: { text: string; envelope: GenUiEnvelopeV1 };
   try {
-    await itemStore.ensureScope();
-    const output = await botResponseEngineRouter.run({
-      // The server-owned resolver replaces this fallback with the persisted
-      // tenant/requester selection. The deterministic fallback is also the
-      // safe behavior for local test mode.
-      mode: 'deterministic',
-      prompt,
-      request: botResponseRequest(activity, prompt, scope),
+    const collaboration = await completion;
+    presentation = a2aCompletionPresentation(collaboration, scope);
+  } catch (error) {
+    const text = error instanceof AgentCapacityError
+      ? agentCapacityText(error)
+      : error instanceof AgentExecutionUnavailableError
+        ? agentUnavailableText()
+        : `A2A 작업 ${parentTaskId}을 완료하지 못했습니다. 잠시 후 다시 시도하세요.`;
+    presentation = { text, envelope: genUi.error(text, `a2a-completion-${parentTaskId}-failed`) };
+    console.error(
+      'A2A Teams background collaboration failed',
+      error instanceof Error ? error.message : 'unknown error',
+    );
+  }
+
+  await dispatchA2ACompletionPresentation(presentation, scope, outboundIntentId);
+}
+
+async function dispatchA2ACompletionPresentation(
+  presentation: { text: string; envelope: GenUiEnvelopeV1 },
+  scope: AgentJobScope,
+  outboundIntentId: string,
+): Promise<void> {
+  const lease = await a2aOutboundStore.claim(
+    outboundIntentId,
+    scope,
+    `worker-${crypto.randomUUID()}`,
+    30_000,
+  );
+  if (!lease) return;
+
+  try {
+    const receipt = await createConversationBotSender(scope.conversationId)(
+      presentation.text,
+      presentation.envelope,
+    );
+    if (receipt.state === 'connector-accepted') {
+      await a2aOutboundStore.recordConnectorAccepted(
+        lease.id,
+        scope,
+        lease.leaseToken!,
+        receipt.activityId,
+      );
+    } else if (receipt.state === 'connector-rejected') {
+      await a2aOutboundStore.recordConnectorRejected(
+        lease.id,
+        scope,
+        lease.leaseToken!,
+        'Teams Connector explicitly rejected the completion activity.',
+      );
+    } else {
+      await a2aOutboundStore.recordAmbiguous(
+        lease.id,
+        scope,
+        lease.leaseToken!,
+        'Teams completion transport outcome is unknown.',
+      );
+    }
+  } catch (deliveryError) {
+    await a2aOutboundStore.recordAmbiguous(
+      lease.id,
       scope,
-      itemStore,
-      agentService,
-      setActiveJobId: () => undefined,
-      isCancelled: () => false,
-      deferAgentCompletion: true,
-      approvalEnvelope: (job) => genUi.approval(job),
+      lease.leaseToken!,
+      'Teams completion dispatch failed before an accepted response was persisted.',
+    );
+    console.error(
+      'A2A Teams completion dispatch could not be confirmed',
+      deliveryError instanceof Error ? deliveryError.message : 'unknown error',
+    );
+  }
+}
+
+async function recoverQueuedA2ACompletions(): Promise<void> {
+  const terminalStatuses = new Set<A2ATask['status']>(['completed', 'failed', 'canceled']);
+  for (const record of a2aStore.listTasksByIdempotencyPrefix(TEAMS_A2A_ASYNC_IDEMPOTENCY_PREFIX, 1_000)) {
+    if (!terminalStatuses.has(record.task.status)) continue;
+    await a2aOutboundStore.createOrGetCompletionIntent({
+      parentTaskId: record.task.id,
+      scope: record.task.scope,
+      payloadSha256: a2aCompletionIntentFingerprint(record.task.id, record.task.scope),
     });
-    await send(output.text, output.envelope);
+  }
+
+  for (const intent of a2aOutboundStore.listQueued(100)) {
+    const parent = a2aStore.getTask(intent.parentTaskId, intent.scope);
+    if (!parent || !terminalStatuses.has(parent.status)) continue;
+
+    if (intent.payloadSha256 !== a2aCompletionIntentFingerprint(parent.id, intent.scope)) {
+      console.error('A2A Teams completion recovery skipped an intent with an invalid payload fingerprint', intent.id);
+      continue;
+    }
+
+    await dispatchA2ACompletionPresentation(
+      a2aParentCompletionPresentation(parent, intent.scope),
+      intent.scope,
+      intent.id,
+    );
+  }
+}
+
+async function handleBotA2ACollaboration(activity: any, send: BotSend, scope: AgentJobScope, prompt: string): Promise<void> {
+  try {
+    if (!a2aProductionRuntime) throw new Error('A2A production runtime is not initialized.');
+    const collaborationWorkers = a2aAgents.flatMap((agent) => {
+      const executionReady = 'executionReady' in agent ? agent.executionReady !== false : true;
+      if (
+        !executionReady
+        || typeof agent.executionIdentity !== 'string'
+        || typeof agent.executionBoundaryId !== 'string'
+        || !Array.isArray(agent.roles)
+        || !Array.isArray(agent.capabilities)
+      ) return [];
+      return [{
+        agentId: agent.agentId,
+        providerId: agent.providerId,
+        executionIdentity: agent.executionIdentity,
+        executionBoundaryId: agent.executionBoundaryId,
+        roles: agent.roles,
+        capabilities: agent.capabilities,
+      }];
+    });
+    const chatRoles = selectTeamsA2AChatRoles(collaborationWorkers);
+    const started = await a2aProductionRuntime.startCollaboration({
+      scope,
+      prompt,
+      requestedRoles: chatRoles.requestedRoles,
+      idempotencyKey: teamsA2AIdempotencyKey(activity, scope, prompt),
+      deadlineMs: 60_000,
+      parallelism: chatRoles.parallelism,
+    });
+    if (!started.parentTask) {
+      const presentation = a2aCompletionPresentation(await started.completion, scope);
+      await send(presentation.text, presentation.envelope);
+      return;
+    }
+
+    const durable = await a2aOutboundStore.createOrGetCompletionIntent({
+      parentTaskId: started.parentTask.id,
+      scope,
+      payloadSha256: a2aCompletionIntentFingerprint(started.parentTask.id, scope),
+    });
+
+    const ownsDispatch = started.created || durable.created;
+    if (started.created) {
+      const accepted = a2aAcceptedPresentation(started.parentTask.id);
+      await send(accepted.text, accepted.envelope);
+    }
+    if (ownsDispatch) {
+      void dispatchA2ACompletion(
+        started.completion,
+        started.parentTask.id,
+        scope,
+        durable.intent.id,
+      ).catch((error) => {
+        console.error(
+          'A2A Teams background completion worker failed',
+          error instanceof Error ? error.message : 'unknown error',
+        );
+      });
+    }
   } catch (error) {
     if (error instanceof AgentMutationAuthorizationError) {
       await send(error.message, genUi.error(error.message, 'response-engine-forbidden'));
+      return;
+    }
+    if (error instanceof AgentCapacityError) {
+      await send(agentCapacityText(error), agentCapacityEnvelope(error, 'response-engine-capacity'));
+      return;
+    }
+    if (error instanceof AgentExecutionUnavailableError) {
+      await send(agentUnavailableText(), agentUnavailableEnvelope('response-engine-unavailable'));
+      return;
+    }
+    console.error('Teams Bot response engine failed', error);
+    const text = '응답 엔진을 실행하지 못했습니다. mode에서 사용 가능한 모드를 선택한 뒤 다시 시도하세요.';
+    await send(text, genUi.error(text, 'response-engine-error'));
+  }
+}
+
+function teamsBotResponseRequest(activity: any, scope: AgentJobScope, prompt: string): ResponseEngineInput['request'] {
+  const sourceActivityId = nonEmptyString(activity?.id, 200) ?? crypto.randomUUID();
+  return {
+    threadId: scope.conversationId,
+    runId: `teams-bot-${sourceActivityId}`,
+    messages: [{ id: sourceActivityId, role: 'user', content: prompt }],
+    context: [],
+  } as ResponseEngineInput['request'];
+}
+
+async function handleBotResponseEngine(
+  activity: any,
+  send: BotSend,
+  scope: AgentJobScope,
+  prompt: string,
+): Promise<void> {
+  try {
+    const output = await botResponseEngineRouter.run({
+      mode: 'deterministic',
+      prompt,
+      request: teamsBotResponseRequest(activity, scope, prompt),
+      scope,
+      itemStore,
+      agentService,
+      deferAgentCompletion: true,
+      approvalEnvelope: (job) => genUi.approval(job),
+    });
+    await send(output.text, genUi.withTabAction(output.envelope));
+  } catch (error) {
+    if (error instanceof ResponseEngineNotConfiguredError) {
+      const availability = publicResponseModeAvailability();
+      const text = `${responseModeLabel(error.mode)} 응답 모드는 현재 서버에서 사용할 수 없습니다. 결정형 또는 사용 가능한 모드를 선택하세요.`;
+      await send(
+        text,
+        undefined,
+        createResponseModeCardActivity(error.mode, availability, text, personalTabDeepLink),
+      );
+      return;
+    }
+    if (error instanceof AgentMutationAuthorizationError) {
+      await send(error.message, genUi.error(error.message, 'response-engine-forbidden'));
+      return;
+    }
+    if (error instanceof AgentCapacityError) {
+      await send(agentCapacityText(error), agentCapacityEnvelope(error, 'response-engine-capacity'));
+      return;
+    }
+    if (error instanceof AgentExecutionUnavailableError) {
+      await send(agentUnavailableText(), agentUnavailableEnvelope('response-engine-unavailable'));
       return;
     }
     console.error('Teams Bot response engine failed', error);
@@ -2094,7 +3408,7 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
     }
 
     if (normalizedText === 'help') {
-      const responseText = '사용 가능한 명령: help, mode, carousel, weather [위도 경도], status, list, work, collaboration, run <작업>, continue <작업 ID> <추가 요청>, write <작업>, approve <작업 ID>, commit <작업 ID> [메시지], cancel <작업 ID>';
+      const responseText = '사용 가능한 명령: help, mode, carousel, weather [위도 경도], status, list, work, collaboration, a2a <협업 요청>, run <작업>, continue <작업 ID> <추가 요청>, write <작업>, approve <작업 ID>, commit <작업 ID> [메시지], cancel <작업 ID>';
       const envelope = genUi.help();
       await send(responseText, envelope);
       return;
@@ -2175,6 +3489,21 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
       return;
     }
 
+    const a2aMatch = userText.match(/^(?:a2a|collaborate|협업)\s+([\s\S]+)$/i);
+    if (a2aMatch) {
+      if (!scope) {
+        await send('A2A 협업에는 사용자·대화·테넌트 정보가 필요합니다.', genUi.error('A2A 협업에는 사용자·대화·테넌트 정보가 필요합니다.', 'a2a-scope-missing'));
+        return;
+      }
+      const promptResult = validatePrompt(a2aMatch[1]);
+      if (promptResult.error) {
+        await send(promptResult.error, genUi.error(promptResult.error, 'a2a-prompt-invalid'));
+        return;
+      }
+      await handleBotA2ACollaboration(activity, send, scope, promptResult.value!);
+      return;
+    }
+
     const commandMatch = userText.match(/^(run|write)\s+([\s\S]+)$/i);
     if (commandMatch) {
       if (!scope) {
@@ -2199,13 +3528,24 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
           const envelope = await genUi.approval(job);
           await send(responseText, envelope);
         } else {
-          const responseText = `읽기 전용 Codex 작업 ${job.id}을 시작했습니다.\nstatus ${job.id}로 진행 상태를 확인할 수 있습니다.`;
+          const responseText = `읽기 전용 ${agentLabel} 작업 ${job.id}을 시작했습니다.\nstatus ${job.id}로 진행 상태를 확인할 수 있습니다.`;
           const envelope = genUi.started(job);
           await send(responseText, envelope);
         }
       } catch (error) {
-        if (!(error instanceof AgentMutationAuthorizationError)) throw error;
-        await send(error.message, genUi.error(error.message, `${mode}-forbidden`));
+        if (error instanceof AgentCapacityError) {
+          await send(agentCapacityText(error), agentCapacityEnvelope(error, `${mode}-capacity`));
+          return;
+        }
+        if (error instanceof AgentExecutionUnavailableError) {
+          await send(agentUnavailableText(), agentUnavailableEnvelope(`${mode}-unavailable`));
+          return;
+        }
+        if (error instanceof AgentMutationAuthorizationError) {
+          await send(error.message, genUi.error(error.message, `${mode}-forbidden`));
+          return;
+        }
+        throw error;
       }
       return;
     }
@@ -2251,16 +3591,27 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
     try {
       const job = await agentService.continue(continueMatch[1], promptResult.value!, scope);
       if (job) {
-        const responseText = `작업 ${job.id}이 이전 Codex thread에서 이어집니다.\nstatus ${job.id}`;
+        const responseText = `작업 ${job.id}이 이전 ${agentLabel} thread에서 이어집니다.\nstatus ${job.id}`;
         const envelope = genUi.continued(job);
         await send(responseText, envelope);
       } else {
-        const responseText = '재개할 Codex thread가 있는 작업을 찾을 수 없습니다.';
+        const responseText = `재개할 ${agentLabel} thread가 있는 작업을 찾을 수 없습니다.`;
         await send(responseText, genUi.error(responseText, 'continue-missing'));
       }
     } catch (error) {
-      if (!(error instanceof AgentMutationAuthorizationError)) throw error;
-      await send(error.message, genUi.error(error.message, `continue-${continueMatch[1]}-forbidden`));
+      if (error instanceof AgentCapacityError) {
+        await send(agentCapacityText(error), agentCapacityEnvelope(error, `continue-${continueMatch[1]}-capacity`));
+        return;
+      }
+      if (error instanceof AgentExecutionUnavailableError) {
+        await send(agentUnavailableText(), agentUnavailableEnvelope(`continue-${continueMatch[1]}-unavailable`));
+        return;
+      }
+      if (error instanceof AgentMutationAuthorizationError) {
+        await send(error.message, genUi.error(error.message, `continue-${continueMatch[1]}-forbidden`));
+        return;
+      }
+      throw error;
     }
     return;
   }
@@ -2329,7 +3680,7 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
       await send(promptResult.error, genUi.error(promptResult.error, 'natural-language-prompt-invalid'));
       return;
     }
-    await handleBotNaturalLanguage(activity, send, scope, promptResult.value!);
+    await handleBotResponseEngine(activity, send, scope, promptResult.value!);
     return;
   }
 
@@ -2381,24 +3732,18 @@ http.get('/tabs/home', (request: any, response: any, next: any) => {
 if (teamsApp) {
   teamsApp.tab('home', clientDist);
   teamsApp.on('install.add', async ({ activity, send }: any) => {
-    const runtimeSend: BotSend = process.env.TEAMS_SKIP_OUTBOUND === 'true'
-      ? async () => {}
-      : createBotSender(send);
+    const runtimeSend = createRuntimeBotSender(activity, send);
     await handleInstall(activity, runtimeSend);
   });
   teamsApp.on('message', async ({ activity, send }: any) => {
     if (activity?.type === 'message' && isResponseModeCardAction(activity.value)) {
-      const runtimeSend: BotSend = process.env.TEAMS_SKIP_OUTBOUND === 'true'
-        ? async () => {}
-        : createBotSender(send);
+      const runtimeSend = createRuntimeBotSender(activity, send);
       await handleResponseModeSubmit(activity, runtimeSend);
       return;
     }
 
     if (activity?.type === 'message' && hasGenUiActionValue(activity)) {
-      const runtimeSend: BotSend = process.env.TEAMS_SKIP_OUTBOUND === 'true'
-        ? async () => {}
-        : createBotSender(send);
+      const runtimeSend = createRuntimeBotSender(activity, send);
       await handleGenUiSubmit(activity, runtimeSend);
       return;
     }
@@ -2407,9 +3752,7 @@ if (teamsApp) {
       return handleGenUiAction(activity);
     }
 
-    const runtimeSend: BotSend = process.env.TEAMS_SKIP_OUTBOUND === 'true'
-      ? async () => {}
-      : createBotSender(send);
+    const runtimeSend = createRuntimeBotSender(activity, send);
     await handleMessage(activity, runtimeSend);
   });
 
@@ -2480,6 +3823,61 @@ if (skipAuth) {
     localOutboxActivities.delete(conversationId);
     response.json({ conversationId, messages, activities });
   });
+
+  if (process.env.TEAMS_ADAPTIVE_CARD_DELIVERY_TEST === 'true') {
+    http.post('/api/debug/adaptive-card-delivery', async (request: any, response: any) => {
+      const scenario = request.body?.scenario;
+      const path = request.body?.path ?? 'envelope';
+      const validScenarios = new Set([
+        'success',
+        'ambiguous',
+        'confirmed',
+        'bare-status',
+        'bare-status-code',
+        'status-timeout',
+        'status-abort',
+        'unknown',
+        'reset',
+        'socket',
+        'confirmed-response',
+        'nested-confirmed-response',
+      ]);
+      if (!validScenarios.has(scenario) || (path !== 'envelope' && path !== 'override')) {
+        response.status(400).json({ error: 'invalid Adaptive Card delivery test scenario' });
+        return;
+      }
+
+      const attempts: unknown[] = [];
+      const deliver = async (activity: unknown): Promise<void> => {
+        attempts.push(activity);
+        if (attempts.length !== 1) return;
+        if (scenario === 'success') return;
+        const errors: Record<string, Error> = {
+          ambiguous: Object.assign(new Error('test transport timeout'), { code: 'ETIMEDOUT' }),
+          confirmed: Object.assign(new Error('test card rejection'), { response: { status: 400 } }),
+          'bare-status': Object.assign(new Error('test status metadata'), { status: 500 }),
+          'bare-status-code': Object.assign(new Error('test statusCode metadata'), { statusCode: 500 }),
+          'status-timeout': Object.assign(new Error('test ambiguous timeout metadata'), { status: 500, code: 'ETIMEDOUT' }),
+          'status-abort': Object.assign(new Error('test ambiguous abort metadata'), { statusCode: 500, name: 'AbortError' }),
+          unknown: new Error('test unknown delivery failure'),
+          reset: Object.assign(new Error('test connection reset'), { code: 'ECONNRESET' }),
+          socket: Object.assign(new Error('test socket failure'), { code: 'UND_ERR_SOCKET' }),
+          'confirmed-response': Object.assign(new Error('test provider rejection'), { response: { status: 400 } }),
+          'nested-confirmed-response': Object.assign(new Error('test nested provider rejection'), { cause: { response: { status: 422 } } }),
+        };
+        throw errors[scenario];
+      };
+
+      const envelope = genUi.answer('Adaptive Card delivery fallback test', 'adaptive-card-delivery-test');
+      const activityOverride = createAdaptiveCardActivity(envelope);
+      await createBotSender(deliver)(
+        'Adaptive Card delivery fallback test',
+        envelope,
+        path === 'override' ? activityOverride : undefined,
+      );
+      response.json({ scenario, attempts });
+    });
+  }
 }
 
 if (skipAuth) {
@@ -2500,11 +3898,175 @@ if (teamsApp) {
   });
 }
 
+void recoverQueuedA2ACompletions().catch((error) => {
+  console.error(
+    'A2A Teams queued completion recovery failed',
+    error instanceof Error ? error.message : 'unknown error',
+  );
+});
+
 console.log(`Tab URL: http://localhost:${port}/tabs/home`);
 console.log(`Teams messages: http://localhost:${port}/api/messages`);
 
 function isDeploymentGuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+type ConfiguredA2AProvider = Readonly<{
+  provider: CliAgentProvider;
+  ordinal: number;
+}>;
+
+const MAX_A2A_CLI_WORKERS = 8;
+
+function parseAgentProviders(rawValue: string | undefined, defaultProvider: CliAgentProvider): readonly ConfiguredA2AProvider[] {
+  const raw = rawValue?.trim();
+  const requestedValues = raw ? raw.split(',').map((entry) => entry.trim()) : [defaultProvider];
+  for (const provider of requestedValues) {
+    if (provider !== 'codex' && provider !== 'copilot') {
+      throw new Error('TEAMS_A2A_AGENT_PROVIDERS may contain only codex and copilot.');
+    }
+  }
+  const requested = requestedValues as CliAgentProvider[];
+
+  // Preserve the legacy default worker when callers add only a secondary
+  // provider, while allowing repeated entries such as codex,codex to create
+  // independent server-registered Codex workers.
+  const providers = requested.includes(defaultProvider)
+    ? requested
+    : [defaultProvider, ...requested];
+  if (providers.length > MAX_A2A_CLI_WORKERS) {
+    throw new Error(`TEAMS_A2A_AGENT_PROVIDERS may register at most ${MAX_A2A_CLI_WORKERS} workers.`);
+  }
+
+  const ordinals = new Map<CliAgentProvider, number>();
+  return Object.freeze(providers.map((provider) => {
+    const ordinal = (ordinals.get(provider) ?? 0) + 1;
+    ordinals.set(provider, ordinal);
+    return Object.freeze({ provider, ordinal });
+  }));
+}
+
+function a2aAgentId(configuredAgent: ConfiguredA2AProvider): string {
+  const base = configuredAgent.provider === 'copilot' ? 'teams-core-copilot' : 'teams-core-codex';
+  return configuredAgent.ordinal === 1 ? base : `${base}-${configuredAgent.ordinal}`;
+}
+
+function a2aProviderId(configuredAgent: ConfiguredA2AProvider): string {
+  const base = configuredAgent.provider === 'copilot' ? 'official-copilot-cli' : 'codex-cli';
+  return configuredAgent.ordinal === 1 ? base : `${base}-${configuredAgent.ordinal}`;
+}
+
+function a2aExecutionIdentity(configuredAgent: ConfiguredA2AProvider): string {
+  const base = `teams-core-${configuredAgent.provider}`;
+  return configuredAgent.ordinal === 1 ? base : `${base}-${configuredAgent.ordinal}`;
+}
+
+function a2aExecutionBoundaryId(configuredAgent: ConfiguredA2AProvider): string {
+  const base = `${a2aExecutionIdentity(configuredAgent)}-runner`;
+  return base;
+}
+
+function createA2ARemoteAuthorizationPolicy(agentId: string) {
+  return createA2AAgentAuthorizationPolicy({
+    authorize: (input) => (
+      input.agentId === agentId
+      && Boolean(input.scope.tenantId && input.scope.requesterId && input.scope.conversationId)
+      && (skipAuth || !configuredTenantId || input.scope.tenantId === configuredTenantId)
+      && isOperator(input.scope)
+      && Boolean(input.role && input.capabilities?.length)
+    ),
+  });
+}
+
+function cliProviderFromA2AProviderId(providerId: string): CliAgentProvider | undefined {
+  if (providerId === 'codex-cli' || /^codex-cli-[2-8]$/.test(providerId)) return 'codex';
+  if (providerId === 'official-copilot-cli' || /^official-copilot-cli-[2-8]$/.test(providerId)) return 'copilot';
+  return undefined;
+}
+
+async function executeA2AProviderChild(
+  configuredAgent: ConfiguredA2AProvider,
+  input: A2AProductionChildExecutionInput,
+) {
+  const provider = configuredAgent.provider;
+  const agentId = a2aAgentId(configuredAgent);
+  const worker = a2aAgentServices.get(agentId);
+  if (!worker) {
+    const reason = a2aWorkerReadiness.get(agentId)?.reason ?? 'execution-boundary-unavailable.';
+    throw new Error(`A2A agent ${agentId} is unavailable: ${reason}`);
+  }
+  let agentJobId: string | undefined;
+  const cancelChild = (): void => {
+    if (!agentJobId) return;
+    void worker.cancelStrict(agentJobId, input.scope, {
+      notify: false,
+      provider,
+    }).catch(() => undefined);
+  };
+  input.signal.addEventListener('abort', cancelChild, { once: true });
+  try {
+    const job = await worker.runForCopilot({
+      provider,
+      prompt: input.prompt,
+      scope: input.scope,
+      notify: false,
+      timeoutMs: Math.max(1, input.deadlineAtMs - Date.now()),
+      onSubmitted: async (submitted) => {
+        agentJobId = submitted.id;
+        await input.bindChild(submitted.id);
+        if (input.signal.aborted) cancelChild();
+      },
+    });
+    if (job.status === 'completed') return { taskId: job.id, status: 'completed' as const, result: job.result };
+    if (job.status === 'cancelled') return { taskId: job.id, status: 'canceled' as const, error: job.error };
+    return { taskId: job.id, status: 'failed' as const, error: job.error ?? `${provider} agent execution failed.` };
+  } finally {
+    input.signal.removeEventListener('abort', cancelChild);
+  }
+}
+
+async function cancelA2AProviderChild(
+  configuredAgent: ConfiguredA2AProvider,
+  input: A2AProductionChildCancellationInput,
+): Promise<void> {
+  const agentId = a2aAgentId(configuredAgent);
+  const worker = a2aAgentServices.get(agentId);
+  if (!worker) {
+    const reason = a2aWorkerReadiness.get(agentId)?.reason ?? 'execution-boundary-unavailable.';
+    throw new Error(`A2A agent ${agentId} is unavailable: ${reason}`);
+  }
+  await worker.cancelStrict(input.agentJobId, input.scope, {
+    notify: false,
+    provider: configuredAgent.provider,
+  });
+}
+
+async function recoverA2AProviderChild(
+  configuredAgent: ConfiguredA2AProvider,
+  input: A2AProductionChildRecoveryInput,
+) {
+  const agentId = a2aAgentId(configuredAgent);
+  const worker = a2aAgentServices.get(agentId);
+  if (!worker) {
+    const reason = a2aWorkerReadiness.get(agentId)?.reason ?? 'execution-boundary-unavailable.';
+    throw new Error(`A2A agent ${agentId} is unavailable: ${reason}`);
+  }
+  const existing = worker.get(input.agentJobId, input.scope);
+  if (!existing) throw new Error(`A2A agent ${agentId} child ${input.agentJobId} is not available for recovery.`);
+  const job = existing.status === 'queued' || existing.status === 'running' || existing.status === 'awaiting_approval'
+    ? await worker.waitForTerminal(input.agentJobId, input.scope, Math.max(1, input.deadlineAtMs - Date.now()))
+    : existing;
+  if (job.status === 'completed') {
+    return { taskId: job.id, status: 'completed' as const, result: job.result };
+  }
+  if (job.status === 'cancelled') {
+    return { taskId: job.id, status: 'canceled' as const, error: job.error };
+  }
+  if (job.status === 'failed') {
+    return { taskId: job.id, status: 'failed' as const, error: job.error };
+  }
+  throw new Error(`A2A agent ${agentId} child did not reach a terminal state during recovery.`);
 }
 
 function parseOperatorAllowlist(
@@ -2558,4 +4120,16 @@ function numericEnvGreaterThan(name: string, threshold: number): boolean {
   if (!raw) return false;
   const value = Number(raw);
   return Number.isFinite(value) && value > threshold;
+}
+
+function boundedAgentLimitEnv(name: string, fallback: number, maximum: number): number {
+  const configured = process.env[name];
+  if (configured === undefined) return fallback;
+  const raw = configured.trim();
+  if (!raw) throw new Error(`${name} must be a finite positive safe integer <= ${maximum}`);
+  const value = Number(raw);
+  if (!Number.isFinite(value) || !Number.isSafeInteger(value) || value <= 0 || value > maximum) {
+    throw new Error(`${name} must be a finite positive safe integer <= ${maximum}`);
+  }
+  return value;
 }

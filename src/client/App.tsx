@@ -248,6 +248,8 @@ export type HealthResponse = {
   ok: boolean;
   service: string;
   version: string;
+  sourceCommit?: string;
+  serverBundleSha256?: string;
   environment: string;
   auth: 'local-bypass' | 'teams-authenticated' | 'not-configured';
   userAuth: 'local-bypass' | 'entra-sso' | 'not-configured';
@@ -255,7 +257,7 @@ export type HealthResponse = {
   storage: 'file-json-single-process';
   timestamp: string;
   copilotKit: 'enabled' | 'disabled';
-  genAI: 'openai-configured' | 'not-configured' | 'deterministic-test';
+  genAI: 'openai-configured' | 'grok-configured' | 'not-configured' | 'deterministic-test';
 };
 
 export function healthAuthLabel(value: HealthResponse['auth'] | undefined): string {
@@ -285,9 +287,23 @@ export function healthStorageLabel(value: HealthResponse['storage'] | undefined)
 }
 
 export function genAiLabel(value: HealthResponse['genAI'] | undefined): string {
+  if (value === 'grok-configured') return 'Grok (xAI) 선택형';
   if (value === 'openai-configured') return 'OpenAI (선택형)';
   if (value === 'deterministic-test') return '결정형 테스트';
   return '미사용 · 결정형 기본';
+}
+
+export function releaseIdentityLabel(
+  value: Pick<HealthResponse, 'version' | 'sourceCommit'> | null | undefined,
+): string {
+  const version = value?.version?.trim();
+  if (!version) return '릴리스 identity 확인 필요';
+
+  const sourceCommit = value?.sourceCommit?.trim();
+  const shortCommit = sourceCommit && /^[0-9a-f]{7,40}$/u.test(sourceCommit)
+    ? sourceCommit.slice(0, 7)
+    : '소스 확인 필요';
+  return `${version} · ${shortCommit}`;
 }
 
 export function runtimeBadgeLabel(input: {
@@ -296,7 +312,7 @@ export function runtimeBadgeLabel(input: {
   auth: HealthResponse['auth'] | undefined;
 }): string {
   if (input.healthLoading) return '상태 확인 중';
-  if (input.teamsHost) return 'Teams 탭 · 네이티브 위치';
+  if (input.teamsHost) return 'Teams 탭 · 기기 위치 권한';
   return healthAuthLabel(input.auth);
 }
 
@@ -327,6 +343,37 @@ export function createLazyCopilotRuntime() {
     const module = await import('./CopilotWorkspaceAssistant.js');
     return { default: module.CopilotWorkspaceRuntime };
   });
+}
+
+export function WeatherErrorNotice({ message }: { message: string }) {
+  return (
+    <p aria-atomic="true" aria-live="assertive" className="weather-note" role="alert">
+      {message}
+    </p>
+  );
+}
+
+export function weatherLocationMeta(input: {
+  source: LocationSource;
+  teamsHost: boolean;
+  teamsClientType: string;
+  teamsHostName: string;
+}): string {
+  const isMobile = input.teamsClientType === 'android'
+    || input.teamsClientType === 'ios'
+    || input.teamsClientType === 'ipados';
+  if (input.source === 'browser') {
+    return isMobile
+      ? 'Teams 모바일 WebView의 HTML5 위치 사용 · Teams 탭의 앱 권한에서 위치를 허용한 뒤 탭을 새로고침하세요.'
+      : '브라우저 HTML5 위치 사용(Teams 호스트) · Teams 탭 앱 권한과 브라우저 위치를 별도로 확인합니다.';
+  }
+  if (input.source === 'teams-native') {
+    return `Teams ${isMobile ? '모바일' : '호스트'} 네이티브 위치 권한 사용`;
+  }
+  if (input.teamsHost) {
+    return `${input.teamsHostName || 'Teams'} 호스트 · Teams 탭의 앱 권한에서 위치를 허용한 뒤 내 위치 사용을 누르세요.`;
+  }
+  return 'Teams 호스트 위치 확인 필요 · Teams 모바일 탭의 앱 권한에서 위치를 허용한 뒤 내 위치 사용을 누르세요.';
 }
 
 export function App() {
@@ -432,6 +479,10 @@ export function App() {
       },
       browserGeolocation: () => navigator.geolocation,
     }, {
+      // The new Teams client does not support the deprecated location API and
+      // Microsoft recommends HTML5 geolocation for tabs. Keep native APIs only
+      // for explicit compatibility tests; never silently use them in Core.
+      allowTeamsNativeFallback: false,
       onRuntime: (runtime) => {
         if (!mountedRef.current) return;
         setTeamsHost(runtime.available);
@@ -820,7 +871,7 @@ export function App() {
     <main className="shell">
       <header className="hero">
         <div>
-          <p className="eyebrow">TEAMS SDK MVP</p>
+          <p className="eyebrow">TEAMS SDK</p>
           <h1>업무 허브</h1>
           <p className="subtitle">Teams 안에서 업무를 확인하고 빠르게 추가합니다.</p>
         </div>
@@ -862,8 +913,8 @@ export function App() {
           <strong>{health?.ok ? '정상' : '확인 필요'}</strong>
         </div>
         <div>
-          <span>앱 버전</span>
-          <strong>{health?.version ?? '-'}</strong>
+          <span>릴리스 identity</span>
+          <strong data-release-identity>{releaseIdentityLabel(health)}</strong>
         </div>
         <div>
           <span>인증 모드</span>
@@ -925,13 +976,7 @@ export function App() {
         </div>
 
         <p className="weather-location-meta">
-          {locationSource === 'browser'
-            ? 'HTML5 위치 권한 사용 · Teams 앱 권한에서 위치를 허용해야 합니다.'
-            : locationSource === 'teams-native'
-            ? `Teams ${teamsClientType === 'android' || teamsClientType === 'ios' || teamsClientType === 'ipados' ? '모바일' : '호스트'} 네이티브 위치 권한 사용`
-            : teamsHost
-              ? `${teamsHostName || 'Teams'} 호스트 · 앱 권한에서 위치를 허용한 뒤 내 위치 사용을 누르세요.`
-              : '위치 권한 필요 · Teams 모바일 탭에서 앱 권한을 허용한 뒤 내 위치 사용을 누르세요.'}
+          {weatherLocationMeta({ source: locationSource, teamsHost, teamsClientType, teamsHostName })}
         </p>
 
         {weatherLoading ? (
@@ -981,7 +1026,7 @@ export function App() {
           <p className="empty">날씨 데이터를 표시할 수 없습니다.</p>
         )}
 
-        {weatherError && <p className="weather-note">{weatherError}</p>}
+        {weatherError && <WeatherErrorNotice message={weatherError} />}
       </section>
       )}
 
@@ -1024,7 +1069,7 @@ export function App() {
           </div>
           <button
             className="secondary"
-            onClick={() => void refreshRuntime()}
+            onClick={() => void loadItems()}
             type="button"
           >
             새로고침
@@ -1204,7 +1249,9 @@ export function App() {
     >
       <Suspense fallback={dashboard}>
         <LazyCopilotWorkspaceRuntime
-          health={health ? { ok: health.ok, bot: health.bot, userAuth: health.userAuth, genAI: health.genAI } : null}
+          health={health && (health.bot === 'teams-sdk' || health.bot === 'local-handler')
+            ? { ok: health.ok, bot: health.bot, userAuth: health.userAuth, genAI: health.genAI }
+            : null}
           items={items}
           responseMode={selectedResponseMode}
           summary={summary}

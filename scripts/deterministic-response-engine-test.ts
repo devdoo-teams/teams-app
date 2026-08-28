@@ -26,7 +26,9 @@ function job(
     prompt,
     mode: 'read-only',
     status,
-    scope,
+    conversationId: scope.conversationId,
+    requesterId: scope.requesterId,
+    tenantId: scope.tenantId,
     progress: [],
     result,
     createdAt: '2026-08-07T00:00:00.000Z',
@@ -46,11 +48,16 @@ function createAgentServiceFake(
   terminalJob = job(),
   previous?: AgentJob,
   trace: AgentServiceFakeTrace = { submissions: [], continuations: [], waitForTerminalCalls: 0 },
+  listedJobs: AgentJob[] = [],
 ): AgentService {
   const submitted: AgentJob[] = [];
   const service = {
     countActive: () => 0,
-    list: () => submitted.slice(),
+    list: (requestedScope: AgentJobScope, limit = 10) => [...listedJobs, ...submitted]
+      .filter((candidate) => candidate.tenantId === requestedScope.tenantId
+        && candidate.requesterId === requestedScope.requesterId
+        && candidate.conversationId === requestedScope.conversationId)
+      .slice(0, limit),
     latestCompletedForConversation: () => previous,
     submit: async (input: { prompt: string; mode: AgentJob['mode']; scope: AgentJobScope; notify?: boolean }) => {
       trace.submissions.push({ notify: input.notify, prompt: input.prompt });
@@ -123,6 +130,58 @@ async function main(): Promise<void> {
     assert.equal(status.envelope.kind, 'job-status');
     assert.equal(status.envelope.aiGenerated, false);
     assert.match(status.text, /활성 Codex 작업/);
+
+    const historyTrace: AgentServiceFakeTrace = { submissions: [], continuations: [], waitForTerminalCalls: 0 };
+    const historyJob = {
+      ...job('completed', '저장소의 서버 회귀를 확인해줘', 'Status/List 조회 경로를 복구했습니다.'),
+      id: 'job-history-1',
+    };
+    const history = await engine.run(await createInput(
+      itemStore,
+      createAgentServiceFake(historyJob, undefined, historyTrace, [historyJob]),
+      '최근 작업한 코덱스 내용 알려줘',
+    ));
+    assert.equal(historyTrace.submissions.length, 0, 'Codex history queries must not start a new isolated CLI job');
+    assert.equal(history.envelope.kind, 'job-status');
+    assert.equal(history.envelope.title, 'Codex 작업 이력');
+    assert.match(history.text, /Status\/List 조회 경로를 복구했습니다/);
+
+    const englishHistoryTrace: AgentServiceFakeTrace = { submissions: [], continuations: [], waitForTerminalCalls: 0 };
+    const englishHistory = await engine.run(await createInput(
+      itemStore,
+      createAgentServiceFake(historyJob, undefined, englishHistoryTrace, [historyJob]),
+      'show my recent Codex jobs',
+    ));
+    assert.equal(englishHistoryTrace.submissions.length, 0, 'English Codex history queries must not start a CLI job');
+    assert.equal(englishHistory.envelope.title, 'Codex 작업 이력');
+
+    const statusIntentTrace: AgentServiceFakeTrace = { submissions: [], continuations: [], waitForTerminalCalls: 0 };
+    const statusIntent = await engine.run(await createInput(
+      itemStore,
+      createAgentServiceFake(historyJob, undefined, statusIntentTrace, [historyJob]),
+      'Codex 작업 상태 알려줘',
+    ));
+    assert.equal(statusIntentTrace.submissions.length, 0, 'Codex status queries must not start a CLI job');
+    assert.equal(statusIntent.envelope.title, '업무 허브 상태');
+
+    const writeHistoryTrace: AgentServiceFakeTrace = { submissions: [], continuations: [], waitForTerminalCalls: 0 };
+    await engine.run(await createInput(
+      itemStore,
+      createAgentServiceFake(job(), undefined, writeHistoryTrace),
+      'write Codex history report',
+    ));
+    assert.equal(writeHistoryTrace.submissions.length, 1, 'write intent must retain the approval-bound mutation path');
+
+    const longHistoryJobs = Array.from({ length: 5 }, (_, index) => ({
+      ...job('completed', 'p'.repeat(600), 'r'.repeat(1_000)),
+      id: `job-history-long-${index}`,
+    }));
+    const longHistory = await engine.run(await createInput(
+      itemStore,
+      createAgentServiceFake(job(), undefined, { submissions: [], continuations: [], waitForTerminalCalls: 0 }, longHistoryJobs),
+      '코덱스 작업 이력 알려줘',
+    ));
+    assert.ok((longHistory.envelope.sections[0]?.description?.length ?? 0) <= 2_000, 'history card descriptions stay within the GenUI schema bound');
 
     const originalFetch = globalThis.fetch;
     let fetchCalled = false;

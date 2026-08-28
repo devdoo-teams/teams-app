@@ -212,19 +212,76 @@ const commandEnvelope = GenUiEnvelopeV1Schema.parse({
   })),
 });
 const commandCard = renderGenUiCard(commandEnvelope);
+const commandActionSet = commandCard.body.find((element) => element.type === 'ActionSet') as Record<string, unknown> | undefined;
 assert.deepEqual(
-  commandCard.actions?.map((action) => ({
+  commandCard.actions,
+  undefined,
+  'command-only cards keep Universal Actions out of the fragile top-level actions collection',
+);
+assert.deepEqual(
+  Object.keys(commandActionSet ?? {}).sort(),
+  ['actions', 'type'],
+  'command Universal Actions use the smallest ActionSet element shape',
+);
+assert.deepEqual(
+  (commandActionSet?.actions as Array<Record<string, unknown>> | undefined)?.map((action) => ({
     type: action.type,
     verb: action.verb,
     entityId: (action.data as Record<string, unknown>)?.entityId,
     fallbackType: (action.fallback as Record<string, unknown>)?.type,
+    fallbackTitle: (action.fallback as Record<string, unknown>)?.title,
+    fallbackData: (action.fallback as Record<string, unknown>)?.data,
   })),
   GENUI_COMMANDS.map((command) => ({
     type: 'Action.Execute',
     verb: 'genui.command',
     entityId: command,
     fallbackType: 'Action.Submit',
+    fallbackTitle: command,
+    fallbackData: {
+      schemaVersion: GENUI_SCHEMA_VERSION,
+      action: 'command',
+      entityId: command,
+      correlationId: 'command-palette',
+      actionToken: `command-${command}`,
+    },
   })),
+);
+
+const mixedActionEnvelope = GenUiEnvelopeV1Schema.parse({
+  ...nonAiEnvelope,
+  id: 'mixed-action-card',
+  actions: [
+    {
+      id: 'command-status',
+      action: 'command',
+      label: 'status',
+      entityId: 'status',
+      correlationId: 'mixed-action-card',
+      actionToken: 'command-status-token',
+    },
+    baseAction('retry', 1),
+  ],
+});
+const mixedActivity = createAdaptiveCardActivity(mixedActionEnvelope);
+const mixedCard = mixedActivity.attachments?.[0]?.content;
+const mixedActionSet = mixedCard?.body.find((element) => element.type === 'ActionSet') as Record<string, unknown> | undefined;
+assert.equal('text' in mixedActivity, false, 'mixed Adaptive Card results remain attachment-only');
+assert.equal(mixedActivity.attachments?.length, 1);
+assert.equal(
+  (mixedActionSet?.actions as Array<Record<string, unknown>> | undefined)?.every((action) => action.type === 'Action.Execute'),
+  true,
+  'mixed cards keep every Universal Action inside the body ActionSet',
+);
+assert.equal(
+  mixedCard?.actions?.some((action) => action.type === 'Action.Execute'),
+  false,
+  'mixed cards never leak Action.Execute into top-level actions',
+);
+assert.equal(
+  mixedCard?.actions?.some((action) => action.type === 'Action.Submit' && action.title === 'retry'),
+  true,
+  'legacy-compatible actions remain available at the top level',
 );
 
 const promptEnvelope = GenUiEnvelopeV1Schema.parse({

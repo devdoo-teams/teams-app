@@ -12,6 +12,11 @@ import {
   AgentPromptValidationError,
   AgentService,
 } from '../src/server/agent-service.js';
+import {
+  AgentExecutionPolicy,
+  AgentIsolationProvider,
+  type AgentIsolationAcquireInput,
+} from '../src/server/agent-execution-policy.js';
 import { CodexRunner } from '../src/server/codex-runner.js';
 import { GitService } from '../src/server/git-service.js';
 
@@ -51,7 +56,16 @@ class ControlledRunner {
 
   waitForStart(count: number): Promise<void> {
     if (this.starts >= count) return Promise.resolve();
-    return new Promise<void>((resolve) => this.startWaiters.push({ count, resolve }));
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`controlled runner did not reach start ${count}; observed ${this.starts}`)), 5_000);
+      this.startWaiters.push({
+        count,
+        resolve: () => {
+          clearTimeout(timer);
+          resolve();
+        },
+      });
+    });
   }
 
   release(index = 0): void {
@@ -78,6 +92,21 @@ class ControlledRunner {
     const run = this.runs[runIndex];
     assert.ok(run, `missing historical controlled run ${runIndex}`);
     await run.onEvent?.(event);
+  }
+}
+
+class TestIsolationProvider extends AgentIsolationProvider {
+  constructor() { super('transition-test-provider'); }
+
+  async acquire(input: AgentIsolationAcquireInput) {
+    await this.validateRequest(input);
+    return this.issueLease({
+      subject: input.subject,
+      workspace: input.workspace,
+      protectedRoots: input.protectedRoots,
+      environmentOverrides: input.environmentOverrides,
+      spawn: () => { throw new Error('transition tests use a controlled runner'); },
+    });
   }
 }
 
@@ -109,8 +138,9 @@ async function waitForNotification(
 }
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-agent-transitions-'));
+const storeRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-agent-transitions-store-'));
 await execFileAsync('git', ['init'], { cwd: root });
-const store = new AgentJobStore(path.join(root, 'agent-jobs.json'));
+const store = new AgentJobStore(path.join(storeRoot, 'agent-jobs.json'));
 const runner = new ControlledRunner();
 const scope: AgentJobScope = {
   requesterId: 'transition-user',
@@ -118,13 +148,19 @@ const scope: AgentJobScope = {
   tenantId: 'transition-tenant',
 };
 const notifications: AgentNotification[] = [];
+const isolationProvider = new TestIsolationProvider();
+const executionPolicy = new AgentExecutionPolicy(root, {
+  canMutateScope: () => true,
+  canReadScope: () => true,
+  isolationProvider,
+});
 const service = new AgentService(
   store,
   runner as unknown as CodexRunner,
   root,
   async (notification) => notifications.push(notification),
   new GitService(root),
-  { canMutateScope: () => true },
+  { canMutateScope: () => true, canReadScope: () => true, executionPolicy },
 );
 
 try {
@@ -188,12 +224,25 @@ try {
   const cancellationJob = await service.submit({ prompt: 'cancellation race', mode: 'workspace-write', scope });
   await service.approve(cancellationJob.id, scope);
   await runner.waitForStart(4);
-  const cancellations = await Promise.allSettled([
+  const cancellationPromises = [
     service.cancelStrict(cancellationJob.id, scope, { notify: true }),
     service.cancelStrict(cancellationJob.id, scope),
-  ]);
-  assert.equal(cancellations.filter((result) => result.status === 'fulfilled').length, 1, 'cancellation transitions once');
-  assert.equal(cancellations.filter((result) => result.status === 'rejected').length, 1, 'stale cancellation conflicts');
+  ];
+  // Attach rejection handlers before yielding to the runner. The stale strict
+  // cancellation is expected to reject; Node 24 treats a rejection that is
+  // observed only after the runner is released as an unhandled rejection.
+  const cancellations = Promise.allSettled(cancellationPromises);
+  const cancellationDeadline = Date.now() + 5_000;
+  while (runner.cancelled.length < 1 && Date.now() < cancellationDeadline) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+  assert.deepEqual(runner.cancelled, [cancellationJob.id], 'running cancellation signals the runner before awaiting terminal cleanup');
+  // AgentService waits for the runner promise before returning cancel(). Release
+  // the controlled runner only after the cancellation signal has been observed.
+  runner.release(0);
+  const cancellationResults = await cancellations;
+  assert.equal(cancellationResults.filter((result) => result.status === 'fulfilled').length, 1, 'cancellation transitions once');
+  assert.equal(cancellationResults.filter((result) => result.status === 'rejected').length, 1, 'stale cancellation conflicts');
   assert.equal(store.get(cancellationJob.id, scope)?.status, 'cancelled');
   assert.deepEqual(runner.cancelled, [cancellationJob.id], 'running cancellation signals the runner once');
   const lateNotificationCount = notifications.filter((notification) => notification.job.id === cancellationJob.id).length;
@@ -205,19 +254,23 @@ try {
     lateNotificationCount,
     'late running/agent/tool progress is suppressed after cancellation',
   );
-  runner.release(0);
-
   const cancellationNotifications = notifications.filter((notification) => notification.job.id === cancellationJob.id);
   assert.equal(cancellationNotifications.filter((notification) => notification.kind === 'cancelled').length, 1, 'cancellation emits one same-conversation cancellation notification');
   assert.equal(cancellationNotifications.filter((notification) => notification.phase === 'completed' || notification.phase === 'failed').length, 0, 'a cancelled runner cannot emit a later terminal success/failure notification');
 
   const failedJob = await service.submit({ prompt: 'runner failure branch', mode: 'read-only', scope });
   await runner.waitForStart(5);
-  runner.fail(new Error('controlled runner failure'));
+  const secretFailure = `Authorization: Bearer secret-token path=${root}/private one-time code ABCD-EFGH`;
+  runner.fail(new Error(secretFailure));
   await waitForStatus(store, failedJob.id, scope, 'failed');
+  const failedState = store.get(failedJob.id, scope);
+  assert.ok(failedState, 'failed job is persisted');
+  assert.notEqual(failedState?.error, secretFailure, 'raw runner diagnostics are not persisted');
+  assert.doesNotMatch(failedState?.error ?? '', /secret-token|ABCD-EFGH|teams-agent-transitions-/u, 'persisted diagnostics redact credentials, codes, and paths');
   const failedNotification = await waitForNotification(notifications, (notification) => notification.job.id === failedJob.id && notification.phase === 'failed');
   assert.equal(failedNotification?.kind, 'error', 'runner failure emits an error notification');
   assert.equal(failedNotification?.conversationId, scope.conversationId, 'runner failure notification stays in the originating conversation');
+  assert.doesNotMatch(failedNotification?.message ?? '', /secret-token|ABCD-EFGH|teams-agent-transitions-/u, 'notification diagnostics redact credentials, codes, and paths');
 
   const retriedFailedJob = await service.retry(failedJob.id, scope, { notify: true });
   assert.ok(retriedFailedJob, 'a failed read-only job can be retried as a new job');
@@ -230,4 +283,5 @@ try {
   console.log('AgentService transition tests passed: prompt bound, delayed progress, retry, approval/cancel races, terminal success/failure, and runner cancellation');
 } finally {
   await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  await fs.rm(storeRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 }

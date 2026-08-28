@@ -25,9 +25,14 @@ export class ResponseModeStore {
   constructor(
     private readonly dataFile: string,
     private readonly options: {
-      providers?: { openai: boolean; local: boolean };
+      defaultMode?: ResponseMode;
+      providers?: { openai: boolean; local: boolean; grok?: boolean };
     } = {},
-  ) {}
+  ) {
+    this.defaultMode = parseMode(options.defaultMode ?? DEFAULT_RESPONSE_MODE);
+  }
+
+  private readonly defaultMode: ResponseMode;
 
   /** Load the store and create an empty file when no store exists yet. */
   async initialize(): Promise<void> {
@@ -42,7 +47,7 @@ export class ResponseModeStore {
     return this.enqueue(async () => {
       await this.loadIfNeeded();
       return this.preferences.find((preference) => matchesScope(preference, validScope))?.mode
-        ?? DEFAULT_RESPONSE_MODE;
+        ?? this.defaultMode;
     });
   }
 
@@ -87,6 +92,12 @@ export class ResponseModeStore {
         mode: 'local',
         label: responseModeLabel('local'),
         configured: this.options.providers?.local === true,
+        requiresServerConfiguration: true,
+      },
+      {
+        mode: 'grok',
+        label: responseModeLabel('grok'),
+        configured: this.options.providers?.grok === true,
         requiresServerConfiguration: true,
       },
     ];

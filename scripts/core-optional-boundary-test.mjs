@@ -31,7 +31,7 @@ assertIncludesAll(
 );
 assert.equal(scripts['test:api-free'], 'node scripts/api-free-test-runner.mjs');
 assert.equal(apiFreeTests.includes('test:optional'), false, 'test:api-free must not call the optional provider suite');
-assertIncludesAll(optionalTests, ['test:openai-engine', 'test:local-engine', 'test:mcp-response-mode', 'test:mcp-direct-factory'], 'test:optional');
+assertIncludesAll(optionalTests, ['test:openai-engine', 'test:local-engine', 'test:response-mode-optional-unconfigured', 'test:mcp-response-mode', 'test:mcp-direct-factory'], 'test:optional');
 assert.equal(optionalTests.includes('test:copilot-item-seeding-failure'), false, 'CopilotKit runtime probe must not be part of the default optional provider suite');
 assert.match(scripts['build:core'], /build-client\.mjs --core/, 'build:core must compile the core client');
 assert.match(scripts['build:core'], /build-server\.mjs --core/, 'build:core must compile the core server');
@@ -52,6 +52,7 @@ const preflight = releaseGate.createPreflightCommands(17);
 assert.deepEqual(preflight, [
   ['core-source-check', 'typecheck:core', 17],
   ['core-build', 'build:core', 17],
+  ['server-build-determinism', 'test:server-build-determinism', 17],
   ['core-test', 'test:core', 17],
   ['deployment', 'check:deployment', 17],
 ]);

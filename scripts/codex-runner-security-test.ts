@@ -1,143 +1,119 @@
 import assert from 'node:assert/strict';
+import { spawn as spawnChild } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { CodexRunner } from '../src/server/codex-runner.js';
-
-type Capture = {
-  args: string[];
-  env: Record<string, string | undefined>;
-  envKeys: string[];
-  grandchildPid?: number;
-};
+import {
+  AgentExecutionUnavailableError,
+  AgentIsolationProvider,
+  type AgentIsolationAcquireInput,
+} from '../src/server/agent-execution-policy.js';
+import { CODEX_READ_ONLY_PERMISSION_ARGS } from '../src/server/codex-permission-profile-isolation-provider.js';
+import { CodexRunner, type CodexRunEvent } from '../src/server/codex-runner.js';
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-codex-runner-security-'));
-const fakeCodexPath = path.join(root, 'fake-codex.mjs');
+const projectionRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-codex-projection-'));
+const fakeCodexPath = path.join(projectionRoot, 'fake-codex.mjs');
 const homePath = path.join(root, 'home');
-const codexHomePath = path.join(root, 'codex-home');
-const failures: Array<{ name: string; error: unknown }> = [];
+const threadId = '019fd700-51cd-7862-a4ef-74ccae0f2b4e';
+const attachmentGrandchildPidPath = path.join(root, 'attachment-grandchild.pid');
 
-const fakeCodexSource = `
-import { spawn } from 'node:child_process';
-import fs from 'node:fs/promises';
-import path from 'node:path';
+class TestIsolationProvider extends AgentIsolationProvider {
+  constructor() {
+    super('runner-test-provider');
+  }
 
-const root = ${JSON.stringify(root)};
-const args = process.argv.slice(2);
-const prompt = args.at(-1) ?? '';
-const caseName = /CASE:([a-z0-9-]+)/i.exec(prompt)?.[1] ?? 'unknown';
-const selectedEnvKeys = [
-  'PATH',
-  'HOME',
-  'CODEX_HOME',
-  'CI',
-  'CLIENT_SECRET',
-  'OPENAI_API_KEY',
-  'LOCAL_MODEL_API_KEY',
-  'TEAMS_LOCAL_ACCESS_TOKEN',
-  'AZURE_CLIENT_SECRET',
-  'CODEX_BIN',
-  'CODEX_SCRIPT',
-  'CODEX_TIMEOUT_MS',
-  'UNRELATED_SECRET',
-];
-const selectedEnv = Object.fromEntries(selectedEnvKeys.map((key) => [key, process.env[key]]));
-
-let grandchild;
-if (['cancel-group', 'timeout-group', 'overflow-group'].includes(caseName)) {
-  grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
-    stdio: 'ignore',
-  });
+  async acquire(input: AgentIsolationAcquireInput) {
+    await this.validateRequest(input);
+    return this.issueLease({
+      subject: input.subject,
+      workspace: input.workspace,
+      protectedRoots: input.protectedRoots,
+      environmentOverrides: input.environmentOverrides,
+      spawn: (command, args, options) => {
+        assert.equal(args.includes('--sandbox'), false, 'CodexRunner must not select the legacy sandbox path');
+        for (const required of CODEX_READ_ONLY_PERMISSION_ARGS) {
+          assert.ok(args.includes(required), `CodexRunner omitted native permission argument: ${required}`);
+        }
+        return spawnChild(command, [...args], options as any);
+      },
+    });
+  }
 }
 
-if (caseName.startsWith('callback-hang')) {
+const provider = new TestIsolationProvider();
+const fakeSource = `
+const caseName = process.argv.at(-1)?.match(/CASE:([a-z0-9-]+)/i)?.[1] ?? 'success';
+const threadId = ${JSON.stringify(threadId)};
+const prefix = () => {
+  console.log(JSON.stringify({ type: 'thread.started', thread_id: threadId }));
   console.log(JSON.stringify({ type: 'turn.started' }));
-}
-
-await fs.writeFile(path.join(root, caseName + '.json'), JSON.stringify({
-  args,
-  env: selectedEnv,
-  envKeys: Object.keys(process.env).sort(),
-  grandchildPid: grandchild?.pid,
-}), 'utf8');
-
-const emitSuccess = () => {
-  console.log(JSON.stringify({ type: 'thread.started', thread_id: 'security-thread' }));
-  console.log(JSON.stringify({
-    type: 'item.completed',
-    item: { type: 'agent_message', text: 'SECURITY_FAKE_OK' },
-  }));
 };
-const lingerThenExit = () => setTimeout(() => process.exit(0), 750);
-
-if (caseName === 'initial-option' || caseName === 'resume-option') {
-  const terminatorIndex = args.lastIndexOf('--');
-  if (terminatorIndex < 0 || terminatorIndex !== args.length - 2) {
-    console.error('missing option terminator');
-    process.exit(64);
-  }
-  emitSuccess();
-} else if (caseName === 'stdout-overflow' || caseName === 'overflow-group') {
-  process.stdout.write('x'.repeat(2_000_000));
-  lingerThenExit();
-} else if (caseName === 'stderr-overflow') {
-  process.stderr.write('e'.repeat(2_000_000));
-  lingerThenExit();
-} else if (caseName === 'event-overflow') {
-  for (let index = 0; index < 20_000; index += 1) {
-    process.stdout.write(JSON.stringify({ type: 'turn.started', index }) + '\\n');
-  }
-  lingerThenExit();
-} else if (caseName === 'final-message-overflow') {
-  console.log(JSON.stringify({
-    type: 'item.completed',
-    item: { type: 'agent_message', text: 'm'.repeat(50_000) },
-  }));
-  lingerThenExit();
-} else if (caseName === 'callback-failure') {
-  console.log(JSON.stringify({ type: 'turn.started' }));
-} else if (caseName.startsWith('callback-hang')) {
-  lingerThenExit();
-} else if (caseName === 'exit-failure') {
-  console.error('expected fake child failure');
-  process.exit(7);
-} else if (caseName === 'no-final-message') {
-  console.log(JSON.stringify({ type: 'thread.started', thread_id: 'security-thread' }));
-  process.exit(0);
-} else if (caseName === 'cancel-group' || caseName === 'timeout-group') {
-  lingerThenExit();
+const message = (text) => console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text } }));
+const completed = () => console.log(JSON.stringify({ type: 'turn.completed' }));
+if (caseName === 'malformed') {
+  process.stdout.write('not-json\\n');
+} else if (caseName === 'non-object') {
+  process.stdout.write('[]\\n');
+} else if (caseName === 'missing-terminal') {
+  prefix();
+} else if (caseName === 'message-then-failure') {
+  prefix(); message('before failure'); console.log(JSON.stringify({ type: 'turn.failed', error: { message: 'synthetic failure' } }));
+} else if (caseName === 'message-then-error') {
+  prefix(); message('before error'); console.log(JSON.stringify({ type: 'error', error: { message: 'synthetic error' } }));
+} else if (caseName === 'terminal-before-message') {
+  prefix(); completed();
+} else if (caseName === 'duplicate-terminal') {
+  prefix(); message('one'); completed(); completed();
+} else if (caseName === 'conflicting-terminal') {
+  prefix(); message('one'); completed(); console.log(JSON.stringify({ type: 'turn.failed' }));
+} else if (caseName === 'post-terminal-item') {
+  prefix(); message('one'); completed(); console.log(JSON.stringify({ type: 'item.completed', item: { type: 'command_execution' } }));
+} else if (caseName === 'duplicate-message') {
+  prefix(); message('one'); message('two'); completed();
+} else if (caseName === 'nonzero') {
+  prefix(); message('one'); completed(); process.exit(7);
+} else if (caseName === 'signal') {
+  prefix(); message('one'); completed(); process.kill(process.pid, 'SIGTERM');
+} else if (caseName === 'timeout') {
+  prefix();
+  await new Promise(() => setInterval(() => {}, 1_000));
+} else if (caseName === 'secret-result') {
+  prefix(); message('access_token=codex-runner-secret-fixture'); completed();
 } else {
-  emitSuccess();
+  prefix(); message('SECURITY_FAKE_OK'); completed();
 }
+`;
+
+const attachmentTreeSource = `
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const grandchild = spawn(process.execPath, [
+  '-e',
+  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+], { stdio: 'ignore' });
+fs.writeFileSync(${JSON.stringify(attachmentGrandchildPidPath)}, String(grandchild.pid));
+setInterval(() => {}, 1000);
 `;
 
 const baseEnvironment: Record<string, string> = {
   CODEX_BIN: process.execPath,
   CODEX_SCRIPT: fakeCodexPath,
-  CODEX_TIMEOUT_MS: '1500',
-  PATH: '/security-test/bin:/usr/bin:/bin',
+  CODEX_TIMEOUT_MS: '1000',
+  PATH: '/usr/bin:/bin',
   HOME: homePath,
-  CODEX_HOME: codexHomePath,
-  CLIENT_SECRET: 'teams-client-secret-canary',
-  OPENAI_API_KEY: 'openai-secret-canary',
-  LOCAL_MODEL_API_KEY: 'local-provider-secret-canary',
-  TEAMS_LOCAL_ACCESS_TOKEN: 'teams-local-token-canary',
-  AZURE_CLIENT_SECRET: 'azure-secret-canary',
-  UNRELATED_SECRET: 'ambient-secret-canary',
+  CLIENT_SECRET: 'secret-canary',
+  OPENAI_API_KEY: 'secret-canary',
 };
 
-async function withEnvironment<T>(
-  values: Record<string, string | undefined>,
-  operation: () => Promise<T>,
-): Promise<T> {
+async function withEnvironment<T>(values: Record<string, string | undefined>, operation: () => Promise<T>): Promise<T> {
   const previous = new Map<string, string | undefined>();
   for (const [key, value] of Object.entries(values)) {
     previous.set(key, process.env[key]);
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
-
   try {
     return await operation();
   } finally {
@@ -148,48 +124,80 @@ async function withEnvironment<T>(
   }
 }
 
-async function runCase(
-  runner: CodexRunner,
-  caseName: string,
-  options: { prompt?: string; threadId?: string; timeoutMs?: number; guardMs?: number; onEvent?: () => Promise<void> } = {},
-) {
+async function runCase(caseName: string, onEvent?: (event: CodexRunEvent) => Promise<void> | void, timeoutMs?: number): Promise<{ finalMessage: string; eventCount: number }> {
   const jobId = `job-${caseName}`;
-  const execution = withEnvironment({
+  const prompt = `strict protocol CASE:${caseName}`;
+  const subject = {
+    tenantId: 'security-tenant',
+    requesterId: 'security-requester',
+    conversationId: 'security-conversation',
+    jobId,
+  };
+  const isolationLease = await provider.acquire({
+    subject,
+    sourceWorkspace: root,
+    workspace: projectionRoot,
+    protectedRoots: [root, homePath],
+    environmentOverrides: {
+      HOME: path.join(projectionRoot, '.isolated-home'),
+      USERPROFILE: path.join(projectionRoot, '.isolated-home'),
+      CODEX_HOME: path.join(projectionRoot, '.isolated-home', '.codex'),
+    },
+    prompt,
+  });
+  const runner = new CodexRunner({ processControllerOptions: { graceMs: 20, cleanupWaitMs: 200 } });
+  return withEnvironment({
     ...baseEnvironment,
-    CODEX_TIMEOUT_MS: String(options.timeoutMs ?? 1500),
+    ...(timeoutMs ? { CODEX_TIMEOUT_MS: String(timeoutMs) } : {}),
   }, () => runner.run({
     jobId,
-    prompt: options.prompt ?? `security test CASE:${caseName}`,
-    workspace: root,
+    prompt,
+    workspace: projectionRoot,
     mode: 'read-only',
-    threadId: options.threadId,
-    onEvent: options.onEvent,
+    isolationLease,
+    subject,
+    environmentOverrides: {
+      HOME: path.join(projectionRoot, '.isolated-home'),
+      USERPROFILE: path.join(projectionRoot, '.isolated-home'),
+      CODEX_HOME: path.join(projectionRoot, '.isolated-home', '.codex'),
+    },
+    onEvent,
   }));
-
-  let guardHandle: NodeJS.Timeout | undefined;
-  const guard = new Promise<never>((_, reject) => {
-    guardHandle = setTimeout(() => reject(new Error(`security test timed out: ${caseName}`)), options.guardMs ?? 4_000);
-  });
-  try {
-    return await Promise.race([execution, guard]);
-  } finally {
-    if (guardHandle) clearTimeout(guardHandle);
-  }
 }
 
-async function readCapture(caseName: string): Promise<Capture> {
-  const filePath = path.join(root, `${caseName}.json`);
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+async function childClosedWithin(child: ReturnType<typeof spawnChild>, timeoutMs = 500): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) return true;
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    const finish = (closed: boolean): void => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      child.removeListener('close', onClose);
+      child.removeListener('error', onError);
+      resolve(closed);
+    };
+    const onClose = (): void => finish(true);
+    const onError = (): void => finish(true);
+    child.once('close', onClose);
+    child.once('error', onError);
+    timer = setTimeout(() => finish(false), timeoutMs);
+  });
+}
+
+async function waitForPidFile(filePath: string, timeoutMs = 1_000): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
     try {
-      return JSON.parse(await fs.readFile(filePath, 'utf8')) as Capture;
+      const pid = Number((await fs.readFile(filePath, 'utf8')).trim());
+      if (Number.isSafeInteger(pid) && pid > 0) return pid;
     } catch (error) {
-      const missing = error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT';
-      const partialWrite = error instanceof SyntaxError;
-      if (!missing && !partialWrite) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error;
     }
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  throw new Error(`fake child did not capture ${caseName}`);
+  throw new Error(`attachment fixture did not publish a grandchild PID within ${timeoutMs}ms`);
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -201,15 +209,16 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-async function waitForProcessExit(pid: number): Promise<boolean> {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+async function processExitedWithin(pid: number, timeoutMs = 1_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
     if (!isProcessAlive(pid)) return true;
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
   return !isProcessAlive(pid);
 }
 
-async function terminateLeftover(pid: number | undefined): Promise<void> {
+function killProcess(pid: number | undefined): void {
   if (!pid || !isProcessAlive(pid)) return;
   try {
     process.kill(pid, 'SIGKILL');
@@ -218,243 +227,110 @@ async function terminateLeftover(pid: number | undefined): Promise<void> {
   }
 }
 
-async function test(name: string, operation: () => Promise<void>): Promise<void> {
-  try {
-    await operation();
-    console.log(`PASS: ${name}`);
-  } catch (error) {
-    failures.push({ name, error });
-    console.error(`FAIL: ${name}`);
-    console.error(error);
-  }
-}
+const negativeCases: Array<[string, RegExp, number?]> = [
+  ['malformed', /malformed|protocol/i],
+  ['non-object', /object|protocol/i],
+  ['missing-terminal', /final|terminal|protocol/i],
+  ['message-then-failure', /terminal|failure|protocol/i],
+  ['message-then-error', /terminal|error|protocol/i],
+  ['terminal-before-message', /agent.message|terminal|protocol/i],
+  ['duplicate-terminal', /terminal|protocol/i],
+  ['conflicting-terminal', /terminal|protocol/i],
+  ['post-terminal-item', /terminal|protocol/i],
+  ['nonzero', /exited|code|signal|protocol/i],
+  ['signal', /signal|protocol|terminated/i],
+  ['timeout', /시간 제한|timeout/i, 100],
+];
 
-await fs.mkdir(homePath, { recursive: true });
-await fs.mkdir(codexHomePath, { recursive: true });
-await fs.writeFile(fakeCodexPath, fakeCodexSource, { mode: 0o700 });
+let attachmentChild: ReturnType<typeof spawnChild> | undefined;
+let attachmentGrandchildPid: number | undefined;
 
 try {
-  await test('rejects non-UUID resume thread IDs before spawning Codex', async () => {
-    const runner = new CodexRunner();
-    await assert.rejects(
-      () => withEnvironment(baseEnvironment, () => runner.run({
-        jobId: 'job-invalid-resume-id',
-        prompt: 'security test CASE:invalid-resume-id',
-        workspace: root,
-        mode: 'read-only',
-        threadId: '--dangerously-bypass-approvals-and-sandbox',
-      })),
-      /invalid.*thread/i,
-    );
-    assert.equal(runner.cancel('job-invalid-resume-id'), false);
-  });
+  await fs.mkdir(path.join(projectionRoot, '.isolated-home', '.codex'), { recursive: true });
+  await fs.mkdir(homePath, { recursive: true });
+  await fs.writeFile(fakeCodexPath, fakeSource, { mode: 0o700 });
 
-  await test('initial prompt is after the POSIX option terminator', async () => {
-    const runner = new CodexRunner();
-    const result = await runCase(runner, 'initial-option', {
-      prompt: '--dangerously-bypass-approvals-and-sandbox CASE:initial-option',
-    });
-    const capture = await readCapture('initial-option');
-    assert.deepEqual(capture.args.slice(0, 7), [
-      'exec', '--json', '--sandbox', 'read-only', '--cd', root, '--',
-    ]);
-    assert.equal(capture.args.length, 8);
-    assert.match(capture.args[7] ?? '', /USER REQUEST:\n--dangerously-bypass-approvals-and-sandbox/);
-    assert.equal(result.finalMessage, 'SECURITY_FAKE_OK');
-    assert.equal(runner.cancel('job-initial-option'), false, 'successful process is removed from the process map');
-  });
+  const events: string[] = [];
+  const result = await runCase('success', (event) => { events.push(event.type ?? ''); });
+  assert.equal(result.finalMessage, 'SECURITY_FAKE_OK');
+  assert.deepEqual(events, ['thread.started', 'turn.started', 'item.completed', 'turn.completed'], 'callbacks preserve FSM order');
+  assert.equal(result.eventCount, 4);
 
-  await test('resume prompt is after the POSIX option terminator', async () => {
-    const runner = new CodexRunner();
-    await runCase(runner, 'resume-option', {
-      prompt: '--version CASE:resume-option',
-      threadId: '019fd700-51cd-7862-a4ef-74ccae0f2b4e',
-    });
-    const capture = await readCapture('resume-option');
-    assert.deepEqual(capture.args.slice(0, 5), [
-      'exec', 'resume', '019fd700-51cd-7862-a4ef-74ccae0f2b4e', '--json', '--',
-    ]);
-    assert.equal(capture.args.length, 6);
-    assert.match(capture.args[5] ?? '', /USER REQUEST:\n--version/);
-    assert.equal(runner.cancel('job-resume-option'), false);
-  });
+  const redactedResult = await runCase('secret-result');
+  assert.equal(redactedResult.finalMessage.includes('codex-runner-secret-fixture'), false, 'credential-shaped success output must not enter durable result sinks');
+  assert.match(redactedResult.finalMessage, /REDACTED/u);
 
-  await test('child receives only the Codex login and executable environment allowlist', async () => {
-    const runner = new CodexRunner();
-    await runCase(runner, 'environment');
-    const capture = await readCapture('environment');
-    assert.equal(capture.env.PATH, baseEnvironment.PATH);
-    assert.equal(capture.env.HOME, homePath);
-    assert.equal(capture.env.CODEX_HOME, codexHomePath);
-    assert.equal(capture.env.CI, '1');
-    for (const key of [
-      'CLIENT_SECRET',
-      'OPENAI_API_KEY',
-      'LOCAL_MODEL_API_KEY',
-      'TEAMS_LOCAL_ACCESS_TOKEN',
-      'AZURE_CLIENT_SECRET',
-      'CODEX_BIN',
-      'CODEX_SCRIPT',
-      'CODEX_TIMEOUT_MS',
-      'UNRELATED_SECRET',
-    ]) {
-      assert.equal(capture.env[key], undefined, `${key} is omitted from the child environment`);
-    }
-    const allowedKeys = new Set([
-      'PATH', 'HOME', 'CODEX_HOME', 'CI',
-      'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'LOCALAPPDATA', 'APPDATA',
-      'SYSTEMROOT', 'WINDIR', 'PATHEXT',
-      'TMPDIR', 'TMP', 'TEMP',
-      'LANG', 'LC_ALL', 'LC_CTYPE',
-      'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS',
-      // macOS launch services injects this locale metadata even when spawn
-      // receives an explicit environment object.
-      '__CF_USER_TEXT_ENCODING',
-    ]);
-    assert.ok(capture.envKeys.every((key) => allowedKeys.has(key)), `unexpected child env keys: ${capture.envKeys.join(', ')}`);
-  });
-
-  for (const [caseName, expected] of [
-    ['stdout-overflow', /stdout.*limit/i],
-    ['stderr-overflow', /stderr.*limit/i],
-    ['event-overflow', /event.*limit/i],
-    ['final-message-overflow', /final message.*limit/i],
-  ] as const) {
-    await test(`${caseName} terminates with a bounded-output error`, async () => {
-      const runner = new CodexRunner();
-      await assert.rejects(() => runCase(runner, caseName), expected);
-      assert.equal(runner.cancel(`job-${caseName}`), false, 'overflowed process is removed from the process map');
-    });
+  for (const [caseName, expected, timeoutMs] of negativeCases) {
+    await assert.rejects(() => runCase(caseName, undefined, timeoutMs), expected, `${caseName} must be rejected`);
   }
 
-  await test('spawn errors remove the process from the process map', async () => {
-    const runner = new CodexRunner();
-    await assert.rejects(
-      () => withEnvironment({
-        ...baseEnvironment,
-        CODEX_BIN: path.join(root, 'missing-codex-executable'),
-        CODEX_SCRIPT: undefined,
-      }, () => runner.run({
-        jobId: 'job-spawn-error',
-        prompt: 'spawn failure',
-        workspace: root,
-        mode: 'read-only',
-      })),
-      /ENOENT/,
-    );
-    assert.equal(runner.cancel('job-spawn-error'), false);
-  });
+  const progressResult = await runCase('duplicate-message');
+  assert.equal(progressResult.finalMessage, 'two', 'the final non-empty agent_message is the terminal result');
+  assert.equal(progressResult.eventCount, 5);
 
-  await test('child exit errors remove the process from the process map', async () => {
-    const runner = new CodexRunner();
-    await assert.rejects(() => runCase(runner, 'exit-failure'), /expected fake child failure/);
-    assert.equal(runner.cancel('job-exit-failure'), false);
-  });
-
-  await test('successful child exit without a final agent message is not a completed result', async () => {
-    const runner = new CodexRunner();
-    await assert.rejects(() => runCase(runner, 'no-final-message'), /final agent message|final result/i);
-    assert.equal(runner.cancel('job-no-final-message'), false);
-  });
-
-  if (process.platform !== 'win32') {
-    await test('cancel terminates the isolated process group', async () => {
-      const runner = new CodexRunner();
-      const runPromise = runCase(runner, 'cancel-group');
-      const capture = await readCapture('cancel-group');
-      assert.ok(capture.grandchildPid);
-      try {
-        assert.equal(runner.cancel('job-cancel-group'), true);
-        await assert.rejects(() => runPromise);
-        assert.equal(await waitForProcessExit(capture.grandchildPid), true, 'cancel kills the descendant process');
-        assert.equal(runner.cancel('job-cancel-group'), false, 'cancelled process is removed from the process map');
-      } finally {
-        await terminateLeftover(capture.grandchildPid);
-      }
-    });
-
-    await test('timeout terminates the isolated process group', async () => {
-      const runner = new CodexRunner();
-      await assert.rejects(() => runCase(runner, 'timeout-group', { timeoutMs: 100 }), /시간 제한/);
-      const capture = await readCapture('timeout-group');
-      assert.ok(capture.grandchildPid);
-      try {
-        assert.equal(await waitForProcessExit(capture.grandchildPid), true, 'timeout kills the descendant process');
-        assert.equal(runner.cancel('job-timeout-group'), false);
-      } finally {
-        await terminateLeftover(capture.grandchildPid);
-      }
-    });
-
-    await test('overflow terminates the isolated process group', async () => {
-      const runner = new CodexRunner();
-      await assert.rejects(() => runCase(runner, 'overflow-group'), /stdout.*limit/i);
-      const capture = await readCapture('overflow-group');
-      assert.ok(capture.grandchildPid);
-      try {
-        assert.equal(await waitForProcessExit(capture.grandchildPid), true, 'overflow kills the descendant process');
-        assert.equal(runner.cancel('job-overflow-group'), false);
-      } finally {
-        await terminateLeftover(capture.grandchildPid);
-      }
-    });
-  }
-
-  await test('event callback errors terminate and remove the process', async () => {
-    const runner = new CodexRunner();
-    await assert.rejects(
-      () => runCase(runner, 'callback-failure', {
-        onEvent: async () => { throw new Error('expected callback failure'); },
-      }),
-      /expected callback failure/,
-    );
-    assert.equal(runner.cancel('job-callback-failure'), false);
-  });
-
-  await test('a never-settling event callback cannot defeat timeout cleanup', async () => {
-    let callbackStarted = false;
-    const runner = new CodexRunner();
-    const runPromise = runCase(runner, 'callback-hang-timeout', {
-      timeoutMs: 500,
-      guardMs: 1_500,
-      onEvent: async () => {
-        callbackStarted = true;
-        await new Promise<never>(() => {});
-      },
-    });
-
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    assert.equal(callbackStarted, true, 'the hanging callback started before the deadline');
-    await assert.rejects(() => runPromise, /시간 제한/);
-    assert.equal(runner.cancel('job-callback-hang-timeout'), false);
-  });
-
-  await test('a never-settling event callback cannot defeat cancellation cleanup', async () => {
-    let callbackStarted = false;
-    const runner = new CodexRunner();
-    const runPromise = runCase(runner, 'callback-hang-cancel', {
-      guardMs: 500,
-      onEvent: async () => {
-        callbackStarted = true;
-        await new Promise<never>(() => {});
-      },
-    });
-
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    assert.equal(callbackStarted, true, 'the hanging callback started before cancellation');
-    assert.equal(runner.cancel('job-callback-hang-cancel'), true);
-    await assert.rejects(() => runPromise, /취소되었습니다/);
-    assert.equal(runner.cancel('job-callback-hang-cancel'), false);
-  });
-} finally {
-  await fs.rm(root, { recursive: true, force: true });
-}
-
-if (failures.length > 0) {
-  throw new AggregateError(
-    failures.map((failure) => failure.error),
-    `${failures.length} Codex runner security test(s) failed: ${failures.map((failure) => failure.name).join(', ')}`,
+  let spawnCount = 0;
+  const cwdOnlyRunner = new CodexRunner({ spawn: () => { spawnCount += 1; throw new Error('spawn must not be reached'); } });
+  await assert.rejects(
+    () => withEnvironment(baseEnvironment, () => cwdOnlyRunner.run({
+      jobId: 'cwd-only',
+      prompt: 'cwd-only boundary',
+      workspace: projectionRoot,
+      mode: 'read-only',
+    })),
+    (error: unknown) => error instanceof AgentExecutionUnavailableError && error.code === 'UNAVAILABLE',
   );
-}
+  assert.equal(spawnCount, 0, 'cwd/assert-only isolation has spawn=0');
 
-console.log('CodexRunner security tests passed: argv boundary, minimal environment, bounded output, process-group termination, and lifecycle cleanup');
+  const attachmentFailureRunner = new CodexRunner({
+    platform: 'linux',
+    processControllerOptions: { graceMs: 20, cleanupWaitMs: 200, retryDelayMs: 10, maxAttempts: 20 },
+    processControllerProvider: {
+      preflight: () => undefined,
+      attach: async () => {
+        attachmentGrandchildPid = await waitForPidFile(attachmentGrandchildPidPath);
+        throw new Error('controller attachment failed');
+      },
+    },
+    spawn: (_command, _args, options) => {
+      attachmentChild = spawnChild(process.execPath, ['-e', attachmentTreeSource], options as any);
+      return attachmentChild;
+    },
+  });
+  await assert.rejects(
+    () => attachmentFailureRunner.run({
+      jobId: 'controller-attachment-failure',
+      prompt: 'attachment must fail closed',
+      workspace: projectionRoot,
+      mode: 'workspace-write',
+    }),
+    /controller attachment failed/iu,
+    'controller attachment errors are returned after cleanup begins',
+  );
+  assert.ok(attachmentChild, 'the attachment regression must spawn a child');
+  assert.equal(await childClosedWithin(attachmentChild), true, 'a child is reaped when controller attachment throws');
+  assert.ok(attachmentGrandchildPid, 'the attachment regression must spawn a real grandchild');
+  assert.equal(
+    await processExitedWithin(attachmentGrandchildPid),
+    true,
+    'process-tree cleanup reaps a grandchild after controller attachment fails',
+  );
+
+  await assert.rejects(
+    () => provider.validateRequest({
+      subject: { tenantId: 'security-tenant', requesterId: 'security-requester', conversationId: 'security-conversation' },
+      sourceWorkspace: root,
+      prompt: `inspect ${root}/secret.txt and ${os.homedir()}/token`,
+    }),
+    (error: unknown) => error instanceof AgentExecutionUnavailableError && error.code === 'UNAVAILABLE',
+  );
+
+  console.log('PASS: CodexRunner enforces provider-owned leases, final agent_message JSONL FSM, nonzero/signal rejection, callback ordering, and cwd-only fail-closed launch');
+} finally {
+  if (attachmentChild && attachmentChild.exitCode === null && attachmentChild.signalCode === null) {
+    attachmentChild.kill('SIGKILL');
+    await childClosedWithin(attachmentChild);
+  }
+  killProcess(attachmentGrandchildPid);
+  await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  await fs.rm(projectionRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+}

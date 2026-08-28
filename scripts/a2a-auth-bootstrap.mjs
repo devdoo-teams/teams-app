@@ -1,0 +1,409 @@
+#!/usr/bin/env node
+
+import { spawn as defaultSpawn } from 'node:child_process';
+import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
+const MAX_AUTH_FILE_BYTES = 1024 * 1024;
+const WORKERS = Object.freeze(['main', '1', '2']);
+const DEFAULT_LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
+const MAX_LOGIN_TIMEOUT_MS = 60 * 60 * 1000;
+const DEFAULT_LOGIN_ATTEMPTS = 2;
+const MAX_LOGIN_ATTEMPTS = 2;
+const LOGIN_ABORT_GRACE_MS = 250;
+const LOGIN_ENV_ALLOWLIST = Object.freeze([
+  'PATH',
+  'Path',
+  'HOME',
+  'USERPROFILE',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'LOCALAPPDATA',
+  'APPDATA',
+  'SYSTEMROOT',
+  'SystemRoot',
+  'WINDIR',
+  'PATHEXT',
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+  'TERM',
+  'COLORTERM',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+  'NODE_EXTRA_CA_CERTS',
+]);
+
+export function parseArguments(argv) {
+  const args = [...argv];
+  let workers = ['main'];
+  let runLogin = false;
+  let all = false;
+  let workerFlagSeen = false;
+
+  while (args.length > 0) {
+    const argument = args.shift();
+    if (argument === '--run-login') {
+      runLogin = true;
+      continue;
+    }
+    if (argument === '--all') {
+      all = true;
+      continue;
+    }
+    if (argument === '--worker') {
+      const worker = args.shift();
+      if (!WORKERS.includes(worker)) throw new Error('worker must be main, 1, or 2');
+      workers = [worker];
+      workerFlagSeen = true;
+      continue;
+    }
+    if (argument === '--help' || argument === '-h') {
+      return { workers: ['main'], runLogin: false, help: true };
+    }
+    throw new Error(`unknown argument: ${argument}`);
+  }
+
+  if (all && workerFlagSeen) throw new Error('--all cannot be combined with --worker');
+  return { workers: all ? [...WORKERS] : workers, runLogin };
+}
+
+export function resolveWorkerHome(env, worker) {
+  const variable = workerHomeVariable(worker);
+  const value = typeof env?.[variable] === 'string' ? env[variable].trim() : '';
+  if (!value) throw new Error(`${variable} is required`);
+  if (!path.isAbsolute(value) || value.includes('\u0000')) {
+    throw new Error(`${variable} must be an absolute path`);
+  }
+  return value;
+}
+
+export async function resolveDistinctWorkerHomes(env, workers) {
+  const seen = new Map();
+  const resolved = [];
+  for (const worker of workers) {
+    const variable = workerHomeVariable(worker);
+    const codexHome = resolveWorkerHome(env, worker);
+    const identity = await workerHomeIdentity(codexHome);
+    const previous = seen.get(identity);
+    if (previous) {
+      throw new Error(`${variable} must reference a distinct worker home from ${previous}`);
+    }
+    seen.set(identity, variable);
+    resolved.push({ worker, codexHome });
+  }
+  return resolved;
+}
+
+export function createLoginInvocation({ codexBin, codexHome }) {
+  if (typeof codexBin !== 'string' || !path.isAbsolute(codexBin)) {
+    throw new Error('CODEX_BIN must be an absolute path');
+  }
+  if (typeof codexHome !== 'string' || !path.isAbsolute(codexHome)) {
+    throw new Error('AGENT_CODEX_HOME must be an absolute path');
+  }
+  return {
+    command: codexBin,
+    args: ['login', '--device-auth'],
+    options: {
+      env: { CODEX_HOME: codexHome },
+      stdio: 'inherit',
+    },
+  };
+}
+
+export function createLoginEnvironment(source, codexHome) {
+  if (typeof codexHome !== 'string' || !path.isAbsolute(codexHome)) {
+    throw new Error('AGENT_CODEX_HOME must be an absolute path');
+  }
+  const environment = { CI: '1' };
+  for (const key of LOGIN_ENV_ALLOWLIST) {
+    const value = source?.[key];
+    if (typeof value === 'string') environment[key] = value;
+  }
+  environment.CODEX_HOME = codexHome;
+  return environment;
+}
+
+export async function prepareWorkerHome(candidate, currentUid = process.getuid?.()) {
+  let stat;
+  try {
+    stat = await fs.lstat(candidate);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw new Error('worker home is unavailable');
+    await fs.mkdir(candidate, { recursive: true, mode: 0o700 });
+    await fs.chmod(candidate, 0o700);
+    stat = await fs.lstat(candidate);
+  }
+  assertPrivateDirectory(stat, currentUid);
+  return candidate;
+}
+
+export async function inspectAuthMetadata(authPath, currentUid = process.getuid?.()) {
+  let stat;
+  try {
+    stat = await fs.lstat(authPath);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { state: 'missing' };
+    return { state: 'unavailable' };
+  }
+  if (stat.isSymbolicLink()) return { state: 'invalid-symlink' };
+  if (!stat.isFile() || stat.size > MAX_AUTH_FILE_BYTES) return { state: 'invalid-file' };
+  if ((stat.mode & 0o077) !== 0 || (currentUid !== undefined && stat.uid !== currentUid)) {
+    return { state: 'invalid-permissions' };
+  }
+  return { state: 'valid', mode: stat.mode & 0o777, size: stat.size };
+}
+
+export class CodexLoginTimeoutError extends Error {
+  code = 'CODEX_LOGIN_TIMEOUT';
+
+  constructor(timeoutMs) {
+    super(`Codex login timed out after ${timeoutMs} ms`);
+    this.name = 'CodexLoginTimeoutError';
+  }
+}
+
+class CodexLoginReapError extends Error {
+  code = 'CODEX_LOGIN_REAP_FAILED';
+
+  constructor(timeoutMs) {
+    super(`Codex login child could not be reaped after timing out at ${timeoutMs} ms`);
+    this.name = 'CodexLoginReapError';
+  }
+}
+
+export async function runWorkerLogin({
+  codexBin,
+  codexHome,
+  env = process.env,
+  spawnImpl = defaultSpawn,
+  timeoutMs,
+  maxAttempts,
+}) {
+  const invocation = createLoginInvocation({ codexBin, codexHome });
+  const childEnvironment = createLoginEnvironment(env, codexHome);
+  const boundedTimeoutMs = normalizeLoginTimeout(timeoutMs);
+  const boundedAttempts = normalizeLoginAttempts(maxAttempts);
+
+  for (let attempt = 1; attempt <= boundedAttempts; attempt += 1) {
+    try {
+      return await runLoginAttempt({
+        invocation,
+        childEnvironment,
+        spawnImpl,
+        timeoutMs: boundedTimeoutMs,
+      });
+    } catch (error) {
+      if (!(error instanceof CodexLoginTimeoutError) || attempt === boundedAttempts) throw error;
+    }
+  }
+
+  throw new Error('Codex login did not complete');
+}
+
+export async function validateExecutableInputs(env) {
+  const codexBin = typeof env.CODEX_BIN === 'string' ? env.CODEX_BIN.trim() : '';
+  if (!codexBin || !path.isAbsolute(codexBin)) throw new Error('CODEX_BIN must be an absolute path');
+  const digest = typeof env.CODEX_BIN_SHA256 === 'string' ? env.CODEX_BIN_SHA256.trim().toLowerCase() : '';
+  if (!/^[a-f0-9]{64}$/u.test(digest)) throw new Error('CODEX_BIN_SHA256 must be a 64-character hexadecimal SHA-256 digest');
+  const stat = await fs.lstat(codexBin).catch(() => undefined);
+  if (!stat?.isFile() || (stat.mode & 0o111) === 0 || (stat.mode & 0o022) !== 0) {
+    throw new Error('CODEX_BIN must be a private executable regular file');
+  }
+  const actualDigest = crypto.createHash('sha256').update(await fs.readFile(codexBin)).digest('hex');
+  if (actualDigest !== digest) throw new Error('CODEX_BIN does not match CODEX_BIN_SHA256');
+  return codexBin;
+}
+
+function assertPrivateDirectory(stat, currentUid) {
+  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('worker home must be a regular directory');
+  if ((stat.mode & 0o077) !== 0 || (currentUid !== undefined && stat.uid !== currentUid)) {
+    throw new Error('worker home must be an owner-only directory owned by the current user');
+  }
+}
+
+function normalizeLoginTimeout(timeoutMs) {
+  if (timeoutMs === undefined || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return DEFAULT_LOGIN_TIMEOUT_MS;
+  }
+  return Math.min(MAX_LOGIN_TIMEOUT_MS, Math.max(1, Math.floor(timeoutMs)));
+}
+
+function normalizeLoginAttempts(maxAttempts) {
+  if (maxAttempts === undefined || !Number.isFinite(maxAttempts) || maxAttempts <= 0) {
+    return DEFAULT_LOGIN_ATTEMPTS;
+  }
+  return Math.min(MAX_LOGIN_ATTEMPTS, Math.max(1, Math.floor(maxAttempts)));
+}
+
+async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeoutMs }) {
+  const controller = new AbortController();
+  let child;
+  let timeoutHandle;
+  let abortGraceHandle;
+  let reapGraceHandle;
+  let settled = false;
+  let timedOut = false;
+  let removeChildListeners = () => undefined;
+
+  const timeoutError = new CodexLoginTimeoutError(timeoutMs);
+  const reapError = new CodexLoginReapError(timeoutMs);
+  const result = new Promise((resolve, reject) => {
+    const settle = (callback) => {
+      if (settled) return;
+      settled = true;
+      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+      if (abortGraceHandle !== undefined) clearTimeout(abortGraceHandle);
+      if (reapGraceHandle !== undefined) clearTimeout(reapGraceHandle);
+      removeChildListeners();
+      callback();
+    };
+
+    const onError = (error) => {
+      if (settled) {
+        removeChildListeners();
+        return;
+      }
+      if (timedOut) return;
+      settle(() => reject(error));
+    };
+
+    const onClose = (code, signal) => {
+      if (settled) {
+        removeChildListeners();
+        return;
+      }
+      settle(() => {
+        if (timedOut) reject(timeoutError);
+        else resolve({ code, signal });
+      });
+    };
+
+    const onTimeout = () => {
+      if (settled) return;
+      timedOut = true;
+      controller.abort();
+      if (!settled && child?.killed !== true && typeof child?.kill === 'function') {
+        try {
+          child.kill('SIGTERM');
+        } catch {
+          // The abort signal remains the primary termination mechanism.
+        }
+      }
+      if (!settled) {
+        abortGraceHandle = setTimeout(() => {
+          if (settled) return;
+          try {
+            child?.kill?.('SIGKILL');
+          } catch {
+            // Reaping below remains the final safety check before retrying.
+          }
+          reapGraceHandle = setTimeout(() => {
+            if (settled) return;
+            settle(() => reject(reapError));
+          }, LOGIN_ABORT_GRACE_MS);
+        }, LOGIN_ABORT_GRACE_MS);
+      }
+    };
+
+    child = spawnImpl(invocation.command, invocation.args, {
+      ...invocation.options,
+      env: childEnvironment,
+      signal: controller.signal,
+    });
+    removeChildListeners = () => {
+      child?.removeListener?.('error', onError);
+      child?.removeListener?.('close', onClose);
+    };
+    child.once('error', onError);
+    child.once('close', onClose);
+    timeoutHandle = setTimeout(onTimeout, timeoutMs);
+  });
+
+  return await result;
+}
+
+function printUsage() {
+  console.log('Usage: npm run a2a:login -- [--worker main|1|2] [--run-login]');
+  console.log('       npm run a2a:login -- --all --run-login');
+  console.log('Without --run-login this performs a safe dry run and never creates credentials.');
+}
+
+async function main() {
+  const options = parseArguments(process.argv.slice(2));
+  if (options.help) {
+    printUsage();
+    return;
+  }
+  const workerHomes = await resolveDistinctWorkerHomes(process.env, options.workers);
+  const codexBin = await validateExecutableInputs(process.env);
+  for (const { worker, codexHome } of workerHomes) {
+    await prepareWorkerHome(codexHome);
+    const authPath = path.join(codexHome, 'auth.json');
+    console.log(`${worker}: home ready (${options.runLogin ? 'login requested' : 'dry run'})`);
+    if (options.runLogin) {
+      const result = await runWorkerLogin({ codexBin, codexHome });
+      if (result.code !== 0) {
+        throw new Error(`${worker}: Codex login exited with code ${result.code ?? 'unknown'}${result.signal ? ` (${result.signal})` : ''}`);
+      }
+    }
+    const metadata = await inspectAuthMetadata(authPath);
+    console.log(`${worker}: auth.json=${metadata.state}`);
+    if (options.runLogin && metadata.state !== 'valid') {
+      throw new Error(`${worker}: owner-only auth.json was not created or is not valid`);
+    }
+  }
+  if (options.runLogin) console.log('Run npm run check:codex-a2a-isolation after all workers are authenticated.');
+}
+
+function workerHomeVariable(worker) {
+  return worker === 'main' ? 'AGENT_CODEX_HOME' : `AGENT_CODEX_HOME_${worker}`;
+}
+
+async function workerHomeIdentity(candidate) {
+  const normalized = path.normalize(path.resolve(candidate));
+  let canonical = normalized;
+  try {
+    canonical = path.normalize(await fs.realpath(normalized));
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw new Error('worker home is unavailable');
+    canonical = await canonicalizeMissingHome(normalized);
+  }
+
+  try {
+    const stat = await fs.stat(normalized);
+    return `inode:${String(stat.dev)}:${String(stat.ino)}`;
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw new Error('worker home is unavailable');
+    return `path:${canonical}`;
+  }
+}
+
+async function canonicalizeMissingHome(normalized) {
+  const suffix = [];
+  let current = normalized;
+  while (true) {
+    try {
+      const ancestor = path.normalize(await fs.realpath(current));
+      return path.join(ancestor, ...suffix.reverse());
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw new Error('worker home is unavailable');
+      const parent = path.dirname(current);
+      if (parent === current) return normalized;
+      suffix.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((error) => {
+    console.error(`A2A auth bootstrap failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  });
+}

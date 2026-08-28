@@ -15,7 +15,7 @@ const required = [
   'webApplicationInfo',
 ];
 
-export function validateManifest(manifest, packageJson, { iconExists } = {}) {
+export function validateManifest(manifest, packageJson, { iconExists, packageLockJson } = {}) {
   const missing = required.filter((key) => !(key in manifest));
   if (missing.length > 0) return `Manifest missing required fields: ${missing.join(', ')}`;
 
@@ -57,6 +57,11 @@ export function validateManifest(manifest, packageJson, { iconExists } = {}) {
     return `Manifest version must match package version ${packageJson.version}, received manifest=${manifest.version}`;
   }
 
+  const lockRoot = packageLockJson?.packages?.[''];
+  if (packageLockJson && (packageLockJson.version !== packageJson.version || lockRoot?.version !== packageJson.version)) {
+    return `Package lock version must match package version ${packageJson.version}, received top-level=${packageLockJson.version}, root=${lockRoot?.version}`;
+  }
+
   if (!manifest.bots?.[0]?.commandLists?.some((list) => list.commands?.some((command) => command.title === '날씨'))) {
     return 'Manifest must expose the 날씨 Bot command.';
   }
@@ -75,8 +80,10 @@ export function validateManifest(manifest, packageJson, { iconExists } = {}) {
 function runCli() {
   const manifest = JSON.parse(fs.readFileSync(path.resolve('appPackage/manifest.json'), 'utf8'));
   const packageJson = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8'));
+  const packageLockJson = JSON.parse(fs.readFileSync(path.resolve('package-lock.json'), 'utf8'));
   const error = validateManifest(manifest, packageJson, {
     iconExists: (icon) => fs.existsSync(path.resolve('appPackage', icon)),
+    packageLockJson,
   });
 
   if (error) {

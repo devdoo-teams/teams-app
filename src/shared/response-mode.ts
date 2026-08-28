@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const RESPONSE_MODES = ['deterministic', 'openai', 'local'] as const;
+export const RESPONSE_MODES = ['deterministic', 'openai', 'local', 'grok'] as const;
 export const DEFAULT_RESPONSE_MODE = 'deterministic' satisfies ResponseMode;
 export const MAX_RESPONSE_MODE_SCOPE_LENGTH = 256;
 
@@ -37,6 +37,7 @@ const RESPONSE_MODE_LABELS: Record<ResponseMode, string> = {
   deterministic: '결정형',
   openai: 'OpenAI',
   local: '로컬/사내 모델',
+  grok: 'Grok (xAI)',
 };
 
 export function responseModeLabel(mode: ResponseMode): string {

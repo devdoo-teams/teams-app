@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const MATRIX_SCHEMA_VERSION = 1;
+export const MATRIX_SCHEMA_VERSION = 2;
 
 // PASS/FAIL rows use this explicit paired schema for accessibility evidence:
 // { schema: ACCESSIBILITY_EVIDENCE_SCHEMA, before: Evidence, after: Evidence }.
@@ -162,9 +162,36 @@ export const REQUIRED_COVERAGE_KEYS = Object.freeze([
   'deep-link.trailing-slash',
 ]);
 
+export const EVIDENCE_SURFACES = Object.freeze(['portal', 'installed', 'desktop', 'mobile']);
+
+export const SURFACE_REQUIRED_COVERAGE_KEYS = Object.freeze({
+  portal: Object.freeze([
+    'deep-link.trailing-slash',
+    'deep-link.static-tab',
+  ]),
+  installed: Object.freeze([
+    'chat.install',
+    'deep-link.open-tab-action',
+    'chat.card.tab-link',
+  ]),
+  desktop: Object.freeze([
+    'chat.card.no-top-level-duplicate',
+    'chat.commands.status.summary',
+    'personal.home.hero',
+    'personal.home.runtime-panel',
+  ]),
+  mobile: Object.freeze([
+    'personal.mobile.narrow-home',
+    'personal.mobile.narrow-card',
+    'personal.auth.expired',
+    'personal.auth.retry',
+  ]),
+});
+
 const REQUIRED_ROW_FIELDS = [
   'id',
   'feature',
+  'evidenceSurface',
   'surface',
   'location',
   'branch',
@@ -285,6 +312,12 @@ function validateEvidence(
     if (!isObject(evidence.releaseIdentity) || evidence.releaseIdentity.packageSha256 === null) {
       push(errors, rowId, `${name} must identify a package SHA for ${resultStatus}`);
     }
+    if (!SHA256.test(evidence.sha256 ?? '')) {
+      push(errors, rowId, `${name}.sha256 must be a SHA-256 for ${resultStatus}`);
+    }
+    if (!Number.isSafeInteger(evidence.bytes) || evidence.bytes <= 0) {
+      push(errors, rowId, `${name}.bytes must be a positive byte count for ${resultStatus}`);
+    }
     validateExistingEvidencePath(evidence, name, rowId, errors, evidenceBaseDir);
     if (isObject(evidence.releaseIdentity) && isObject(matrixIdentity)) {
       for (const key of RELEASE_IDENTITY_KEYS) {
@@ -299,6 +332,8 @@ function validateEvidence(
     if (evidence.state !== expectedState) push(errors, rowId, `${name}.state must be ${expectedState} for ${resultStatus}`);
     if (evidence.path !== null) push(errors, rowId, `${name}.path must be null until evidence is captured`);
     if (evidence.capturedAt !== null) push(errors, rowId, `${name}.capturedAt must be null until evidence is captured`);
+    if (evidence.sha256 !== null) push(errors, rowId, `${name}.sha256 must be null until evidence is captured`);
+    if (evidence.bytes !== null) push(errors, rowId, `${name}.bytes must be null until evidence is captured`);
   }
 }
 
@@ -422,7 +457,18 @@ function validateResult(result, rowId, errors) {
   return result.status;
 }
 
-function validateRow(row, index, matrixIdentity, errors, seenIds, foundCoverage, options, allowedCoverageKeys) {
+function validateRow(
+  row,
+  index,
+  matrixIdentity,
+  errors,
+  seenIds,
+  foundCoverage,
+  foundCoverageBySurface,
+  coverageRowsBySurface,
+  options,
+  allowedCoverageKeys,
+) {
   const rowId = isObject(row) && isNonBlank(row.id) ? row.id : `row[${index}]`;
   if (!isObject(row)) {
     push(errors, rowId, 'row must be an object');
@@ -438,6 +484,11 @@ function validateRow(row, index, matrixIdentity, errors, seenIds, foundCoverage,
 
   for (const key of ['feature', 'surface', 'location', 'branch', 'precondition']) {
     if (!isNonBlank(row[key])) push(errors, rowId, `${key} is required`);
+  }
+  if (!EVIDENCE_SURFACES.includes(row.evidenceSurface)) {
+    push(errors, rowId, `evidenceSurface must be one of: ${EVIDENCE_SURFACES.join(', ')}`);
+  } else if (options.evidenceScope !== 'full' && row.evidenceSurface !== options.evidenceScope) {
+    push(errors, rowId, `evidenceSurface ${row.evidenceSurface} must match matrix scope ${options.evidenceScope}`);
   }
 
   validateActionObject(row.action, rowId, errors);
@@ -475,8 +526,33 @@ function validateRow(row, index, matrixIdentity, errors, seenIds, foundCoverage,
       if (!isNonBlank(key)) push(errors, rowId, 'coverage keys must be non-empty strings');
       if (!allowedCoverageKeys.includes(key)) push(errors, rowId, `unknown coverage key ${key}`);
       foundCoverage.add(key);
+      if (EVIDENCE_SURFACES.includes(row.evidenceSurface)) {
+        foundCoverageBySurface.get(row.evidenceSurface).add(key);
+        const rowsForKey = coverageRowsBySurface.get(row.evidenceSurface);
+        if (!rowsForKey.has(key)) rowsForKey.set(key, new Set());
+        rowsForKey.get(key).add(rowId);
+      }
     }
   }
+}
+
+function hasInjectiveCoverageMatching(requiredKeys, rowsByKey) {
+  const rowToKey = new Map();
+
+  function assign(key, visitedRows) {
+    for (const rowId of rowsByKey.get(key) ?? []) {
+      if (visitedRows.has(rowId)) continue;
+      visitedRows.add(rowId);
+      const previousKey = rowToKey.get(rowId);
+      if (!previousKey || assign(previousKey, visitedRows)) {
+        rowToKey.set(rowId, key);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  return requiredKeys.every((key) => assign(key, new Set()));
 }
 
 export function extractMatrixData(markdown) {
@@ -495,12 +571,15 @@ export function validateMatrix(
   {
     requirePass = false,
     evidenceBaseDir = process.cwd(),
+    evidenceScope,
     requiredCoverageKeys,
   } = {},
 ) {
   const errors = [];
   const seenIds = new Set();
   const foundCoverage = new Set();
+  const foundCoverageBySurface = new Map(EVIDENCE_SURFACES.map((surface) => [surface, new Set()]));
+  const coverageRowsBySurface = new Map(EVIDENCE_SURFACES.map((surface) => [surface, new Map()]));
 
   if (!isObject(matrix)) {
     return {
@@ -509,29 +588,94 @@ export function validateMatrix(
       summary: { total: 0, pass: 0, fail: 0, blocked: 0, notApplicable: 0, missingCoverage: [...REQUIRED_COVERAGE_KEYS] },
     };
   }
-  if (matrix.schemaVersion !== MATRIX_SCHEMA_VERSION) push(errors, '', `schemaVersion must be ${MATRIX_SCHEMA_VERSION}`);
+  if (matrix.schemaVersion !== MATRIX_SCHEMA_VERSION) {
+    const migrationError = matrix.schemaVersion === 1
+      ? 'schemaVersion 1 is legacy and must migrate to schemaVersion 2 with evidenceSurface, sha256, and bytes'
+      : `schemaVersion must be ${MATRIX_SCHEMA_VERSION}`;
+    return {
+      ok: false,
+      errors: [migrationError],
+      summary: {
+        total: Array.isArray(matrix.rows) ? matrix.rows.length : 0,
+        pass: 0,
+        fail: 0,
+        blocked: 0,
+        notApplicable: 0,
+        missingCoverage: [...REQUIRED_COVERAGE_KEYS],
+      },
+    };
+  }
   if (!isNonBlank(matrix.matrixId)) push(errors, '', 'matrixId is required');
   if (!isObject(matrix.releaseIdentity)) push(errors, '', 'releaseIdentity is required');
   validateReleaseIdentity(matrix.releaseIdentity, errors, 'releaseIdentity');
   if (!isObject(matrix.evidencePolicy)) push(errors, '', 'evidencePolicy is required');
   if (!Array.isArray(matrix.rows)) push(errors, '', 'rows must be an array');
 
+  const matrixScope = matrix.evidenceScope;
+  if (!(matrixScope === 'full' || EVIDENCE_SURFACES.includes(matrixScope))) {
+    push(errors, '', `evidenceScope must be full or one of: ${EVIDENCE_SURFACES.join(', ')}`);
+  }
+  const effectiveScope = evidenceScope ?? matrixScope;
+  if (!(effectiveScope === 'full' || EVIDENCE_SURFACES.includes(effectiveScope))) {
+    push(errors, '', `requested evidence scope must be full or one of: ${EVIDENCE_SURFACES.join(', ')}`);
+  } else if (matrixScope !== effectiveScope) {
+    push(errors, '', `matrix evidenceScope ${matrixScope ?? '<missing>'} must match requested scope ${effectiveScope}`);
+  }
+
   const declaredCoverageKeys = Array.isArray(matrix.coverage?.requiredKeys)
     ? matrix.coverage.requiredKeys
     : [];
   const allowedCoverageKeys = [...new Set([...REQUIRED_COVERAGE_KEYS, ...declaredCoverageKeys])];
-  const requiredKeys = requiredCoverageKeys ?? allowedCoverageKeys;
+  const authoritativeRequiredKeys = effectiveScope === 'full'
+    ? REQUIRED_COVERAGE_KEYS
+    : SURFACE_REQUIRED_COVERAGE_KEYS[effectiveScope] ?? [];
+  const requiredKeys = [...new Set([
+    ...authoritativeRequiredKeys,
+    ...declaredCoverageKeys,
+    ...(Array.isArray(requiredCoverageKeys) ? requiredCoverageKeys : []),
+  ])];
   if (!Array.isArray(matrix.coverage?.requiredKeys)) {
     push(errors, '', 'coverage.requiredKeys must be an array');
   }
 
   const rows = Array.isArray(matrix.rows) ? matrix.rows : [];
   for (const [index, row] of rows.entries()) {
-    validateRow(row, index, matrix.releaseIdentity, errors, seenIds, foundCoverage, { evidenceBaseDir }, allowedCoverageKeys);
+    validateRow(
+      row,
+      index,
+      matrix.releaseIdentity,
+      errors,
+      seenIds,
+      foundCoverage,
+      foundCoverageBySurface,
+      coverageRowsBySurface,
+      { evidenceBaseDir, evidenceScope: effectiveScope },
+      allowedCoverageKeys,
+    );
   }
 
   const missingCoverage = requiredKeys.filter((key) => !foundCoverage.has(key));
   if (missingCoverage.length > 0) push(errors, '', `missing coverage: ${missingCoverage.join(', ')}`);
+
+  const requiredSurfaces = effectiveScope === 'full' ? EVIDENCE_SURFACES : [effectiveScope];
+  for (const surface of requiredSurfaces.filter((candidate) => EVIDENCE_SURFACES.includes(candidate))) {
+    const surfaceKeys = SURFACE_REQUIRED_COVERAGE_KEYS[surface];
+    const surfaceCoverage = foundCoverageBySurface.get(surface);
+    const missingSurfaceCoverage = surfaceKeys.filter((key) => !surfaceCoverage.has(key));
+    if (missingSurfaceCoverage.length > 0) {
+      push(
+        errors,
+        '',
+        `${effectiveScope === 'full' ? 'full scope surface ' : ''}${surface} missing required coverage: ${missingSurfaceCoverage.join(', ')}`,
+      );
+    }
+    if (
+      missingSurfaceCoverage.length === 0
+      && !hasInjectiveCoverageMatching(surfaceKeys, coverageRowsBySurface.get(surface))
+    ) {
+      push(errors, '', `${surface} required coverage keys must have an injective matching to distinct rows`);
+    }
+  }
 
   const counts = { PASS: 0, FAIL: 0, BLOCKED: 0, 'N/A': 0 };
   for (const row of rows) {

@@ -328,6 +328,7 @@ function renderAction(
       data: payload,
       fallback: {
         type: 'Action.Submit',
+        title: action.label,
         data: payload,
       },
       style: action.style,
@@ -393,6 +394,15 @@ function renderGenUiCardFromEnvelope(
     }
   }
 
+  const renderedActions = envelope.actions.map((action, index) => renderAction(action, envelope, index));
+  const executeActions = renderedActions.filter((action) => action.type === 'Action.Execute');
+  if (executeActions.length > 0) {
+    // Microsoft recommends ActionSet wrapping because older Teams clients can
+    // miss Action.Execute fallback handling when it is top-level.
+    body.push({ type: 'ActionSet', actions: executeActions });
+  }
+  const topLevelActions = renderedActions.filter((action) => action.type !== 'Action.Execute');
+
   return {
     type: 'AdaptiveCard',
     $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
@@ -400,11 +410,11 @@ function renderGenUiCardFromEnvelope(
     msteams: { width: 'Full' },
     speak: `상태: ${STATUS_PRESENTATION[envelope.status].label}`,
     body,
-    ...(envelope.prompt || envelope.actions.length > 0
+    ...(envelope.prompt || topLevelActions.length > 0
       ? {
         actions: [
           ...(envelope.prompt ? [renderPromptViewAction(envelope.prompt)] : []),
-          ...envelope.actions.map((action, index) => renderAction(action, envelope, index)),
+          ...topLevelActions,
         ],
       }
       : {}),

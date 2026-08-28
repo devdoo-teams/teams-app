@@ -94,6 +94,33 @@ function formatJobs(input: ResponseEngineInput): string {
   return jobs.map((job) => `- ${job.id}: ${job.status}`).join('\n');
 }
 
+function isCodexHistoryRequest(normalized: string): boolean {
+  const namesCodex = /(codex|코덱스)/i.test(normalized);
+  const asksForHistory = /(?:이력|기록|히스토리|history)/i.test(normalized)
+    || /(?:최근|지난).*(?:내용|작업|결과|이력|기록)/i.test(normalized)
+    || /\b(?:show|list)\b.*\b(?:recent|latest|jobs?|activity|work|results)\b/i.test(normalized)
+    || /\bwhat did\b.*\b(?:recently|lately)\b/i.test(normalized);
+  return namesCodex && asksForHistory;
+}
+
+function formatJobHistory(input: ResponseEngineInput): string {
+  const jobs = input.agentService.list(input.scope, 5);
+  if (jobs.length === 0) return 'Codex 작업 이력이 없습니다.';
+
+  const history = jobs.map((job) => {
+    const detail = job.result?.trim() || job.error?.trim() || job.progress.at(-1)?.trim() || '아직 결과가 기록되지 않았습니다.';
+    return [
+      `- ${job.id} · ${job.status}`,
+      `요청: ${safeText(job.prompt, 600)}`,
+      `내용: ${safeText(detail, 1_000)}`,
+    ].join('\n');
+  }).join('\n\n');
+  // GenUI section descriptions are schema-limited to 2,000 characters. Keep
+  // the history response below that limit before the envelope is parsed so a
+  // busy workspace cannot turn a read-only lookup into a server error.
+  return safeText(history, 1_900);
+}
+
 function safeText(value: string, maxLength = 4_000): string {
   return redactSensitiveText(value).slice(0, maxLength);
 }
@@ -241,7 +268,8 @@ export class DeterministicResponseEngine implements ResponseEngine {
       });
     }
 
-    if (/^(status|상태|진행 상태)/i.test(normalized)) {
+    if (/^(?:status|상태|진행 상태)/i.test(normalized)
+      || /^(?:codex|코덱스)\s+(?:작업\s+)?(?:상태|진행 상태)/i.test(normalized)) {
       const text = `활성 Codex 작업 ${input.agentService.countActive(input.scope)}개\n\n${formatJobs(input)}`;
       return output({
         text,
@@ -260,6 +288,21 @@ export class DeterministicResponseEngine implements ResponseEngine {
       return output({
         text,
         envelope: approvalEnvelope ?? envelope({ kind: 'approval', id: job.id, title: '쓰기 작업 승인 필요', text, status: 'approval', sections: [{ type: 'status', title: '승인 경계', status: 'awaiting_approval', description: requestedPrompt }] }),
+        toolCalls,
+      });
+    }
+
+    if (isCodexHistoryRequest(normalized)) {
+      const text = formatJobHistory(input);
+      return output({
+        text,
+        envelope: envelope({
+          kind: 'job-status',
+          id: 'workspace-history',
+          title: 'Codex 작업 이력',
+          text,
+          sections: [{ type: 'status', title: '최근 Codex 작업', status: 'ready', description: text }],
+        }),
         toolCalls,
       });
     }

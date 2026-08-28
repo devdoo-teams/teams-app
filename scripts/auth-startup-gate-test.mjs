@@ -13,6 +13,7 @@ const runtimeDistRoot = resolveRuntimeDistRoot(root);
 const botClientId = '00000000-0000-4000-8000-000000000001';
 const clientId = '00000000-0000-4000-8000-000000000002';
 const tenantId = '00000000-0000-4000-8000-000000000003';
+const catalogAppId = '00000000-0000-4000-8000-000000000004';
 const applicationIdUri = `api://runtime.test/botid-${botClientId}`;
 
 async function freePort() {
@@ -54,6 +55,7 @@ async function expectStartupFailure(label, overrides, expectedOutput) {
       CLIENT_ID: clientId,
       CLIENT_SECRET: 'runtime-test-secret',
       TENANT_ID: tenantId,
+      TEAMS_CATALOG_APP_ID: catalogAppId,
       TAB_DOMAIN: 'runtime.test',
       APPLICATION_ID_URI: applicationIdUri,
       TEAMS_USER_AUTH_ACCEPTED_AUDIENCES: `${clientId},${applicationIdUri}`,

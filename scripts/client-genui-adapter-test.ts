@@ -68,6 +68,41 @@ const partialWeatherMarkup = renderToStaticMarkup(React.createElement(GenUiCard,
 assert.match(partialWeatherMarkup, /58%/, 'partial weather data still renders available humidity');
 assert.match(partialWeatherMarkup, /9\.4km\/h/, 'partial weather data still renders available wind');
 
+const duplicateSectionIds = GenUiEnvelopeV1Schema.parse({
+  schemaVersion: '1',
+  kind: 'answer',
+  status: 'ready',
+  id: 'duplicate-section-ids',
+  correlationId: 'duplicate-section-ids',
+  title: '중복 섹션 ID 카드',
+  sections: [
+    { type: 'text', id: 'same-section', title: '첫 번째 섹션', text: '첫 번째 내용' },
+    { type: 'text', id: 'same-section', title: '두 번째 섹션', text: '두 번째 내용' },
+  ],
+  actions: [],
+  citations: [],
+  aiGenerated: false,
+  fallbackText: '중복 섹션 ID 카드',
+});
+const duplicateSectionMarkup = renderToStaticMarkup(React.createElement(React.Fragment, null,
+  React.createElement(GenUiCard, { envelope: duplicateSectionIds }),
+  React.createElement(GenUiCard, { envelope: duplicateSectionIds }),
+));
+const labelledByIds = [...duplicateSectionMarkup.matchAll(/aria-labelledby="([^"]+)"/g)].map((match) => match[1]);
+assert.equal(new Set(labelledByIds).size, labelledByIds.length, 'each rendered card and section has a unique accessible label target');
+for (const labelledById of labelledByIds) {
+  assert.match(
+    duplicateSectionMarkup,
+    new RegExp(`id="${labelledById}"`),
+    `aria-labelledby target ${labelledById} exists in the rendered card`,
+  );
+}
+
+const loadingGenUiMarkup = renderToStaticMarkup(React.createElement(GenUiCard, { envelope: null }));
+assert.match(loadingGenUiMarkup, /role="status"/);
+assert.match(loadingGenUiMarkup, /aria-live="polite"/);
+assert.match(loadingGenUiMarkup, /aria-atomic="true"/);
+
 const errorWithRetry = GenUiEnvelopeV1Schema.parse({
   schemaVersion: '1',
   kind: 'error',

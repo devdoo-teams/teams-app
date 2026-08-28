@@ -52,7 +52,13 @@ function isPermissionDenied(error: unknown): boolean {
 
 function locationRecoveryGuidance(clientType: string, provider: LocationProvider): string {
   if (provider === 'browser') {
-    return '브라우저 주소 표시줄의 사이트 설정에서 위치 권한을 허용하고 Teams 탭을 새로고침한 뒤 다시 시도하세요.';
+    if (clientType === 'ios' || clientType === 'ipados') {
+      return 'Teams 탭의 앱 권한에서 위치를 허용하고 권한 변경 후 Teams 탭을 새로고침하세요. iPhone 또는 iPad 설정의 개인정보 보호 및 보안 > 위치 서비스 > Teams도 “앱 사용 중”으로 설정한 뒤 다시 시도하세요.';
+    }
+    if (clientType === 'android') {
+      return 'Teams 탭의 앱 권한에서 위치를 허용하고 권한 변경 후 Teams 탭을 새로고침하세요. Android 설정 > 앱 > Teams > 권한 > 위치에서 “앱 사용 중에만 허용”으로 설정한 뒤 다시 시도하세요.';
+    }
+    return 'Teams 탭의 앱 권한 또는 브라우저 사이트 설정에서 위치 권한을 허용하고 Teams 탭을 새로고침한 뒤 다시 시도하세요.';
   }
   if (clientType === 'ios' || clientType === 'ipados') {
     return 'Teams 앱 권한에서 위치를 허용하고, iPhone 또는 iPad 설정의 개인정보 보호 및 보안 > 위치 서비스 > Teams도 “앱 사용 중”으로 설정한 뒤 다시 시도하세요.';
@@ -109,6 +115,12 @@ export type ClientLocationServiceOptions = {
   initializeTimeoutMs?: number;
   operationTimeoutMs?: number;
   onRuntime?: (runtime: TeamsLocationRuntime) => void;
+  /**
+   * Keep deprecated/preview Teams location APIs available for an explicitly
+   * opted-in compatibility host. This is disabled by default because the new
+   * Teams client recommends HTML5 geolocation for tabs.
+   */
+  allowTeamsNativeFallback?: boolean;
 };
 
 export function createAbortError(): Error {
@@ -376,7 +388,7 @@ export function createClientLocationService(
     );
   }
 
-  function getBrowserLocation(attempt: TrackedAttempt): Promise<DeviceLocation> {
+  function getBrowserLocation(attempt: TrackedAttempt, clientType: string): Promise<DeviceLocation> {
     const operation = attempt.track(new Promise<DeviceLocation>((resolve, reject) => {
       const browserGeolocation = dependencies.browserGeolocation();
       if (!browserGeolocation) {
@@ -408,11 +420,24 @@ export function createClientLocationService(
             : '브라우저 위치를 확인하지 못했습니다.';
           reject(new Error(message));
         },
-        { enableHighAccuracy: false, maximumAge: 300_000, timeout: 12_000 },
+        {
+          // A mobile Teams WebView must ask the device for a fresh fix. A
+          // cached browser position can belong to an earlier desktop session.
+          enableHighAccuracy: clientType === 'ios' || clientType === 'ipados' || clientType === 'android',
+          maximumAge: 0,
+          timeout: operationTimeoutMs,
+        },
       );
     }), 'browser');
 
-    return withTimeout(operation, operationTimeoutMs, '브라우저 위치 확인 시간이 초과되었습니다.');
+    return withTimeout(operation, operationTimeoutMs, '브라우저 위치 확인 시간이 초과되었습니다.').catch((error: unknown) => {
+      if (isLocationTimeoutError(error)) {
+        // HTML5 geolocation cannot be cancelled after the browser operation
+        // deadline. Separate this stale callback from the next user request.
+        attempt.abandon();
+      }
+      throw error;
+    });
   }
 
   async function getTeamsGeoLocation(attempt: TrackedAttempt): Promise<DeviceLocation> {
@@ -453,6 +478,14 @@ export function createClientLocationService(
     const locationErrors: string[] = [];
     const runtime = await initializeTeamsLocation(attempt);
     onRuntime(runtime);
+    if (!runtime.available) {
+      throw new Error('Teams 호스트 연결을 확인하지 못해 위치를 조회하지 않았습니다. PC 또는 서버 위치를 자동으로 사용하지 않았습니다. Teams 탭을 다시 열고 다시 시도하세요.');
+    }
+    const knownClientTypes = new Set(['android', 'desktop', 'ios', 'ipados', 'web']);
+    if (!knownClientTypes.has(runtime.clientType)) {
+      throw new Error('Teams 호스트 유형을 확인하지 못해 위치를 조회하지 않았습니다. PC 또는 서버 위치를 자동으로 사용하지 않았습니다. Teams 탭을 다시 열고 다시 시도하세요.');
+    }
+    const allowTeamsNativeFallback = options.allowTeamsNativeFallback ?? false;
     const isAppleMobile = runtime.clientType === 'ios' || runtime.clientType === 'ipados';
     const isAndroidMobile = runtime.clientType === 'android';
     let legacyAttempted = false;
@@ -492,7 +525,7 @@ export function createClientLocationService(
       }
     }
 
-    if (isAppleMobile && runtime.legacyLocationSupported) {
+    if (allowTeamsNativeFallback && isAppleMobile && runtime.legacyLocationSupported) {
       legacyAttempted = true;
       const nativeLocation = await tryProvider('Teams iPhone 위치', 'teams-native', () => getLegacyTeamsLocation(attempt));
       if (nativeLocation) return nativeLocation;
@@ -501,12 +534,12 @@ export function createClientLocationService(
     const browserLocation = await tryProvider(
       'HTML5 위치',
       'browser',
-      () => getBrowserLocation(attempt),
-      isAndroidMobile && (runtime.geoLocationSupported || runtime.legacyLocationSupported),
+      () => getBrowserLocation(attempt, runtime.clientType),
+      allowTeamsNativeFallback && isAndroidMobile && (runtime.geoLocationSupported || runtime.legacyLocationSupported),
     );
     if (browserLocation) return browserLocation;
 
-    if (runtime.geoLocationSupported) {
+    if (allowTeamsNativeFallback && runtime.geoLocationSupported) {
       const geoLocationResult = await tryProvider(
         'Teams geoLocation',
         'teams-native',
@@ -515,7 +548,7 @@ export function createClientLocationService(
       if (geoLocationResult) return geoLocationResult;
     }
 
-    if (runtime.legacyLocationSupported && !legacyAttempted) {
+    if (allowTeamsNativeFallback && runtime.legacyLocationSupported && !legacyAttempted) {
       const nativeLocation = await tryProvider('Teams 위치', 'teams-native', () => getLegacyTeamsLocation(attempt));
       if (nativeLocation) return nativeLocation;
     }

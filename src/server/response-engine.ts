@@ -103,6 +103,15 @@ export interface ResponseEngine {
   run(input: ResponseEngineInput): Promise<ResponseEngineOutput>;
 }
 
+export class ResponseEngineNotConfiguredError extends Error {
+  readonly code = 'RESPONSE_ENGINE_NOT_CONFIGURED' as const;
+
+  constructor(readonly mode: ResponseMode) {
+    super(`응답 엔진이 등록되지 않았습니다: ${mode}`);
+    this.name = 'ResponseEngineNotConfiguredError';
+  }
+}
+
 export type ResponseEngineModeResolver = (
   input: ResponseEngineInput,
 ) => ResponseMode | Promise<ResponseMode>;
@@ -141,7 +150,7 @@ export class ResponseEngineRouter {
 
   get(mode: ResponseMode): ResponseEngine {
     const engine = this.engines.get(mode);
-    if (!engine) throw new Error(`응답 엔진이 등록되지 않았습니다: ${mode}`);
+    if (!engine) throw new ResponseEngineNotConfiguredError(mode);
     return engine;
   }
 

@@ -150,11 +150,30 @@ async function testCallerAbortIsDeterministic(): Promise<void> {
   assert.equal(observedSignal?.aborted, true, 'caller abort propagates to the provider request');
 }
 
+async function testInvalidCoordinatesAreRejectedBeforeProviderCall(): Promise<void> {
+  clearWeatherCache();
+  const fake = createFakeFetch(() => response(payload()));
+  const options = { fetch: fake.fetch, timeoutMs: 100, cacheTtlMs: 100, now: () => 0 };
+
+  await assert.rejects(
+    () => getWeather(90.0001, 127, options),
+    /위도.*-90.*90|좌표/,
+    'latitude outside the manual coordinate contract is rejected',
+  );
+  await assert.rejects(
+    () => getWeather(37.5, -180.0001, options),
+    /경도.*-180.*180|좌표/,
+    'longitude outside the manual coordinate contract is rejected',
+  );
+  assert.equal(fake.calls(), 0, 'invalid manual coordinates never reach the weather provider');
+}
+
 await testCacheHitAndCoordinateNormalization();
 await testCacheExpiry();
 await testCacheEvictionBound();
 await testErrorsAreNotCached();
 await testTimeoutAbortsRequest();
 await testCallerAbortIsDeterministic();
+await testInvalidCoordinatesAreRejectedBeforeProviderCall();
 
 console.log('PASS: weather service timeout, abort, TTL cache, eviction bound, and error non-caching verified');

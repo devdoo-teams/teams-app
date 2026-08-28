@@ -5,12 +5,13 @@ import path from 'node:path';
 
 import { GenUiActionStore } from '../src/server/genui-action-store.js';
 import { GenUiResponseFactory } from '../src/server/genui-response.js';
+import { renderGenUiCard } from '../src/server/genui-teams.js';
 
 const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-genui-actions-'));
 const dataFile = path.join(directory, 'actions.json');
 
 try {
-  const store = new GenUiActionStore(dataFile, 100);
+  const store = new GenUiActionStore(dataFile);
   await store.initialize();
   const grant = {
     action: 'approve' as const,
@@ -26,7 +27,7 @@ try {
   assert.equal((await store.consume({ ...grant, token })).ok, true);
   assert.deepEqual(await store.consume({ ...grant, token }), { ok: false, reason: 'consumed' });
 
-  const restarted = new GenUiActionStore(dataFile, 100);
+  const restarted = new GenUiActionStore(dataFile);
   await restarted.initialize();
   assert.deepEqual(await restarted.consume({ ...grant, token }), { ok: false, reason: 'consumed' });
 
@@ -108,6 +109,72 @@ try {
   );
   assert.equal(helpCard.actions.at(-1)?.entityId, 'home');
   assert.equal(helpCard.metadata.openTabUrl, personalTabUrl);
+
+  const providerEnvelope = {
+    ...configuredFactory.answer('응답 엔진 결과', 'response-engine-result'),
+    actions: [],
+    metadata: { provider: 'deterministic', deterministic: true },
+  };
+  const decoratedProviderEnvelope = configuredFactory.withTabAction(providerEnvelope);
+  assert.equal(
+    decoratedProviderEnvelope.actions.at(-1)?.action,
+    'open-tab',
+    'response-engine cards preserve the default Work Hub tab action',
+  );
+  assert.equal(
+    decoratedProviderEnvelope.metadata.provider,
+    'deterministic',
+    'decorating a response-engine card preserves provider metadata',
+  );
+  assert.equal(providerEnvelope.actions.length, 0, 'decorating a response-engine card does not mutate the provider envelope');
+  assert.equal(
+    configuredFactory.withTabAction(decoratedProviderEnvelope).actions.filter((action) => action.action === 'open-tab').length,
+    1,
+    'decorating a response-engine card is idempotent',
+  );
+
+  const configuredTabAction = decoratedProviderEnvelope.actions[0];
+  assert.ok(configuredTabAction);
+  const staleProviderEnvelope = {
+    ...decoratedProviderEnvelope,
+    actions: [
+      configuredTabAction,
+      {
+        ...configuredTabAction,
+        id: 'provider-open-tab',
+        actionToken: 'stale-provider-tab-token',
+      },
+    ],
+    metadata: {
+      ...decoratedProviderEnvelope.metadata,
+      openTabUrl: 'https://stale.example/global',
+      'openTabUrl.open-tab': 'https://stale.example/action',
+      'openTabUrl.0': 'https://stale.example/index',
+    },
+  };
+  const normalizedProviderEnvelope = configuredFactory.withTabAction(staleProviderEnvelope);
+  assert.equal(
+    normalizedProviderEnvelope.actions.filter((action) => action.action === 'open-tab').length,
+    1,
+    'decorating a provider card normalizes duplicate tab actions to one',
+  );
+  assert.equal(normalizedProviderEnvelope.metadata.openTabUrl, personalTabUrl);
+  assert.equal(normalizedProviderEnvelope.metadata['openTabUrl.open-tab'], undefined);
+  assert.equal(normalizedProviderEnvelope.metadata['openTabUrl.0'], undefined);
+  assert.equal(normalizedProviderEnvelope.metadata.provider, 'deterministic');
+  const renderedTabAction = renderGenUiCard(normalizedProviderEnvelope).actions?.find(
+    (action) => action.type === 'Action.OpenUrl',
+  );
+  assert.equal(
+    renderedTabAction?.url,
+    personalTabUrl,
+    'the surviving tab action renders the configured Work Hub deep link',
+  );
+  assert.equal(
+    staleProviderEnvelope.metadata.openTabUrl,
+    'https://stale.example/global',
+    'normalizing a provider card does not mutate its metadata',
+  );
 
   const jobStatusCard = await configuredFactory.jobStatus({
     id: 'task-status-1',
