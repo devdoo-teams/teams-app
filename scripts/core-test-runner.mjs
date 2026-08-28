@@ -40,6 +40,7 @@ const runtimeTests = [
   'scripts/response-mode-api-test.ts',
   'scripts/teams-a2a-chat-regression-test.ts',
   'scripts/teams-a2a-outbound-restart-regression-test.ts',
+  'scripts/a2a-index-integration-test.mjs',
 ];
 const tsTests = [
   'scripts/status-card-test.ts',
@@ -77,7 +78,6 @@ const tsTests = [
   'scripts/a2a-observability-test.ts',
   'scripts/a2a-jsonrpc-route-test.ts',
   'scripts/a2a-v1-list-tasks-test.ts',
-  'scripts/a2a-index-integration-test.mjs',
   'scripts/a2a-store-test.ts',
   'scripts/a2a-route-test.ts',
   'scripts/a2a-execution-test.ts',
