@@ -390,10 +390,19 @@ async function runNativePermissionPreflight(input: {
     '/bin/sh', '-c', ': > "$1"', 'workspace-write-denied-canary', writeCanary,
   ], environment, 'workspace write');
   await withLoopbackServer(async (port) => {
+    // The macOS Codex sandbox currently reports a denied loopback connect as
+    // exit code 1 with no stderr. Prove the same command and listener work
+    // outside the sandbox first; only then may this canary accept that silent
+    // non-zero result as the expected policy denial.
+    await execFileAsync('/usr/bin/nc', ['-z', '127.0.0.1', String(port)], {
+      env: environment,
+      timeout: PREFLIGHT_TIMEOUT_MS,
+      maxBuffer: 16 * 1024,
+    });
     await expectSandboxDenial(input.codexExecutable, [
       ...sandboxPrefix,
       '/bin/sh', '-c', 'exec /usr/bin/nc -z 127.0.0.1 "$1"', 'network-denied-canary', String(port),
-    ], environment, 'network');
+    ], environment, 'network', { allowSilentExit: true });
   });
 
   const authenticated = await execFileAsync(input.codexExecutable, [
@@ -688,6 +697,7 @@ async function expectSandboxDenial(
   args: readonly string[],
   environment: NodeJS.ProcessEnv,
   label: string,
+  options: Readonly<{ allowSilentExit?: boolean }> = {},
 ): Promise<void> {
   try {
     await execFileAsync(executable, [...args], {
@@ -697,11 +707,30 @@ async function expectSandboxDenial(
     });
   } catch (error) {
     const classification = classifyPreflightFailure(error);
-    if (classification === 'genuine-denial') return;
+    if (classification === 'genuine-denial' || (options.allowSilentExit && isSilentExpectedDenial(error))) return;
     const detail = error instanceof Error ? error.message : String(error);
     throw preflightFailure(classification, `${label} preflight failed: ${detail}`);
   }
   throw new Error(`native permission profile allowed forbidden ${label}`);
+}
+
+function isSilentExpectedDenial(error: unknown): boolean {
+  const candidate = (error && typeof error === 'object' ? error : {}) as {
+    code?: string | number;
+    signal?: NodeJS.Signals | null;
+    stdout?: string | Buffer;
+    stderr?: string | Buffer;
+  };
+  const stdout = typeof candidate.stdout === 'string'
+    ? candidate.stdout
+    : candidate.stdout?.toString('utf8') ?? '';
+  const stderr = typeof candidate.stderr === 'string'
+    ? candidate.stderr
+    : candidate.stderr?.toString('utf8') ?? '';
+  return candidate.code === 1
+    && (candidate.signal === undefined || candidate.signal === null)
+    && stdout.length === 0
+    && stderr.length === 0;
 }
 
 function classifyPreflightFailure(error: unknown): CodexPermissionProfilePreflightClassification {
