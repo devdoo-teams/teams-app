@@ -84,14 +84,9 @@ export async function validateCodexA2AIsolation({
 }
 
 async function validateIndexedA2AHomes({ env, serviceHome, currentUid, issues }) {
-  const rawProviders = typeof env.TEAMS_A2A_AGENT_PROVIDERS === 'string'
-    ? env.TEAMS_A2A_AGENT_PROVIDERS.trim()
-    : '';
-  if (!rawProviders) return;
-
   let ordinal = 0;
   const indexedHomes = new Set();
-  for (const provider of rawProviders.split(',').map((entry) => entry.trim())) {
+  for (const provider of normalizeA2AAgentProviders(env)) {
     if (provider !== 'codex') continue;
     ordinal += 1;
     const variableName = `AGENT_CODEX_HOME_${ordinal}`;
@@ -114,6 +109,21 @@ async function validateIndexedA2AHomes({ env, serviceHome, currentUid, issues })
     indexedHomes.add(realHome);
     await validateAuthFile(path.join(realHome, 'auth.json'), currentUid, issues);
   }
+}
+
+function normalizeA2AAgentProviders(env) {
+  const defaultProvider = typeof env.TEAMS_AGENT_CLI_PROVIDER === 'string'
+    ? env.TEAMS_AGENT_CLI_PROVIDER.trim() || 'codex'
+    : 'codex';
+  const rawProviders = typeof env.TEAMS_A2A_AGENT_PROVIDERS === 'string'
+    ? env.TEAMS_A2A_AGENT_PROVIDERS.trim()
+    : '';
+  const requestedProviders = rawProviders
+    ? rawProviders.split(',').map((entry) => entry.trim())
+    : [defaultProvider];
+  return requestedProviders.includes(defaultProvider)
+    ? requestedProviders
+    : [defaultProvider, ...requestedProviders];
 }
 
 function requiredAbsoluteValue(value, name, issues) {

@@ -20,10 +20,29 @@ try {
   await fs.writeFile(authFile, `{"token":"${authSecret}"}\n`, { mode: 0o600 });
   await fs.writeFile(executable, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
   const digest = crypto.createHash('sha256').update(await fs.readFile(executable)).digest('hex');
-  const validEnvironment = {
+  const baseEnvironment = {
     AGENT_CODEX_HOME: serviceHome,
     CODEX_BIN: executable,
     CODEX_BIN_SHA256: digest,
+  };
+
+  const missingDefaultWorker = await validateCodexA2AIsolation({
+    env: baseEnvironment,
+    platform: 'darwin',
+    verifyExecutableSignature: () => undefined,
+  });
+  assert.equal(missingDefaultWorker.ok, false, 'the omitted roster still creates the default Codex worker');
+  assert.deepEqual(missingDefaultWorker.issues.map(({ code }) => code), ['AGENT_CODEX_HOME_1_REQUIRED']);
+
+  const a2aHome1 = path.join(root, 'a2a-home-1');
+  const a2aHome2 = path.join(root, 'a2a-home-2');
+  await fs.mkdir(a2aHome1, { mode: 0o700 });
+  await fs.mkdir(a2aHome2, { mode: 0o700 });
+  await fs.writeFile(path.join(a2aHome1, 'auth.json'), `{"token":"${authSecret}"}\n`, { mode: 0o600 });
+  await fs.writeFile(path.join(a2aHome2, 'auth.json'), `{"token":"${authSecret}"}\n`, { mode: 0o600 });
+  const validEnvironment = {
+    ...baseEnvironment,
+    AGENT_CODEX_HOME_1: a2aHome1,
   };
 
   const result = await validateCodexA2AIsolation({
@@ -35,12 +54,34 @@ try {
   assert.deepEqual(result, { ok: true, issues: [] });
   assert.deepEqual(await fs.readdir(serviceHome), ['auth.json'], 'validation must not create service-home files');
 
-  const a2aHome1 = path.join(root, 'a2a-home-1');
-  const a2aHome2 = path.join(root, 'a2a-home-2');
-  await fs.mkdir(a2aHome1, { mode: 0o700 });
-  await fs.mkdir(a2aHome2, { mode: 0o700 });
-  await fs.writeFile(path.join(a2aHome1, 'auth.json'), `{"token":"${authSecret}"}\n`, { mode: 0o600 });
-  await fs.writeFile(path.join(a2aHome2, 'auth.json'), `{"token":"${authSecret}"}\n`, { mode: 0o600 });
+  const explicitSingle = await validateCodexA2AIsolation({
+    env: { ...baseEnvironment, TEAMS_A2A_AGENT_PROVIDERS: 'codex', AGENT_CODEX_HOME_1: a2aHome1 },
+    platform: 'darwin',
+    verifyExecutableSignature: () => undefined,
+  });
+  assert.deepEqual(explicitSingle, { ok: true, issues: [] }, 'an explicit single Codex worker remains valid');
+
+  const missingPrependedDefault = await validateCodexA2AIsolation({
+    env: { ...baseEnvironment, TEAMS_A2A_AGENT_PROVIDERS: 'copilot' },
+    platform: 'darwin',
+    verifyExecutableSignature: () => undefined,
+  });
+  assert.deepEqual(missingPrependedDefault.issues.map(({ code }) => code), ['AGENT_CODEX_HOME_1_REQUIRED']);
+
+  const prependedDefault = await validateCodexA2AIsolation({
+    env: { ...baseEnvironment, TEAMS_A2A_AGENT_PROVIDERS: 'copilot', AGENT_CODEX_HOME_1: a2aHome1 },
+    platform: 'darwin',
+    verifyExecutableSignature: () => undefined,
+  });
+  assert.deepEqual(prependedDefault, { ok: true, issues: [] }, 'the runtime default worker remains valid when prepended');
+
+  const copilotDefault = await validateCodexA2AIsolation({
+    env: { ...baseEnvironment, TEAMS_AGENT_CLI_PROVIDER: 'copilot' },
+    platform: 'darwin',
+    verifyExecutableSignature: () => undefined,
+  });
+  assert.deepEqual(copilotDefault, { ok: true, issues: [] }, 'a Copilot default has no effective Codex worker');
+
   const indexed = await validateCodexA2AIsolation({
     env: {
       ...validEnvironment,
@@ -95,6 +136,7 @@ try {
     'AGENT_CODEX_HOME_REQUIRED',
     'CODEX_BIN_REQUIRED',
     'CODEX_BIN_SHA256_REQUIRED',
+    'AGENT_CODEX_HOME_1_REQUIRED',
   ]);
 
   const malformed = await validateCodexA2AIsolation({
@@ -110,6 +152,7 @@ try {
     'AGENT_CODEX_HOME_ABSOLUTE',
     'CODEX_BIN_ABSOLUTE',
     'CODEX_BIN_SHA256_FORMAT',
+    'AGENT_CODEX_HOME_1_REQUIRED',
   ]);
 
   await fs.chmod(serviceHome, 0o750);
