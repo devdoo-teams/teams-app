@@ -17,6 +17,17 @@ assert.deepEqual(
   `GitHub Actions references undefined npm scripts: ${missingScripts.join(', ')}`,
 );
 
+const a2aStart = workflow.indexOf('\n  a2a:');
+const continuityStart = workflow.indexOf('\n  continuity:');
+assert.notEqual(a2aStart, -1, 'workflow must define an A2A job');
+assert.notEqual(continuityStart, -1, 'workflow must define a continuity job');
+const a2aJob = workflow.slice(a2aStart, continuityStart);
+assert.match(
+  a2aJob,
+  /npm run build:core/,
+  'A2A runtime integration fixtures must build the commit-bound Core dist in their isolated job',
+);
+
 const artifactStart = workflow.indexOf('\n  artifact:');
 assert.notEqual(artifactStart, -1, 'workflow must define an immutable artifact job');
 const artifactJob = workflow.slice(artifactStart);

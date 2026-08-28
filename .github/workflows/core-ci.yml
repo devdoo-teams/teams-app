@@ -63,6 +63,8 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build Core for integration runtime fixtures
+        run: npm run build:core
       - name: Verify tracked A2A contracts and orchestration
         run: |
           npm run test:a2a-official-contract-audit
