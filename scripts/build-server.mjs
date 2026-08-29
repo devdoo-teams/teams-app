@@ -178,6 +178,11 @@ try {
       // Keep optional provider chunks lazy as well. The default production
       // startup must not parse the large optional graph before listen().
       splitting: true,
+      // Esbuild's bundled-module origin comments contain the absolute
+      // node_modules path. That makes an otherwise identical CI/FileProvider
+      // build differ when the checkout root changes and leaks local paths into
+      // the release artifact.
+      legalComments: 'none',
       // Node 24 + esbuild can stall while emitting the large optional
       // CopilotKit/provider source map. Production runtime identity is
       // carried by the build marker and bundle SHA instead.
