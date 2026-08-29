@@ -110,6 +110,7 @@ import {
 import { CollaborationStore } from './collaboration-store.js';
 import type { CollaborationScope } from '../shared/collaboration.js';
 import { A2AStore } from './a2a-store.js';
+import { deriveA2AExecutionReadiness } from './a2a-execution-readiness.js';
 import type { A2ATask } from './a2a-contract.js';
 import { TeamsA2AOutboundStore } from './teams-a2a-outbound-store.js';
 import { createA2AExecutionAdapter } from './a2a-execution.js';
@@ -353,7 +354,7 @@ async function runA2ANativePreflight(policy: AgentExecutionPolicy): Promise<A2AW
   }
 }
 
-const a2aExecutionReadiness = baseExecutionReadiness.state === 'configured' && isProduction
+const legacyExecutionReadiness = baseExecutionReadiness.state === 'configured' && isProduction
   && (await runA2ANativePreflight(agentExecutionPolicy)).state === 'unavailable'
   ? { state: 'unavailable' as const, reason: 'isolation-unavailable' as const }
   : baseExecutionReadiness;
@@ -466,6 +467,16 @@ for (const configuredAgent of a2aAgentProviders) {
     });
   }
 }
+const a2aWorkerProviderIds = a2aAgentProviders
+  .map((configuredAgent) => {
+    const policy = a2aWorkerExecutionPolicies.get(a2aAgentId(configuredAgent));
+    const readiness = policy?.readOnlyExecutionReadiness();
+    return readiness?.state === 'configured' ? readiness.providerId : undefined;
+  })
+  .filter((providerId): providerId is string => providerId !== undefined);
+const a2aExecutionReadiness = isProduction
+  ? deriveA2AExecutionReadiness([...a2aWorkerReadiness.values()], a2aWorkerProviderIds)
+  : legacyExecutionReadiness;
 const appVersion = (() => {
   const configured = process.env.APP_VERSION?.trim();
   if (configured) return configured;

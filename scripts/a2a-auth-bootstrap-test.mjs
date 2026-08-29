@@ -256,6 +256,53 @@ const authMetadata = await inspectAuthMetadata(authPath);
 assert.deepEqual(authMetadata, { state: 'valid', mode: 0o600, size: 27 });
 assert.equal(Object.hasOwn(authMetadata, 'contents'), false, 'auth contents must never be returned');
 
+const hardlinkedAuthPath = path.join(root, 'hardlinked-auth.json');
+await fs.link(authPath, hardlinkedAuthPath);
+assert.deepEqual(
+  await inspectAuthMetadata(hardlinkedAuthPath),
+  { state: 'invalid-hardlink' },
+  'auth metadata must reject a hardlink so one credential file cannot have another inode name',
+);
+
+const hardlinkedExecutable = path.join(root, 'hardlinked-codex-bin');
+await fs.link(executableFixture, hardlinkedExecutable);
+await assert.rejects(
+  () => validateExecutableInputs({ CODEX_BIN: hardlinkedExecutable, CODEX_BIN_SHA256: executableDigest }),
+  /hardlink|one owner-only regular file/i,
+  'executable validation must reject a hardlinked binary',
+);
+
+const raceExecutable = path.join(root, 'race-codex-bin');
+await fs.copyFile(executableFixture, raceExecutable);
+await fs.chmod(raceExecutable, 0o755);
+const raceDigest = crypto.createHash('sha256').update(await fs.readFile(raceExecutable)).digest('hex');
+let raceAttempts = 0;
+await assert.rejects(
+  () => runWorkerLogin({
+    codexBin: raceExecutable,
+    codexBinSha256: raceDigest,
+    codexHome: '/var/lib/teams/codex-worker-1',
+    env: { PATH: '/usr/bin' },
+    maxAttempts: 2,
+    timeoutMs: 10,
+    spawnImpl: (_command, _args, options) => {
+      raceAttempts += 1;
+      const child = new EventEmitter();
+      child.kill = () => false;
+      if (raceAttempts === 1) {
+        options.signal.addEventListener('abort', () => {
+          fs.writeFile(raceExecutable, 'tampered executable\n');
+          queueMicrotask(() => child.emit('close', null, 'SIGTERM'));
+        }, { once: true });
+      }
+      return child;
+    },
+  }),
+  /does not match/i,
+  'a login retry must revalidate the pinned executable digest',
+);
+assert.equal(raceAttempts, 1, 'a changed executable must block the retry before spawn');
+
 const alias = path.join(root, 'worker-1-alias');
 await fs.symlink(home, alias, 'dir');
 await assert.rejects(
