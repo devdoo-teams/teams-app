@@ -104,6 +104,10 @@ type TrustedExecutableSnapshot = TrustedPathSnapshot & Readonly<{
   sha256: string;
 }>;
 
+type ServiceCanarySnapshot = TrustedPathSnapshot & Readonly<{
+  created: boolean;
+}>;
+
 export type ExecutableTrustVerifier = (input: Readonly<{ path: string; sha256: string }>) => void;
 
 export type CodexPermissionProfilePreflightClassification =
@@ -397,56 +401,60 @@ async function runNativePermissionPreflight(input: {
 
   const workspaceCanary = await findWorkspaceCanary(input.workspace);
   const serviceCanary = await ensureServiceCanary(input.codexHome);
-  const sandboxPrefix = [
-    'sandbox',
-    '-c', DEFAULT_PERMISSION_VALUE,
-    '-c', PERMISSION_PROFILE_VALUE,
-    '-P', PROFILE_NAME,
-    '-C', input.workspace,
-    '--',
-  ];
-  await execFileClosedStdin(input.codexExecutable, [
-    ...sandboxPrefix,
-    '/bin/sh', '-c', 'test -r "$1"', 'workspace-read-canary', workspaceCanary,
-  ], { env: environment, timeout: PREFLIGHT_TIMEOUT_MS, maxBuffer: 16 * 1024 });
-  await expectSandboxDenial(input.codexExecutable, [
-    ...sandboxPrefix,
-    '/bin/sh', '-c', 'cat "$1" >/dev/null', 'service-read-denied-canary', serviceCanary,
-  ], environment, 'service-home read');
-  const writeCanary = path.join(input.workspace, 'write-denied-canary');
-  await expectSandboxDenial(input.codexExecutable, [
-    ...sandboxPrefix,
-    '/bin/sh', '-c', ': > "$1"', 'workspace-write-denied-canary', writeCanary,
-  ], environment, 'workspace write');
-  await withLoopbackServer(async (port) => {
-    // The macOS Codex sandbox currently reports a denied loopback connect as
-    // exit code 1 with no stderr. Prove the same command and listener work
-    // outside the sandbox first; only then may this canary accept that silent
-    // non-zero result as the expected policy denial.
-    await execFileClosedStdin('/usr/bin/nc', ['-z', '127.0.0.1', String(port)], {
-      env: environment,
-      timeout: PREFLIGHT_TIMEOUT_MS,
-      maxBuffer: 16 * 1024,
-    });
+  try {
+    const sandboxPrefix = [
+      'sandbox',
+      '-c', DEFAULT_PERMISSION_VALUE,
+      '-c', PERMISSION_PROFILE_VALUE,
+      '-P', PROFILE_NAME,
+      '-C', input.workspace,
+      '--',
+    ];
+    await execFileClosedStdin(input.codexExecutable, [
+      ...sandboxPrefix,
+      '/bin/sh', '-c', 'test -r "$1"', 'workspace-read-canary', workspaceCanary,
+    ], { env: environment, timeout: PREFLIGHT_TIMEOUT_MS, maxBuffer: 16 * 1024 });
     await expectSandboxDenial(input.codexExecutable, [
       ...sandboxPrefix,
-      '/bin/sh', '-c', 'exec /usr/bin/nc -z 127.0.0.1 "$1"', 'network-denied-canary', String(port),
-    ], environment, 'network', { allowSilentExit: true });
-  });
+      '/bin/sh', '-c', 'cat "$1" >/dev/null', 'service-read-denied-canary', serviceCanary.path,
+    ], environment, 'service-home read');
+    const writeCanary = path.join(input.workspace, 'write-denied-canary');
+    await expectSandboxDenial(input.codexExecutable, [
+      ...sandboxPrefix,
+      '/bin/sh', '-c', ': > "$1"', 'workspace-write-denied-canary', writeCanary,
+    ], environment, 'workspace write');
+    await withLoopbackServer(async (port) => {
+      // The macOS Codex sandbox currently reports a denied loopback connect as
+      // exit code 1 with no stderr. Prove the same command and listener work
+      // outside the sandbox first; only then may this canary accept that silent
+      // non-zero result as the expected policy denial.
+      await execFileClosedStdin('/usr/bin/nc', ['-z', '127.0.0.1', String(port)], {
+        env: environment,
+        timeout: PREFLIGHT_TIMEOUT_MS,
+        maxBuffer: 16 * 1024,
+      });
+      await expectSandboxDenial(input.codexExecutable, [
+        ...sandboxPrefix,
+        '/bin/sh', '-c', 'exec /usr/bin/nc -z 127.0.0.1 "$1"', 'network-denied-canary', String(port),
+      ], environment, 'network', { allowSilentExit: true });
+    });
 
-  const authenticated = await execFileClosedStdin(input.codexExecutable, [
-    'exec', '--json', ...CODEX_READ_ONLY_PERMISSION_ARGS,
-    '--cd', input.workspace,
-    '--', 'Reply with exactly TEAMS_CODEX_AUTH_PREFLIGHT_OK. Do not call any tool.',
-  ], {
-    env: environment,
-    cwd: input.workspace,
-    encoding: 'utf8',
-    timeout: PREFLIGHT_TIMEOUT_MS,
-    maxBuffer: 128 * 1024,
-  });
-  if (!hasExactPreflightMessage(authenticated.stdout)) {
-    throw new Error('authenticated Codex exec preflight did not return the exact terminal canary');
+    const authenticated = await execFileClosedStdin(input.codexExecutable, [
+      'exec', '--json', ...CODEX_READ_ONLY_PERMISSION_ARGS,
+      '--cd', input.workspace,
+      '--', 'Reply with exactly TEAMS_CODEX_AUTH_PREFLIGHT_OK. Do not call any tool.',
+    ], {
+      env: environment,
+      cwd: input.workspace,
+      encoding: 'utf8',
+      timeout: PREFLIGHT_TIMEOUT_MS,
+      maxBuffer: 128 * 1024,
+    });
+    if (!hasExactPreflightMessage(authenticated.stdout)) {
+      throw new Error('authenticated Codex exec preflight did not return the exact terminal canary');
+    }
+  } finally {
+    await cleanupCreatedServiceCanary(serviceCanary);
   }
 }
 
@@ -703,22 +711,61 @@ async function findWorkspaceCanary(workspace: string): Promise<string> {
   throw new Error('projected workspace has no deterministic readable canary');
 }
 
-async function ensureServiceCanary(codexHome: string): Promise<string> {
+async function ensureServiceCanary(codexHome: string): Promise<ServiceCanarySnapshot> {
   for (const name of ['service-secret-canary.txt', '.teams-permission-canary']) {
     const existing = path.join(codexHome, name);
     try {
       const stat = await fs.lstat(existing);
       const currentUserId = typeof process.getuid === 'function' ? process.getuid() : undefined;
       if (stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1 && (stat.mode & 0o077) === 0
-        && (currentUserId === undefined || stat.uid === currentUserId)) return existing;
+        && (currentUserId === undefined || stat.uid === currentUserId)) {
+        return { path: existing, identity: stableIdentity(stat), created: false };
+      }
       throw new Error('service canary metadata is unsafe');
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
   }
   const candidate = path.join(codexHome, '.teams-permission-canary');
-  await fs.writeFile(candidate, 'teams-permission-boundary\n', { flag: 'wx', mode: 0o600 });
-  return candidate;
+  const handle = await fs.open(candidate, 'wx', 0o600);
+  try {
+    await handle.writeFile('teams-permission-boundary\n');
+    const stat = await handle.stat();
+    const currentUserId = typeof process.getuid === 'function' ? process.getuid() : undefined;
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || (stat.mode & 0o077) !== 0
+      || (currentUserId !== undefined && stat.uid !== currentUserId)) {
+      throw new Error('new service canary metadata is unsafe');
+    }
+    return { path: candidate, identity: stableIdentity(stat), created: true };
+  } finally {
+    await handle.close();
+  }
+}
+
+async function cleanupCreatedServiceCanary(canary: ServiceCanarySnapshot): Promise<void> {
+  if (!canary.created) return;
+  let handle: fs.FileHandle | undefined;
+  try {
+    const initial = await fs.lstat(canary.path);
+    const currentUserId = typeof process.getuid === 'function' ? process.getuid() : undefined;
+    if (!initial.isFile() || initial.isSymbolicLink() || initial.nlink !== 1
+      || (initial.mode & 0o077) !== 0
+      || (currentUserId !== undefined && initial.uid !== currentUserId)
+      || !sameStableIdentity(stableIdentity(initial), canary.identity)) {
+      throw new Error('new service canary identity changed; refusing cleanup');
+    }
+    handle = await fs.open(canary.path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    const opened = await handle.stat();
+    if (!sameStableIdentity(stableIdentity(opened), canary.identity)) {
+      throw new Error('new service canary identity changed while opening; refusing cleanup');
+    }
+    await fs.unlink(canary.path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  } finally {
+    await handle?.close();
+  }
 }
 
 async function expectSandboxDenial(
