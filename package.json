@@ -1,6 +1,6 @@
 {
   "name": "teams-sdk-mvp",
-  "version": "1.0.89",
+  "version": "1.0.90",
   "private": true,
   "type": "module",
   "scripts": {
@@ -71,6 +71,7 @@
     "test:agent-process-controller-security": "tsx scripts/agent-process-controller-security-test.ts",
     "test:agent-authorization": "tsx scripts/agent-service-authorization-test.ts",
     "test:codex-runner-security": "tsx scripts/codex-runner-security-test.ts",
+    "test:codex-code-mode-host": "tsx scripts/codex-code-mode-host-regression-test.ts",
     "test:genui-action-hardening": "tsx scripts/genui-action-store-hardening-test.ts",
     "test:genui-redaction": "tsx scripts/genui-redaction-test.ts",
     "test:genui-actions": "tsx scripts/genui-action-store-test.ts",

@@ -72,7 +72,6 @@ const requiredDisabledFeatures = Object.freeze([
   'browser_use',
   'browser_use_external',
   'browser_use_full_cdp_access',
-  'code_mode_host',
   'computer_use',
   'goals',
   'hooks',
@@ -197,6 +196,9 @@ async function productionLaunchPinsEveryToolSurface(): Promise<void> {
     const launchedArgs = spawnCalls[0]?.args ?? [];
     const configValues = launchedArgs.flatMap((value, index) => value === '-c' ? [launchedArgs[index + 1] ?? ''] : []);
     const disabledFeatures = launchedArgs.flatMap((value, index) => value === '--disable' ? [launchedArgs[index + 1] ?? ''] : []);
+    if (disabledFeatures.includes('code_mode_host')) {
+      findings.push('launch must keep the verified Code Mode host available; it is the isolated execution substrate for current Codex CLI');
+    }
     for (const value of requiredDisabledFeatures) {
       if (!disabledFeatures.includes(value)) findings.push(`launch omitted explicit disabled feature ${value}`);
     }

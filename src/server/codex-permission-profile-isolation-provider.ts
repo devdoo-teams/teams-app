@@ -28,7 +28,6 @@ const DISABLED_CODEX_FEATURES = Object.freeze([
   'browser_use',
   'browser_use_external',
   'browser_use_full_cdp_access',
-  'code_mode_host',
   'computer_use',
   'goals',
   'hooks',
