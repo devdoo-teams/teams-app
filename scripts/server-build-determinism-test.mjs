@@ -65,6 +65,28 @@ function runBuild(runtimeDir, sourceCommit) {
   });
 }
 
+async function readServerJavaScriptOutputs(runtimeDir) {
+  const serverDirectory = path.join(runtimeDir, 'server');
+  const names = (await fs.readdir(serverDirectory))
+    .filter((name) => name.endsWith('.js'))
+    .sort();
+  const outputs = {};
+  for (const name of names) {
+    outputs[name] = await fs.readFile(path.join(serverDirectory, name), 'utf8');
+  }
+  return outputs;
+}
+
+function assertPortableServerOutputs(outputs) {
+  for (const [name, contents] of Object.entries(outputs)) {
+    assert.doesNotMatch(
+      contents,
+      /(?:^|\n)\s*\/\/[^\n]*node_modules[\\/]/,
+      `server output ${name} must not embed a node_modules source-path comment`,
+    );
+  }
+}
+
 const sourceCommit = await resolveHead();
 const testRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-server-determinism-'));
 try {
@@ -88,11 +110,18 @@ try {
     const marker = JSON.parse(await fs.readFile(markerPath, 'utf8'));
     const bundleSha256 = crypto.createHash('sha256').update(bytes).digest('hex');
     assert.equal(marker.bundleSha256, bundleSha256, 'server marker must attest the emitted bundle');
-    outputs.push({ bytes, bundleSha256, marker });
+    const javascriptOutputs = await readServerJavaScriptOutputs(runtimeDir);
+    assertPortableServerOutputs(javascriptOutputs);
+    outputs.push({ bytes, bundleSha256, marker, javascriptOutputs });
   }
 
   assert.deepEqual(outputs[1].bytes, outputs[0].bytes, 'same source commit must emit identical server bytes');
   assert.equal(outputs[1].bundleSha256, outputs[0].bundleSha256, 'same source commit must emit identical server SHA-256');
+  assert.deepEqual(
+    outputs[1].javascriptOutputs,
+    outputs[0].javascriptOutputs,
+    'same source commit must emit identical server JavaScript outputs',
+  );
   assert.deepEqual(
     outputs[1].marker,
     outputs[0].marker,
