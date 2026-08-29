@@ -42,6 +42,14 @@ requireText(/serverBundleSha256/, 'promotion evidence must bind the server bundl
 requireText(/manifestSha256/, 'promotion evidence must bind the manifest digest');
 requireText(/imageDigest/, 'promotion evidence must bind the pushed image digest');
 requireText(/actions\/upload-artifact@[0-9a-f]{40}/, 'promotion identity must be retained as an immutable workflow artifact');
+const attestationStep = workflow.indexOf('      - name: Attest image provenance');
+const identityBindStep = workflow.indexOf('      - name: Bind the pushed image digest to the release identity');
+const identityUploadStep = workflow.indexOf('      - name: Upload immutable release identity');
+assert.ok(attestationStep >= 0, 'promotion must define the provenance attestation step');
+assert.ok(identityBindStep >= 0, 'promotion must define the release identity binding step');
+assert.ok(identityUploadStep >= 0, 'promotion must define the release identity upload step');
+assert.ok(identityBindStep < attestationStep, 'release identity must be bound before a later attestation can fail');
+assert.ok(identityUploadStep < attestationStep, 'release identity must be retained before a later attestation can fail');
 requireText(/npm run validate:manifest/, 'publishing must verify the Teams manifest');
 requireText(/GITHUB_REF_NAME#v/, 'version-tag publication must derive the package version from the tag');
 requireText(/package_version.*tag_version/s, 'version-tag publication must compare the package and tag versions');
