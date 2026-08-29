@@ -102,7 +102,7 @@ export async function resolveDistinctWorkerHomes(env, workers) {
   if (!workers.includes('main') && workers.some((worker) => worker !== 'main')) {
     const legacyValue = typeof env?.AGENT_CODEX_HOME === 'string' ? env.AGENT_CODEX_HOME.trim() : '';
     if (legacyValue) {
-      const legacyIdentity = await workerHomeIdentity(resolveWorkerHome(env, 'main'));
+      const legacyIdentity = await workerHomeIdentity(resolveWorkerHome(env, 'main'), { rejectSymlink: false });
       const previous = seen.get(legacyIdentity);
       if (previous) {
         throw new Error(`${previous} must reference a distinct worker home from AGENT_CODEX_HOME`);
@@ -134,9 +134,15 @@ export function createLoginEnvironment(source, codexHome) {
     throw new Error('AGENT_CODEX_HOME must be an absolute path');
   }
   const environment = { CI: '1' };
+  const seenKeys = new Set();
   for (const key of LOGIN_ENV_ALLOWLIST) {
+    const normalizedKey = key.toLowerCase();
+    if (seenKeys.has(normalizedKey)) continue;
     const value = source?.[key];
-    if (typeof value === 'string') environment[key] = value;
+    if (typeof value === 'string') {
+      environment[key] = value;
+      seenKeys.add(normalizedKey);
+    }
   }
   environment.CODEX_HOME = codexHome;
   return environment;
@@ -186,6 +192,15 @@ export class CodexLoginTimeoutError extends Error {
   }
 }
 
+export class CodexLoginAbortedError extends Error {
+  code = 'CODEX_LOGIN_ABORTED';
+
+  constructor() {
+    super('Codex login was aborted');
+    this.name = 'CodexLoginAbortedError';
+  }
+}
+
 class CodexLoginReapError extends Error {
   code = 'CODEX_LOGIN_REAP_FAILED';
 
@@ -203,11 +218,17 @@ export async function runWorkerLogin({
   spawnImpl = defaultSpawn,
   timeoutMs,
   maxAttempts,
+  signal,
 }) {
   const invocation = createLoginInvocation({ codexBin, codexHome });
   const childEnvironment = createLoginEnvironment(env, codexHome);
   const boundedTimeoutMs = normalizeLoginTimeout(timeoutMs);
   const boundedAttempts = normalizeLoginAttempts(maxAttempts);
+
+  if (signal !== undefined && typeof signal?.addEventListener !== 'function') {
+    throw new TypeError('signal must be an AbortSignal');
+  }
+  if (signal?.aborted) throw new CodexLoginAbortedError();
 
   for (let attempt = 1; attempt <= boundedAttempts; attempt += 1) {
     try {
@@ -216,6 +237,7 @@ export async function runWorkerLogin({
         childEnvironment,
         spawnImpl,
         timeoutMs: boundedTimeoutMs,
+        abortSignal: signal,
         validateExecutable: () => validateExecutableInputs({
           CODEX_BIN: codexBin,
           CODEX_BIN_SHA256: codexBinSha256,
@@ -286,15 +308,17 @@ function normalizeLoginAttempts(maxAttempts) {
   return Math.min(MAX_LOGIN_ATTEMPTS, Math.max(1, Math.floor(maxAttempts)));
 }
 
-async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeoutMs, validateExecutable }) {
+async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeoutMs, abortSignal, validateExecutable }) {
+  if (abortSignal?.aborted) throw new CodexLoginAbortedError();
   await validateExecutable();
+  if (abortSignal?.aborted) throw new CodexLoginAbortedError();
   const controller = new AbortController();
   let child;
   let timeoutHandle;
   let abortGraceHandle;
   let reapGraceHandle;
   let settled = false;
-  let timedOut = false;
+  let terminationReason;
   let removeChildListeners = () => undefined;
 
   const timeoutError = new CodexLoginTimeoutError(timeoutMs);
@@ -306,6 +330,7 @@ async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeou
       if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
       if (abortGraceHandle !== undefined) clearTimeout(abortGraceHandle);
       if (reapGraceHandle !== undefined) clearTimeout(reapGraceHandle);
+      abortSignal?.removeEventListener?.('abort', onAbort);
       removeChildListeners();
       callback();
     };
@@ -315,7 +340,7 @@ async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeou
         removeChildListeners();
         return;
       }
-      if (timedOut) return;
+      if (terminationReason !== undefined) return;
       settle(() => reject(error));
     };
 
@@ -325,14 +350,15 @@ async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeou
         return;
       }
       settle(() => {
-        if (timedOut) reject(timeoutError);
+        if (terminationReason === 'timeout') reject(timeoutError);
+        else if (terminationReason === 'aborted') reject(new CodexLoginAbortedError());
         else resolve({ code, signal });
       });
     };
 
-    const onTimeout = () => {
-      if (settled) return;
-      timedOut = true;
+    const requestTermination = (reason) => {
+      if (settled || terminationReason !== undefined) return;
+      terminationReason = reason;
       controller.abort();
       if (!settled && child?.killed !== true && typeof child?.kill === 'function') {
         try {
@@ -357,6 +383,9 @@ async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeou
       }
     };
 
+    const onTimeout = () => requestTermination('timeout');
+    const onAbort = () => requestTermination('aborted');
+
     child = spawnImpl(invocation.command, invocation.args, {
       ...invocation.options,
       env: childEnvironment,
@@ -368,7 +397,9 @@ async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeou
     };
     child.once('error', onError);
     child.once('close', onClose);
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
     timeoutHandle = setTimeout(onTimeout, timeoutMs);
+    if (abortSignal?.aborted) onAbort();
   });
 
   return await result;
@@ -438,8 +469,15 @@ function sameStableIdentity(left, right) {
     && a.ctimeMs === b.ctimeMs;
 }
 
-async function workerHomeIdentity(candidate) {
+async function workerHomeIdentity(candidate, { rejectSymlink = true } = {}) {
   const normalized = path.normalize(path.resolve(candidate));
+  const pathStat = await fs.lstat(normalized).catch((error) => {
+    if (error?.code === 'ENOENT') return undefined;
+    throw new Error('worker home is unavailable');
+  });
+  if (rejectSymlink && pathStat?.isSymbolicLink()) {
+    throw new Error('worker home alias (symbolic link) is not allowed');
+  }
   let canonical = normalized;
   try {
     canonical = path.normalize(await fs.realpath(normalized));

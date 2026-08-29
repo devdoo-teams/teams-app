@@ -73,6 +73,27 @@ assert.deepEqual(
   'the login child receives only the documented runtime environment and its worker home',
 );
 
+const caseInsensitiveEnvironment = createLoginEnvironment({
+  PATH: '/safe/path',
+  Path: '/ambiguous/path',
+  SYSTEMROOT: '/safe/system-root',
+  SystemRoot: '/ambiguous/system-root',
+}, '/var/lib/teams/codex-worker-1');
+assert.deepEqual(
+  Object.keys(caseInsensitiveEnvironment)
+    .filter((key) => key.toLowerCase() === 'path'),
+  ['PATH'],
+  'the login child must receive one deterministic PATH key across case-insensitive platforms',
+);
+assert.deepEqual(
+  Object.keys(caseInsensitiveEnvironment)
+    .filter((key) => key.toLowerCase() === 'systemroot'),
+  ['SYSTEMROOT'],
+  'the login child must not receive duplicate case variants of an allowlisted variable',
+);
+assert.equal(caseInsensitiveEnvironment.PATH, '/safe/path');
+assert.equal(caseInsensitiveEnvironment.SYSTEMROOT, '/safe/system-root');
+
 let capturedLoginOptions;
 let successfulAbortCount = 0;
 const successfulChild = new EventEmitter();
@@ -166,6 +187,43 @@ assert.equal(timeoutSignal.aborted, true, 'timed-out login must abort its child 
 assert.equal(timeoutAbortCount, 1);
 await new Promise((resolve) => setTimeout(resolve, 30));
 assert.equal(timeoutAbortCount, 1, 'the timeout must be cleared after cleanup');
+
+const callerAbortController = new AbortController();
+let callerAbortSignal;
+let callerAbortAttempts = 0;
+const callerAbortedChild = new EventEmitter();
+const callerAbortSignals = [];
+callerAbortedChild.kill = (signal) => {
+  callerAbortSignals.push(signal);
+  queueMicrotask(() => callerAbortedChild.emit('close', null, signal));
+  return true;
+};
+await assert.rejects(
+  () => runWorkerLogin({
+    codexBin: executableFixture,
+    codexBinSha256: executableDigest,
+    codexHome: '/var/lib/teams/codex-worker-1',
+    env: { PATH: '/usr/bin' },
+    signal: callerAbortController.signal,
+    maxAttempts: 2,
+    timeoutMs: 100,
+    spawnImpl: (_command, _args, options) => {
+      callerAbortAttempts += 1;
+      callerAbortSignal = options.signal;
+      queueMicrotask(() => callerAbortController.abort());
+      return callerAbortedChild;
+    },
+  }),
+  (error) => {
+    assert.equal(error.code, 'CODEX_LOGIN_ABORTED');
+    assert.match(error.message, /aborted/i);
+    return true;
+  },
+  'caller cancellation must terminate the login child with an explicit abort result',
+);
+assert.equal(callerAbortSignal.aborted, true, 'caller cancellation must propagate to the child AbortSignal');
+assert.equal(callerAbortAttempts, 1, 'caller cancellation must not retry the login child');
+assert.deepEqual(callerAbortSignals, ['SIGTERM']);
 
 let retryAttempts = 0;
 let activeLogins = 0;
@@ -397,6 +455,14 @@ await assert.rejects(
   }, ['1']),
   /AGENT_CODEX_HOME.*distinct|legacy.*AGENT_CODEX_HOME/i,
   'an indexed worker must not alias the legacy unsuffixed Codex home even when bootstrapped alone',
+);
+
+const uniqueHomeAlias = path.join(root, 'unique-home-alias');
+await fs.symlink(home, uniqueHomeAlias, 'dir');
+await assert.rejects(
+  () => resolveDistinctWorkerHomes({ AGENT_CODEX_HOME_1: uniqueHomeAlias }, ['1']),
+  /symbolic link|alias/i,
+  'a worker home symlink must be rejected even when it has no duplicate configured path',
 );
 
 await fs.rm(root, { recursive: true, force: true });
