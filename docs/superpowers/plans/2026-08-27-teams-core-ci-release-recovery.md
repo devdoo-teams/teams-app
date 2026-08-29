@@ -6,7 +6,7 @@
 
 **Architecture:** The existing Dev Tunnel and `1.0.76` public process remain a preserved reference service, not the next release. GitHub Actions must verify Core, A2A, continuity, Docker runtime, and the package before an image promotion can run; the promotion workflow may publish only a tag or a manual run selected from `main`, and it must retain a machine-readable binding between source commit, package SHA, server bundle SHA, manifest SHA, and image digest. Codex read-only execution remains fail-closed until a separately proven OS boundary and worker authentication contract exists.
 
-**Tech Stack:** GitHub Actions, pinned Docker actions, Node.js 24, TypeScript/React Teams Core, Express/Teams SDK, deterministic ZIP packaging, GHCR provenance attestations, A2A JSON-RPC contracts, and Jira MP-160 evidence tracking.
+**Tech Stack:** GitHub Actions, pinned Docker actions, Node.js 24, TypeScript/React Teams Core, Express/Teams SDK, deterministic ZIP packaging, GHCR digest identity with plan-aware artifact provenance, A2A JSON-RPC contracts, and Jira MP-160 evidence tracking.
 
 **Spec:** `docs/teams-release-workflow.md`, `docs/api-free-teams-roadmap.md`, and `AGENTS.md`.
 
@@ -211,9 +211,9 @@ candidate and the preserved service are separate:
   git commit -m "ci: bind image promotion to merged release identity"
   ```
 
-- [x] **Step 8: Require a smoke of the exact pushed image before attestation.** Commit: `7fdfe12`.
+- [x] **Step 8: Require a smoke of the exact pushed image before provenance recording.** Commit: `7fdfe12`.
 
-  The promotion workflow now pulls the digest returned by the push step and runs `scripts/docker-runtime-image-smoke.mjs` before provenance attestation. The script verifies production health, source commit identity, Core auth/bot mode, `/tabs/home/`, and the hashed main asset. The workflow contract requires the digest and shared script; Docker availability is still required for the actual promotion run.
+  The promotion workflow now pulls the digest returned by the push step and runs `scripts/docker-runtime-image-smoke.mjs` before provenance recording. Public repositories run the pinned GitHub artifact attestation action; private Free/Pro/Team repositories record the documented `private-repository-plan` limitation because GitHub requires Enterprise Cloud for private-repository attestations. The script verifies production health, source commit identity, Core auth/bot mode, `/tabs/home/`, and the hashed main asset. The workflow contract requires the digest and shared script; Docker availability is still required for the actual promotion run.
 
 - [x] **Step 9: Close CI-discovered test flakiness before promotion.** Commit: `db54ddd`.
 

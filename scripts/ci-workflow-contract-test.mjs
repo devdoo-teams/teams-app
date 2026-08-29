@@ -31,6 +31,29 @@ assert.match(
 const artifactStart = workflow.indexOf('\n  artifact:');
 assert.notEqual(artifactStart, -1, 'workflow must define an immutable artifact job');
 const artifactJob = workflow.slice(artifactStart);
+const uploadStepStart = artifactJob.indexOf('\n      - name: Upload immutable release candidate');
+assert.notEqual(uploadStepStart, -1, 'immutable artifact job must define its release candidate upload step');
+const uploadStepEnd = artifactJob.indexOf('\n      - ', uploadStepStart + 1);
+const uploadStep = artifactJob.slice(
+  uploadStepStart,
+  uploadStepEnd === -1 ? artifactJob.length : uploadStepEnd,
+);
+assert.match(
+  uploadStep,
+  /include-hidden-files:\s*true/,
+  'release candidate upload must opt in to hidden files for the server build marker',
+);
+const uploadPathMatch = uploadStep.match(/\n          path:[ \t]*\|[ \t]*\n((?: {12}.*\n)+?)(?=          [A-Za-z0-9-]+:)/);
+assert.ok(uploadPathMatch, 'release candidate upload must declare an explicit path block');
+const uploadPaths = uploadPathMatch[1]
+  .split('\n')
+  .map((line) => line.trim())
+  .filter(Boolean);
+assert.deepEqual(
+  uploadPaths,
+  ['dist/', 'appPackage/build/teams-sdk-mvp.zip'],
+  'release candidate upload must stay scoped to runtime dist and the exact Teams package ZIP',
+);
 const artifactStepsStart = artifactJob.indexOf('\n    steps:');
 assert.notEqual(artifactStepsStart, -1, 'immutable artifact job must define its steps');
 const artifactHeader = artifactJob.slice(0, artifactStepsStart);

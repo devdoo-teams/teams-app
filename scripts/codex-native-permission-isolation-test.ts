@@ -144,6 +144,38 @@ try {
   });
   const denialLease = await denialProvider.acquire(acquireInput(denialExecutable));
   await denialLease.dispose();
+  await assert.rejects(
+    () => fs.access(path.join(serviceCodexHome, '.teams-permission-canary')),
+    'a newly created native permission canary must be removed after a successful preflight',
+  );
+
+  const failedPreflightExecutable = path.join(root, 'codex-failed-preflight-canary-cleanup');
+  await writePreflightFixture(failedPreflightExecutable, 'invalid permission profile');
+  const failedPreflightExecutableSha256 = crypto.createHash('sha256')
+    .update(await fs.readFile(failedPreflightExecutable))
+    .digest('hex');
+  const failedPreflightProvider = new CodexPermissionProfileIsolationProvider({
+    codexExecutable: failedPreflightExecutable,
+    codexExecutableSha256: failedPreflightExecutableSha256,
+    codexHome: serviceCodexHome,
+    platform: 'darwin',
+    spawn: () => fakeChild,
+    executableTrustVerifier: () => undefined,
+  });
+  await assert.rejects(
+    () => failedPreflightProvider.acquire(acquireInput(failedPreflightExecutable)),
+    (error: unknown) => error instanceof AgentExecutionUnavailableError
+      && error.reason === 'trusted-isolation-required'
+      && (error as Error & { classification?: unknown }).classification === 'malformed-profile',
+    'a failed native permission preflight must still clean up its newly created canary',
+  );
+  await assert.rejects(
+    () => fs.access(path.join(serviceCodexHome, '.teams-permission-canary')),
+    'a newly created native permission canary must be removed after a failed preflight',
+  );
+
+  const managedServiceCanary = path.join(serviceCodexHome, 'service-secret-canary.txt');
+  await fs.writeFile(managedServiceCanary, 'managed service canary\n', { mode: 0o600 });
 
   const silentNetworkDenialExecutable = path.join(root, 'codex-silent-network-denial');
   await writeSilentNetworkDenialFixture(silentNetworkDenialExecutable);
@@ -160,6 +192,40 @@ try {
   });
   const silentNetworkDenialLease = await silentNetworkDenialProvider.acquire(acquireInput(silentNetworkDenialExecutable));
   await silentNetworkDenialLease.dispose();
+  await fs.access(managedServiceCanary);
+  await assert.rejects(
+    () => fs.access(path.join(serviceCodexHome, '.teams-permission-canary')),
+    'an existing managed service canary must not be replaced or removed by native preflight cleanup',
+  );
+
+  const replacementServiceCodexHome = path.join(root, 'replacement-service-codex-home');
+  await fs.mkdir(replacementServiceCodexHome, { recursive: true, mode: 0o700 });
+  await fs.writeFile(path.join(replacementServiceCodexHome, 'auth.json'), '{"fixture":"replacement-service-auth"}\n', { mode: 0o600 });
+  const replacementExecutable = path.join(root, 'codex-replacement-canary');
+  await writeCanaryReplacementFixture(replacementExecutable);
+  const replacementExecutableSha256 = crypto.createHash('sha256')
+    .update(await fs.readFile(replacementExecutable))
+    .digest('hex');
+  const replacementProvider = new CodexPermissionProfileIsolationProvider({
+    codexExecutable: replacementExecutable,
+    codexExecutableSha256: replacementExecutableSha256,
+    codexHome: replacementServiceCodexHome,
+    platform: 'darwin',
+    spawn: () => fakeChild,
+    executableTrustVerifier: () => undefined,
+  });
+  await assert.rejects(
+    () => replacementProvider.acquire(acquireInput(replacementExecutable)),
+    (error: unknown) => error instanceof AgentExecutionUnavailableError
+      && error.reason === 'trusted-isolation-required'
+      && (error as Error & { classification?: unknown }).classification === 'unknown-infrastructure',
+    'native canary cleanup must fail closed when the canary path contains a replacement file',
+  );
+  assert.equal(
+    await fs.readFile(path.join(replacementServiceCodexHome, '.teams-permission-canary'), 'utf8'),
+    'replacement service canary\n',
+    'cleanup must not delete a replacement canary with a different inode, owner, mode, or link count',
+  );
 
   const malformedExecutable = path.join(root, 'codex-malformed-profile');
   await fs.writeFile(malformedExecutable, [
@@ -358,6 +424,33 @@ async function writeSilentNetworkDenialFixture(executable: string): Promise<void
     '};',
     'process.stdin.resume();',
     'process.stdin.on("end", run);',
+    '',
+  ].join('\n');
+  await fs.writeFile(executable, source, { mode: 0o700 });
+}
+
+async function writeCanaryReplacementFixture(executable: string): Promise<void> {
+  const source = [
+    `#!${process.execPath}`,
+    'const fs = require("node:fs");',
+    'const args = process.argv.slice(2);',
+    'if (args[0] === "--version") { console.log("codex-cli 0.148.0"); process.exit(0); }',
+    'if (args[0] === "mcp") { console.log("[]"); process.exit(0); }',
+    'if (args[0] === "plugin") { console.log(JSON.stringify({ installed: [], available: [] })); process.exit(0); }',
+    'if (args[0] === "sandbox") {',
+    '  if (args.includes("workspace-read-canary")) process.exit(0);',
+    '  if (args.includes("service-read-denied-canary")) {',
+    '    const canary = args[args.indexOf("service-read-denied-canary") + 1];',
+    '    const replacement = canary + ".replacement";',
+    '    fs.writeFileSync(replacement, "replacement service canary\\n", { mode: 0o600 });',
+    '    fs.renameSync(canary, canary + ".original");',
+    '    fs.renameSync(replacement, canary);',
+    '  }',
+    '  console.error("sandbox: /bin/cat: Operation not permitted");',
+    '  process.exit(1);',
+    '}',
+    'if (args[0] === "exec") { console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "TEAMS_CODEX_AUTH_PREFLIGHT_OK" } })); process.exit(0); }',
+    'process.exit(1);',
     '',
   ].join('\n');
   await fs.writeFile(executable, source, { mode: 0o700 });

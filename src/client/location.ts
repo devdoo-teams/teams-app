@@ -514,6 +514,13 @@ export function createClientLocationService(
             const timeoutMessage = caught instanceof Error
               ? caught.message
               : '위치 확인 시간이 초과되었습니다.';
+            // Browser geolocation has no cancellation handle, so release only
+            // the stale browser attempt and let the next user action start a
+            // fresh request. Native Teams prompts keep their single-flight
+            // lock until the host promise settles; otherwise two native
+            // prompts could overlap after a timeout. The attempt generation
+            // still protects late callbacks from the abandoned browser call.
+            if (pendingProvider === 'browser') attempt.abandon();
             throw new LocationTimeoutError(
               `${timeoutMessage} ${unresolvedLocationRecoveryMessage(runtime.clientType, pendingProvider)}`,
             );

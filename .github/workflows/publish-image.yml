@@ -35,6 +35,7 @@ jobs:
       contents: read
       packages: write
       attestations: write
+      artifact-metadata: write
       id-token: write
     steps:
       - name: Check out the exact source commit
@@ -178,6 +179,45 @@ jobs:
           fs.writeFileSync(identityPath, `${JSON.stringify(identity, null, 2)}\n`);
           NODE
 
+      - name: Attest image provenance
+        if: github.event.repository.visibility == 'public'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Record provenance policy for private repository
+        if: github.event.repository.visibility != 'public'
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const identityPath = 'dist/evidence/release-identity.json';
+          const identity = JSON.parse(fs.readFileSync(identityPath, 'utf8'));
+          identity.provenance = {
+            method: 'github-artifact-attestation',
+            state: 'unavailable',
+            reason: 'private-repository-plan',
+          };
+          fs.writeFileSync(identityPath, `${JSON.stringify(identity, null, 2)}\n`);
+          NODE
+
+      - name: Record provenance policy for public repository
+        if: github.event.repository.visibility == 'public'
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const identityPath = 'dist/evidence/release-identity.json';
+          const identity = JSON.parse(fs.readFileSync(identityPath, 'utf8'));
+          identity.provenance = {
+            method: 'github-artifact-attestation',
+            state: 'attested',
+          };
+          fs.writeFileSync(identityPath, `${JSON.stringify(identity, null, 2)}\n`);
+          NODE
+
       - name: Upload immutable release identity
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -188,10 +228,3 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
-
-      - name: Attest image provenance
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
-        with:
-          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          subject-digest: ${{ steps.push.outputs.digest }}
-          push-to-registry: true
