@@ -153,6 +153,7 @@ export async function inspectAuthMetadata(authPath, currentUid = process.getuid?
   }
   if (stat.isSymbolicLink()) return { state: 'invalid-symlink' };
   if (!stat.isFile() || stat.size > MAX_AUTH_FILE_BYTES) return { state: 'invalid-file' };
+  if (stat.nlink !== 1) return { state: 'invalid-hardlink' };
   if ((stat.mode & 0o077) !== 0 || (currentUid !== undefined && stat.uid !== currentUid)) {
     return { state: 'invalid-permissions' };
   }
@@ -179,6 +180,7 @@ class CodexLoginReapError extends Error {
 
 export async function runWorkerLogin({
   codexBin,
+  codexBinSha256,
   codexHome,
   env = process.env,
   spawnImpl = defaultSpawn,
@@ -191,6 +193,9 @@ export async function runWorkerLogin({
   const boundedAttempts = normalizeLoginAttempts(maxAttempts);
 
   for (let attempt = 1; attempt <= boundedAttempts; attempt += 1) {
+    if (codexBinSha256 !== undefined) {
+      await validateExecutableInputs({ CODEX_BIN: codexBin, CODEX_BIN_SHA256: codexBinSha256 });
+    }
     try {
       return await runLoginAttempt({
         invocation,
@@ -212,8 +217,8 @@ export async function validateExecutableInputs(env) {
   const digest = typeof env.CODEX_BIN_SHA256 === 'string' ? env.CODEX_BIN_SHA256.trim().toLowerCase() : '';
   if (!/^[a-f0-9]{64}$/u.test(digest)) throw new Error('CODEX_BIN_SHA256 must be a 64-character hexadecimal SHA-256 digest');
   const stat = await fs.lstat(codexBin).catch(() => undefined);
-  if (!stat?.isFile() || (stat.mode & 0o111) === 0 || (stat.mode & 0o022) !== 0) {
-    throw new Error('CODEX_BIN must be a private executable regular file');
+  if (!stat?.isFile() || stat.nlink !== 1 || (stat.mode & 0o111) === 0 || (stat.mode & 0o022) !== 0) {
+    throw new Error('CODEX_BIN must be a non-hardlinked private executable regular file');
   }
   const actualDigest = crypto.createHash('sha256').update(await fs.readFile(codexBin)).digest('hex');
   if (actualDigest !== digest) throw new Error('CODEX_BIN does not match CODEX_BIN_SHA256');
@@ -342,12 +347,13 @@ async function main() {
   }
   const workerHomes = await resolveDistinctWorkerHomes(process.env, options.workers);
   const codexBin = await validateExecutableInputs(process.env);
+  const codexBinSha256 = process.env.CODEX_BIN_SHA256?.trim().toLowerCase();
   for (const { worker, codexHome } of workerHomes) {
     await prepareWorkerHome(codexHome);
     const authPath = path.join(codexHome, 'auth.json');
     console.log(`${worker}: home ready (${options.runLogin ? 'login requested' : 'dry run'})`);
     if (options.runLogin) {
-      const result = await runWorkerLogin({ codexBin, codexHome });
+      const result = await runWorkerLogin({ codexBin, codexBinSha256, codexHome });
       if (result.code !== 0) {
         throw new Error(`${worker}: Codex login exited with code ${result.code ?? 'unknown'}${result.signal ? ` (${result.signal})` : ''}`);
       }

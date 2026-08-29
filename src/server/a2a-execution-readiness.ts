@@ -1,4 +1,5 @@
 import type { A2AProviderFact } from './a2a-provider-facts.js';
+import type { AgentExecutionReadiness } from './agent-execution-policy.js';
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u;
 
@@ -107,4 +108,29 @@ export function evaluateA2AExecutionReadiness(
     return decision(true, 'execution-handlers-required');
   }
   return decision(true, 'ready');
+}
+
+export type A2AWorkerReadinessSnapshot = Readonly<{
+  state: 'configured' | 'unavailable';
+  reason?: string;
+}>;
+
+/**
+ * Aggregate the readiness of the workers that the A2A roster actually
+ * registers. A legacy service policy cannot make a missing indexed worker
+ * ready, so any unavailable roster entry keeps the aggregate fail-closed.
+ */
+export function deriveA2AExecutionReadiness(
+  workers: readonly A2AWorkerReadinessSnapshot[],
+  providerIds: readonly string[] = [],
+): AgentExecutionReadiness {
+  if (workers.length === 0 || workers.some((worker) => worker.state !== 'configured')) {
+    return { state: 'unavailable', reason: 'isolation-unavailable' };
+  }
+
+  const distinctProviderIds = [...new Set(providerIds.filter((providerId) => providerId.length > 0))];
+  return {
+    state: 'configured',
+    providerId: distinctProviderIds.length === 1 ? distinctProviderIds[0] : 'a2a-worker-roster',
+  };
 }
