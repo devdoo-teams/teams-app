@@ -1,4 +1,10 @@
-import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import {
+  execFile,
+  execFileSync,
+  spawn,
+  type ChildProcess,
+  type ExecFileOptionsWithStringEncoding,
+} from 'node:child_process';
 import crypto from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import fsSync from 'node:fs';
@@ -338,13 +344,13 @@ type ExecFileFailure = Error & {
 function execFileClosedStdin(
   file: string,
   args: readonly string[],
-  options: NodeJS.ExecFileOptionsWithStringEncoding,
+  options: ExecFileOptionsWithStringEncoding,
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = execFile(file, [...args], options, (error, stdout, stderr) => {
       const output = {
-        stdout: typeof stdout === 'string' ? stdout : stdout.toString('utf8'),
-        stderr: typeof stderr === 'string' ? stderr : stderr.toString('utf8'),
+        stdout,
+        stderr,
       };
       if (error) {
         const failure = error as ExecFileFailure;

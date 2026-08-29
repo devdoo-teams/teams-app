@@ -145,7 +145,7 @@ npm run release:preflight
 
 ### iCloud와 무관한 CI 이미지 승격 및 호스팅 경계
 
-배포를 로컬 작업공간의 iCloud/FileProvider 상태에 의존시키지 않는다. GitHub Actions의 `core-ci.yml`은 GitHub checkout에서 Core 소스·A2A·결정적 빌드·Docker 런타임 smoke를 확인하고, `publish-image.yml`은 사용자가 명시적으로 실행하거나 `vX.Y.Z` 태그를 push했을 때 같은 커밋을 다시 검증한 뒤 GHCR에 커밋 태그 이미지를 publish하고 digest provenance를 attestation한다. 태그 이벤트에서는 `v`를 제거한 값과 `package.json` 버전이 다르면 publish를 차단한다. 이 경로에는 로컬 Finder, iCloud 다운로드, 별도 브라우저, 임의의 호스팅 제공자 URL이 없다.
+배포를 로컬 작업공간의 iCloud/FileProvider 상태에 의존시키지 않는다. GitHub Actions의 `core-ci.yml`은 GitHub checkout에서 Core 소스·A2A·결정적 빌드·Docker 런타임 smoke를 확인하고, `publish-image.yml`은 사용자가 명시적으로 실행하거나 `vX.Y.Z` 태그를 push했을 때 같은 커밋을 다시 검증한 뒤 GHCR에 커밋 태그 이미지를 publish한다. 공개 저장소에서는 이미지 digest provenance를 GitHub artifact attestation으로 기록하고, GitHub Free/Pro/Team의 private 저장소에서는 공식 plan 제한으로 attestation을 만들 수 없으므로 release identity에 `private-repository-plan` 사유를 남긴다. 태그 이벤트에서는 `v`를 제거한 값과 `package.json` 버전이 다르면 publish를 차단한다. 이 경로에는 로컬 Finder, iCloud 다운로드, 별도 브라우저, 임의의 호스팅 제공자 URL이 없다.
 
 이미지 publish는 “검증된 불변 산출물을 레지스트리에 보관”하는 단계일 뿐 “공개 HTTPS 서비스가 실행 중”이라는 뜻이 아니다. 실제 서비스 승격은 다음 독립 게이트를 추가로 요구한다.
 
