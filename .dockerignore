@@ -1,9 +1,14 @@
 node_modules
-dist
+dist/*
+!dist/client/
+!dist/client/**
+!dist/server/
+!dist/server/**
 data/*
 appPackage/build
 .env
 .env.*
 !.env.example
 !data/.gitkeep
+.git
 *.log

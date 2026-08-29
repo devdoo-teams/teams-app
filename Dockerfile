@@ -1,17 +1,4 @@
-FROM node:22-alpine AS build
-
-WORKDIR /app
-RUN apk add --no-cache git
-ARG TEAMS_SOURCE_COMMIT
-ENV TEAMS_SOURCE_COMMIT=${TEAMS_SOURCE_COMMIT}
-ENV TEAMS_BUILD_CONTEXT=docker
-COPY package*.json ./
-RUN npm ci --ignore-scripts --no-audit --no-fund
-
-COPY . .
-RUN npm run build
-
-FROM node:22-alpine
+FROM node:24.19.0-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43 AS runtime
 
 WORKDIR /app
 ENV NODE_ENV=production
@@ -21,8 +8,13 @@ ENV TEAMS_SOURCE_COMMIT=${TEAMS_SOURCE_COMMIT}
 
 COPY package*.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
-COPY --from=build /app/dist ./dist
-COPY --from=build /app/appPackage ./appPackage
+
+# dist is built, source-verified, and tested by the CI job before Docker
+# packaging. Reusing it avoids a second build in a different libc/toolchain.
+COPY dist ./dist
+COPY appPackage ./appPackage
+COPY scripts/verify-runtime-dist.mjs /tmp/verify-runtime-dist.mjs
+RUN node /tmp/verify-runtime-dist.mjs && rm /tmp/verify-runtime-dist.mjs
 
 RUN mkdir -p /app/data
 EXPOSE 3978
