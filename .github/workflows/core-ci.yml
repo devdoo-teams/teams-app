@@ -317,6 +317,7 @@ jobs:
           path: |
             dist/
             appPackage/build/teams-sdk-mvp.zip
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
