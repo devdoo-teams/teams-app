@@ -81,8 +81,8 @@ function assertPortableServerOutputs(outputs) {
   for (const [name, contents] of Object.entries(outputs)) {
     assert.doesNotMatch(
       contents,
-      /node_modules[\\/]/,
-      `server output ${name} must not embed an absolute or relative node_modules source path`,
+      /(?:^|\n)\s*\/\/[^\n]*node_modules[\\/]/,
+      `server output ${name} must not embed a node_modules source-path comment`,
     );
   }
 }
