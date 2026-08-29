@@ -145,6 +145,22 @@ try {
   const denialLease = await denialProvider.acquire(acquireInput(denialExecutable));
   await denialLease.dispose();
 
+  const silentNetworkDenialExecutable = path.join(root, 'codex-silent-network-denial');
+  await writeSilentNetworkDenialFixture(silentNetworkDenialExecutable);
+  const silentNetworkDenialSha256 = crypto.createHash('sha256')
+    .update(await fs.readFile(silentNetworkDenialExecutable))
+    .digest('hex');
+  const silentNetworkDenialProvider = new CodexPermissionProfileIsolationProvider({
+    codexExecutable: silentNetworkDenialExecutable,
+    codexExecutableSha256: silentNetworkDenialSha256,
+    codexHome: serviceCodexHome,
+    platform: 'darwin',
+    spawn: () => fakeChild,
+    executableTrustVerifier: () => undefined,
+  });
+  const silentNetworkDenialLease = await silentNetworkDenialProvider.acquire(acquireInput(silentNetworkDenialExecutable));
+  await silentNetworkDenialLease.dispose();
+
   const malformedExecutable = path.join(root, 'codex-malformed-profile');
   await fs.writeFile(malformedExecutable, [
     '#!/bin/sh',
@@ -318,6 +334,30 @@ async function writePreflightFixture(executable: string, sandboxFailure: string)
     '}',
     'if (args[0] === "exec") { console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "TEAMS_CODEX_AUTH_PREFLIGHT_OK" } })); process.exit(0); }',
     'process.exit(1);',
+    '',
+  ].join('\n');
+  await fs.writeFile(executable, source, { mode: 0o700 });
+}
+
+async function writeSilentNetworkDenialFixture(executable: string): Promise<void> {
+  const source = [
+    `#!${process.execPath}`,
+    'const args = process.argv.slice(2);',
+    'const run = () => {',
+    '  if (args[0] === "--version") { console.log("codex-cli 0.148.0"); process.exit(0); }',
+    '  if (args[0] === "mcp") { console.log("[]"); process.exit(0); }',
+    '  if (args[0] === "plugin") { console.log(JSON.stringify({ installed: [], available: [] })); process.exit(0); }',
+    '  if (args[0] === "sandbox") {',
+    '    if (args.includes("workspace-read-canary")) process.exit(0);',
+    '    if (args.includes("network-denied-canary")) process.exit(1);',
+    '    console.error("sandbox: /bin/cat: Operation not permitted");',
+    '    process.exit(1);',
+    '  }',
+    '  if (args[0] === "exec") { console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "TEAMS_CODEX_AUTH_PREFLIGHT_OK" } })); process.exit(0); }',
+    '  process.exit(1);',
+    '};',
+    'process.stdin.resume();',
+    'process.stdin.on("end", run);',
     '',
   ].join('\n');
   await fs.writeFile(executable, source, { mode: 0o700 });
