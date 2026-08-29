@@ -2,6 +2,7 @@
 
 import { spawn as defaultSpawn } from 'node:child_process';
 import crypto from 'node:crypto';
+import { constants as fsConstants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -12,6 +13,7 @@ const MAX_LOGIN_TIMEOUT_MS = 60 * 60 * 1000;
 const DEFAULT_LOGIN_ATTEMPTS = 2;
 const MAX_LOGIN_ATTEMPTS = 2;
 const LOGIN_ABORT_GRACE_MS = 250;
+const NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const LOGIN_ENV_ALLOWLIST = Object.freeze([
   'PATH',
   'Path',
@@ -96,6 +98,17 @@ export async function resolveDistinctWorkerHomes(env, workers) {
     seen.set(identity, variable);
     resolved.push({ worker, codexHome });
   }
+
+  if (!workers.includes('main') && workers.some((worker) => worker !== 'main')) {
+    const legacyValue = typeof env?.AGENT_CODEX_HOME === 'string' ? env.AGENT_CODEX_HOME.trim() : '';
+    if (legacyValue) {
+      const legacyIdentity = await workerHomeIdentity(resolveWorkerHome(env, 'main'));
+      const previous = seen.get(legacyIdentity);
+      if (previous) {
+        throw new Error(`${previous} must reference a distinct worker home from AGENT_CODEX_HOME`);
+      }
+    }
+  }
   return resolved;
 }
 
@@ -152,9 +165,13 @@ export async function inspectAuthMetadata(authPath, currentUid = process.getuid?
     return { state: 'unavailable' };
   }
   if (stat.isSymbolicLink()) return { state: 'invalid-symlink' };
-  if (!stat.isFile() || stat.size > MAX_AUTH_FILE_BYTES) return { state: 'invalid-file' };
+  if (!stat.isFile() || stat.size <= 0 || stat.size > MAX_AUTH_FILE_BYTES) return { state: 'invalid-file' };
   if (stat.nlink !== 1) return { state: 'invalid-hardlink' };
-  if ((stat.mode & 0o077) !== 0 || (currentUid !== undefined && stat.uid !== currentUid)) {
+  if (
+    (stat.mode & 0o077) !== 0
+    || (stat.mode & 0o400) === 0
+    || (currentUid !== undefined && stat.uid !== currentUid)
+  ) {
     return { state: 'invalid-permissions' };
   }
   return { state: 'valid', mode: stat.mode & 0o777, size: stat.size };
@@ -193,15 +210,16 @@ export async function runWorkerLogin({
   const boundedAttempts = normalizeLoginAttempts(maxAttempts);
 
   for (let attempt = 1; attempt <= boundedAttempts; attempt += 1) {
-    if (codexBinSha256 !== undefined) {
-      await validateExecutableInputs({ CODEX_BIN: codexBin, CODEX_BIN_SHA256: codexBinSha256 });
-    }
     try {
       return await runLoginAttempt({
         invocation,
         childEnvironment,
         spawnImpl,
         timeoutMs: boundedTimeoutMs,
+        validateExecutable: () => validateExecutableInputs({
+          CODEX_BIN: codexBin,
+          CODEX_BIN_SHA256: codexBinSha256,
+        }),
       });
     } catch (error) {
       if (!(error instanceof CodexLoginTimeoutError) || attempt === boundedAttempts) throw error;
@@ -211,16 +229,38 @@ export async function runWorkerLogin({
   throw new Error('Codex login did not complete');
 }
 
-export async function validateExecutableInputs(env) {
+export async function validateExecutableInputs(env, currentUid = process.getuid?.()) {
   const codexBin = typeof env.CODEX_BIN === 'string' ? env.CODEX_BIN.trim() : '';
   if (!codexBin || !path.isAbsolute(codexBin)) throw new Error('CODEX_BIN must be an absolute path');
   const digest = typeof env.CODEX_BIN_SHA256 === 'string' ? env.CODEX_BIN_SHA256.trim().toLowerCase() : '';
   if (!/^[a-f0-9]{64}$/u.test(digest)) throw new Error('CODEX_BIN_SHA256 must be a 64-character hexadecimal SHA-256 digest');
   const stat = await fs.lstat(codexBin).catch(() => undefined);
-  if (!stat?.isFile() || stat.nlink !== 1 || (stat.mode & 0o111) === 0 || (stat.mode & 0o022) !== 0) {
+  if (
+    !stat?.isFile()
+    || stat.nlink !== 1
+    || (stat.mode & 0o111) === 0
+    || (stat.mode & 0o022) !== 0
+    || (currentUid !== undefined && stat.uid !== 0 && stat.uid !== currentUid)
+  ) {
     throw new Error('CODEX_BIN must be a non-hardlinked private executable regular file');
   }
-  const actualDigest = crypto.createHash('sha256').update(await fs.readFile(codexBin)).digest('hex');
+
+  let handle;
+  let actualDigest;
+  try {
+    const real = path.normalize(await fs.realpath(codexBin));
+    handle = await fs.open(real, fsConstants.O_RDONLY | NOFOLLOW);
+    const opened = await handle.stat();
+    if (!sameStableIdentity(stat, opened)) throw new Error('CODEX_BIN changed during validation');
+    actualDigest = crypto.createHash('sha256').update(await handle.readFile()).digest('hex');
+    const afterRead = await handle.stat();
+    if (!sameStableIdentity(opened, afterRead)) throw new Error('CODEX_BIN changed during validation');
+  } catch (error) {
+    if (error instanceof Error && error.message === 'CODEX_BIN changed during validation') throw error;
+    throw new Error('CODEX_BIN is unavailable');
+  } finally {
+    await handle?.close();
+  }
   if (actualDigest !== digest) throw new Error('CODEX_BIN does not match CODEX_BIN_SHA256');
   return codexBin;
 }
@@ -246,7 +286,8 @@ function normalizeLoginAttempts(maxAttempts) {
   return Math.min(MAX_LOGIN_ATTEMPTS, Math.max(1, Math.floor(maxAttempts)));
 }
 
-async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeoutMs }) {
+async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeoutMs, validateExecutable }) {
+  await validateExecutable();
   const controller = new AbortController();
   let child;
   let timeoutHandle;
@@ -369,6 +410,32 @@ async function main() {
 
 function workerHomeVariable(worker) {
   return worker === 'main' ? 'AGENT_CODEX_HOME' : `AGENT_CODEX_HOME_${worker}`;
+}
+
+function stableIdentity(stat) {
+  return {
+    dev: String(stat.dev),
+    ino: String(stat.ino),
+    mode: stat.mode,
+    nlink: stat.nlink,
+    size: stat.size,
+    uid: stat.uid,
+    mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs,
+  };
+}
+
+function sameStableIdentity(left, right) {
+  const a = stableIdentity(left);
+  const b = stableIdentity(right);
+  return a.dev === b.dev
+    && a.ino === b.ino
+    && a.mode === b.mode
+    && a.nlink === b.nlink
+    && a.size === b.size
+    && a.uid === b.uid
+    && a.mtimeMs === b.mtimeMs
+    && a.ctimeMs === b.ctimeMs;
 }
 
 async function workerHomeIdentity(candidate) {
