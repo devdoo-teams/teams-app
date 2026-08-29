@@ -225,8 +225,7 @@ jobs:
           path: |
             dist/evidence/release-identity.json
             appPackage/build/teams-sdk-mvp.zip
-            dist/server/index.js
-            dist/server/.teams-server-build-commit
+            dist/server/**
             dist/client/**
           include-hidden-files: true
           if-no-files-found: error

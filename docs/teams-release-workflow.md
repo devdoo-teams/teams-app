@@ -149,7 +149,7 @@ npm run release:preflight
 
 이미지 publish는 “검증된 불변 산출물을 레지스트리에 보관”하는 단계일 뿐 “공개 HTTPS 서비스가 실행 중”이라는 뜻이 아니다. 실제 서비스 승격은 다음 독립 게이트를 추가로 요구한다.
 
-immutable release identity artifact에는 CI가 만든 서버 bundle·build marker·client assets도 hidden 파일을 포함해 함께 보관한다.
+immutable release identity artifact에는 CI가 만든 `dist/server/**` 전체 트리(숨김 build marker 포함)와 `dist/client/**`를 함께 보관한다.
 
 1. 승인된 호스팅 대상과 자격증명을 확인하고, 이미지 digest를 정확히 지정한다. 현재 저장소에는 특정 호스팅 provider와 배포 자격증명이 고정되어 있지 않으므로 provider를 추측하거나 자동 배포하지 않는다.
 2. `file-json-single-process` 저장소를 유지하는 동안에는 한 replica와 persistent writable volume을 사용한다. 수평 확장·무중단 재시작이 필요하면 transactional shared database와 durable queue/outbox로 바꾼 뒤 별도 Core 검증을 통과한다.
