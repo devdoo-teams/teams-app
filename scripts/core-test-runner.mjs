@@ -48,6 +48,7 @@ const tsTests = [
   'scripts/teams-tab-link-test.ts',
   'scripts/deterministic-response-engine-test.ts',
   'scripts/codex-runner-security-test.ts',
+  'scripts/codex-code-mode-host-regression-test.ts',
   'scripts/cli-agent-runner-test.ts',
   'scripts/ghcp-cli-adapter-test.ts',
   'scripts/provider-neutral-agent-runner-test.ts',
