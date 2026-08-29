@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
+  createLoginEnvironment,
   createLoginInvocation,
   inspectAuthMetadata,
   parseArguments,
@@ -15,6 +16,12 @@ import {
   runWorkerLogin,
   validateExecutableInputs,
 } from './a2a-auth-bootstrap.mjs';
+
+const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-a2a-auth-'));
+const executableFixture = path.join(root, 'codex-bin');
+await fs.copyFile(process.execPath, executableFixture);
+await fs.chmod(executableFixture, 0o755);
+const executableDigest = crypto.createHash('sha256').update(await fs.readFile(executableFixture)).digest('hex');
 
 assert.deepEqual(parseArguments([]), { workers: ['main'], runLogin: false });
 assert.deepEqual(parseArguments(['--worker', '1', '--run-login']), { workers: ['1'], runLogin: true });
@@ -47,13 +54,33 @@ assert.deepEqual(
 );
 assert.throws(() => createLoginInvocation({ codexBin: 'codex', codexHome: '/tmp/home' }), /absolute/i);
 
+assert.deepEqual(
+  createLoginEnvironment({
+    PATH: '/usr/bin',
+    HOME: '/Users/operator',
+    TERM: 'xterm-256color',
+    SHELL: '/bin/zsh',
+    OPENAI_API_KEY: 'must-not-cross-the-boundary',
+    CODEX_HOME: '/wrong/inherited/home',
+  }, '/var/lib/teams/codex-worker-1'),
+  {
+    CI: '1',
+    PATH: '/usr/bin',
+    HOME: '/Users/operator',
+    TERM: 'xterm-256color',
+    CODEX_HOME: '/var/lib/teams/codex-worker-1',
+  },
+  'the login child receives only the documented runtime environment and its worker home',
+);
+
 let capturedLoginOptions;
 let successfulAbortCount = 0;
 const successfulChild = new EventEmitter();
 successfulChild.kill = () => false;
 const sentinelSecret = 'a2a-bootstrap-sentinel-secret';
 const successfulLogin = await runWorkerLogin({
-  codexBin: '/Applications/ChatGPT.app/Contents/Resources/codex',
+  codexBin: executableFixture,
+  codexBinSha256: executableDigest,
   codexHome: '/var/lib/teams/codex-worker-1',
   env: {
     PATH: '/usr/bin',
@@ -87,13 +114,35 @@ assert.doesNotMatch(JSON.stringify(capturedLoginOptions.env), new RegExp(sentine
 await new Promise((resolve) => setTimeout(resolve, 40));
 assert.equal(successfulAbortCount, 0, 'a completed login must clear its timeout');
 
+let missingDigestSpawned = false;
+const missingDigestChild = new EventEmitter();
+missingDigestChild.kill = () => false;
+await assert.rejects(
+  () => runWorkerLogin({
+    codexBin: executableFixture,
+    codexHome: '/var/lib/teams/codex-worker-1',
+    env: { PATH: '/usr/bin' },
+    maxAttempts: 1,
+    timeoutMs: 10,
+    spawnImpl: (_command, _args, _options) => {
+      missingDigestSpawned = true;
+      queueMicrotask(() => missingDigestChild.emit('close', 0, null));
+      return missingDigestChild;
+    },
+  }),
+  /CODEX_BIN_SHA256/i,
+  'login must require the pinned executable digest before spawning the child',
+);
+assert.equal(missingDigestSpawned, false, 'a missing digest must fail before process execution');
+
 let timeoutSignal;
 let timeoutAbortCount = 0;
 const timedOutChild = new EventEmitter();
 timedOutChild.kill = () => false;
 await assert.rejects(
   () => runWorkerLogin({
-    codexBin: '/Applications/ChatGPT.app/Contents/Resources/codex',
+    codexBin: executableFixture,
+    codexBinSha256: executableDigest,
     codexHome: '/var/lib/teams/codex-worker-1',
     env: { PATH: '/usr/bin' },
     maxAttempts: 1,
@@ -122,7 +171,8 @@ let retryAttempts = 0;
 let activeLogins = 0;
 let maxActiveLogins = 0;
 const retriedLogin = await runWorkerLogin({
-  codexBin: '/Applications/ChatGPT.app/Contents/Resources/codex',
+  codexBin: executableFixture,
+  codexBinSha256: executableDigest,
   codexHome: '/var/lib/teams/codex-worker-1',
   env: { PATH: '/usr/bin' },
   maxAttempts: 2,
@@ -160,7 +210,8 @@ let stubbornChildReaped = false;
 let retryStartedBeforeReap = false;
 const stubbornSignals = [];
 const stubbornRetriedLogin = await runWorkerLogin({
-  codexBin: '/Applications/ChatGPT.app/Contents/Resources/codex',
+  codexBin: executableFixture,
+  codexBinSha256: executableDigest,
   codexHome: '/var/lib/teams/codex-worker-1',
   env: { PATH: '/usr/bin' },
   maxAttempts: 2,
@@ -205,7 +256,8 @@ let unreapableAttempts = 0;
 const unreapableSignals = [];
 await assert.rejects(
   () => runWorkerLogin({
-    codexBin: '/Applications/ChatGPT.app/Contents/Resources/codex',
+    codexBin: executableFixture,
+    codexBinSha256: executableDigest,
     codexHome: '/var/lib/teams/codex-worker-1',
     env: { PATH: '/usr/bin' },
     maxAttempts: 2,
@@ -230,11 +282,6 @@ await assert.rejects(
 assert.equal(unreapableAttempts, 1, 'an unreaped child must fail closed without retry');
 assert.deepEqual(unreapableSignals, ['SIGTERM', 'SIGKILL']);
 
-const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-a2a-auth-'));
-const executableFixture = path.join(root, 'codex-bin');
-await fs.copyFile(process.execPath, executableFixture);
-await fs.chmod(executableFixture, 0o755);
-const executableDigest = crypto.createHash('sha256').update(await fs.readFile(executableFixture)).digest('hex');
 assert.equal(
   await validateExecutableInputs({ CODEX_BIN: executableFixture, CODEX_BIN_SHA256: executableDigest }),
   executableFixture,
@@ -255,6 +302,23 @@ await fs.writeFile(authPath, '{"token":"fixture-secret"}\n', { mode: 0o600 });
 const authMetadata = await inspectAuthMetadata(authPath);
 assert.deepEqual(authMetadata, { state: 'valid', mode: 0o600, size: 27 });
 assert.equal(Object.hasOwn(authMetadata, 'contents'), false, 'auth contents must never be returned');
+
+const emptyAuthPath = path.join(home, 'empty-auth.json');
+await fs.writeFile(emptyAuthPath, '', { mode: 0o600 });
+assert.deepEqual(
+  await inspectAuthMetadata(emptyAuthPath),
+  { state: 'invalid-file' },
+  'empty auth metadata must fail the same readiness contract as the final validator',
+);
+
+const unreadableAuthPath = path.join(home, 'unreadable-auth.json');
+await fs.writeFile(unreadableAuthPath, '{"token":"fixture-secret"}\n', { mode: 0o200 });
+await fs.chmod(unreadableAuthPath, 0o200);
+assert.deepEqual(
+  await inspectAuthMetadata(unreadableAuthPath),
+  { state: 'invalid-permissions' },
+  'auth metadata without owner-read permission must fail closed',
+);
 
 const hardlinkedAuthPath = path.join(root, 'hardlinked-auth.json');
 await fs.link(authPath, hardlinkedAuthPath);
@@ -298,7 +362,7 @@ await assert.rejects(
       return child;
     },
   }),
-  /does not match/i,
+  /does not match|changed/i,
   'a login retry must revalidate the pinned executable digest',
 );
 assert.equal(raceAttempts, 1, 'a changed executable must block the retry before spawn');
@@ -322,6 +386,17 @@ await assert.rejects(
   }, ['main', '1']),
   /distinct worker home|alias/i,
   'lexical path aliases must be rejected before any login or home preparation',
+);
+
+const legacyHomeAlias = path.join(root, 'legacy-home-alias');
+await fs.symlink(home, legacyHomeAlias, 'dir');
+await assert.rejects(
+  () => resolveDistinctWorkerHomes({
+    AGENT_CODEX_HOME: legacyHomeAlias,
+    AGENT_CODEX_HOME_1: home,
+  }, ['1']),
+  /AGENT_CODEX_HOME.*distinct|legacy.*AGENT_CODEX_HOME/i,
+  'an indexed worker must not alias the legacy unsuffixed Codex home even when bootstrapped alone',
 );
 
 await fs.rm(root, { recursive: true, force: true });

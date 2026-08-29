@@ -51,6 +51,24 @@ The helper requires the operator-provided absolute `CODEX_BIN` and its
 64-character `CODEX_BIN_SHA256`; it does not guess an executable. With
 `--run-login`, the official `codex login --device-auth` process inherits the
 terminal so the operator can complete the browser login, password, and MFA.
-The helper reports only whether `auth.json` metadata is valid. After all
-homes are authenticated, run `npm run check:codex-a2a-isolation`; that gate is
-still required before enabling live A2A execution.
+The child receives only the documented bootstrap environment: fixed `CI=1`,
+the selected worker's `CODEX_HOME`, and any present terminal/runtime values
+from `PATH`/`Path`, `HOME`, `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`,
+`LOCALAPPDATA`, `APPDATA`, `SYSTEMROOT`/`SystemRoot`, `WINDIR`, `PATHEXT`,
+`TMPDIR`, `TMP`, `TEMP`, `TERM`, `COLORTERM`, `LANG`, `LC_ALL`, `LC_CTYPE`,
+`SSL_CERT_FILE`, `SSL_CERT_DIR`, and `NODE_EXTRA_CA_CERTS`. Other parent
+environment values, including access tokens, API keys, worker-roster values,
+and executable pins, are not forwarded. The selected executable and digest
+are revalidated immediately before each login child is spawned, including a
+retry, and the executable must remain a single private regular file.
+
+Each login attempt has a bounded timeout (10 minutes by default, capped at one
+hour). A timeout aborts the child, requests termination, and waits for it to
+be reaped before allowing the single deterministic retry; an unreaped child
+fails closed. This does not automate the device flow or handle credentials.
+The helper reports only whether `auth.json` metadata is valid. Empty,
+owner-unreadable, symlinked, or hardlinked auth files are invalid, and an
+indexed worker may not alias the legacy unsuffixed `AGENT_CODEX_HOME`, even
+when bootstrapped alone. After all homes are authenticated, run
+`npm run check:codex-a2a-isolation`; that gate is still required before
+enabling live A2A execution.
