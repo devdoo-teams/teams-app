@@ -47,6 +47,10 @@ requireText(/serverBundleSha256/, 'promotion evidence must bind the server bundl
 requireText(/manifestSha256/, 'promotion evidence must bind the manifest digest');
 requireText(/imageDigest/, 'promotion evidence must bind the pushed image digest');
 requireText(/actions\/upload-artifact@[0-9a-f]{40}/, 'promotion identity must be retained as an immutable workflow artifact');
+requireText(/dist\/server\/index\.js/, 'promotion identity must retain the exact CI-built server bundle');
+requireText(/dist\/server\/\.teams-server-build-commit/, 'promotion identity must retain the server build marker');
+requireText(/dist\/client\/\*\*/, 'promotion identity must retain the exact CI-built client assets');
+requireText(/include-hidden-files:\s*true/, 'promotion identity must include hidden build marker files');
 const attestationStep = workflow.indexOf('      - name: Attest image provenance');
 const identityBindStep = workflow.indexOf('      - name: Bind the pushed image digest to the release identity');
 const identityUploadStep = workflow.indexOf('      - name: Upload immutable release identity');
