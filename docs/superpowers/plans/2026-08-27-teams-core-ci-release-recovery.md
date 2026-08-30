@@ -346,7 +346,7 @@ Core gates, create a new package and bind its commit, ZIP SHA, public runtime,
 portal, installed, desktop, and mobile evidence. Do not close the Jira issue or
 send a Teams completion message from CI/health/card evidence alone.
 
-## Current execution addendum — 2026-08-31
+## Current execution addendum — 2026-08-31 (superseded snapshot)
 
 The 2026-08-30 block above is historical. The functional implementation
 baseline for this continuation is commit
@@ -400,7 +400,7 @@ and installed package read-back, Teams desktop/mobile evidence, and live
 authenticated A2A/Grok verification. No Teams completion message is justified
 until those gates pass.
 
-## Verification checkpoint — 2026-08-31
+## Verification checkpoint — 2026-08-31 (superseded snapshot)
 
 The exact current HEAD `42eb00fa7b65b2ff17f796e4c1d134f3323f87d8` was rechecked
 in the clean implementation worktree after the hosting audit:
@@ -425,3 +425,37 @@ in the clean implementation worktree after the hosting audit:
   inventory of every Internet provider. Cloudflare Free is not a drop-in host
   for the current Express/Codex-worker process; Azure Container Apps + Azure
   Files remains the primary candidate and Cloud Run the alternative.
+
+## Current verification checkpoint — 2026-08-31
+
+The authoritative implementation HEAD for this continuation is
+`19b29dac028fbfc3216b6b0f097cea6a2fcfb4e5` on branch
+`codex/agent-ledger-20260830`. The original
+`/Users/doosansmacbookpro/Documents/TeamsApp` checkout remains untouched and
+dirty user work.
+
+- The worktree is clean. Package and Teams manifest version are `1.0.101`.
+- The freshly rebuilt Core server marker is schema 3, commit `19b29da...`,
+  `mode=core`, `worktree=clean`, server bundle SHA-256
+  `40eedfb2c46aa600ba0248629140b9db22e75dbe30e92f23bd3f99c1506d0e61`.
+- The freshly generated candidate ZIP SHA-256 is
+  `8699f2230d5bf0cd5253a3cc5f2ea8f13633584ef76dfc250c6c31bb790c9ea5`.
+  `test:package-determinism` and `test:package-output-determinism` both pass.
+- A stale local `dist` marker initially reported `mode=optional`; it was not
+  used as release evidence. Rebuilding with `npm run build:core` corrected the
+  artifact, and `test:docker-build-inputs`, `test:runtime-dist`, and
+  `validate:manifest` pass against the corrected Core output.
+- PR [#17](https://github.com/devdoo-teams/teams-app/pull/17) remains Draft at
+  this exact HEAD. Its latest PR CI run
+  [33323945540](https://github.com/devdoo-teams/teams-app/actions/runs/33323945540)
+  passes Core, A2A, optional/Grok contract, continuity, and Docker jobs; the
+  immutable release candidate remains intentionally skipped for pull requests.
+- The hosting research is deliberately bounded official-document research,
+  not a literal inventory of every provider. No Azure/GCP/Oracle resource or
+  stable external runtime has been configured, so no public service, Teams
+  package, or completion message is changed by this checkpoint.
+
+Remaining gates are still approved external resource/OIDC configuration,
+merged-main immutable publish, same-identity public runtime, Portal and
+installed package read-back, Teams desktop/mobile evidence, and live
+authenticated A2A/Grok verification.
