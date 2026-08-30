@@ -22,6 +22,7 @@ const naturalPrompt = '저장소의 현재 상태를 분석하고 핵심 리스�
 const jobStorePath = path.join(temporaryRoot, 'agent-jobs.json');
 const a2aStorePath = path.join(temporaryRoot, 'a2a.json');
 const a2aOutboundStorePath = path.join(temporaryRoot, 'a2a-outbound.json');
+const agentEventStorePath = path.join(temporaryRoot, 'agent-events.json');
 const responseModeStorePath = path.join(temporaryRoot, 'response-modes.json');
 const agentWorkspace = path.join(temporaryRoot, 'agent-workspace');
 let child: ChildProcess | undefined;
@@ -77,6 +78,7 @@ try {
     WORK_ITEM_STORE_PATH: path.join(temporaryRoot, 'work-items.json'),
     COLLABORATION_STORE_PATH: path.join(temporaryRoot, 'collaboration.json'),
     AGENT_JOB_STORE_PATH: jobStorePath,
+    AGENT_EVENT_STORE_PATH: agentEventStorePath,
     A2A_STORE_PATH: a2aStorePath,
     A2A_OUTBOUND_STORE_PATH: a2aOutboundStorePath,
     AGENT_ADMISSION_JOURNAL_PATH: path.join(temporaryRoot, 'agent-admission.json'),
@@ -234,6 +236,38 @@ try {
   const serializedRestartCard = JSON.stringify(restartCard);
   assert.ok(serializedRestartCard.includes(job.id), 'restart Status card must identify the persisted job');
   assert.ok(serializedRestartCard.includes('completed'), 'restart Status card must report the persisted completed status');
+
+  const unauthenticatedEventHistory = await fetch(`${baseUrl}/api/agent-jobs/unknown/events`);
+  assert.equal(unauthenticatedEventHistory.status, 401, 'agent event history rejects requests without the validated local boundary');
+
+  const eventJobResponse = await request(baseUrl, '/api/agent-jobs', {
+    method: 'POST',
+    body: JSON.stringify({
+      prompt: 'event history HTTP route integration check',
+      mode: 'read-only',
+      conversationId: 'runtime-agent-event-history',
+    }),
+  });
+  assert.equal(eventJobResponse.response.status, 201, 'agent event history route creates a REST-scoped job');
+  const eventJob = eventJobResponse.body.job;
+  assert.ok(eventJob?.id, 'agent event history route returns the created job id');
+
+  const eventHistory = await request(baseUrl, `/api/agent-jobs/${eventJob.id}/events`);
+  assert.equal(eventHistory.response.status, 200, 'owned agent event history returns HTTP 200');
+  assert.equal(eventHistory.body.jobId, eventJob.id, 'agent event history binds the response to the requested job');
+  assert.ok(eventHistory.body.events.some((event: any) => event.kind === 'submitted'), 'agent event history includes the submission event');
+  assert.equal(eventHistory.response.headers.get('cache-control'), 'no-store', 'agent event history is not cacheable');
+
+  const limitedEventHistory = await request(baseUrl, `/api/agent-jobs/${eventJob.id}/events?limit=1`);
+  assert.equal(limitedEventHistory.response.status, 200, 'agent event history accepts a bounded limit');
+  assert.ok(limitedEventHistory.body.events.length <= 1, 'agent event history enforces the requested limit');
+  const invalidEventLimit = await request(baseUrl, `/api/agent-jobs/${eventJob.id}/events?limit=0`);
+  assert.equal(invalidEventLimit.response.status, 400, 'agent event history rejects an out-of-range limit');
+  const malformedEventLimit = await request(baseUrl, `/api/agent-jobs/${eventJob.id}/events?limit=invalid`);
+  assert.equal(malformedEventLimit.response.status, 400, 'agent event history rejects a malformed limit');
+
+  const foreignEventHistory = await request(baseUrl, `/api/agent-jobs/${job.id}/events`);
+  assert.equal(foreignEventHistory.response.status, 404, 'a different owner and tenant cannot read agent event history');
 
   await stop(child);
   child = undefined;

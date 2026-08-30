@@ -57,6 +57,8 @@ const tsTests = [
   'scripts/agent-execution-readiness-test.ts',
   'scripts/codex-native-permission-isolation-test.ts',
   'scripts/agent-job-store-hardening-test.ts',
+  'scripts/agent-event-store-test.ts',
+  'scripts/agent-service-event-audit-test.ts',
   'scripts/agent-admission-control-test.ts',
   'scripts/agent-process-controller-security-test.ts',
   'scripts/agent-service-transition-test.ts',

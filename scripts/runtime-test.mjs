@@ -330,6 +330,7 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
       WORK_ITEM_STORE_PATH: `${dataFile}.work-items.json`,
       COLLABORATION_STORE_PATH: `${dataFile}.collaboration.json`,
       AGENT_JOB_STORE_PATH: jobDataFile,
+      AGENT_EVENT_STORE_PATH: `${jobDataFile}.events.json`,
       AGENT_ADMISSION_JOURNAL_PATH: `${jobDataFile}.agent-admission.json`,
       A2A_STORE_PATH: `${jobDataFile}.a2a.json`,
       A2A_OUTBOUND_STORE_PATH: `${jobDataFile}.a2a-outbound.json`,
@@ -876,6 +877,65 @@ async function runLocalFlow(dataFile, jobDataFile, { optionalProviders = false }
     const wrongToken = await rawRequest(server.baseUrl, '/api/health', {}, 'wrong-local-access-token');
     assert(wrongToken.response.statusCode === 401, 'local API denies a wrong access token');
     assert(!String(wrongToken.body).includes(server.localAccessToken), 'wrong-token error does not contain the local access token');
+
+    const unauthenticatedEventHistory = await request(server.baseUrl, '/api/agent-jobs/unknown/events', {
+      localAccessToken: null,
+    });
+    assert(unauthenticatedEventHistory.response.status === 401, 'agent event history requires the authenticated local boundary');
+
+    const eventJobResponse = await request(server.baseUrl, '/api/agent-jobs', {
+      method: 'POST',
+      body: JSON.stringify({
+        prompt: 'event history route integration check',
+        mode: 'read-only',
+        conversationId: 'runtime-agent-event-history',
+      }),
+    });
+    assert(eventJobResponse.response.status === 201, 'agent event history test creates a scoped job through the REST API');
+    const eventJob = eventJobResponse.body.job;
+    assert(Boolean(eventJob?.id), 'agent event history test receives a job id');
+
+    const eventHistory = await request(server.baseUrl, `/api/agent-jobs/${eventJob.id}/events`);
+    assert(eventHistory.response.status === 200, 'owned agent event history returns 200');
+    assert(eventHistory.body.jobId === eventJob.id, 'agent event history is bound to the requested job');
+    assert(Array.isArray(eventHistory.body.events), 'agent event history returns an events array');
+    assert(eventHistory.body.events.some((event) => event.kind === 'submitted'), 'agent event history includes the server-owned submission event');
+    assert(eventHistory.response.headers.get('cache-control') === 'no-store', 'agent event history is not cached');
+
+    const limitedEventHistory = await request(server.baseUrl, `/api/agent-jobs/${eventJob.id}/events?limit=1`);
+    assert(limitedEventHistory.response.status === 200, 'agent event history accepts a bounded limit');
+    assert(limitedEventHistory.body.events.length <= 1, 'agent event history enforces the requested limit');
+    const invalidEventLimit = await request(server.baseUrl, `/api/agent-jobs/${eventJob.id}/events?limit=0`);
+    assert(invalidEventLimit.response.status === 400, 'agent event history rejects an out-of-range limit');
+    const malformedEventLimit = await request(server.baseUrl, `/api/agent-jobs/${eventJob.id}/events?limit=not-a-number`);
+    assert(malformedEventLimit.response.status === 400, 'agent event history rejects a malformed limit');
+
+    const foreignScopeConversationId = 'runtime-agent-event-foreign-scope';
+    const foreignScopeResponse = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity(
+        'write event history ownership boundary check',
+        server.baseUrl,
+        'agent-event-foreign-scope',
+        foreignScopeConversationId,
+        { userId: 'foreign-event-owner', tenantId: 'foreign-event-tenant' },
+      )),
+    });
+    const foreignJobId = foreignScopeResponse.body.messages?.[0]?.match(/task-[\w-]+/)?.[0];
+    assert(Boolean(foreignJobId), 'event history ownership test creates a foreign-scoped job');
+    const foreignEventHistory = await request(server.baseUrl, `/api/agent-jobs/${foreignJobId}/events`);
+    assert(foreignEventHistory.response.status === 404, 'a different owner and tenant cannot read agent event history');
+    const foreignCancel = await request(server.baseUrl, '/api/messages', {
+      method: 'POST',
+      body: JSON.stringify(activity(
+        `cancel ${foreignJobId}`,
+        server.baseUrl,
+        'agent-event-foreign-scope-cleanup',
+        foreignScopeConversationId,
+        { userId: 'foreign-event-owner', tenantId: 'foreign-event-tenant' },
+      )),
+    });
+    assert(foreignCancel.response.status === 200, 'event history ownership fixture can be cleaned up through its owning scope');
 
     const publicHost = await rawRequest(server.baseUrl, '/api/health', { host: 'public.example.test' });
     assert(publicHost.response.statusCode === 403, 'safe local mode rejects a public Host header');
