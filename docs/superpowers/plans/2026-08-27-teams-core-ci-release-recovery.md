@@ -495,3 +495,40 @@ research remains a bounded official-document audit, not a literal inventory
 of every Internet provider. Actual Azure/GCP/Oracle resources, stable public
 runtime, portal read-back, desktop/mobile evidence, and live authenticated
 A2A/Grok remain open gates.
+
+## Orchestration checkpoint — 2026-08-31
+
+The latest clean implementation checkout is
+`codex/agent-ledger-20260830` at `c98871a3292e33c8920f3abbd6beac4192d51120`
+(`docs(research): revalidate free hosting options`). The original
+`/Users/doosansmacbookpro/Documents/TeamsApp` checkout remains a dirty user
+worktree and is not a release source.
+
+- PR [#17](https://github.com/devdoo-teams/teams-app/pull/17) remains Draft.
+  Exact-head run
+  [33326954778](https://github.com/devdoo-teams/teams-app/actions/runs/33326954778)
+  passed Core, A2A/remote contracts, atomic continuity, optional/Grok route,
+  and Docker Core runtime. The immutable release candidate is skipped because
+  the run is for a pull request; this is not an immutable publish.
+- The application/package/manifest remains `1.0.101`. The hosting research
+  update is documentation-only, so no version bump or new ZIP is justified.
+- The official hosting comparison is intentionally bounded, not a claim to
+  have enumerated every provider on the Internet. It covers the major
+  managed/serverless/VM candidates relevant to this repository and records
+  their current execution, persistence, billing, and free-tier constraints.
+  Cloudflare Workers Free is not a drop-in host for Node `child_process` or
+  file-backed state; Cloudflare D1/R2/Queues are future adapters/backing
+  services, not the current Express runtime. Azure Container Apps + Azure
+  Files remains the primary managed target; Cloud Run is the alternative;
+  Oracle Always Free VM is a no-cost canary with material operator burden.
+- No Azure/GCP/Oracle resource, OIDC trust, registry, DNS, stable external
+  runtime, or external agent auth homes have been configured or proven. The
+  preserved q3 Dev Tunnel is not replaced and is not evidence for this
+  candidate.
+
+The next execution gate is an approved external resource configuration. Only
+after that gate exists may the guarded workflow publish by immutable digest and
+verify the same identity at the public runtime. A Teams package update, portal
+read-back, desktop/mobile evidence, live authenticated A2A/Grok round trip,
+and completion message remain prohibited until their same-release evidence is
+present.
