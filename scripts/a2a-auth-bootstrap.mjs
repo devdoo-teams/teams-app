@@ -7,7 +7,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 const MAX_AUTH_FILE_BYTES = 1024 * 1024;
-const WORKERS = Object.freeze(['main', '1', '2']);
+const WORKERS = Object.freeze(['main', ...Array.from({ length: 8 }, (_value, index) => String(index + 1))]);
 const DEFAULT_LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_LOGIN_TIMEOUT_MS = 60 * 60 * 1000;
 const DEFAULT_LOGIN_ATTEMPTS = 2;
@@ -59,7 +59,7 @@ export function parseArguments(argv) {
     }
     if (argument === '--worker') {
       const worker = args.shift();
-      if (!WORKERS.includes(worker)) throw new Error('worker must be main, 1, or 2');
+      if (!WORKERS.includes(worker)) throw new Error('worker must be main or 1 through 8');
       workers = [worker];
       workerFlagSeen = true;
       continue;
@@ -406,7 +406,7 @@ async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeou
 }
 
 function printUsage() {
-  console.log('Usage: npm run a2a:login -- [--worker main|1|2] [--run-login]');
+  console.log('Usage: npm run a2a:login -- [--worker main|1|2|3|4|5|6|7|8] [--run-login]');
   console.log('       npm run a2a:login -- --all --run-login');
   console.log('Without --run-login this performs a safe dry run and never creates credentials.');
 }

@@ -25,17 +25,23 @@ const executableDigest = crypto.createHash('sha256').update(await fs.readFile(ex
 
 assert.deepEqual(parseArguments([]), { workers: ['main'], runLogin: false });
 assert.deepEqual(parseArguments(['--worker', '1', '--run-login']), { workers: ['1'], runLogin: true });
-assert.deepEqual(parseArguments(['--all']), { workers: ['main', '1', '2'], runLogin: false });
-assert.throws(() => parseArguments(['--worker', '3']), /worker must be main, 1, or 2/i);
+assert.deepEqual(
+  parseArguments(['--all']),
+  { workers: ['main', '1', '2', '3', '4', '5', '6', '7', '8'], runLogin: false },
+);
+assert.deepEqual(parseArguments(['--worker', '8']), { workers: ['8'], runLogin: false });
+assert.throws(() => parseArguments(['--worker', '9']), /worker must be main or 1 through 8/i);
 assert.throws(() => parseArguments(['--all', '--worker', '1']), /cannot be combined/i);
 
 const env = {
   AGENT_CODEX_HOME: '/var/lib/teams/codex-main',
   AGENT_CODEX_HOME_1: '/var/lib/teams/codex-worker-1',
   AGENT_CODEX_HOME_2: '/var/lib/teams/codex-worker-2',
+  AGENT_CODEX_HOME_8: '/var/lib/teams/codex-worker-8',
 };
 assert.equal(resolveWorkerHome(env, 'main'), env.AGENT_CODEX_HOME);
 assert.equal(resolveWorkerHome(env, '1'), env.AGENT_CODEX_HOME_1);
+assert.equal(resolveWorkerHome(env, '8'), env.AGENT_CODEX_HOME_8);
 assert.throws(() => resolveWorkerHome({}, '1'), /AGENT_CODEX_HOME_1 is required/i);
 
 assert.deepEqual(

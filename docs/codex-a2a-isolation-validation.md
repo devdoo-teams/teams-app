@@ -16,7 +16,7 @@ The command loads `.env.runtime` when present and requires all three values:
 - `CODEX_BIN_SHA256`: the 64-character SHA-256 pin for that executable.
 
 When `TEAMS_A2A_AGENT_PROVIDERS` is set, every Codex entry is validated with
-its indexed home (`AGENT_CODEX_HOME_1`, `AGENT_CODEX_HOME_2`, ...). Indexed
+its indexed home (`AGENT_CODEX_HOME_1` through `AGENT_CODEX_HOME_8`). Indexed
 homes must be separate owner-only directories, each with its own owner-only
 `auth.json`, and none may alias the ordinary `AGENT_CODEX_HOME`. The
 executable and digest are shared; credentials are not copied between workers.
@@ -41,11 +41,11 @@ npm run a2a:login -- --worker 1
 npm run a2a:login -- --worker 1 --run-login
 ```
 
-Use `--worker main`, `--worker 1`, or `--worker 2` for one independent Codex
-home. `--all --run-login` processes `main`, `1`, and `2` sequentially and
-stops at the first failed login; it never shares credentials or runs login
-flows concurrently. Without `--run-login`, the command is a dry run and does
-not create credentials.
+Use `--worker main` or `--worker 1` through `--worker 8` for one independent
+Codex home. `--all --run-login` processes `main`, then `1` through `8`
+sequentially and stops at the first failed login; it never shares credentials
+or runs login flows concurrently. Without `--run-login`, the command is a dry
+run and does not create credentials.
 
 The helper requires the operator-provided absolute `CODEX_BIN` and its
 64-character `CODEX_BIN_SHA256`; it does not guess an executable. With
