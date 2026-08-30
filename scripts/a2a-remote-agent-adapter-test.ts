@@ -383,6 +383,8 @@ const configuredCard: A2ARemoteAgentCard = {
   name: 'Configured Remote Agent',
   description: 'Remote A2A test agent.',
   version: '1.0.0',
+  agentId: 'remote-agent',
+  providerId: 'remote-provider',
   supportedInterfaces: [{
     url: 'https://remote.example.test/a2a/v1',
     protocolBinding: 'JSONRPC',
@@ -418,6 +420,17 @@ const configuredFetch: A2ARemoteFetch = async (input, init = {}) => {
       },
     },
   }), { status: 200, headers: { 'content-type': 'application/json' } });
+};
+const batchConfiguredFetch: A2ARemoteFetch = async (input, init = {}) => {
+  const url = new URL(String(input));
+  if (url.pathname === '/.well-known/agent-card.json') {
+    return new Response(JSON.stringify({
+      ...configuredCard,
+      agentId: 'batch-ready-remote',
+      providerId: 'batch-ready-provider',
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }
+  return configuredFetch(input, init);
 };
 const configuredAgent = await createConfiguredA2ARemoteAgent({
   endpoint: 'https://remote.example.test',
@@ -473,7 +486,7 @@ const batch = await createConfiguredA2ARemoteAgents([
     roles: ['reviewer'],
     capabilities: ['source.read', 'review.report'],
     authorizationPolicy,
-    fetch: configuredFetch,
+    fetch: batchConfiguredFetch,
   },
 ]);
 assert.equal(batch.agents.length, 1, 'one unavailable peer must not discard a ready peer');

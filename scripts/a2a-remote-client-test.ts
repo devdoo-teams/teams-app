@@ -67,6 +67,9 @@ const mockFetch: A2ARemoteFetch = async (input, init = {}) => {
 };
 
 await testHappyPath();
+await testPinnedEndpointAndIdentity();
+await testEndpointAndIdentityMismatches();
+await testRedirectsAreRejected();
 await testAdvertisedCapabilitiesDoNotBlockBaseRpc();
 await testDirectMessageResponse();
 await testMissingAuthenticationProvider();
@@ -144,6 +147,99 @@ async function testHappyPath(): Promise<void> {
     nextPageToken: '',
   });
   assert.deepEqual(await client.cancelTask('task-1'), completedTask);
+}
+
+async function testPinnedEndpointAndIdentity(): Promise<void> {
+  calls.length = 0;
+  const identityCard = {
+    ...validCard,
+    agentId: 'remote-agent',
+    providerId: 'remote-provider',
+    supportedInterfaces: [{
+      ...validCard.supportedInterfaces[0],
+      url: 'https://agent.example.test/a2a/v1',
+    }],
+  };
+  nextResponse = (url, init) => {
+    if (url.pathname === '/.well-known/agent-card.json') return jsonResponse(identityCard);
+    assert.equal(url.origin, 'https://agent.example.test');
+    assert.equal(url.pathname, '/a2a/v1');
+    const request = JSON.parse(String(init.body)) as { id: string };
+    return jsonResponse({ jsonrpc: '2.0', id: request.id, result: completedTask });
+  };
+
+  const client = await createA2ARemoteClient('https://agent.example.test/a2a/v1', {
+    fetch: mockFetch,
+    bearerTokenProvider: () => 'test-token',
+    expectedIdentity: { agentId: 'remote-agent', providerId: 'remote-provider' },
+  });
+  assert.equal(client.card.agentId, 'remote-agent');
+  assert.equal(client.card.providerId, 'remote-provider');
+  assert.deepEqual(await client.getTask('task-1'), completedTask);
+}
+
+async function testEndpointAndIdentityMismatches(): Promise<void> {
+  const expectedIdentity = { agentId: 'remote-agent', providerId: 'remote-provider' };
+  const expectInvalidCard = async (card: Record<string, unknown>): Promise<void> => {
+    nextResponse = (url) => url.pathname === '/.well-known/agent-card.json'
+      ? jsonResponse(card)
+      : jsonResponse({});
+    await expectRemoteError(
+      () => createA2ARemoteClient('https://agent.example.test/a2a/v1', {
+        fetch: mockFetch,
+        expectedIdentity,
+      }),
+      'INVALID_AGENT_CARD',
+    );
+  };
+
+  await expectInvalidCard({
+    ...validCard,
+    agentId: 'remote-agent',
+    providerId: 'remote-provider',
+    supportedInterfaces: [{
+      ...validCard.supportedInterfaces[0],
+      url: 'https://other.example.test/a2a/v1',
+    }],
+  });
+  await expectInvalidCard({
+    ...validCard,
+    agentId: 'different-agent',
+    providerId: 'remote-provider',
+  });
+  await expectInvalidCard({
+    ...validCard,
+    agentId: 'remote-agent',
+    providerId: 'different-provider',
+  });
+  await expectRemoteError(
+    () => createA2ARemoteClient('https://agent.example.test/a2a/v1?redirect=/else', { fetch: mockFetch }),
+    'UNSUPPORTED_PROTOCOL',
+  );
+}
+
+async function testRedirectsAreRejected(): Promise<void> {
+  nextResponse = (url) => url.pathname === '/.well-known/agent-card.json'
+    ? redirectedJsonResponse(validCard, 'https://agent.example.test/login')
+    : jsonResponse({});
+  await expectRemoteError(
+    () => createA2ARemoteClient('https://agent.example.test', { fetch: mockFetch }),
+    'INVALID_RESPONSE',
+  );
+
+  nextResponse = (url, init) => {
+    if (url.pathname === '/.well-known/agent-card.json') return jsonResponse(validCard);
+    const request = JSON.parse(String(init.body)) as { id: string };
+    return redirectedJsonResponse(
+      { jsonrpc: '2.0', id: request.id, result: completedTask },
+      'https://agent.example.test/redirected-a2a',
+    );
+  };
+  const client = await createA2ARemoteClient('https://agent.example.test', {
+    fetch: mockFetch,
+    bearerTokenProvider: () => 'test-token',
+  });
+  await expectRemoteError(() => client.getTask('task-1'), 'INVALID_RESPONSE');
 }
 
 async function testAdvertisedCapabilitiesDoNotBlockBaseRpc(): Promise<void> {
@@ -376,4 +472,11 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { 'content-type': 'application/json' },
   });
+}
+
+function redirectedJsonResponse(body: unknown, url: string): Response {
+  const response = jsonResponse(body);
+  Object.defineProperty(response, 'redirected', { value: true });
+  Object.defineProperty(response, 'url', { value: url });
+  return response;
 }

@@ -10,6 +10,8 @@ export type A2ARemoteAgentCard = Readonly<{
   name: string;
   description: string;
   version: string;
+  agentId?: string;
+  providerId?: string;
   supportedInterfaces: readonly Readonly<{
     url: string;
     protocolBinding: 'JSONRPC';
@@ -30,6 +32,10 @@ export type A2ARemoteAgentCard = Readonly<{
 export type A2ARemoteFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 export type A2ARemoteTokenProvider = () => string | Promise<string>;
 export type A2ARemoteRequestOptions = Readonly<{ signal?: AbortSignal }>;
+export type A2ARemotePeerIdentity = Readonly<{
+  agentId: string;
+  providerId: string;
+}>;
 export type A2ARemoteMessagePart = Readonly<{ text: string; mediaType?: string }>;
 export type A2ARemoteMessage = Readonly<{
   messageId: string;
@@ -87,10 +93,11 @@ export type A2ARemoteClient = Readonly<{
   cancelTask: (id: string, options?: A2ARemoteRequestOptions) => Promise<A2ARemoteTask>;
 }>;
 
-type ClientOptions = Readonly<{
+export type A2ARemoteClientOptions = Readonly<{
   fetch?: A2ARemoteFetch;
   bearerTokenProvider?: A2ARemoteTokenProvider;
   requestTimeoutMs?: number;
+  expectedIdentity?: A2ARemotePeerIdentity;
 }>;
 
 function fail(code: A2ARemoteClientErrorCode): never {
@@ -100,7 +107,7 @@ function fail(code: A2ARemoteClientErrorCode): never {
 function validateBaseUrl(value: string): URL {
   let url: URL;
   try { url = new URL(value); } catch { return fail('UNSUPPORTED_PROTOCOL'); }
-  if (url.protocol !== 'https:' || url.username || url.password || url.hash) fail('UNSUPPORTED_PROTOCOL');
+  if (url.protocol !== 'https:' || url.username || url.password || url.hash || url.search) fail('UNSUPPORTED_PROTOCOL');
   assertPublicHost(url);
   return url;
 }
@@ -164,6 +171,8 @@ function validateCard(value: unknown): A2ARemoteAgentCard {
     name: card.name,
     description: card.description,
     version: card.version,
+    ...(card.agentId === undefined ? {} : { agentId: boundedId(card.agentId as string, 'INVALID_AGENT_CARD') }),
+    ...(card.providerId === undefined ? {} : { providerId: boundedId(card.providerId as string, 'INVALID_AGENT_CARD') }),
     supportedInterfaces: Object.freeze(supportedInterfaces),
     capabilities: Object.freeze({
       streaming: capabilities.streaming,
@@ -176,6 +185,31 @@ function validateCard(value: unknown): A2ARemoteAgentCard {
     defaultOutputModes: Object.freeze([...card.defaultOutputModes] as string[]),
     skills: Object.freeze([...card.skills] as Record<string, unknown>[]),
   });
+}
+
+function normalizedPath(pathname: string): string {
+  const normalized = pathname.replace(/\/+$/, '');
+  return normalized || '/';
+}
+
+function isPinnedEndpoint(configured: URL, advertised: URL): boolean {
+  if (configured.origin !== advertised.origin) return false;
+  const configuredPath = normalizedPath(configured.pathname);
+  return configuredPath === '/' || configuredPath === normalizedPath(advertised.pathname);
+}
+
+function assertPinnedIdentity(
+  card: A2ARemoteAgentCard,
+  expected: A2ARemotePeerIdentity | undefined,
+): void {
+  if (!expected) return;
+  if (card.agentId !== expected.agentId) fail('INVALID_AGENT_CARD');
+  if (card.providerId !== undefined && card.providerId !== expected.providerId) fail('INVALID_AGENT_CARD');
+}
+
+function assertNoRedirect(response: Response, expectedUrl: URL): void {
+  if (response.redirected || response.type === 'opaqueredirect') fail('INVALID_RESPONSE');
+  if (response.url && response.url !== expectedUrl.toString()) fail('INVALID_RESPONSE');
 }
 
 function validateMessage(value: unknown): A2ARemoteMessage {
@@ -260,17 +294,27 @@ async function fetchWithTimeout(
   }
 }
 
-export async function createA2ARemoteClient(baseUrl: string, options: ClientOptions = {}): Promise<A2ARemoteClient> {
+export async function createA2ARemoteClient(
+  baseUrl: string,
+  options: A2ARemoteClientOptions = {},
+): Promise<A2ARemoteClient> {
   const base = validateBaseUrl(baseUrl);
   const fetcher = options.fetch ?? ((input, init) => fetch(input, init));
   const timeoutMs = boundedTimeout(options.requestTimeoutMs);
   const cardUrl = new URL('/.well-known/agent-card.json', base);
-  const cardResponse = await fetchWithTimeout(fetcher, cardUrl, { method: 'GET', headers: { accept: 'application/json' } }, timeoutMs);
+  const cardResponse = await fetchWithTimeout(fetcher, cardUrl, {
+    method: 'GET',
+    redirect: 'error',
+    headers: { accept: 'application/json' },
+  }, timeoutMs);
+  assertNoRedirect(cardResponse, cardUrl);
   if (cardResponse.status === 401 || cardResponse.status === 403) fail('AUTHENTICATION_FAILED');
   if (!cardResponse.ok) fail('HTTP_ERROR');
   const rawCard = await readJson(cardResponse);
   const card = validateCard(rawCard);
   const endpoint = new URL(card.supportedInterfaces[0].url);
+  if (!isPinnedEndpoint(base, endpoint)) fail('INVALID_AGENT_CARD');
+  assertPinnedIdentity(card, options.expectedIdentity);
 
   async function authorizationHeaders(): Promise<Record<string, string>> {
     if (card.securityRequirements.length === 0) return {};
@@ -289,9 +333,11 @@ export async function createA2ARemoteClient(baseUrl: string, options: ClientOpti
     const headers = await authorizationHeaders();
     const response = await fetchWithTimeout(fetcher, endpoint, {
       method: 'POST',
+      redirect: 'error',
       headers: { ...headers, accept: 'application/json', 'content-type': 'application/json', 'a2a-version': PROTOCOL_VERSION },
       body: JSON.stringify({ jsonrpc: '2.0', id: requestId(), method, params }),
     }, timeoutMs, requestOptions.signal);
+    assertNoRedirect(response, endpoint);
     if (response.status === 401 || response.status === 403) fail('AUTHENTICATION_FAILED');
     if (!response.ok) fail('HTTP_ERROR');
     const body = asRecord(await readJson(response));

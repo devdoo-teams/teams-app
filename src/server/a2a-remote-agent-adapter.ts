@@ -397,6 +397,7 @@ export async function createConfiguredA2ARemoteAgent(
   const client = await createA2ARemoteClient(options.endpoint, {
     ...(options.fetch ? { fetch: options.fetch } : {}),
     bearerTokenProvider: () => bearerToken,
+    expectedIdentity: { agentId: options.agentId, providerId: options.providerId },
     ...(options.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: options.requestTimeoutMs }),
   });
   const {
