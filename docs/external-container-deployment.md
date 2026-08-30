@@ -79,8 +79,8 @@ PUBLIC_BASE_URL
 - CI artifact의 dist만 Docker context에 사용
 - pinned Node image와 `TEAMS_SOURCE_COMMIT`를 사용
 - GHCR에 `sha-<full-commit>` tag와 digest를 publish
-- source commit, app version, ZIP SHA-256, server bundle SHA-256, manifest SHA-256,
-  image digest를 `release-identity.json`에 기록
+- source commit, app version, ZIP SHA-256, server bundle SHA-256, client asset SHA-256,
+  manifest SHA-256, image digest를 `release-identity.json`에 기록
 - pushed digest로 image smoke를 수행하고 `/api/health`, `/tabs/home/`, hashed asset을 확인
 - public repository만 artifact attestation을 시도하며 private repository는 한계를
   identity에 명시한다
