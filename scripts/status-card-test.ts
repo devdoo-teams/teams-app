@@ -133,7 +133,7 @@ const statusFacts: GenUiStatusFacts = {
   a2aProviders: [
     { provider: 'codex', agentId: 'teams-core-codex', providerId: 'codex-cli', configured: true, execution: 'configured' },
     { provider: 'copilot', agentId: 'teams-core-copilot', providerId: 'official-copilot-cli', configured: false, execution: 'unavailable', executionReason: 'isolation-unavailable' },
-    { provider: 'remote', agentId: 'remote-reviewer', providerId: 'remote-a2a', configured: true, execution: 'configured' },
+    { provider: 'remote', agentId: 'remote-reviewer', providerId: 'remote-a2a', configured: true, execution: 'unknown', executionReason: 'live-round-trip-unverified.' },
   ],
 };
 const statusEnvelope = factory.status(statusFacts);
@@ -165,7 +165,7 @@ assert.ok(factEntries?.some((fact) => fact.title === 'Teams SDK' && fact.value =
 assert.ok(factEntries?.some((fact) => fact.title === '활성 agent provider' && fact.value === 'codex'));
 assert.ok(factEntries?.some((fact) => fact.title === 'A2A worker (codex)' && fact.value === 'teams-core-codex · codex-cli · execution=configured'));
 assert.ok(factEntries?.some((fact) => fact.title === 'A2A worker (copilot)' && fact.value === 'teams-core-copilot · official-copilot-cli · execution=unavailable · isolation-unavailable'));
-assert.ok(factEntries?.some((fact) => fact.title === 'A2A worker (remote)' && fact.value === 'remote-reviewer · remote-a2a · execution=configured'));
+assert.ok(factEntries?.some((fact) => fact.title === 'A2A worker (remote)' && fact.value === 'remote-reviewer · remote-a2a · execution=unknown · live-round-trip-unverified.'));
 assert.ok(factEntries?.some((fact) => fact.title === 'Codex CLI' && fact.value === 'unknown'));
 assert.ok(factEntries?.some((fact) => fact.title === 'GHCP CLI' && fact.value === 'unknown'));
 const serializedStatusCard = JSON.stringify(statusCard);

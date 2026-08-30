@@ -32,6 +32,9 @@ async function assertProcessReaped(pid, label, timeoutMs = 2_000) {
   const clientBuild = invocations.find(({ args }) => args.includes('scripts/build-client.mjs'));
   const serverBuild = invocations.find(({ args }) => args.includes('scripts/build-server.mjs'));
   const runtimeSmoke = invocations.find(({ args }) => args.includes('scripts/core-runtime-smoke.mjs'));
+  const fileProviderRuntimeDependencies = invocations.find(({ args }) => (
+    args.includes('scripts/fileprovider-runtime-deps-test.mjs')
+  ));
   const workspaceContract = invocations.find(({ args }) => args.includes('scripts/core-test-workspace-test.mjs'));
   const runtimeContract = invocations.find(({ args }) => args.includes('scripts/teams-core-chat-regression-test.ts'));
   const responseModeContract = invocations.find(({ args }) => args.includes('scripts/response-mode-api-test.ts'));
@@ -51,6 +54,20 @@ async function assertProcessReaped(pid, label, timeoutMs = 2_000) {
   );
   assert.equal(clientBuild.timeoutMs, 300_000, 'Core builds use the bounded release build budget');
   assert.equal(serverBuild.timeoutMs, 300_000, 'Core builds use the bounded release build budget');
+  assert.ok(
+    fileProviderRuntimeDependencies,
+    'the default Core gate must include the FileProvider runtime dependency lifecycle contract',
+  );
+  assert.equal(
+    fileProviderRuntimeDependencies.kind,
+    'contract',
+    'the default Core gate must execute the FileProvider runtime dependency lifecycle contract',
+  );
+  assert.equal(
+    fileProviderRuntimeDependencies.cwd,
+    '/repo',
+    'the FileProvider runtime dependency contract executes against the orchestrator root',
+  );
   assert.equal(workspaceContract.cwd, '/repo', 'plain runner contract tests execute against the orchestrator root');
   assert.equal(runtimeContract.kind, 'runtime', 'compiled runtime tests have an explicit invocation kind');
   assert.equal(runtimeContract.cwd, '/repo', 'compiled runtime tests execute beside the commit-bound dist output');

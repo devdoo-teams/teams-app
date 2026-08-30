@@ -197,7 +197,8 @@ const clickedCancelStatus = clickedCancelResult.sections[0];
 assert.equal(clickedCancelStatus?.type === 'status' ? clickedCancelStatus.status : undefined, 'cancelled');
 
 assert.equal(getGenAiBadgeLabel('deterministic-test'), '테스트 모드');
-assert.equal(getGenAiBadgeLabel('openai-configured'), 'GenAI 연결됨');
+assert.equal(getGenAiBadgeLabel('openai-configured'), 'OpenAI 연결됨');
+assert.equal(getGenAiBadgeLabel('grok-configured'), 'Grok 연결됨');
 assert.equal(getGenAiBadgeLabel('not-configured'), '설정 필요');
 assert.equal(getGenAiBadgeLabel(undefined), '설정 필요');
 

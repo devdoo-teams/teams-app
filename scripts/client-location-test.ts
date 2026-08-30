@@ -426,6 +426,11 @@ async function testBrowserLocationTimeoutStartsFreshRequestAndIgnoresLateCallbac
   const secondOutcome = second.then(() => 'settled' as const, () => 'rejected' as const);
 
   assert.match(first instanceof Error ? first.message : '', /시간(?:이)? 초과/, 'browser operation timeout is returned to the first caller');
+  assert.match(
+    first instanceof Error ? first.message : '',
+    /새 위치 요청을 시작하지 않았습니다/,
+    'browser timeout preserves guidance about the unresolved stale request before releasing it',
+  );
   const freshStart = await Promise.race([
     freshStarted.then(() => 'started' as const),
     new Promise<'test-watchdog'>((resolve) => setTimeout(() => resolve('test-watchdog'), 60)),

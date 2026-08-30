@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawn as realSpawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -23,19 +24,66 @@ await fs.copyFile(process.execPath, executableFixture);
 await fs.chmod(executableFixture, 0o755);
 const executableDigest = crypto.createHash('sha256').update(await fs.readFile(executableFixture)).digest('hex');
 
+async function waitForProcessMarker(markerPath) {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    try {
+      const values = (await fs.readFile(markerPath, 'utf8')).trim().split('\n').map(Number);
+      if (values.length === 2 && values.every((value) => Number.isInteger(value) && value > 0)) {
+        return { parentPid: values[0], descendantPid: values[1] };
+      }
+    } catch {
+      // The child has not written its process metadata yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('login child process marker was not created');
+}
+
+function processIsAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === 'EPERM';
+  }
+}
+
+function createChildWithSafeLateErrorObservation() {
+  const child = new EventEmitter();
+  let unhandledError;
+  const emit = child.emit.bind(child);
+  child.emit = (event, ...args) => {
+    if (event === 'error' && child.listenerCount('error') === 0) {
+      unhandledError = args[0];
+      return false;
+    }
+    return emit(event, ...args);
+  };
+  child.getUnhandledError = () => unhandledError;
+  child.kill = () => false;
+  return child;
+}
+
 assert.deepEqual(parseArguments([]), { workers: ['main'], runLogin: false });
 assert.deepEqual(parseArguments(['--worker', '1', '--run-login']), { workers: ['1'], runLogin: true });
-assert.deepEqual(parseArguments(['--all']), { workers: ['main', '1', '2'], runLogin: false });
-assert.throws(() => parseArguments(['--worker', '3']), /worker must be main, 1, or 2/i);
+assert.deepEqual(
+  parseArguments(['--all']),
+  { workers: ['main', '1', '2', '3', '4', '5', '6', '7', '8'], runLogin: false },
+);
+assert.deepEqual(parseArguments(['--worker', '8']), { workers: ['8'], runLogin: false });
+assert.throws(() => parseArguments(['--worker', '9']), /worker must be main or 1 through 8/i);
 assert.throws(() => parseArguments(['--all', '--worker', '1']), /cannot be combined/i);
 
 const env = {
   AGENT_CODEX_HOME: '/var/lib/teams/codex-main',
   AGENT_CODEX_HOME_1: '/var/lib/teams/codex-worker-1',
   AGENT_CODEX_HOME_2: '/var/lib/teams/codex-worker-2',
+  AGENT_CODEX_HOME_8: '/var/lib/teams/codex-worker-8',
 };
 assert.equal(resolveWorkerHome(env, 'main'), env.AGENT_CODEX_HOME);
 assert.equal(resolveWorkerHome(env, '1'), env.AGENT_CODEX_HOME_1);
+assert.equal(resolveWorkerHome(env, '8'), env.AGENT_CODEX_HOME_8);
 assert.throws(() => resolveWorkerHome({}, '1'), /AGENT_CODEX_HOME_1 is required/i);
 
 assert.deepEqual(
@@ -135,6 +183,53 @@ assert.doesNotMatch(JSON.stringify(capturedLoginOptions.env), new RegExp(sentine
 await new Promise((resolve) => setTimeout(resolve, 40));
 assert.equal(successfulAbortCount, 0, 'a completed login must clear its timeout');
 
+const childError = new Error('login child could not be spawned');
+const errorFirstChild = new EventEmitter();
+errorFirstChild.kill = () => false;
+await assert.rejects(
+  () => runWorkerLogin({
+    codexBin: executableFixture,
+    codexBinSha256: executableDigest,
+    codexHome: '/var/lib/teams/codex-worker-1',
+    env: { PATH: '/usr/bin' },
+    maxAttempts: 1,
+    timeoutMs: 25,
+    spawnImpl: () => {
+      queueMicrotask(() => {
+        errorFirstChild.emit('error', childError);
+        errorFirstChild.emit('close', null, null);
+      });
+      return errorFirstChild;
+    },
+  }),
+  (error) => error === childError,
+  'a child error must reject with the emitted error before close can settle the login',
+);
+
+const closeThenError = new Error('late child error');
+const closeFirstChild = createChildWithSafeLateErrorObservation();
+const closeFirstLogin = await runWorkerLogin({
+  codexBin: executableFixture,
+  codexBinSha256: executableDigest,
+  codexHome: '/var/lib/teams/codex-worker-1',
+  env: { PATH: '/usr/bin' },
+  maxAttempts: 1,
+  timeoutMs: 25,
+  spawnImpl: () => {
+    queueMicrotask(() => {
+      closeFirstChild.emit('close', 0, null);
+      closeFirstChild.emit('error', closeThenError);
+    });
+    return closeFirstChild;
+  },
+});
+assert.deepEqual(closeFirstLogin, { code: 0, signal: null });
+assert.equal(
+  closeFirstChild.getUnhandledError(),
+  undefined,
+  'a close/error race must keep the late child error handled after close settles the login',
+);
+
 let missingDigestSpawned = false;
 const missingDigestChild = new EventEmitter();
 missingDigestChild.kill = () => false;
@@ -187,6 +282,159 @@ assert.equal(timeoutSignal.aborted, true, 'timed-out login must abort its child 
 assert.equal(timeoutAbortCount, 1);
 await new Promise((resolve) => setTimeout(resolve, 30));
 assert.equal(timeoutAbortCount, 1, 'the timeout must be cleared after cleanup');
+
+const windowsSignals = [];
+let windowsDetached;
+let windowsKillCalls = 0;
+let windowsChild;
+await assert.rejects(
+  () => runWorkerLogin({
+    codexBin: executableFixture,
+    codexBinSha256: executableDigest,
+    codexHome: '/var/lib/teams/codex-worker-1',
+    env: { PATH: '/usr/bin' },
+    maxAttempts: 1,
+    timeoutMs: 10,
+    platform: 'win32',
+    killImpl: () => {
+      windowsKillCalls += 1;
+      throw new Error('win32 cleanup must not signal a process group');
+    },
+    spawnImpl: (_command, _args, options) => {
+      windowsDetached = options.detached;
+      windowsChild = new EventEmitter();
+      windowsChild.pid = 424242;
+      windowsChild.kill = (signal) => {
+        windowsSignals.push(signal);
+        if (signal === 'SIGKILL') queueMicrotask(() => windowsChild.emit('close', null, signal));
+        return true;
+      };
+      return windowsChild;
+    },
+  }),
+  (error) => error?.code === 'CODEX_LOGIN_TIMEOUT',
+  'the injected win32 cleanup path must still reject with a timeout after child-handle cleanup',
+);
+assert.equal(windowsDetached, false, 'win32 login must not request detached process-group execution');
+assert.deepEqual(windowsSignals, ['SIGTERM', 'SIGKILL']);
+assert.equal(windowsKillCalls, 0, 'win32 cleanup must use the supported child handle path');
+
+const processGroupMarker = path.join(root, 'login-process-group-marker');
+const processGroupScript = [
+  "const { spawn } = require('node:child_process');",
+  "const fs = require('node:fs');",
+  `const marker = ${JSON.stringify(processGroupMarker)};`,
+  "const descendant = spawn(process.execPath, ['-e', \"process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)\"], { stdio: 'ignore' });",
+  "fs.writeFileSync(marker, String(process.pid) + '\\n' + String(descendant.pid) + '\\n');",
+  "process.on('SIGTERM', () => process.exit(0));",
+  "setInterval(() => {}, 1000);",
+].join('\n');
+let processGroupOptions;
+let processGroupPids;
+let processGroupLogin;
+try {
+  processGroupLogin = runWorkerLogin({
+    codexBin: executableFixture,
+    codexBinSha256: executableDigest,
+    codexHome: '/var/lib/teams/codex-worker-1',
+    env: { PATH: '/usr/bin' },
+    maxAttempts: 1,
+    timeoutMs: 100,
+    spawnImpl: (_command, _args, options) => {
+      processGroupOptions = options;
+      return realSpawn(process.execPath, ['-e', processGroupScript], {
+        detached: options.detached,
+        stdio: 'ignore',
+      });
+    },
+  });
+  processGroupPids = await waitForProcessMarker(processGroupMarker);
+  await assert.rejects(
+    processGroupLogin,
+    (error) => error?.code === 'CODEX_LOGIN_TIMEOUT',
+    'a child that never closes must reject with a bounded timeout',
+  );
+  const usesProcessGroups = process.platform !== 'win32';
+  assert.equal(processGroupOptions.detached, usesProcessGroups);
+  if (usesProcessGroups) {
+    const descendantAliveAtSettlement = processIsAlive(processGroupPids.descendantPid);
+    assert.equal(descendantAliveAtSettlement, false, 'timeout rejection must wait for process-group cleanup before settling');
+  }
+} finally {
+  if (processGroupPids?.descendantPid && processIsAlive(processGroupPids.descendantPid)) {
+    try {
+      process.kill(processGroupPids.descendantPid, 'SIGKILL');
+    } catch {
+      // The child may have exited during the assertion or cleanup.
+    }
+  }
+  if (processGroupPids?.parentPid && processIsAlive(processGroupPids.parentPid)) {
+    try {
+      process.kill(processGroupPids.parentPid, 'SIGKILL');
+    } catch {
+      // The child may have exited during the assertion or cleanup.
+    }
+  }
+}
+
+const cleanupFailureMarker = path.join(root, 'login-process-group-cleanup-failure-marker');
+const cleanupFailureScript = [
+  "const { spawn } = require('node:child_process');",
+  "const fs = require('node:fs');",
+  `const marker = ${JSON.stringify(cleanupFailureMarker)};`,
+  "const descendant = spawn(process.execPath, ['-e', \"process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)\"], { stdio: 'ignore' });",
+  "fs.writeFileSync(marker, String(process.pid) + '\\n' + String(descendant.pid) + '\\n');",
+  "process.on('SIGTERM', () => process.exit(0));",
+  "setInterval(() => {}, 1000);",
+].join('\n');
+let cleanupFailurePids;
+let cleanupFailureLogin;
+let cleanupFailureAttempts = 0;
+const cleanupFailureKillImpl = (pid, signal) => {
+  if (pid < 0 && signal === 'SIGKILL') return true;
+  return process.kill(pid, signal);
+};
+try {
+  cleanupFailureLogin = runWorkerLogin({
+    codexBin: executableFixture,
+    codexBinSha256: executableDigest,
+    codexHome: '/var/lib/teams/codex-worker-1',
+    env: { PATH: '/usr/bin' },
+    maxAttempts: 2,
+    timeoutMs: 250,
+    platform: 'linux',
+    killImpl: cleanupFailureKillImpl,
+    spawnImpl: (_command, _args, options) => {
+      cleanupFailureAttempts += 1;
+      return realSpawn(process.execPath, ['-e', cleanupFailureScript], {
+        detached: options.detached,
+        stdio: 'ignore',
+      });
+    },
+  });
+  cleanupFailurePids = await waitForProcessMarker(cleanupFailureMarker);
+  await assert.rejects(
+    cleanupFailureLogin,
+    (error) => error?.code === 'CODEX_LOGIN_REAP_FAILED',
+    'a SIGKILL cleanup failure must be reported before timeout rejection or retry',
+  );
+  assert.equal(cleanupFailureAttempts, 1, 'cleanup failure must not start an overlapping retry');
+} finally {
+  if (cleanupFailurePids?.descendantPid && processIsAlive(cleanupFailurePids.descendantPid)) {
+    try {
+      process.kill(cleanupFailurePids.descendantPid, 'SIGKILL');
+    } catch {
+      // The child may have exited during the assertion or cleanup.
+    }
+  }
+  if (cleanupFailurePids?.parentPid && processIsAlive(cleanupFailurePids.parentPid)) {
+    try {
+      process.kill(cleanupFailurePids.parentPid, 'SIGKILL');
+    } catch {
+      // The child may have exited during the assertion or cleanup.
+    }
+  }
+}
 
 const callerAbortController = new AbortController();
 let callerAbortSignal;

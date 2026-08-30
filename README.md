@@ -64,7 +64,7 @@ v1.0.7부터 사용자·테넌트별로 다음 응답 엔진을 선택할 수 �
 
 모바일 Teams에서 선택하려면 다음 순서를 따릅니다.
 
-1. Teams Admin Center의 기존 앱 상세에 업로드된 v1.0.15 앱을 Teams 모바일에서 새로 고침하거나 앱을 다시 추가하고 `업무 허브` 개인 탭을 엽니다.
+1. Teams Admin Center의 기존 앱 상세에 업로드된 현재 승인 버전의 앱을 Teams 모바일에서 새로 고침하거나 앱을 다시 추가하고 `업무 허브` 개인 탭을 엽니다.
 2. 탭의 `응답 엔진` 선택 영역에서 `결정형`, `OpenAI`, `로컬/사내 모델` 중 하나를 누릅니다.
 3. 설정되지 않은 provider는 비활성화되어 있으며 모바일 사용자는 키·endpoint URL을 입력하지 않습니다. OpenAI/로컬 항목이 비활성화되어 있으면 `결정형`을 선택하거나 관리자에게 서버 설정을 요청합니다.
 4. Bot 대화에서는 `mode` 또는 `응답 모드`를 보내 같은 세 가지 선택 Adaptive Card를 열 수 있습니다. 선택 후 `help`, `list`, `status`, `날씨` 또는 자연어 요청을 보내 응답을 확인합니다.
@@ -138,7 +138,7 @@ Teams 탭이 초기화되면 TeamsJS `authentication.getAuthToken()`으로 받�
 
 실제 Teams 등록 후 발급받은 값으로 패키지를 생성합니다.
 
-이 릴리스 후보의 소스 package와 Teams manifest 버전은 `1.0.26`으로 고정되어 있으며 `npm run validate:manifest`가 두 값을 함께 검사합니다. 실제 배포 환경값이 없는 상태에서는 패키지를 업로드하거나 placeholder를 운영 자격 증명으로 간주하지 않습니다.
+이 릴리스 후보의 소스 package와 Teams manifest 버전은 서로 일치해야 하며 `npm run validate:manifest`가 두 값을 함께 검사합니다. 실제 배포 환경값이 없는 상태에서는 패키지를 업로드하거나 placeholder를 운영 자격 증명으로 간주하지 않습니다.
 
 운영 패키지를 만들기 전에 배포 환경 사전검사를 실행합니다. 이 검사는 검증용 placeholder, 로컬 호스트, 잘못된 GUID를 차단합니다. `BOT_ID`는 메시징용 Teams/Bot 등록 ID이며, 봇과 탭을 함께 사용하는 Teams SDK 앱에서는 `APPLICATION_ID_URI`가 Microsoft의 결합 봇+탭 계약인 `api://<TAB_DOMAIN>/botid-<BOT_CLIENT_ID>`여야 합니다. `webApplicationInfo.id`는 별도 인증 앱일 수 있지만 resource URI 계약은 관찰된 봇 리소스와 일치해야 합니다.
 
@@ -159,7 +159,7 @@ npm run package:app
 
 생성된 `appPackage/build/teams-sdk-mvp.zip`을 Teams Developer Portal 또는 Teams Admin Center에 업로드합니다.
 
-ZIP을 새로 만든 뒤에는 내부 `manifest.json`의 버전 `1.0.26`, `devicePermissions: ["geolocation"]`, 탭 호스트와 `token.botframework.com`을 포함한 valid domain, 해석된 ID/URI를 확인하고 SHA-256을 기록합니다. 이전 ZIP을 재사용하지 않습니다.
+ZIP을 새로 만든 뒤에는 내부 `manifest.json`의 버전이 source package와 일치하는지, `devicePermissions: ["geolocation"]`, 탭 호스트와 `token.botframework.com`을 포함한 valid domain, 해석된 ID/URI를 확인하고 SHA-256을 기록합니다. 이전 ZIP을 재사용하지 않습니다.
 
 `APPLICATION_ID_URI`는 Microsoft Entra 앱 등록의 `Expose an API`에 표시되는 실제 Application ID URI를 사용해야 합니다. 이 값은 manifest의 `webApplicationInfo.resource`로 들어갑니다.
 

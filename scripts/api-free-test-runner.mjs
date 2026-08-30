@@ -57,6 +57,7 @@ const tests = [
   'typecheck:core',
   'check',
   'test:core-bundle-boundary',
+  'test:fileprovider-runtime-deps',
   'test:deployment-env',
   'test:manifest',
   'test:tab-route-order',

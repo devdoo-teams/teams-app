@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import * as coreSourceCheckBehavior from './core-source-check-lib.mjs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const runner = fs.readFileSync(new URL('./api-free-test-runner.mjs', import.meta.url), 'utf8');
 const clientBuild = fs.readFileSync(new URL('./build-client.mjs', import.meta.url), 'utf8');
@@ -322,6 +326,45 @@ function makeCoreSourceAdapters(compileSource) {
     /Core source compile check failed for src\/server\/index\.ts: The service was stopped/,
   );
   assert.equal(attempts, 2, 'core compile must fail after exactly two service-stop attempts');
+}
+
+{
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'teams-api-free-runner-contract-'));
+  try {
+    const invocationLog = path.join(fixtureRoot, 'npm-invocations.log');
+    const fakeNpmProgram = path.join(fixtureRoot, 'fake-npm.cjs');
+    fs.writeFileSync(
+      fakeNpmProgram,
+      `const fs = require('node:fs');\nfs.appendFileSync(${JSON.stringify(invocationLog)}, process.argv.slice(2).join(' ') + '\\n');\n`,
+    );
+    if (process.platform === 'win32') {
+      fs.writeFileSync(path.join(fixtureRoot, 'npm.cmd'), `@node "%~dp0fake-npm.cjs" %*\r\n`);
+    } else {
+      const fakeNpm = path.join(fixtureRoot, 'npm');
+      fs.writeFileSync(fakeNpm, `#!/usr/bin/env node\n${fs.readFileSync(fakeNpmProgram, 'utf8')}`);
+      fs.chmodSync(fakeNpm, 0o755);
+    }
+
+    const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const result = spawnSync(process.execPath, ['scripts/api-free-test-runner.mjs'], {
+      cwd: repositoryRoot,
+      env: {
+        ...process.env,
+        PATH: `${fixtureRoot}${path.delimiter}${process.env.PATH}`,
+        TEAMS_SOURCE_COMMIT: PINNED_COMMIT,
+        TEAMS_TEST_TIMEOUT_MS: '5000',
+      },
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const invocations = fs.readFileSync(invocationLog, 'utf8').trim().split('\n');
+    assert.ok(
+      invocations.includes('run test:fileprovider-runtime-deps'),
+      'the default API-free runner must execute the FileProvider runtime dependency lifecycle contract',
+    );
+  } finally {
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  }
 }
 
 console.log('PASS: API-free runner avoids the unbounded full typecheck');
