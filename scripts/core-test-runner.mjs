@@ -41,6 +41,7 @@ const runtimeTests = [
   'scripts/response-mode-api-test.ts',
   'scripts/teams-a2a-chat-regression-test.ts',
   'scripts/teams-a2a-outbound-restart-regression-test.ts',
+  'scripts/a2a-remote-startup-isolation-test.mjs',
   'scripts/a2a-index-integration-test.mjs',
 ];
 const tsTests = [

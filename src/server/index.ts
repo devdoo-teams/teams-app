@@ -126,7 +126,6 @@ import { serializeA2ADispatchAudit } from './a2a-observability.js';
 import { createA2AAgentAuthorizationPolicy } from './a2a-agent-authorization.js';
 import { A2ATelemetryCollector } from './a2a-telemetry.js';
 import {
-  createConfiguredA2ARemoteAgent,
   createConfiguredA2ARemoteAgents,
   type A2AConfiguredRemoteAgentFailure,
 } from './a2a-remote-agent-adapter.js';
@@ -1454,16 +1453,22 @@ if ((remoteA2AEndpoint || remoteA2ABearerToken) && remoteA2ARoster.length > 0) {
 }
 const remoteA2AAgentId = process.env.TEAMS_A2A_REMOTE_AGENT_ID?.trim() || 'teams-core-remote';
 const remoteA2AProviderId = process.env.TEAMS_A2A_REMOTE_PROVIDER_ID?.trim() || 'remote-a2a';
-const configuredRemoteA2AAgent = remoteA2AEndpoint && remoteA2ABearerToken
-  ? await createConfiguredA2ARemoteAgent({
-    endpoint: remoteA2AEndpoint,
-    bearerToken: remoteA2ABearerToken,
-    agentId: remoteA2AAgentId,
-    providerId: remoteA2AProviderId,
-    authorizationPolicy: createA2ARemoteAuthorizationPolicy(remoteA2AAgentId),
-    telemetry: a2aTelemetry,
-  })
-  : undefined;
+// A remote Agent Card is an optional dependency. Initialize the legacy
+// single-peer form through the same per-peer failure isolation as the roster
+// form so a stale/unreachable remote cannot take down Teams Core at startup.
+const configuredRemoteA2ALegacy = await createConfiguredA2ARemoteAgents(
+  remoteA2AEndpoint && remoteA2ABearerToken
+    ? [{
+        endpoint: remoteA2AEndpoint,
+        bearerToken: remoteA2ABearerToken,
+        agentId: remoteA2AAgentId,
+        providerId: remoteA2AProviderId,
+        authorizationPolicy: createA2ARemoteAuthorizationPolicy(remoteA2AAgentId),
+        telemetry: a2aTelemetry,
+      }]
+    : [],
+);
+const configuredRemoteA2AAgent = configuredRemoteA2ALegacy.agents[0];
 const remoteA2ARosterCredentials: A2ARemotePeerCredential[] = [];
 const remoteA2ARosterFailures: A2AConfiguredRemoteAgentFailure[] = [];
 for (const peer of remoteA2ARoster) {
@@ -1498,6 +1503,7 @@ const configuredRemoteA2ABatch = await createConfiguredA2ARemoteAgents(
 );
 const a2aRemoteInitializationFailures: readonly A2AConfiguredRemoteAgentFailure[] = Object.freeze([
   ...remoteA2ARosterFailures,
+  ...configuredRemoteA2ALegacy.failures,
   ...configuredRemoteA2ABatch.failures,
 ]);
 const coreA2ARoles = Object.freeze(A2A_ROLE_CATALOG.map((role) => role.id));
