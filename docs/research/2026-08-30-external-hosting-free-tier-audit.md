@@ -79,6 +79,29 @@ Cloudflare는 현재 primary compute가 아니다. Workers Free는 Edge/API faca
 
 즉, Cloudflare의 무료 D1/R2/Queues는 “무료 외부 서비스가 전혀 없다”는 뜻을 뒤집지만, 현재 서버를 그대로 무료 Cloudflare Workers에 배포할 수 있다는 뜻은 아니다. 무료 쿼리·저장 한도도 초과 시 오류/보존 기간 제한이 있으므로 release gate와 운영 SLA에 포함해 측정해야 한다.
 
+## 2차 보강 조사: 추가 무료·저비용 후보
+
+첫 번째 표는 현재 저장소에서 바로 비교할 가능성이 높은 대표 후보를 대상으로 한 것이었다. “전수” 범위를 더 넓히기 위해 컨테이너 PaaS, 무료 VM, serverless/API, AI 데모 호스팅을 다시 분류했다. 아래 서비스도 공식 문서에서 확인했지만, 무료라는 사실만으로 현재 운영 계약을 만족한다고 판정하지 않는다.
+
+| 추가 후보 | 공식 문서에서 확인한 사실 | 현재 앱과의 대조 | 판정 |
+| --- | --- | --- | --- |
+| DigitalOcean App Platform | 무료 계층은 정적 사이트용이다. 동적 컨테이너는 유료이며, 컨테이너 로컬 파일은 교체 때 소실되고 volume을 지원하지 않는다. | `/api/messages`를 포함한 Express 서버를 지속 운영하려면 유료 컨테이너와 외부 DB/Object Storage가 필요하다. | `NOT_A_FREE_OPTION` / canary 후보 |
+| Northflank Developer Sandbox | 무료 Sandbox는 2 services, 2 jobs, 1 addon을 제공하지만 리소스 생성 전에 결제수단을 요구하고 production 사용을 금지한다. | Docker canary와 실험에는 유용하나 무료 production/A2A 운영 증거로 사용할 수 없다. | `CANARY_ONLY` |
+| Zeabur Free | 카드 없이 시작할 수 있으나 Free Plan 서비스는 inactivity auto-sleep, SLA 없음, 자동 DB backup/log forwarding 없음이다. | Teams webhook cold start와 durable agent state/운영 SLA에 부적합하다. | `CANARY_ONLY` |
+| IBM Cloud Code Engine | 사용량 기반 컨테이너/작업 실행과 free tier가 있지만 app은 scale-to-zero가 가능하고 ephemeral storage이며 HTTP timeout 최대가 600초다. | 짧은 API/canary 또는 별도 worker 실험에는 가능하지만 file-json 단일 프로세스와 장기 Codex child process를 그대로 보존하지 못한다. | `CANARY_ONLY` / 재설계 필요 |
+| Google App Engine Standard | Node.js standard environment에 free tier와 scale-to-zero가 있지만 billing account/payment instrument가 필요하고 request timeout·파일/런타임 제약이 있다. | 얇은 API adapter에는 가능하나 현재 Docker/Express/A2A worker의 직접 호스트는 아니다. | `NOT_A_PRIMARY_RUNTIME` |
+| Azure App Service Free (F1) | 무료 F1은 하루 60 CPU minutes/앱 수준의 quota이고 free/shared plan은 trial·학습용이며 production을 지원하지 않는다. | 짧은 개발 검증 외에는 Teams webhook과 공개 운영 대상이 아니다. | `CANARY_ONLY` |
+| Azure Static Web Apps Free | 정적 호스팅과 managed HTTP Functions를 제공하지만 API는 HTTP-only, 요청 최대 45초이며 WebSocket을 지원하지 않는다. | 개인 탭 정적 asset에는 쓸 수 있지만 Bot webhook·장기 agent 결과 저장소·worker를 대체하지 못한다. | `STATIC_ONLY` |
+| Hugging Face Spaces Free | CPU Basic은 무료지만 Docker/Gradio 실행·비공개 운영 조건과 free hardware sleep이 있고 기본 디스크는 ephemeral이다. | AI 데모에는 유용하나 Teams production endpoint, private source, durable A2A에는 부적합하다. | `DEMO_ONLY` |
+
+이 보강으로 무료 후보의 의미도 분리된다.
+
+1. `지속 실행 컴퓨트`: Oracle Always Free VM은 실제 Always Free 자원이지만 home region capacity 부족과 7일 저사용 reclaim 조건이 있고, ARM/x86 이미지·보안 패치·TLS·백업·모니터링을 직접 운영해야 한다. 따라서 “가능한 무료 self-managed VM”이지 “관리형 production 무료 서비스”가 아니다.
+2. `서버리스 무료 한도`: Cloud Run, App Engine, IBM Code Engine, AWS Lambda, Firebase Functions는 사용량 기반 무료 한도 또는 no-cost tier가 있어도 billing account/유료 요금제/함수 실행 한도/ephemeral filesystem을 함께 확인해야 한다. Lambda/Firebase/Static Web Apps는 현재 Express 프로세스와 Codex worker를 함수 단위로 분해하는 재설계 대상이다.
+3. `데이터 계층`: Cloudflare D1/R2/Queues와 Supabase·Oracle DB는 무료 또는 no-cost 구간이 있지만, quota 초과·pause·retention·백업·consistency 조건을 job/event store의 수락 기준에 넣어야 한다.
+
+따라서 이번 조사에서 “현재 앱을 무료 계정만으로 그대로 옮겨 production 완료”라는 결론은 나오지 않았다. 가장 현실적인 선택지는 (a) 현재 서비스는 유지하고, (b) Azure Container Apps 또는 Cloud Run을 유료 초과 가능성을 포함한 guarded canary로 준비하며, (c) 진짜 무료가 반드시 필요하면 Oracle VM을 별도 self-managed 경로로 검증하고, (d) Cloudflare는 Workers facade + D1/R2/Queues로 재설계할 때만 선택하는 것이다. 이 판단은 계정 생성이나 live deploy를 수행한 결과가 아니라 공식 계약과 현재 저장소 요구사항을 대조한 아키텍처 판단이다.
+
 ## 릴리스 및 교체 순서
 
 1. PR/main에서 bounded Core source check, build, Core tests, manifest, deterministic package, Docker contract/smoke를 통과시킨다.
@@ -104,19 +127,34 @@ Cloudflare는 현재 primary compute가 아니다. Workers Free는 Edge/API faca
 - Cloudflare D1 pricing: <https://developers.cloudflare.com/d1/platform/pricing/>
 - Cloudflare R2 pricing: <https://developers.cloudflare.com/r2/pricing/>
 - Cloudflare Queues pricing: <https://developers.cloudflare.com/queues/platform/pricing/>
+- Cloudflare Containers lifecycle and ephemeral disk: <https://developers.cloudflare.com/containers/concepts/architecture/>
 - Google Cloud Run pricing: <https://cloud.google.com/run/pricing>
 - Google Cloud Run container contract: <https://docs.cloud.google.com/run/docs/container-contract>
 - Google Cloud free program: <https://docs.cloud.google.com/free/docs/free-cloud-features>
+- Google App Engine pricing: <https://cloud.google.com/appengine/pricing>
+- Google App Engine request limits: <https://docs.cloud.google.com/appengine/docs/standard/how-requests-are-handled>
 - Render free services: <https://render.com/docs/free>
 - Railway free trial: <https://docs.railway.com/pricing/free-trial>
 - Railway volumes: <https://docs.railway.com/volumes/reference>
 - Koyeb instances: <https://www.koyeb.com/docs/reference/instances>
 - Fly.io free trial: <https://fly.io/docs/about/free-trial/>
 - Oracle Always Free resources: <https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm>
+- DigitalOcean App Platform pricing: <https://docs.digitalocean.com/products/app-platform/details/pricing/>
+- DigitalOcean App Platform limits: <https://docs.digitalocean.com/products/app-platform/details/limits/>
+- Northflank pricing: <https://northflank.com/docs/v1/application/billing/pricing-on-northflank>
+- Zeabur Free Plan: <https://zeabur.com/docs/en-US/pricing/free-plan>
+- IBM Code Engine pricing: <https://cloud.ibm.com/docs/codeengine?topic=codeengine-pricing>
+- IBM Code Engine limits: <https://cloud.ibm.com/docs/codeengine?topic=codeengine-limits>
+- Azure App Service pricing: <https://azure.microsoft.com/en-us/pricing/details/app-service/windows/>
+- Azure Static Web Apps plans: <https://learn.microsoft.com/en-us/azure/static-web-apps/plans>
+- Azure Static Web Apps API limits: <https://learn.microsoft.com/en-us/azure/static-web-apps/apis-overview>
+- Hugging Face Spaces overview: <https://huggingface.co/docs/hub/en/spaces-overview>
+- Hugging Face Spaces storage: <https://huggingface.co/docs/hub/en/spaces-storage>
 - Deno Deploy pricing: <https://deno.com/deploy/pricing>
 - Vercel function limits: <https://vercel.com/docs/functions/limitations>
 - Netlify Background Functions: <https://docs.netlify.com/build/functions/background-functions/>
 - AWS Lambda pricing: <https://aws.amazon.com/lambda/pricing/>
+- AWS Lambda quotas: <https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html>
 - Supabase pricing: <https://supabase.com/pricing>
 - Supabase Free project pausing: <https://supabase.com/docs/guides/platform/free-project-pausing>
 
