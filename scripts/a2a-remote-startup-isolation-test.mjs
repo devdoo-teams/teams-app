@@ -62,7 +62,7 @@ const child = spawn(process.execPath, [runtimeEntry], {
     TEAMS_SKIP_AUTH: 'true',
     TEAMS_SKIP_OUTBOUND: 'true',
     TEAMS_LOCAL_DEV: 'true',
-    TEAMS_LOCAL_ACCESS_TOKEN: 'remote-startup-test-token',
+    TEAMS_LOCAL_ACCESS_TOKEN: 'remote-startup-test-token-0123456789abcdef',
     TEAMS_BIND_HOST: '127.0.0.1',
     PUBLIC_BASE_URL: '',
     TAB_DOMAIN: '',
