@@ -360,6 +360,48 @@ jobs:
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --image "$DEPLOY_IMAGE_REPOSITORY@$IMAGE_DIGEST" \
             --revision-suffix "sha-${GITHUB_SHA:0:12}"
+      - name: Wait for immutable revision readiness
+        env:
+          REVISION_READINESS_TIMEOUT_SECONDS: 300
+        run: |
+          set -euo pipefail
+          EXPECTED_REVISION_SUFFIX="sha-${GITHUB_SHA:0:12}"
+          deadline=$((SECONDS + REVISION_READINESS_TIMEOUT_SECONDS))
+          while (( SECONDS < deadline )); do
+            revisions="$(az containerapp revision list \
+              --name "$AZURE_CONTAINER_APP" \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --all \
+              --only-show-errors \
+              --output json)"
+            revision_json="$(printf '%s' "$revisions" | jq -c --arg suffix "$EXPECTED_REVISION_SUFFIX" '
+              [.[] | select(.properties.template.revisionSuffix == $suffix)]
+              | sort_by(.properties.createdTime // "")
+              | last // empty
+            ')"
+            if [[ -n "$revision_json" ]]; then
+              revision_name="$(printf '%s' "$revision_json" | jq -r '.name // empty')"
+              provisioning_state="$(printf '%s' "$revision_json" | jq -r '.properties.provisioningState // empty')"
+              health_state="$(printf '%s' "$revision_json" | jq -r '.properties.healthState // empty')"
+              running_state="$(printf '%s' "$revision_json" | jq -r '.properties.runningState // empty')"
+              replicas="$(printf '%s' "$revision_json" | jq -r '.properties.replicas // 0')"
+              printf 'revision readiness: name=%s provisioning=%s health=%s running=%s replicas=%s\n' \
+                "$revision_name" "$provisioning_state" "$health_state" "$running_state" "$replicas"
+              if [[ "$provisioning_state" == "Failed" || "$running_state" == "Failed" || "$running_state" == "Degraded" || "$health_state" == "Unhealthy" ]]; then
+                echo 'new revision entered a terminal failure state' >&2
+                exit 1
+              fi
+              if [[ "$provisioning_state" == "Provisioned" && "$health_state" == "Healthy" && "$running_state" == "Running" && "$replicas" =~ ^[1-9][0-9]*$ ]]; then
+                echo "READY_REVISION_NAME=$revision_name" >> "$GITHUB_ENV"
+                exit 0
+              fi
+            else
+              echo 'revision readiness: waiting for the commit-suffixed revision to appear'
+            fi
+            sleep 10
+          done
+          echo "timed out waiting for revision suffix $EXPECTED_REVISION_SUFFIX" >&2
+          exit 1
       - name: Verify the deployed image reference
         run: |
           set -euo pipefail
@@ -455,6 +497,45 @@ jobs:
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --image "$PREVIOUS_IMAGE" \
             --revision-suffix "rollback-${GITHUB_RUN_ID:0:12}"
+          rollback_suffix="rollback-${GITHUB_RUN_ID:0:12}"
+          rollback_deadline=$((SECONDS + 300))
+          rollback_ready=false
+          while (( SECONDS < rollback_deadline )); do
+            revisions="$(az containerapp revision list \
+              --name "$AZURE_CONTAINER_APP" \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --all \
+              --only-show-errors \
+              --output json)"
+            rollback_json="$(printf '%s' "$revisions" | jq -c --arg suffix "$rollback_suffix" '
+              [.[] | select(.properties.template.revisionSuffix == $suffix)]
+              | sort_by(.properties.createdTime // "")
+              | last // empty
+            ')"
+            if [[ -n "$rollback_json" ]]; then
+              rollback_provisioning="$(printf '%s' "$rollback_json" | jq -r '.properties.provisioningState // empty')"
+              rollback_health="$(printf '%s' "$rollback_json" | jq -r '.properties.healthState // empty')"
+              rollback_running="$(printf '%s' "$rollback_json" | jq -r '.properties.runningState // empty')"
+              rollback_replicas="$(printf '%s' "$rollback_json" | jq -r '.properties.replicas // 0')"
+              printf 'rollback readiness: provisioning=%s health=%s running=%s replicas=%s\n' \
+                "$rollback_provisioning" "$rollback_health" "$rollback_running" "$rollback_replicas"
+              if [[ "$rollback_provisioning" == "Failed" || "$rollback_running" == "Failed" || "$rollback_running" == "Degraded" || "$rollback_health" == "Unhealthy" ]]; then
+                echo 'rollback revision entered a terminal failure state' >&2
+                exit 1
+              fi
+              if [[ "$rollback_provisioning" == "Provisioned" && "$rollback_health" == "Healthy" && "$rollback_running" == "Running" && "$rollback_replicas" =~ ^[1-9][0-9]*$ ]]; then
+                rollback_ready=true
+                break
+              fi
+            else
+              echo 'rollback readiness: waiting for the rollback revision to appear'
+            fi
+            sleep 10
+          done
+          if [[ "$rollback_ready" != true ]]; then
+            echo "timed out waiting for rollback suffix $rollback_suffix" >&2
+            exit 1
+          fi
           rolled_back_image="$(az containerapp show --name "$AZURE_CONTAINER_APP" --resource-group "$AZURE_RESOURCE_GROUP" --query 'properties.template.containers[0].image' --output tsv)"
           test "$rolled_back_image" = "$PREVIOUS_IMAGE"
       - name: Upload external runtime verification

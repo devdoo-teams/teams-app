@@ -92,6 +92,14 @@ requireText(/npm run test:docker-build-inputs/, 'external verification must vali
 requireText(/npm run test:docker-runtime-contract/, 'external verification must validate the Docker runtime contract');
 requireText(/activeRevisionsMode/, 'deployment must inspect the Container Apps revision mode');
 requireText(/test "\$active_revisions_mode" = "Single"/, 'file-backed deployment must use a single active revision');
+requireText(/az containerapp revision list\s*\\\s*--name/s, 'deployment must inspect the created revision readiness');
+requireText(/--all\s*\\\s*--only-show-errors\s*\\\s*--output json/s, 'revision readiness must include active revision state');
+requireText(/EXPECTED_REVISION_SUFFIX/, 'revision readiness must bind to the source-commit suffix');
+requireText(/provisioningState/, 'revision readiness must inspect provisioning state');
+requireText(/healthState/, 'revision readiness must inspect health state');
+requireText(/runningState/, 'revision readiness must inspect running state');
+requireText(/properties\.replicas/, 'revision readiness must inspect replica availability');
+requireText(/revision readiness/, 'deployment must report revision readiness explicitly');
 requireText(/previous_image/, 'deployment must capture an immutable rollback image');
 requireText(/if: failure\(\).*DEPLOYMENT_ATTEMPTED/s, 'failed deployment verification must trigger rollback');
 requireText(/rollback-\$\{GITHUB_RUN_ID/, 'rollback must create a traceable revision suffix');
