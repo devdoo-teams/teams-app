@@ -31,6 +31,7 @@
 | Cloudflare Containers | 임의 Linux container를 실행할 수 있지만 Workers Paid 전용이다. 컨테이너 디스크는 ephemeral이고 재시작·sleep 뒤 보존되지 않는다. | 현재 file JSON 저장과 무료 상용 운영에 맞지 않는다. Durable Objects/R2/외부 DB로 재설계하고 유료 플랜을 써야 한다. | `CANARY_ONLY` / 유료 전제 |
 | Cloudflare Tunnel | origin에서 Cloudflare로 outbound 연결을 만들고 public hostname으로 origin을 노출하는 연결 계층이다. | 호스팅/컴퓨트가 아니므로 로컬 Mac 또는 다른 서버를 대체하지 않는다. | `NOT_A_PRIMARY_RUNTIME` |
 | Google Cloud Run | `0.0.0.0`의 `PORT` listen 컨테이너 계약과 public HTTPS를 제공한다. request/instance 기반 free grant가 있지만 billing account가 필요하다. | Docker Core를 유지하기 쉬운 주 후보다. 파일 저장은 외부 저장소로 바꾸고, scale-to-zero와 long-lived worker를 분리해야 한다. | `PRIMARY_CANDIDATE` |
+| Firebase App Hosting | 동적 앱을 Cloud Run에 배포하고 Cloud Build/Artifact Registry/Secret Manager를 함께 사용한다. 공식 비용 문서상 Blaze pay-as-you-go 플랜이 필요하며 사용량별 no-cost 구간 이후 과금된다. | 별도 무료 컴퓨트가 아니라 Cloud Run 관리 표면이다. 현재 Express/file-json/Codex worker의 persistence·worker 문제를 해결하지 않으며, Cloud Run 대안으로만 검토한다. | `PRIMARY_CANDIDATE` / Cloud Run 조건 동일 |
 | Azure Container Apps | Microsoft가 Teams bot/tab를 Container Apps에 배포하는 경로를 제공하며 public HTTPS ingress와 Azure Files volume을 지원한다. | Teams/Entra/Bot Service와 직접 정렬되고 Azure Files + maxReplicas=1로 현재 file-json 계약을 보존할 수 있다. subscription/OIDC/resource 검증이 필요하다. | `PRIMARY_CANDIDATE` |
 | Render Free | idle sleep, 재시작/배포 시 local filesystem 소실, free Postgres 만료 및 free instance의 production 사용 제한이 있다. | Teams webhook cold start와 durable A2A state에 부적합하다. | `CANARY_ONLY` |
 | Railway Trial/Free | trial credit이 한시적이고 이후 무료 credit이 작다. volume 서비스는 replica 제약과 배포 downtime이 있다. | Docker canary에는 유용하지만 장기 production/A2A 저장소 계약에는 부족하다. | `CANARY_ONLY` |
@@ -142,6 +143,9 @@ Azure Container Apps의 Single revision은 새 revision이 준비될 때까지 �
 - Google Cloud free program: <https://docs.cloud.google.com/free/docs/free-cloud-features>
 - Google App Engine pricing: <https://cloud.google.com/appengine/pricing>
 - Google App Engine request limits: <https://docs.cloud.google.com/appengine/docs/standard/how-requests-are-handled>
+- Firebase App Hosting product comparison: <https://firebase.google.com/docs/app-hosting/product-comparison>
+- Firebase App Hosting costs: <https://firebase.google.com/docs/app-hosting/costs>
+- Firebase Hosting usage and quotas: <https://firebase.google.com/docs/hosting/usage-quotas-pricing>
 - Render free services: <https://render.com/docs/free>
 - Railway free trial: <https://docs.railway.com/pricing/free-trial>
 - Railway volumes: <https://docs.railway.com/volumes/reference>
@@ -175,12 +179,13 @@ Azure Container Apps의 Single revision은 새 revision이 준비될 때까지 �
 
 ## 2026-08-31 공식 문서 재검증 기록
 
-이번 재검증은 “무료”라는 광고 문구가 아니라 현재 저장소의 실행 계약을 기준으로 했다. 공식 문서를 다시 확인한 범위는 Cloudflare Workers/Containers/Tunnel/D1/R2/Queues, Azure Container Apps, Google Cloud Run, Oracle Always Free VM, AWS Lambda/App Runner, Render, Railway, Koyeb, Fly.io, Deno Deploy, Vercel, Netlify, DigitalOcean, Northflank, Zeabur, IBM Code Engine, App Engine, Azure Static Web Apps/App Service, Hugging Face Spaces, Supabase 및 Neon이다. 이는 여전히 인터넷상의 모든 제공자 목록을 뜻하지 않는다.
+이번 재검증은 “무료”라는 광고 문구가 아니라 현재 저장소의 실행 계약을 기준으로 했다. 공식 문서를 다시 확인한 범위는 Cloudflare Workers/Containers/Tunnel/D1/R2/Queues, Azure Container Apps, Google Cloud Run 및 Firebase App Hosting/Hosting, Oracle Always Free VM, AWS Lambda/App Runner, Render, Railway, Koyeb, Fly.io, Deno Deploy, Vercel, Netlify, DigitalOcean, Northflank, Zeabur, IBM Code Engine, App Engine, Azure Static Web Apps/App Service, Hugging Face Spaces, Supabase 및 Neon이다. 이는 여전히 인터넷상의 모든 제공자 목록을 뜻하지 않는다.
 
 - Cloudflare Workers 공식 Node.js 문서는 `node:child_process`를 non-functional stub으로 분류하며, `node:fs`의 `/tmp`는 요청별 메모리 파일 시스템으로 이후 요청에 보존되지 않는다고 명시한다. 따라서 Workers Free는 현재의 Codex child process와 `file-json-single-process`를 그대로 호스팅할 수 없다.
 - Cloudflare Workers Free의 현재 한도는 100,000 requests/day, 요청당 CPU 10ms, memory 128MB이다. Containers의 Free 행은 `N/A`이고 Workers Paid($5/month) 사용량에 포함되며, 컨테이너 디스크는 sleep/restart 시 새로 시작되는 ephemeral disk다. Tunnel은 origin에서 Cloudflare로 나가는 연결 계층일 뿐 compute 호스트가 아니다.
 - Cloudflare D1/R2/Queues는 각각 무료 구간이 있지만 D1은 SQL adapter와 schema 전환, R2는 객체 저장, Queues는 24시간 retention의 비동기 handoff 역할이다. 어느 것도 현재 Express 프로세스나 Codex 실행 worker 자체를 대체하지 않는다.
 - Azure Container Apps Consumption과 Google Cloud Run은 월별 free grant가 있으나 subscription/billing 관계와 초과 과금 가능성이 있다. Azure Files는 별도 영속 볼륨 전제이고, Cloud Run의 컨테이너 파일 시스템은 disposable이므로 두 경우 모두 현재 JSON 상태를 그대로 두려면 저장소·replica·rollback을 별도로 검증해야 한다.
+- Firebase App Hosting은 Cloud Run·Cloud Build·Artifact Registry·Secret Manager를 묶은 동적 호스팅 표면이며 Blaze pay-as-you-go 플랜이 필요하다. Firebase Hosting의 no-cost 정적 호스팅은 `/api/messages`와 서버측 worker를 대신하지 않는다. 따라서 Firebase를 새로운 무료 서버 후보로 중복 집계하지 않고 Cloud Run의 관리 표면/정적 asset 계층으로 분류한다.
 - Oracle Always Free VM은 실제로 장기간 사용할 수 있는 no-cost compute 후보지만 home-region capacity, 카드 기반 가입, idle reclaim, TLS·방화벽·패치·백업·모니터링을 운영자가 직접 책임진다. 관리형 무료 production SLA로 분류하지 않는다.
 - Render Free의 idle sleep/ephemeral filesystem, Railway의 한시적 trial 및 소액 월별 credit, Koyeb의 scale-to-zero와 volume 제한, Vercel Hobby의 개인·비상업 조건, Netlify Free의 credit hard limit, DigitalOcean의 동적 서버 유료/정적 사이트 무료 구분을 재확인했다. Neon과 Supabase는 호스트가 아니라 외부 Postgres 저장소 후보로만 분류한다.
 
