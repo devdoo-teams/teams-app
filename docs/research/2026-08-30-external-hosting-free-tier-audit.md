@@ -27,7 +27,7 @@
 
 | 후보 | 공식 문서에서 확인한 사실 | 현재 앱과의 대조 | 판정 |
 | --- | --- | --- | --- |
-| Cloudflare Workers Free | Free 한도는 100,000 requests/day, invocation CPU 10ms, memory 128MB이며 Node API는 부분 호환이다. | Express/Teams SDK 서버와 독립 Codex child process를 그대로 실행하는 대상이 아니다. edge/API adapter로 별도 설계해야 한다. | `NOT_A_PRIMARY_RUNTIME` |
+| Cloudflare Workers Free | Free 한도는 100,000 requests/day, invocation CPU 10ms, memory 128MB이며 Node API는 부분 호환이다. 공식 Node 호환성 표에서 `node:child_process`는 import 가능한 non-functional stub로 분류되어 직접 실행할 수 없다. | Express/Teams SDK 서버와 독립 Codex child process를 그대로 실행하는 대상이 아니다. edge/API adapter로 별도 설계해야 한다. | `NOT_A_PRIMARY_RUNTIME` |
 | Cloudflare Containers | 임의 Linux container를 실행할 수 있지만 Workers Paid 전용이다. 컨테이너 디스크는 ephemeral이고 재시작·sleep 뒤 보존되지 않는다. | 현재 file JSON 저장과 무료 상용 운영에 맞지 않는다. Durable Objects/R2/외부 DB로 재설계하고 유료 플랜을 써야 한다. | `CANARY_ONLY` / 유료 전제 |
 | Cloudflare Tunnel | origin에서 Cloudflare로 outbound 연결을 만들고 public hostname으로 origin을 노출하는 연결 계층이다. | 호스팅/컴퓨트가 아니므로 로컬 Mac 또는 다른 서버를 대체하지 않는다. | `NOT_A_PRIMARY_RUNTIME` |
 | Google Cloud Run | `0.0.0.0`의 `PORT` listen 컨테이너 계약과 public HTTPS를 제공한다. request/instance 기반 free grant가 있지만 billing account가 필요하다. | Docker Core를 유지하기 쉬운 주 후보다. 파일 저장은 외부 저장소로 바꾸고, scale-to-zero와 long-lived worker를 분리해야 한다. | `PRIMARY_CANDIDATE` |
