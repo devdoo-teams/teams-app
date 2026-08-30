@@ -309,3 +309,39 @@ candidate and the preserved service are separate:
 - Security: Task 6 prevents the screenshot error from being “fixed” by removing the isolation requirement or copying user credentials.
 - Version policy: Tasks 1–4 are documentation/control-plane changes and do not increment `1.0.76`; a later functional change must satisfy the global release policy.
 - No placeholders or guessed provider credentials are required by this plan.
+
+## Continuation addendum — 2026-08-30
+
+The historical checkpoints above are retained for provenance. The current
+release baseline and execution state are:
+
+- Preserved public release: `v1.0.95`, source commit
+  `051b2f5b74fcbf630c0160fe5b35e8097abae91e`, ZIP asset SHA-256
+  `2023b9638215a692d3b451b949dd70297f34c3178896648901e864444439594b`.
+- Preserved public health currently reports `1.0.95`, the same source/server
+  identity, production Teams authentication, and configured Codex A2A workers.
+  Its A2A telemetry counter is still zero; this is configuration evidence, not
+  live authenticated multi-agent proof.
+- PR [#16](https://github.com/devdoo-teams/teams-app/pull/16) is still Draft.
+  Branch `codex/fix-runtime-deps-lifecycle-20260829` is clean at
+  `db9b28300ae33dab0e8992fff5d21d6ee9832e45`. The FileProvider runtime
+  dependency cache/staging hardening is in `afe18aa833b90820c78cda037593994fe29ff0f4`,
+  with the Core and API-free runner registrations in the same PR. GitHub run
+  `33287338176` passed Core, A2A, atomic continuity, Docker Core runtime, and
+  optional/Grok checks; its immutable-release job was skipped because it was a
+  pull-request event.
+- Jira `MP-13` is the confirmed issue for the external runtime-dependency
+  closure. Evidence was added there; it remains open because same-release
+  portal, installed, desktop/mobile, and live A2A evidence are not complete.
+- `teams status` reports the Teams account logged in but TDP token unavailable.
+  Computer Use currently lists no Teams desktop application, so portal upload
+  and desktop UI verification remain blocked. Existing browser/session state
+  must be reused if it becomes visible; do not create a replacement login
+  session.
+
+The next execution order is therefore: preserve `v1.0.95`; obtain the existing
+Teams update-tab/TDP authorization without handling credentials; only after a
+qualifying user-visible or reproduced-bug change passes the functional and
+Core gates, create a new package and bind its commit, ZIP SHA, public runtime,
+portal, installed, desktop, and mobile evidence. Do not close the Jira issue or
+send a Teams completion message from CI/health/card evidence alone.
