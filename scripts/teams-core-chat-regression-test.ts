@@ -90,7 +90,7 @@ try {
     CODEX_SCRIPT: 'scripts/fake-codex.mjs',
     COPILOTKIT_DETERMINISTIC_MODE: '',
     WEATHER_MODE: 'demo',
-    TEAMS_OPERATOR_REQUESTER_ALLOWLIST: `${tenantId}/${requesterId}`,
+    TEAMS_OPERATOR_REQUESTER_ALLOWLIST: `${tenantId}/${requesterId},local-tenant/local-user`,
     MCP_PUBLIC_ENABLED: '',
     TEAMS_OPTIONAL_RUNTIME: '',
   };
