@@ -112,11 +112,20 @@ Cloudflare는 현재 primary compute가 아니다. Workers Free는 Edge/API faca
 6. 새 ZIP을 만들 때만 기존 Teams 앱 업데이트 경로를 사용하고, 설치본/desktop/mobile의 같은-version 증거를 새로 수집한다.
 7. 모든 gate가 통과한 후에만 endpoint를 전환하고 이전 서비스를 rollback 대상으로 유지한다.
 
+## Azure 배포 readiness 게이트 보강
+
+Azure Container Apps의 Single revision은 새 revision이 준비될 때까지 기존 revision에 트래픽을 유지하지만, 외부 배포 작업도 그 상태를 명시적으로 읽어야 한다. 공식 lifecycle 문서의 준비 조건(성공적인 provisioning, 필요한 replica 수까지 확장, startup/readiness probe 통과)에 맞춰 `external-container-release.yml`은 배포 후 commit-suffixed revision을 조회한다. `Provisioned`·`Healthy`·`Running`·양수 replica를 모두 확인한 뒤에만 공개 health와 탭 자산 검증으로 진행하며, `Failed`·`Degraded`·`Unhealthy`는 즉시 실패시킨다. 롤백 revision에도 같은 bounded readiness 확인을 적용한다.
+
+이 보강은 외부 계정이나 실제 Azure 리소스가 존재한다는 증거가 아니다. 실제 배포 시에는 revision 상태, 이미지 digest, 공개 health, 탭 HTML/해시 자산을 같은 run의 release identity로 기록해야 한다.
+
 ## 공식 1차 출처
 
 - Microsoft Teams container deployment: <https://learn.microsoft.com/en-us/microsoftteams/platform/toolkit/deploy-teams-app-to-container-service>
 - Microsoft Teams app configuration: <https://learn.microsoft.com/en-us/microsoftteams/platform/teams-sdk/teams/configuration/manual-configuration>
 - Azure Container Apps Azure Files: <https://learn.microsoft.com/en-us/azure/container-apps/storage-mounts-azure-files>
+- Azure Container Apps revisions and readiness: <https://learn.microsoft.com/en-us/azure/container-apps/revisions>
+- Azure CLI revision list: <https://learn.microsoft.com/en-us/cli/azure/containerapp/revision?view=azure-cli-latest>
+- Azure Container Apps revision state schema: <https://learn.microsoft.com/en-us/rest/api/resource-manager/containerapps/container-apps-diagnostics/get-revision?view=rest-resource-manager-containerapps-2025-07-01>
 - GitHub Actions OIDC: <https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc>
 - Cloudflare Workers limits: <https://developers.cloudflare.com/workers/platform/limits/>
 - Cloudflare Workers pricing: <https://developers.cloudflare.com/workers/platform/pricing/>
