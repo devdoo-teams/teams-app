@@ -62,7 +62,11 @@ import {
 import { formatWeatherMessage, getWeather } from './weather-service.js';
 import { GenUiActionStore, type GenUiActionName } from './genui-action-store.js';
 import { GenUiResponseFactory } from './genui-response.js';
-import { createA2AProviderFacts, type A2AProviderFact } from './a2a-provider-facts.js';
+import {
+  createA2AProviderFacts,
+  type A2AProviderFact,
+  unverifiedRemoteA2AProviderFact,
+} from './a2a-provider-facts.js';
 import {
   createAdaptiveCardActivity,
   createAdaptiveCardCarouselActivity,
@@ -1515,12 +1519,10 @@ function a2aProviderFacts(): A2AProviderFact[] {
       providerId: configuredRemoteA2AAgent.providerId,
     } : undefined,
   );
-  facts.push(...configuredRemoteA2ABatch.agents.map((agent) => ({
+  facts.push(...configuredRemoteA2ABatch.agents.map((agent) => unverifiedRemoteA2AProviderFact({
     provider: 'remote',
     agentId: agent.agentId,
     providerId: agent.providerId,
-    configured: true,
-    execution: 'configured' as const,
   })));
   return facts;
 }

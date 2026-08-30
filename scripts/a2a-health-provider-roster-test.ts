@@ -49,9 +49,14 @@ assert.deepEqual(
   createA2AProviderFacts(localProviders, remote),
   [
     ...localProviders,
-    { ...remote, configured: true, execution: 'configured' },
+    {
+      ...remote,
+      configured: true,
+      execution: 'unknown',
+      executionReason: 'live-round-trip-unverified.',
+    },
   ],
-  'health and status rosters must expose a configured remote A2A identity',
+  'health and status rosters must expose a configured remote A2A identity without claiming live execution readiness',
 );
 
 assert.deepEqual(createA2AProviderFacts(localProviders), localProviders);

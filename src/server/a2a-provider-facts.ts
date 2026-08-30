@@ -13,12 +13,30 @@ export type A2AProviderFact = A2AProviderIdentityFact & Readonly<{
   executionReason?: string;
 }>;
 
+const REMOTE_A2A_EXECUTION_UNVERIFIED_REASON = 'live-round-trip-unverified.';
+
 export function createA2AProviderFacts(
   localProviders: readonly A2AProviderFact[],
   remoteProvider?: A2AProviderIdentityFact,
 ): A2AProviderFact[] {
   return [
     ...localProviders,
-    ...(remoteProvider ? [{ ...remoteProvider, configured: true, execution: 'configured' as const }] : []),
+    ...(remoteProvider
+      ? [{
+        ...remoteProvider,
+        configured: true,
+        execution: 'unknown' as const,
+        executionReason: REMOTE_A2A_EXECUTION_UNVERIFIED_REASON,
+      }]
+      : []),
   ];
+}
+
+export function unverifiedRemoteA2AProviderFact(remoteProvider: A2AProviderIdentityFact): A2AProviderFact {
+  return {
+    ...remoteProvider,
+    configured: true,
+    execution: 'unknown',
+    executionReason: REMOTE_A2A_EXECUTION_UNVERIFIED_REASON,
+  };
 }
