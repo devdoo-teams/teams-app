@@ -49,6 +49,22 @@ function processIsAlive(pid) {
   }
 }
 
+function createChildWithSafeLateErrorObservation() {
+  const child = new EventEmitter();
+  let unhandledError;
+  const emit = child.emit.bind(child);
+  child.emit = (event, ...args) => {
+    if (event === 'error' && child.listenerCount('error') === 0) {
+      unhandledError = args[0];
+      return false;
+    }
+    return emit(event, ...args);
+  };
+  child.getUnhandledError = () => unhandledError;
+  child.kill = () => false;
+  return child;
+}
+
 assert.deepEqual(parseArguments([]), { workers: ['main'], runLogin: false });
 assert.deepEqual(parseArguments(['--worker', '1', '--run-login']), { workers: ['1'], runLogin: true });
 assert.deepEqual(
@@ -167,6 +183,53 @@ assert.doesNotMatch(JSON.stringify(capturedLoginOptions.env), new RegExp(sentine
 await new Promise((resolve) => setTimeout(resolve, 40));
 assert.equal(successfulAbortCount, 0, 'a completed login must clear its timeout');
 
+const childError = new Error('login child could not be spawned');
+const errorFirstChild = new EventEmitter();
+errorFirstChild.kill = () => false;
+await assert.rejects(
+  () => runWorkerLogin({
+    codexBin: executableFixture,
+    codexBinSha256: executableDigest,
+    codexHome: '/var/lib/teams/codex-worker-1',
+    env: { PATH: '/usr/bin' },
+    maxAttempts: 1,
+    timeoutMs: 25,
+    spawnImpl: () => {
+      queueMicrotask(() => {
+        errorFirstChild.emit('error', childError);
+        errorFirstChild.emit('close', null, null);
+      });
+      return errorFirstChild;
+    },
+  }),
+  (error) => error === childError,
+  'a child error must reject with the emitted error before close can settle the login',
+);
+
+const closeThenError = new Error('late child error');
+const closeFirstChild = createChildWithSafeLateErrorObservation();
+const closeFirstLogin = await runWorkerLogin({
+  codexBin: executableFixture,
+  codexBinSha256: executableDigest,
+  codexHome: '/var/lib/teams/codex-worker-1',
+  env: { PATH: '/usr/bin' },
+  maxAttempts: 1,
+  timeoutMs: 25,
+  spawnImpl: () => {
+    queueMicrotask(() => {
+      closeFirstChild.emit('close', 0, null);
+      closeFirstChild.emit('error', closeThenError);
+    });
+    return closeFirstChild;
+  },
+});
+assert.deepEqual(closeFirstLogin, { code: 0, signal: null });
+assert.equal(
+  closeFirstChild.getUnhandledError(),
+  undefined,
+  'a close/error race must keep the late child error handled after close settles the login',
+);
+
 let missingDigestSpawned = false;
 const missingDigestChild = new EventEmitter();
 missingDigestChild.kill = () => false;
@@ -219,6 +282,42 @@ assert.equal(timeoutSignal.aborted, true, 'timed-out login must abort its child 
 assert.equal(timeoutAbortCount, 1);
 await new Promise((resolve) => setTimeout(resolve, 30));
 assert.equal(timeoutAbortCount, 1, 'the timeout must be cleared after cleanup');
+
+const windowsSignals = [];
+let windowsDetached;
+let windowsKillCalls = 0;
+let windowsChild;
+await assert.rejects(
+  () => runWorkerLogin({
+    codexBin: executableFixture,
+    codexBinSha256: executableDigest,
+    codexHome: '/var/lib/teams/codex-worker-1',
+    env: { PATH: '/usr/bin' },
+    maxAttempts: 1,
+    timeoutMs: 10,
+    platform: 'win32',
+    killImpl: () => {
+      windowsKillCalls += 1;
+      throw new Error('win32 cleanup must not signal a process group');
+    },
+    spawnImpl: (_command, _args, options) => {
+      windowsDetached = options.detached;
+      windowsChild = new EventEmitter();
+      windowsChild.pid = 424242;
+      windowsChild.kill = (signal) => {
+        windowsSignals.push(signal);
+        if (signal === 'SIGKILL') queueMicrotask(() => windowsChild.emit('close', null, signal));
+        return true;
+      };
+      return windowsChild;
+    },
+  }),
+  (error) => error?.code === 'CODEX_LOGIN_TIMEOUT',
+  'the injected win32 cleanup path must still reject with a timeout after child-handle cleanup',
+);
+assert.equal(windowsDetached, false, 'win32 login must not request detached process-group execution');
+assert.deepEqual(windowsSignals, ['SIGTERM', 'SIGKILL']);
+assert.equal(windowsKillCalls, 0, 'win32 cleanup must use the supported child handle path');
 
 const processGroupMarker = path.join(root, 'login-process-group-marker');
 const processGroupScript = [
@@ -291,7 +390,10 @@ const cleanupFailureScript = [
 let cleanupFailurePids;
 let cleanupFailureLogin;
 let cleanupFailureAttempts = 0;
-const originalProcessKill = process.kill;
+const cleanupFailureKillImpl = (pid, signal) => {
+  if (pid < 0 && signal === 'SIGKILL') return true;
+  return process.kill(pid, signal);
+};
 try {
   cleanupFailureLogin = runWorkerLogin({
     codexBin: executableFixture,
@@ -300,6 +402,8 @@ try {
     env: { PATH: '/usr/bin' },
     maxAttempts: 2,
     timeoutMs: 250,
+    platform: 'linux',
+    killImpl: cleanupFailureKillImpl,
     spawnImpl: (_command, _args, options) => {
       cleanupFailureAttempts += 1;
       return realSpawn(process.execPath, ['-e', cleanupFailureScript], {
@@ -309,22 +413,13 @@ try {
     },
   });
   cleanupFailurePids = await waitForProcessMarker(cleanupFailureMarker);
-  if (process.platform !== 'win32') {
-    process.kill = (pid, signal) => {
-      if (pid === -cleanupFailurePids.parentPid && signal === 'SIGKILL') return true;
-      return originalProcessKill(pid, signal);
-    };
-    await assert.rejects(
-      cleanupFailureLogin,
-      (error) => error?.code === 'CODEX_LOGIN_REAP_FAILED',
-      'a SIGKILL cleanup failure must be reported before timeout rejection or retry',
-    );
-    assert.equal(cleanupFailureAttempts, 1, 'cleanup failure must not start an overlapping retry');
-  } else {
-    await assert.rejects(cleanupFailureLogin, (error) => error?.code === 'CODEX_LOGIN_TIMEOUT');
-  }
+  await assert.rejects(
+    cleanupFailureLogin,
+    (error) => error?.code === 'CODEX_LOGIN_REAP_FAILED',
+    'a SIGKILL cleanup failure must be reported before timeout rejection or retry',
+  );
+  assert.equal(cleanupFailureAttempts, 1, 'cleanup failure must not start an overlapping retry');
 } finally {
-  process.kill = originalProcessKill;
   if (cleanupFailurePids?.descendantPid && processIsAlive(cleanupFailurePids.descendantPid)) {
     try {
       process.kill(cleanupFailurePids.descendantPid, 'SIGKILL');

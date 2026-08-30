@@ -219,6 +219,8 @@ export async function runWorkerLogin({
   timeoutMs,
   maxAttempts,
   signal,
+  platform = process.platform,
+  killImpl = process.kill,
 }) {
   const invocation = createLoginInvocation({ codexBin, codexHome });
   const childEnvironment = createLoginEnvironment(env, codexHome);
@@ -238,6 +240,8 @@ export async function runWorkerLogin({
         spawnImpl,
         timeoutMs: boundedTimeoutMs,
         abortSignal: signal,
+        platform,
+        killImpl,
         validateExecutable: () => validateExecutableInputs({
           CODEX_BIN: codexBin,
           CODEX_BIN_SHA256: codexBinSha256,
@@ -308,10 +312,10 @@ function normalizeLoginAttempts(maxAttempts) {
   return Math.min(MAX_LOGIN_ATTEMPTS, Math.max(1, Math.floor(maxAttempts)));
 }
 
-function signalLoginProcess(child, signal) {
-  if (process.platform !== 'win32' && Number.isInteger(child?.pid) && child.pid > 0) {
+function signalLoginProcess(child, signal, { platform, killImpl }) {
+  if (platform !== 'win32' && Number.isInteger(child?.pid) && child.pid > 0) {
     try {
-      process.kill(-child.pid, signal);
+      killImpl(-child.pid, signal);
       return;
     } catch (error) {
       if (error?.code !== 'ESRCH') {
@@ -322,17 +326,26 @@ function signalLoginProcess(child, signal) {
   child?.kill?.(signal);
 }
 
-function isLoginProcessGroupGone(child) {
-  if (process.platform === 'win32' || !Number.isInteger(child?.pid) || child.pid <= 0) return true;
+function isLoginProcessGroupGone(child, { platform, killImpl }) {
+  if (platform === 'win32' || !Number.isInteger(child?.pid) || child.pid <= 0) return true;
   try {
-    process.kill(-child.pid, 0);
+    killImpl(-child.pid, 0);
     return false;
   } catch (error) {
     return error?.code === 'ESRCH';
   }
 }
 
-async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeoutMs, abortSignal, validateExecutable }) {
+async function runLoginAttempt({
+  invocation,
+  childEnvironment,
+  spawnImpl,
+  timeoutMs,
+  abortSignal,
+  platform,
+  killImpl,
+  validateExecutable,
+}) {
   if (abortSignal?.aborted) throw new CodexLoginAbortedError();
   await validateExecutable();
   if (abortSignal?.aborted) throw new CodexLoginAbortedError();
@@ -349,14 +362,14 @@ async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeou
   const timeoutError = new CodexLoginTimeoutError(timeoutMs);
   const reapError = new CodexLoginReapError(timeoutMs);
   const result = new Promise((resolve, reject) => {
-    const settle = (callback) => {
+    const settle = (callback, { retainErrorListener = false } = {}) => {
       if (settled) return;
       settled = true;
       if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
       if (abortGraceHandle !== undefined) clearTimeout(abortGraceHandle);
       if (reapGraceHandle !== undefined) clearTimeout(reapGraceHandle);
       abortSignal?.removeEventListener?.('abort', onAbort);
-      removeChildListeners();
+      removeChildListeners({ retainErrorListener });
       callback();
     };
 
@@ -380,7 +393,7 @@ async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeou
       }
       settle(() => {
         resolve({ code, signal });
-      });
+      }, { retainErrorListener: true });
     };
 
     const requestTermination = (reason) => {
@@ -389,7 +402,7 @@ async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeou
       controller.abort();
       if (!settled && typeof child?.kill === 'function') {
         try {
-          signalLoginProcess(child, 'SIGTERM');
+          signalLoginProcess(child, 'SIGTERM', { platform, killImpl });
         } catch {
           // The abort signal remains the primary termination mechanism.
         }
@@ -397,19 +410,19 @@ async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeou
       if (!settled) {
         abortGraceHandle = setTimeout(() => {
           if (settled) return;
-          const requiresProcessGroupKill = process.platform !== 'win32'
+          const requiresProcessGroupKill = platform !== 'win32'
             && Number.isInteger(child?.pid)
             && child.pid > 0;
           if (!childClosed || requiresProcessGroupKill) {
             try {
-              signalLoginProcess(child, 'SIGKILL');
+              signalLoginProcess(child, 'SIGKILL', { platform, killImpl });
             } catch {
               // Reaping below remains the final safety check before retrying.
             }
           }
           reapGraceHandle = setTimeout(() => {
             if (settled) return;
-            if (!childClosed || !isLoginProcessGroupGone(child)) {
+            if (!childClosed || !isLoginProcessGroupGone(child, { platform, killImpl })) {
               settle(() => reject(reapError));
               return;
             }
@@ -429,10 +442,10 @@ async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeou
       ...invocation.options,
       env: childEnvironment,
       signal: controller.signal,
-      detached: process.platform !== 'win32',
+      detached: platform !== 'win32',
     });
-    removeChildListeners = () => {
-      child?.removeListener?.('error', onError);
+    removeChildListeners = ({ retainErrorListener = false } = {}) => {
+      if (!retainErrorListener) child?.removeListener?.('error', onError);
       child?.removeListener?.('close', onClose);
     };
     child.once('error', onError);
