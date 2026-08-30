@@ -258,7 +258,16 @@ const validAssetResponse = {
   url: validTab.scriptUrl,
   headers: { get: (name) => name === 'content-type' ? 'text/javascript; charset=utf-8' : null },
 };
-assert.equal(assertPublicAsset(validAssetResponse, validBundle, validTab).buildId, validBuildId);
+const validAssetSha256 = crypto.createHash('sha256').update(validBundle).digest('hex');
+assert.equal(
+  assertPublicAsset(validAssetResponse, validBundle, { ...validTab, expectedSha256: validAssetSha256 }).buildId,
+  validBuildId,
+);
+assert.throws(
+  () => assertPublicAsset(validAssetResponse, validBundle, { ...validTab, expectedSha256: 'b'.repeat(64) }),
+  /expected client asset|SHA-256|hash/i,
+  'the public gate must reject a client asset whose full digest differs from the local build',
+);
 assert.throws(
   () => assertPublicAsset(validAssetResponse, Buffer.from('console.log("tampered");'), validTab),
   /hash|build|digest|identity/i,
@@ -269,6 +278,7 @@ const deployedTab = await validatePublicTabDeployment({
   tabUrl: validTabResponse.url,
   manifest: validManifest,
   timeoutMs: 100,
+  expectedAssetSha256: validAssetSha256,
   fetchResource: async (url, _timeoutMs, bodyType) => {
     publicFetches.push({ url, bodyType });
     if (bodyType === 'text') {

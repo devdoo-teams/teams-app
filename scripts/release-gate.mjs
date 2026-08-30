@@ -247,6 +247,18 @@ export function assertPublicAsset(response, bytes, tabIdentity) {
   assert.ok(bytes.byteLength <= 20 * 1024 * 1024, 'public Teams tab build script exceeds the 20 MiB safety limit');
   const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
   assert.equal(sha256.slice(0, 12), tabIdentity.buildId, 'public Teams tab build script hash does not match its build identity');
+  if (tabIdentity.expectedSha256 !== undefined) {
+    assert.match(
+      String(tabIdentity.expectedSha256),
+      /^[a-f0-9]{64}$/,
+      'expected public Teams tab build script SHA-256 is invalid',
+    );
+    assert.equal(
+      sha256,
+      tabIdentity.expectedSha256,
+      'public Teams tab build script SHA-256 does not match the local release asset',
+    );
+  }
   return { finalUrl, sha256, buildId: tabIdentity.buildId };
 }
 
@@ -631,12 +643,31 @@ export async function validatePublicTabDeployment({
   manifest,
   timeoutMs,
   fetchResource = fetchWithTimeout,
+  expectedAssetSha256,
 }) {
   const tabResult = await fetchResource(tabUrl, timeoutMs, 'text');
   const tab = assertPublicTab(tabResult.response, tabResult.text, manifest);
   const assetResult = await fetchResource(tab.scriptUrl, timeoutMs, 'bytes');
-  const asset = assertPublicAsset(assetResult.response, assetResult.bytes, tab);
+  const asset = assertPublicAsset(
+    assetResult.response,
+    assetResult.bytes,
+    expectedAssetSha256 === undefined ? tab : { ...tab, expectedSha256: expectedAssetSha256 },
+  );
   return { tabResult, tab, asset };
+}
+
+async function readLocalClientAssetIdentity() {
+  const clientDir = path.join(resolveRuntimeDistRoot(root), 'client');
+  const html = await fs.readFile(path.join(clientDir, 'index.html'), 'utf8');
+  const assetPath = html.match(/(?:src|href)=["'](?:\.\/)?(assets\/main\.js(?:\?[^"']*)?)["']/i)?.[1];
+  assert.ok(assetPath, 'local Core client index must reference its main asset');
+  const relativeAssetPath = assetPath.split('?')[0];
+  assert.equal(relativeAssetPath, 'assets/main.js', 'local Core client main asset path is invalid');
+  const bytes = await fs.readFile(path.join(clientDir, relativeAssetPath));
+  const assetSha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+  const buildId = new URL(assetPath, 'https://release.local/tabs/home/').searchParams.get('v');
+  assert.equal(buildId, assetSha256.slice(0, 12), 'local Core client asset hash does not match its HTML build ID');
+  return { relativeAssetPath, assetSha256, buildId };
 }
 
 async function runPublic({ url, timeoutOverride, releaseSource } = {}) {
@@ -669,10 +700,12 @@ async function runPublic({ url, timeoutOverride, releaseSource } = {}) {
     'public website root must resolve to the packaged canonical tab surface',
   );
 
+  const localClientAsset = await readLocalClientAssetIdentity();
   const tabDeployment = await validatePublicTabDeployment({
     tabUrl: `${baseUrl}/tabs/home/`,
     manifest: packageManifest,
     timeoutMs,
+    expectedAssetSha256: localClientAsset.assetSha256,
   });
   const packageShaAfter = await sha256(packagePath);
   assert.equal(packageShaAfter, packageShaBefore, 'package SHA changed during public validation');
@@ -707,7 +740,7 @@ async function runPublic({ url, timeoutOverride, releaseSource } = {}) {
           buildId: tabDeployment.tab.buildId,
         },
       },
-      { asset: tabDeployment.asset },
+      { asset: { ...tabDeployment.asset, localSha256: localClientAsset.assetSha256 } },
     ],
     uiGates: ['INSTALLED_VERSION_UNVERIFIED', 'DESKTOP_UNVERIFIED', 'MOBILE_UNVERIFIED'],
   };
