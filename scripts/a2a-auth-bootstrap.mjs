@@ -332,6 +332,7 @@ async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeou
   let abortGraceHandle;
   let reapGraceHandle;
   let settled = false;
+  let childClosed = false;
   let terminationReason;
   let removeChildListeners = () => undefined;
 
@@ -363,10 +364,12 @@ async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeou
         removeChildListeners();
         return;
       }
+      if (terminationReason !== undefined) {
+        childClosed = true;
+        return;
+      }
       settle(() => {
-        if (terminationReason === 'timeout') reject(timeoutError);
-        else if (terminationReason === 'aborted') reject(new CodexLoginAbortedError());
-        else resolve({ code, signal });
+        resolve({ code, signal });
       });
     };
 
@@ -384,14 +387,26 @@ async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeou
       if (!settled) {
         abortGraceHandle = setTimeout(() => {
           if (settled) return;
-          try {
-            signalLoginProcess(child, 'SIGKILL');
-          } catch {
-            // Reaping below remains the final safety check before retrying.
+          const requiresProcessGroupKill = process.platform !== 'win32'
+            && Number.isInteger(child?.pid)
+            && child.pid > 0;
+          if (!childClosed || requiresProcessGroupKill) {
+            try {
+              signalLoginProcess(child, 'SIGKILL');
+            } catch {
+              // Reaping below remains the final safety check before retrying.
+            }
           }
           reapGraceHandle = setTimeout(() => {
             if (settled) return;
-            settle(() => reject(reapError));
+            if (!childClosed) {
+              settle(() => reject(reapError));
+              return;
+            }
+            settle(() => {
+              if (terminationReason === 'timeout') reject(timeoutError);
+              else reject(new CodexLoginAbortedError());
+            });
           }, LOGIN_ABORT_GRACE_MS);
         }, LOGIN_ABORT_GRACE_MS);
       }

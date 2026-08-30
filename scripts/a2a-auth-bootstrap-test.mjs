@@ -49,14 +49,6 @@ function processIsAlive(pid) {
   }
 }
 
-async function waitForProcessExit(pid) {
-  const deadline = Date.now() + 2_000;
-  while (Date.now() < deadline && processIsAlive(pid)) {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  return !processIsAlive(pid);
-}
-
 assert.deepEqual(parseArguments([]), { workers: ['main'], runLogin: false });
 assert.deepEqual(parseArguments(['--worker', '1', '--run-login']), { workers: ['1'], runLogin: true });
 assert.deepEqual(
@@ -233,8 +225,9 @@ const processGroupScript = [
   "const { spawn } = require('node:child_process');",
   "const fs = require('node:fs');",
   `const marker = ${JSON.stringify(processGroupMarker)};`,
-  "const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
+  "const descendant = spawn(process.execPath, ['-e', \"process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)\"], { stdio: 'ignore' });",
   "fs.writeFileSync(marker, String(process.pid) + '\\n' + String(descendant.pid) + '\\n');",
+  "process.on('SIGTERM', () => process.exit(0));",
   "setInterval(() => {}, 1000);",
 ].join('\n');
 let processGroupOptions;
@@ -265,11 +258,8 @@ try {
   const usesProcessGroups = process.platform !== 'win32';
   assert.equal(processGroupOptions.detached, usesProcessGroups);
   if (usesProcessGroups) {
-    assert.equal(
-      await waitForProcessExit(processGroupPids.descendantPid),
-      true,
-      'timeout cleanup must reap descendants in the login process group before settling',
-    );
+    const descendantAliveAtSettlement = processIsAlive(processGroupPids.descendantPid);
+    assert.equal(descendantAliveAtSettlement, false, 'timeout rejection must wait for process-group cleanup before settling');
   }
 } finally {
   if (processGroupPids?.descendantPid && processIsAlive(processGroupPids.descendantPid)) {
