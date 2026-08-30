@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawn as realSpawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -22,6 +23,39 @@ const executableFixture = path.join(root, 'codex-bin');
 await fs.copyFile(process.execPath, executableFixture);
 await fs.chmod(executableFixture, 0o755);
 const executableDigest = crypto.createHash('sha256').update(await fs.readFile(executableFixture)).digest('hex');
+
+async function waitForProcessMarker(markerPath) {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    try {
+      const values = (await fs.readFile(markerPath, 'utf8')).trim().split('\n').map(Number);
+      if (values.length === 2 && values.every((value) => Number.isInteger(value) && value > 0)) {
+        return { parentPid: values[0], descendantPid: values[1] };
+      }
+    } catch {
+      // The child has not written its process metadata yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('login child process marker was not created');
+}
+
+function processIsAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === 'EPERM';
+  }
+}
+
+async function waitForProcessExit(pid) {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline && processIsAlive(pid)) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return !processIsAlive(pid);
+}
 
 assert.deepEqual(parseArguments([]), { workers: ['main'], runLogin: false });
 assert.deepEqual(parseArguments(['--worker', '1', '--run-login']), { workers: ['1'], runLogin: true });
@@ -193,6 +227,66 @@ assert.equal(timeoutSignal.aborted, true, 'timed-out login must abort its child 
 assert.equal(timeoutAbortCount, 1);
 await new Promise((resolve) => setTimeout(resolve, 30));
 assert.equal(timeoutAbortCount, 1, 'the timeout must be cleared after cleanup');
+
+const processGroupMarker = path.join(root, 'login-process-group-marker');
+const processGroupScript = [
+  "const { spawn } = require('node:child_process');",
+  "const fs = require('node:fs');",
+  `const marker = ${JSON.stringify(processGroupMarker)};`,
+  "const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
+  "fs.writeFileSync(marker, String(process.pid) + '\\n' + String(descendant.pid) + '\\n');",
+  "setInterval(() => {}, 1000);",
+].join('\n');
+let processGroupOptions;
+let processGroupPids;
+let processGroupLogin;
+try {
+  processGroupLogin = runWorkerLogin({
+    codexBin: executableFixture,
+    codexBinSha256: executableDigest,
+    codexHome: '/var/lib/teams/codex-worker-1',
+    env: { PATH: '/usr/bin' },
+    maxAttempts: 1,
+    timeoutMs: 100,
+    spawnImpl: (_command, _args, options) => {
+      processGroupOptions = options;
+      return realSpawn(process.execPath, ['-e', processGroupScript], {
+        detached: options.detached,
+        stdio: 'ignore',
+      });
+    },
+  });
+  processGroupPids = await waitForProcessMarker(processGroupMarker);
+  await assert.rejects(
+    processGroupLogin,
+    (error) => error?.code === 'CODEX_LOGIN_TIMEOUT',
+    'a child that never closes must reject with a bounded timeout',
+  );
+  const usesProcessGroups = process.platform !== 'win32';
+  assert.equal(processGroupOptions.detached, usesProcessGroups);
+  if (usesProcessGroups) {
+    assert.equal(
+      await waitForProcessExit(processGroupPids.descendantPid),
+      true,
+      'timeout cleanup must reap descendants in the login process group before settling',
+    );
+  }
+} finally {
+  if (processGroupPids?.descendantPid && processIsAlive(processGroupPids.descendantPid)) {
+    try {
+      process.kill(processGroupPids.descendantPid, 'SIGKILL');
+    } catch {
+      // The child may have exited during the assertion or cleanup.
+    }
+  }
+  if (processGroupPids?.parentPid && processIsAlive(processGroupPids.parentPid)) {
+    try {
+      process.kill(processGroupPids.parentPid, 'SIGKILL');
+    } catch {
+      // The child may have exited during the assertion or cleanup.
+    }
+  }
+}
 
 const callerAbortController = new AbortController();
 let callerAbortSignal;

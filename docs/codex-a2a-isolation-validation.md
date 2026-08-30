@@ -63,9 +63,11 @@ are revalidated immediately before each login child is spawned, including a
 retry, and the executable must remain a single private regular file.
 
 Each login attempt has a bounded timeout (10 minutes by default, capped at one
-hour). A timeout aborts the child, requests termination, and waits for it to
-be reaped before allowing the single deterministic retry; an unreaped child
-fails closed. This does not automate the device flow or handle credentials.
+hour). On POSIX hosts the login child runs in its own process group; a timeout
+or cancellation signals that group with SIGTERM and then SIGKILL if needed.
+The helper waits for the child to be reaped before allowing the single
+deterministic retry; an unreaped child fails closed. Windows uses the child
+handle fallback. This does not automate the device flow or handle credentials.
 The helper reports only whether `auth.json` metadata is valid. Empty,
 owner-unreadable, symlinked, or hardlinked auth files are invalid, and an
 indexed worker may not alias the legacy unsuffixed `AGENT_CODEX_HOME`, even

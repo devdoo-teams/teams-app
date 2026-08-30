@@ -308,6 +308,20 @@ function normalizeLoginAttempts(maxAttempts) {
   return Math.min(MAX_LOGIN_ATTEMPTS, Math.max(1, Math.floor(maxAttempts)));
 }
 
+function signalLoginProcess(child, signal) {
+  if (process.platform !== 'win32' && Number.isInteger(child?.pid) && child.pid > 0) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch (error) {
+      if (error?.code !== 'ESRCH') {
+        // Fall back to the child handle when group signaling is unavailable.
+      }
+    }
+  }
+  child?.kill?.(signal);
+}
+
 async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeoutMs, abortSignal, validateExecutable }) {
   if (abortSignal?.aborted) throw new CodexLoginAbortedError();
   await validateExecutable();
@@ -360,9 +374,9 @@ async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeou
       if (settled || terminationReason !== undefined) return;
       terminationReason = reason;
       controller.abort();
-      if (!settled && child?.killed !== true && typeof child?.kill === 'function') {
+      if (!settled && typeof child?.kill === 'function') {
         try {
-          child.kill('SIGTERM');
+          signalLoginProcess(child, 'SIGTERM');
         } catch {
           // The abort signal remains the primary termination mechanism.
         }
@@ -371,7 +385,7 @@ async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeou
         abortGraceHandle = setTimeout(() => {
           if (settled) return;
           try {
-            child?.kill?.('SIGKILL');
+            signalLoginProcess(child, 'SIGKILL');
           } catch {
             // Reaping below remains the final safety check before retrying.
           }
@@ -390,6 +404,7 @@ async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeou
       ...invocation.options,
       env: childEnvironment,
       signal: controller.signal,
+      detached: process.platform !== 'win32',
     });
     removeChildListeners = () => {
       child?.removeListener?.('error', onError);
