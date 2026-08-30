@@ -37,6 +37,14 @@ requireText(/tags:\s*\$\{\{ env\.IMAGE_REPOSITORY \}\}:sha-\$\{\{ github\.sha \}
 requireText(/TEAMS_SOURCE_COMMIT:\s*\$\{\{ github\.sha \}\}/, 'build must carry source commit identity');
 requireText(/push:\s*true/, 'verified image must be published for external deployment');
 requireText(/IMAGE_DIGEST:\s*\$\{\{ needs\.publish\.outputs\.image_digest \}\}/, 'deployment must consume the published digest');
+const deploySectionStart = workflow.indexOf('\n  deploy:');
+assert.notEqual(deploySectionStart, -1, 'external workflow must contain a deploy job');
+const deploySection = workflow.slice(deploySectionStart);
+assert.match(
+  deploySection,
+  /^      GITHUB_TOKEN:\s*\$\{\{ secrets\.GITHUB_TOKEN \}\}$/m,
+  'deployment preflight must receive GITHUB_TOKEN at job scope',
+);
 requireText(/--image "\$DEPLOY_IMAGE_REPOSITORY@\$IMAGE_DIGEST"/, 'deployment must use an immutable image digest');
 requireText(/test "\$deployed_image" = "\$DEPLOY_IMAGE_REPOSITORY@\$IMAGE_DIGEST"/, 'deployment must read back the immutable image reference');
 requireText(/az acr login/, 'deployment must authenticate to the target Azure registry');
@@ -49,6 +57,7 @@ requireText(/mount_path=.*mountPath/, 'deployment must inspect the data mount pa
 requireText(/test "\$mount_path" = "\/app\/data"/, 'the JSON store must use the persistent data mount');
 requireText(/test "\$max_replicas" = "1"/, 'file-backed storage must stay single-replica');
 requireText(/release-identity\.json/, 'the release identity must be retained and transported');
+requireText(/clientAssetSha256/, 'the release identity must bind the exact client asset');
 requireText(/health\.sourceCommit/, 'public verification must compare source identity');
 requireText(/health\.version/, 'public verification must compare application version');
 requireText(/health\.serverBundleSha256/, 'public verification must compare server bundle identity');
@@ -96,7 +105,7 @@ for (const variable of [
   requireText(new RegExp(`${variable}: \\$\\{\\{ vars\\.${variable} \\}\\}`), `${variable} must be supplied as a protected variable`);
 }
 assert.doesNotMatch(workflow, /:latest\b/, 'external release must not promote a mutable latest tag');
-assert.doesNotMatch(workflow, /secrets\.(AZURE|TEAMS|CODEX|OPENAI|XAI)/, 'provider credentials must not be hard-coded as secrets');
+assert.doesNotMatch(workflow, /secrets\.(?!GITHUB_TOKEN\b)[A-Z0-9_]+/, 'provider credentials must not be passed through GitHub secrets');
 assert.equal(packageJson.scripts?.['test:external-container-workflow'], 'node scripts/external-container-workflow-test.mjs');
 assert.equal(packageJson.scripts?.['test:docker-runtime-contract'], 'node scripts/docker-runtime-contract-test.mjs');
 assert.equal(packageJson.scripts?.['test:docker-build-inputs'], 'node scripts/docker-build-inputs-test.mjs');

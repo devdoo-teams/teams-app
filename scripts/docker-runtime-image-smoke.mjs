@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 
@@ -112,8 +113,17 @@ assert.equal(tabResponse.status, 200, `container tab HTTP ${tabResponse.status}`
 const html = await tabResponse.text();
 const assetPath = html.match(/src="([^\"]*assets\/main\.js[^\"]*)"/)?.[1];
 assert.ok(assetPath, 'container tab did not expose a hashed main.js asset');
-const assetResponse = await fetchWithTimeout(new URL(assetPath, `http://127.0.0.1:${hostPort}/tabs/home/`));
+const assetUrl = new URL(assetPath, `http://127.0.0.1:${hostPort}/tabs/home/`);
+const assetVersion = assetUrl.searchParams.get('v');
+assert.match(assetVersion ?? '', /^[a-f0-9]{12}$/, 'container main.js asset must carry a content hash');
+const assetResponse = await fetchWithTimeout(assetUrl);
 assert.equal(assetResponse.status, 200, `container asset HTTP ${assetResponse.status}`);
-assert.ok((await assetResponse.text()).length > 0, 'container main.js asset is empty');
+const assetBytes = new Uint8Array(await assetResponse.arrayBuffer());
+assert.ok(assetBytes.byteLength > 0, 'container main.js asset is empty');
+const assetSha256 = crypto.createHash('sha256').update(assetBytes).digest('hex');
+assert.equal(assetSha256.slice(0, 12), assetVersion, 'container main.js URL hash does not match its bytes');
+if (releaseIdentity.clientAssetSha256 !== undefined) {
+  assert.equal(assetSha256, releaseIdentity.clientAssetSha256, 'container client asset differs from the release identity');
+}
 
 console.log(`PASS: published image runtime smoke (${imageRef}, source ${expectedSourceCommit})`);

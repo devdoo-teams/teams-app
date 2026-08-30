@@ -153,7 +153,13 @@ jobs:
           const manifest = JSON.parse(manifestBytes.toString('utf8'));
           const marker = JSON.parse(fs.readFileSync('dist/server/.teams-server-build-commit', 'utf8'));
           const serverBytes = fs.readFileSync('dist/server/index.js');
+          const clientHtml = fs.readFileSync('dist/client/index.html', 'utf8');
           const serverBundleSha256 = sha256(serverBytes);
+          const clientAssetPath = clientHtml.match(/(?:src|href)=["']([^"']*assets\/main\.js(?:\?[^"']*)?)["']/)?.[1];
+          if (!clientAssetPath) throw new Error('client index must reference its main asset');
+          const clientAssetFile = clientAssetPath.split('?')[0].replace(/^\.\//, '');
+          if (clientAssetFile !== 'assets/main.js') throw new Error('client index main asset path is invalid');
+          const clientAssetSha256 = sha256(fs.readFileSync(`dist/client/${clientAssetFile}`));
           if (
             marker.schemaVersion !== 3
             || marker.commit !== process.env.RELEASE_SOURCE_COMMIT
@@ -174,6 +180,7 @@ jobs:
             version: packageJson.version,
             teamsPackageSha256: sha256(packageBytes),
             serverBundleSha256,
+            clientAssetSha256,
             manifestSha256: sha256(manifestBytes),
             image: `${process.env.RELEASE_IMAGE_REPOSITORY}@${process.env.RELEASE_IMAGE_DIGEST}`,
             imageDigest: process.env.RELEASE_IMAGE_DIGEST,
@@ -266,6 +273,7 @@ jobs:
       PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
       IMAGE_DIGEST: ${{ needs.publish.outputs.image_digest }}
       SOURCE_IMAGE_REPOSITORY: ${{ env.IMAGE_REPOSITORY }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Check out the exact commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -310,7 +318,6 @@ jobs:
       - name: Mirror the verified image into Azure Container Registry
         env:
           SOURCE_IMAGE: ${{ env.IMAGE_REPOSITORY }}@${{ needs.publish.outputs.image_digest }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
