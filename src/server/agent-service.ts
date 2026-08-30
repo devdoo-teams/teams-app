@@ -1,5 +1,13 @@
+import crypto from 'node:crypto';
+
 import type { AgentJob, AgentJobMode, AgentJobScope } from './agent-job-store.js';
 import { AgentJobStore } from './agent-job-store.js';
+import {
+  AgentEventStore,
+  MAX_AGENT_EVENT_MESSAGE_LENGTH,
+  type AgentEventKind,
+  type AgentEventPhase,
+} from './agent-event-store.js';
 import {
   AgentExecutionUnavailableError,
   AgentExecutionPolicy,
@@ -152,6 +160,7 @@ export class AgentService {
       agentLabel?: string;
       defaultProvider?: CliAgentProvider;
       providerRunners?: Partial<Record<CliAgentProvider, CodexRunner>>;
+      eventStore?: AgentEventStore;
     } = {},
   ) {
     this.agentLabel = options.agentLabel?.trim() || 'Codex';
@@ -189,6 +198,7 @@ export class AgentService {
   private workspaceWriteChain: Promise<void> = Promise.resolve();
 
   async initialize(): Promise<void> {
+    await this.options.eventStore?.initialize();
     await this.store.initialize();
     const missingProvider = this.store.listLocalOnly(Number.MAX_SAFE_INTEGER).find((job) => !job.provider);
     if (missingProvider) throw new AgentProviderIdentityError(missingProvider);
@@ -236,6 +246,20 @@ export class AgentService {
       try {
         executionWorkspace = await this.executionPolicy.prepareWorkspace(input.mode, input.scope, prompt);
         job = await this.store.create({ ...input, prompt, provider });
+        await this.recordEvent(job, {
+          kind: 'submitted',
+          phase: 'submission',
+          correlationId: 'submitted',
+          message: `${this.agentLabel} 작업이 제출되었습니다.`,
+        });
+        if (job.status === 'awaiting_approval') {
+          await this.recordEvent(job, {
+            kind: 'approval-required',
+            phase: 'approval',
+            correlationId: 'approval-required',
+            message: `${this.agentLabel} 작업은 실행 전 승인이 필요합니다.`,
+          });
+        }
         await admission.lease.bindJob(job.id);
         this.admissionLeases.set(job.id, admission.lease);
         this.executionWorkspaces.set(job.id, executionWorkspace);
@@ -348,7 +372,15 @@ export class AgentService {
       return refreshed;
     });
 
-    if (queued) this.launchExecution(queued, true);
+    if (queued) {
+      await this.recordEvent(queued, {
+        kind: 'approved',
+        phase: 'approval',
+        correlationId: 'approved',
+        message: `${this.agentLabel} 작업 실행이 승인되었습니다.`,
+      });
+      this.launchExecution(queued, true);
+    }
     return queued;
   }
 
@@ -421,7 +453,15 @@ export class AgentService {
     });
 
     if (cancelledWasRunning) await this.executionByJob.get(id);
-    if (cancelled) await this.finalizeAdmission(cancelled, scope);
+    if (cancelled) {
+      await this.finalizeAdmission(cancelled, scope);
+      await this.recordEvent(cancelled, {
+        kind: 'cancelled',
+        phase: 'cancellation',
+        correlationId: 'cancelled',
+        message: `작업 ${id}이 취소되었습니다.`,
+      });
+    }
 
     if (options.notify && cancelled) {
       await this.notifyIfEnabled(cancelled, {
@@ -480,7 +520,7 @@ export class AgentService {
     }
     if (previous.mode === 'workspace-write') this.assertMutationAllowed(scope);
 
-    return this.submit({
+    const retried = await this.submit({
       prompt: previous.prompt,
       mode: previous.mode,
       scope,
@@ -490,6 +530,13 @@ export class AgentService {
       notify: options.notify,
       onProgress: options.onProgress,
     });
+    await this.recordEvent(retried, {
+      kind: 'retry',
+      phase: 'submission',
+      correlationId: `retry:${previous.id}`,
+      message: `작업 ${previous.id}에서 재시도 작업을 생성했습니다.`,
+    });
+    return retried;
   }
 
   get(id: string, scope: AgentJobScope): AgentJob | undefined {
@@ -506,6 +553,10 @@ export class AgentService {
 
   countActive(scope: AgentJobScope): number {
     return this.store.countActive(scope);
+  }
+
+  listEvents(scope: AgentJobScope, id: string, limit = 200) {
+    return this.options.eventStore?.list(scope, id, limit) ?? [];
   }
 
   async commit(id: string, message: string, scope: AgentJobScope): Promise<AgentJob | undefined> {
@@ -543,6 +594,12 @@ export class AgentService {
         commitMessage: commit.message,
       });
       if (refreshed) {
+        await this.recordEvent(refreshed, {
+          kind: 'commit',
+          phase: 'commit',
+          correlationId: `commit:${commit.hash}`,
+          message: `작업 ${id}: ${commit.message}`,
+        });
         await this.notifyIfEnabled(refreshed, {
           kind: 'result',
           phase: 'commit',
@@ -644,6 +701,12 @@ export class AgentService {
 
         progressState = this.createProgressState(job.id, shouldNotify, onProgress);
         await this.store.appendProgress(job.id, scope, `${this.agentLabel} 작업을 시작했습니다.`);
+        await this.recordEvent(started, {
+          kind: 'started',
+          phase: 'execution',
+          correlationId: 'started',
+          message: `${this.agentLabel} 작업을 시작했습니다.`,
+        });
         if (started.mode === 'workspace-write') {
           workspaceSnapshot = await this.gitService.captureWorkspaceSnapshot();
         }
@@ -739,6 +802,12 @@ export class AgentService {
 
       if (diagnosticMessage) {
         await this.store.appendProgress(job.id, scope, `${this.agentLabel} 작업이 차단되었습니다: ${diagnostic.code}`);
+        await this.recordEvent(terminal, {
+          kind: 'error',
+          phase: 'failure',
+          correlationId: `terminal:${diagnostic.code}`,
+          message: diagnosticMessage,
+        });
         await this.notifyIfEnabled(terminal, {
           kind: 'error',
           phase: 'blocked',
@@ -748,6 +817,12 @@ export class AgentService {
       }
 
       await this.store.appendProgress(job.id, scope, `${this.agentLabel} 작업 완료 (${result.eventCount}개 이벤트).`);
+      await this.recordEvent(terminal, {
+        kind: 'result',
+        phase: 'completion',
+        correlationId: 'completed',
+        message: this.formatCompletion(job.id, result.finalMessage),
+      });
       await this.notifyIfEnabled(terminal, {
         kind: 'result',
         phase: 'completed',
@@ -796,6 +871,12 @@ export class AgentService {
       }
 
       await this.store.appendProgress(job.id, scope, `${this.agentLabel} 작업이 실패했습니다.`);
+      await this.recordEvent(failed, {
+        kind: 'error',
+        phase: 'failure',
+        correlationId: 'failed',
+        message: `작업 ${job.id}이 실패했습니다.\n\n${message}`,
+      });
       await this.notifyIfEnabled(failed, {
         kind: 'error',
         phase: 'failed',
@@ -871,6 +952,13 @@ export class AgentService {
         // Keep the durable error as the primary visible reconciliation marker.
       }
     }
+    await this.recordEvent(job, {
+      kind: 'reconciled',
+      phase: 'reconciliation',
+      correlationId: 'reconciliation-required',
+      message: visibleError,
+      status: 'failed',
+    });
   }
 
   private async handleEvent(job: AgentJob, generation: number, event: CodexRunEvent): Promise<void> {
@@ -925,6 +1013,13 @@ export class AgentService {
     const scope = scopeForJob(job);
     if (!scope) return;
     if (!this.isCurrentRunningProgress(job, state)) return;
+    await this.recordEvent(job, {
+      kind: 'progress',
+      phase: 'agent-update',
+      correlationId: `progress:${hashAuditKey(compact)}`,
+      message: compact,
+      status: 'running',
+    });
     await this.store.appendProgress(job.id, scope, `${this.agentLabel} 업데이트: ${compact}`);
     if (!this.isCurrentRunningProgress(job, state)) return;
     await state.onProgress?.(`${this.agentLabel} 업데이트: ${compact}`);
@@ -950,6 +1045,13 @@ export class AgentService {
     const scope = scopeForJob(job);
     if (!scope) return;
     if (!this.isCurrentRunningProgress(job, state)) return;
+    await this.recordEvent(job, {
+      kind: 'progress',
+      phase,
+      correlationId: `progress:${key}`,
+      message: storedMessage,
+      status: 'running',
+    });
     await this.store.appendProgress(job.id, scope, storedMessage);
     if (!this.isCurrentRunningProgress(job, state)) return;
     await state.onProgress?.(storedMessage);
@@ -992,6 +1094,41 @@ export class AgentService {
         job: current,
       });
     });
+  }
+
+  /**
+   * Audit persistence is a secondary durability channel. A failed audit write
+   * must never turn a successfully persisted job into a false execution
+   * failure, but it is always logged so operators can see the gap.
+   */
+  private async recordEvent(
+    job: AgentJob,
+    event: Readonly<{
+      kind: AgentEventKind;
+      phase: AgentEventPhase;
+      correlationId: string;
+      message: string;
+      status?: AgentJob['status'];
+    }>,
+  ): Promise<void> {
+    const eventStore = this.options.eventStore;
+    const scope = scopeForJob(job);
+    if (!eventStore || !scope) return;
+    try {
+      await eventStore.append({
+        jobId: job.id,
+        scope,
+        ...(job.provider ? { provider: job.provider } : {}),
+        status: event.status ?? job.status,
+        kind: event.kind,
+        phase: event.phase,
+        correlationId: event.correlationId,
+        message: boundAuditMessage(event.message),
+        ...(job.parentJobId ? { parentJobId: job.parentJobId } : {}),
+      });
+    } catch (error) {
+      console.error(`Agent audit event persistence failed for ${job.id}`, error);
+    }
   }
 
   private createProgressState(id: string, notify: boolean, onProgress?: ProgressListener): ProgressState {
@@ -1091,4 +1228,15 @@ function snapshotAgentJob(job: AgentJob): AgentJob {
     progress: [...job.progress],
     ...(job.changedPaths ? { changedPaths: [...job.changedPaths] } : {}),
   };
+}
+
+function hashAuditKey(value: string): string {
+  return crypto.createHash('sha256').update(value, 'utf8').digest('hex').slice(0, 32);
+}
+
+function boundAuditMessage(value: string): string {
+  const normalized = value.trim();
+  if (normalized.length <= MAX_AGENT_EVENT_MESSAGE_LENGTH) return normalized;
+  const suffix = '\n\n(감사 로그가 길어 일부만 보존되었습니다.)';
+  return `${normalized.slice(0, MAX_AGENT_EVENT_MESSAGE_LENGTH - suffix.length)}${suffix}`;
 }

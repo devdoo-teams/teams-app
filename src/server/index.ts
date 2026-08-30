@@ -16,6 +16,10 @@ import {
   type AgentJobScope,
 } from './agent-job-store.js';
 import {
+  AgentEventStore,
+  MAX_AGENT_EVENT_LIST_LIMIT,
+} from './agent-event-store.js';
+import {
   AgentMutationAuthorizationError,
   AgentJobConflictError,
   AgentService,
@@ -193,6 +197,7 @@ const itemStorePath = process.env.ITEM_STORE_PATH ?? path.resolve(process.cwd(),
 const workItemStorePath = process.env.WORK_ITEM_STORE_PATH ?? path.resolve(process.cwd(), 'data/work-items.json');
 const collaborationStorePath = process.env.COLLABORATION_STORE_PATH ?? path.resolve(process.cwd(), 'data/collaboration.json');
 const agentJobStorePath = process.env.AGENT_JOB_STORE_PATH ?? path.resolve(process.cwd(), 'data/agent-jobs.json');
+const agentEventStorePath = process.env.AGENT_EVENT_STORE_PATH ?? path.resolve(process.cwd(), 'data/agent-events.json');
 const a2aStorePath = process.env.A2A_STORE_PATH ?? path.resolve(process.cwd(), 'data/a2a.json');
 const a2aOutboundStorePath = process.env.A2A_OUTBOUND_STORE_PATH ?? path.resolve(process.cwd(), 'data/a2a-outbound.json');
 const agentAdmissionJournalPath = process.env.AGENT_ADMISSION_JOURNAL_PATH ?? path.resolve(process.cwd(), 'data/agent-admission.json');
@@ -258,6 +263,7 @@ const agentJobStore = new AgentJobStore(
   agentJobStorePath,
   { legacyProvider: agentProvider },
 );
+const agentEventStore = new AgentEventStore(agentEventStorePath);
 const a2aStore = new A2AStore(a2aStorePath);
 const a2aOutboundStore = new TeamsA2AOutboundStore(a2aOutboundStorePath);
 const codexRunner = new ProviderNeutralAgentRunner({ provider: agentProvider });
@@ -711,6 +717,7 @@ storeProcessLease = await acquireStoreProcessLease([
   workItemStorePath,
   collaborationStorePath,
   agentJobStorePath,
+  agentEventStorePath,
   a2aStorePath,
   a2aOutboundStorePath,
   agentAdmissionJournalPath,
@@ -722,6 +729,7 @@ process.once('exit', () => storeProcessLease?.releaseSync());
 await itemStore.initialize();
 await workItemService.initialize();
 await collaborationService.initialize();
+await agentEventStore.initialize();
 await a2aStore.initialize();
 await a2aOutboundStore.initialize();
 await genUiActionStore.initialize();
@@ -1684,6 +1692,15 @@ http.get('/api/health', async (_request: any, response: any) => {
         droppedEvents: snapshot.droppedEvents,
       };
     })(),
+    agentEvents: (() => {
+      const snapshot = agentEventStore.snapshot();
+      return {
+        schemaVersion: snapshot.schemaVersion,
+        totalEvents: snapshot.nextSequence - 1,
+        retainedEvents: snapshot.events.length,
+        droppedEvents: snapshot.droppedEvents,
+      };
+    })(),
     timestamp: new Date().toISOString(),
   });
 });
@@ -2382,6 +2399,7 @@ agentService = new AgentService(
     agentLabel,
     defaultProvider: agentProvider,
     providerRunners,
+    eventStore: agentEventStore,
   },
 );
 await agentService.initialize();
@@ -2410,6 +2428,7 @@ for (const configuredAgent of a2aAgentProviders) {
       agentLabel: configuredAgent.provider === 'copilot' ? 'GitHub Copilot CLI' : 'Codex CLI',
       defaultProvider: configuredAgent.provider,
       providerRunners: { [configuredAgent.provider]: runner },
+      eventStore: agentEventStore,
     },
   );
   a2aAgentServices.set(agentId, service);
@@ -2636,6 +2655,38 @@ http.post('/api/agent-jobs', async (request: any, response: any) => {
     console.error('Agent submission failed', error);
     response.status(500).json({ error: { code: 'AGENT_SUBMISSION_FAILED', retryable: false } });
   }
+});
+http.get('/api/agent-jobs/:id/events', async (request: any, response: any) => {
+  const resolved = restPrincipal(request, response);
+  if (!resolved.principal) {
+    response.status(resolved.status ?? 400).json({ error: resolved.error ?? 'invalid job principal' });
+    return;
+  }
+
+  const owned = agentJobStore.getForPrincipal(request.params.id, resolved.principal);
+  if (!owned || typeof owned.tenantId !== 'string') {
+    response.status(404).json({ error: 'agent event history not found' });
+    return;
+  }
+
+  const rawLimit = Array.isArray(request.query?.limit) ? request.query.limit[0] : request.query?.limit;
+  const limit = rawLimit === undefined ? 50 : Number(rawLimit);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_AGENT_EVENT_LIST_LIMIT) {
+    response.status(400).json({ error: `limit must be an integer between 1 and ${MAX_AGENT_EVENT_LIST_LIMIT}` });
+    return;
+  }
+
+  const scope = {
+    requesterId: owned.requesterId,
+    tenantId: owned.tenantId,
+    conversationId: owned.conversationId,
+  };
+  response.set('Cache-Control', 'no-store');
+  response.json({
+    jobId: owned.id,
+    status: owned.status,
+    events: agentService.listEvents(scope, owned.id, limit),
+  });
 });
 http.post('/api/agent-jobs/:id/approve', async (request: any, response: any) => {
   const resolved = restPrincipal(request, response);

@@ -102,6 +102,7 @@ cancel <작업 ID>
 
 - `AGENT_WORKSPACE`: Codex가 작업할 Git 저장소 경로. 기본값은 현재 실행 디렉터리입니다.
 - `AGENT_JOB_STORE_PATH`: Teams 작업·Codex thread·결과를 저장할 JSON 경로입니다.
+- `AGENT_EVENT_STORE_PATH`: 작업 제출·승인·진행·결과·취소의 tenant-scoped append-only 이벤트 로그 경로입니다. 작업 상태의 축약 progress와 분리해 재시작 후 이력을 조회할 수 있습니다.
 - `CODEX_BIN`: Codex 실행 파일. 기본값은 `codex`입니다.
 
 운영 환경에서는 Codex 실행기를 별도 worker로 분리하고, Teams Bot에는 허용 사용자·승인·작업 상태만 노출하는 구성을 권장합니다. `data/agent-jobs.json`도 로컬 업무 데이터와 동일하게 Git에 포함하지 않습니다.
@@ -117,6 +118,8 @@ npm test
 `npm test`는 `npm run test:api-free`의 별칭이며 OpenAI API, 로컬 모델 endpoint, MCP host, CopilotKit 초기화를 요구하지 않습니다. 이 기본 명령이 Teams Core의 소스·패키지·서버 경계를 검증합니다.
 
 `npm run test:optional`은 명시적으로 선택한 OpenAI/local/MCP provider 계약만 검사하고, `npm run test:optional:runtime`과 `npm run test:optional:copilotkit`은 별도 실험 경로입니다. 이 선택 경로의 실패·지연·미설정은 Core 릴리스 실패로 전파하지 않습니다.
+
+에이전트 작업 이력은 인증된 작업 소유자만 `GET /api/agent-jobs/<job-id>/events?limit=50`으로 조회할 수 있습니다. 이벤트 로그에는 서버가 생성한 sequence와 correlation ID가 들어가며, 자격증명 형태의 문자열은 저장 전에 redaction됩니다. 이 경로의 존재는 Codex/Copilot provider가 실제로 구성되었다는 뜻이 아닙니다.
 
 `npm run test:optional:runtime`만 실행하면 이미 빌드된 서버를 기준으로 이전 optional 통합 런타임을 반복할 수 있습니다. 이 테스트는 CopilotKit·MCP 경로까지 포함하므로 API-free Teams Core의 통과 증거로 사용하지 않습니다.
 
