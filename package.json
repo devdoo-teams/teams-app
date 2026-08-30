@@ -23,6 +23,7 @@
     "test:docker-build-inputs": "node scripts/docker-build-inputs-test.mjs",
     "test:image-publish-workflow-contract": "node scripts/image-publish-workflow-contract-test.mjs",
     "test:external-container-workflow": "node scripts/external-container-workflow-test.mjs",
+    "test:containerapp-runtime-contract": "node scripts/containerapp-runtime-contract-test.mjs",
     "typecheck:vendor": "tsc --noEmit -p tsconfig.json",
     "check:types": "npm run typecheck",
     "check:deployment": "node --env-file-if-exists=.env.runtime scripts/validate-deployment-env.mjs",

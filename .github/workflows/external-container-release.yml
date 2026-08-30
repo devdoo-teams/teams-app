@@ -58,6 +58,7 @@ jobs:
           npm run test:docker-runtime-contract
           npm run test:image-publish-workflow-contract
           npm run test:external-container-workflow
+          npm run test:containerapp-runtime-contract
       - name: Build the verified Core runtime
         run: npm run build:core
       - name: Verify the exact Docker inputs
@@ -271,10 +272,20 @@ jobs:
       AZURE_CONTAINER_REGISTRY_REPOSITORY: ${{ vars.AZURE_CONTAINER_REGISTRY_REPOSITORY }}
       AZURE_DATA_VOLUME_NAME: ${{ vars.AZURE_DATA_VOLUME_NAME }}
       PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+      TEAMS_CATALOG_APP_ID: ${{ vars.TEAMS_CATALOG_APP_ID }}
+      BOT_CLIENT_ID: ${{ vars.BOT_CLIENT_ID }}
+      TENANT_ID: ${{ vars.TENANT_ID }}
+      TAB_DOMAIN: ${{ vars.TAB_DOMAIN }}
+      CLIENT_ID: ${{ vars.CLIENT_ID }}
+      APPLICATION_ID_URI: ${{ vars.APPLICATION_ID_URI }}
       IMAGE_DIGEST: ${{ needs.publish.outputs.image_digest }}
     steps:
       - name: Check out the exact commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Node.js for deployment checks
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
       - name: Download the immutable release identity
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -292,6 +303,12 @@ jobs:
           test -n "$AZURE_CONTAINER_REGISTRY_REPOSITORY"
           test -n "$AZURE_DATA_VOLUME_NAME"
           test -n "$PUBLIC_BASE_URL"
+          test -n "$TEAMS_CATALOG_APP_ID"
+          test -n "$BOT_CLIENT_ID"
+          test -n "$TENANT_ID"
+          test -n "$TAB_DOMAIN"
+          test -n "$CLIENT_ID"
+          test -n "$APPLICATION_ID_URI"
           test -n "$IMAGE_DIGEST"
           test -f release-artifact/release-identity.json
           case "$PUBLIC_BASE_URL" in https://*) ;; *) echo 'PUBLIC_BASE_URL must use HTTPS' >&2; exit 1 ;; esac
@@ -301,6 +318,17 @@ jobs:
           client-id: ${{ env.AZURE_CLIENT_ID }}
           tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Verify target Teams runtime identity
+        env:
+          CONTAINER_APP_JSON_PATH: ${{ runner.temp }}/teams-container-app-runtime.json
+        run: |
+          set -euo pipefail
+          az containerapp show \
+            --name "$AZURE_CONTAINER_APP" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --only-show-errors \
+            --output json > "$CONTAINER_APP_JSON_PATH"
+          node scripts/validate-containerapp-runtime-contract.mjs "$CONTAINER_APP_JSON_PATH"
       - name: Verify persistent single-replica storage contract
         run: |
           set -euo pipefail

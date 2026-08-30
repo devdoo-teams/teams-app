@@ -65,6 +65,17 @@ requireText(/storage_name=.*storageName/, 'deployment must inspect the configure
 requireText(/mount_path=.*mountPath/, 'deployment must inspect the data mount path');
 requireText(/test "\$mount_path" = "\/app\/data"/, 'the JSON store must use the persistent data mount');
 requireText(/test "\$max_replicas" = "1"/, 'file-backed storage must stay single-replica');
+requireText(/validate-containerapp-runtime-contract\.mjs/, 'deployment must verify the target runtime environment identity');
+requireText(/TEAMS_CATALOG_APP_ID:\s*\$\{\{ vars\.TEAMS_CATALOG_APP_ID \}\}/, 'target runtime identity must include the catalog app ID');
+requireText(/BOT_CLIENT_ID:\s*\$\{\{ vars\.BOT_CLIENT_ID \}\}/, 'target runtime identity must include the bot client ID');
+requireText(/TENANT_ID:\s*\$\{\{ vars\.TENANT_ID \}\}/, 'target runtime identity must include the tenant ID');
+requireText(/APPLICATION_ID_URI:\s*\$\{\{ vars\.APPLICATION_ID_URI \}\}/, 'target runtime identity must include the application URI');
+requireText(/test -n "\$TEAMS_CATALOG_APP_ID"/, 'deployment must require the catalog app ID before Azure changes');
+requireText(/test -n "\$BOT_CLIENT_ID"/, 'deployment must require the bot client ID before Azure changes');
+requireText(/test -n "\$TENANT_ID"/, 'deployment must require the tenant ID before Azure changes');
+requireText(/test -n "\$TAB_DOMAIN"/, 'deployment must require the tab domain before Azure changes');
+requireText(/test -n "\$CLIENT_ID"/, 'deployment must require the client ID before Azure changes');
+requireText(/test -n "\$APPLICATION_ID_URI"/, 'deployment must require the application URI before Azure changes');
 requireText(/release-identity\.json/, 'the release identity must be retained and transported');
 requireText(/clientAssetSha256/, 'the release identity must bind the exact client asset');
 requireText(/assert\.equal\(identity\.clientAssetSha256, assetSha256/, 'public verification must compare the full client asset hash');
@@ -90,6 +101,7 @@ requireText(/npm run package:app/, 'external verification must build a new Teams
 requireText(/npm run test:package-determinism/, 'external verification must test package determinism');
 requireText(/npm run test:docker-build-inputs/, 'external verification must validate Docker inputs');
 requireText(/npm run test:docker-runtime-contract/, 'external verification must validate the Docker runtime contract');
+requireText(/npm run test:containerapp-runtime-contract/, 'external verification must validate the Container App runtime contract');
 requireText(/activeRevisionsMode/, 'deployment must inspect the Container Apps revision mode');
 requireText(/test "\$active_revisions_mode" = "Single"/, 'file-backed deployment must use a single active revision');
 requireText(/az containerapp revision list\s*\\\s*--name/s, 'deployment must inspect the created revision readiness');
@@ -133,6 +145,7 @@ assert.doesNotMatch(workflow, /secrets\.(?!GITHUB_TOKEN\b)[A-Z0-9_]+/, 'provider
 assert.equal(packageJson.scripts?.['test:external-container-workflow'], 'node scripts/external-container-workflow-test.mjs');
 assert.equal(packageJson.scripts?.['test:docker-runtime-contract'], 'node scripts/docker-runtime-contract-test.mjs');
 assert.equal(packageJson.scripts?.['test:docker-build-inputs'], 'node scripts/docker-build-inputs-test.mjs');
+assert.equal(packageJson.scripts?.['test:containerapp-runtime-contract'], 'node scripts/containerapp-runtime-contract-test.mjs');
 
 assert.match(dockerfile, /COPY scripts\/start-server\.mjs/, 'image must include the runtime loader');
 assert.match(dockerfile, /COPY scripts\/runtime-dist\.mjs/, 'image must include the runtime dist resolver');

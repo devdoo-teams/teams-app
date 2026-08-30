@@ -92,12 +92,17 @@ protected environment 승인이 완료된 경우에만 실행한다.
 
 1. GitHub OIDC로 Azure에 로그인한다.
 2. Azure Files volume과 `/app/data`, single replica를 읽기 전용 조회로 확인한다.
-3. GHCR digest 이미지를 ACR로 mirror하고 push digest가 원본 digest와 같은지 확인한다.
-4. Container App을 ACR의 immutable digest로 업데이트한다.
-5. Container App 설정이 실제 digest를 가리키는지 read-back한다.
-6. 같은 public origin의 health, version, source commit, server bundle SHA,
+3. 대상 Container App의 직접 주입된 Teams/Entra identity(`BOT_CLIENT_ID`, `CLIENT_ID`,
+   `TENANT_ID`, `TAB_DOMAIN`, `APPLICATION_ID_URI`, `TEAMS_CATALOG_APP_ID`)와
+   delegated audience를 패키지 identity와 read-back 대조한다. 이 필드는 secretRef로
+   숨겨져 있으면 검증할 수 없으므로 배포를 중단한다. `CLIENT_SECRET`은 값이 아니라
+   존재 또는 secretRef만 확인하며 로그·artifact에 기록하지 않는다.
+4. GHCR digest 이미지를 ACR로 mirror하고 push digest가 원본 digest와 같은지 확인한다.
+5. Container App을 ACR의 immutable digest로 업데이트한다.
+6. Container App 설정이 실제 digest를 가리키는지 read-back한다.
+7. 같은 public origin의 health, version, source commit, server bundle SHA,
    Teams auth/user auth/bot/outbound, tab HTTP 200, client asset hash를 검증한다.
-7. 검증 JSON만 artifact로 보관한다.
+8. 검증 JSON만 artifact로 보관한다.
 
 이 workflow는 새 Teams package 업로드, Bot endpoint 변경, mobile/desktop 검증을
 자동으로 완료했다고 주장하지 않는다. 외부 runtime identity가 통과한 뒤 기존
