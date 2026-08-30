@@ -345,3 +345,56 @@ qualifying user-visible or reproduced-bug change passes the functional and
 Core gates, create a new package and bind its commit, ZIP SHA, public runtime,
 portal, installed, desktop, and mobile evidence. Do not close the Jira issue or
 send a Teams completion message from CI/health/card evidence alone.
+
+## Current execution addendum — 2026-08-31
+
+The 2026-08-30 block above is historical. The authoritative implementation
+candidate for this continuation is the clean worktree branch
+`codex/agent-ledger-20260830` at commit
+`d7ac22fe7b21d024395da1753faeb5b676b2bec7`. The original
+`/Users/doosansmacbookpro/Documents/TeamsApp` checkout remains dirty user work
+and was not modified, cleaned, or used as release source.
+
+- Functional changes include scoped/redacted agent lifecycle event persistence,
+  legacy A2A startup isolation, configured remote identity/endpoint pinning,
+  standard Agent Card compatibility, and immutable external-container
+  readiness/rollback gates.
+- The package, lockfile, and Teams manifest are synchronized at `1.0.101`.
+  The candidate ZIP is generated only after the functional change and its
+  regression/Core evidence; its SHA-256 is
+  `d1a9c92cbe52de24c6cbd9430fa67923a48e0762bcb4fbc90921ee8520144718`.
+- `release:preflight` and `release:package` are READY for the Core profile.
+  The local candidate identity includes server bundle SHA-256
+  `40eedfb2c46aa600ba0248629140b9db22e75dbe30e92f23bd3f99c1506d0e61`,
+  client asset SHA-256
+  `929e7f80e16ac7ae2c718d8ba8c8529a307644f102e479d3953d27bae997d625`,
+  and packaged manifest SHA-256
+  `8205e4baeccbb86874b8c3c9b369224aaa1f8f8ef5e164891958dc3fd62b49d5`.
+- PR [#17](https://github.com/devdoo-teams/teams-app/pull/17) remains Draft.
+  PR CI run `33319097244` passed Core, A2A, Optional/Grok contract, atomic
+  continuity, and Docker runtime jobs. The immutable release candidate is
+  intentionally skipped for pull-request events.
+- The preserved q3 public host is not replaced. Read-only public verification
+  reports `1.0.100`, source `fbddeaa299d88d2e80ce75b9ca39bfcefa6bc515`,
+  `genAI=not-configured`, and `a2aExecution.state=unavailable`; comparing it
+  with the `1.0.101` candidate correctly fails the public identity gate.
+- The official hosting research is bounded, not a literal inventory of every
+  provider. It covers Cloudflare Workers/Containers/Tunnel/D1/R2/Queues,
+  Cloud Run, Azure Container Apps/Files, Render, Railway, Koyeb, Fly.io,
+  Oracle Always Free VM, Deno, Vercel, Netlify, Lambda, DigitalOcean,
+  Northflank, Zeabur, IBM Code Engine, App Engine, Azure App Service/Static
+  Web Apps, Hugging Face, and Supabase. The detailed record is
+  `docs/research/2026-08-30-external-hosting-free-tier-audit.md`.
+- Current recommendation remains Azure Container Apps + Azure Files as the
+  primary external target, with Cloud Run as the alternative. Cloudflare is a
+  possible future edge-native redesign, not a free drop-in host for the
+  current Express/file-JSON/Codex-worker architecture.
+- Jira evidence was appended to existing MP-93 comment `10428` and MP-160
+  comment `10427`; no duplicate issue was created. Both remain open pending
+  live A2A and same-release external/Teams evidence.
+
+Remaining gates are unchanged: approved production cloud resource/OIDC
+configuration, merged-main immutable publish, stable public runtime, Portal
+and installed package read-back, Teams desktop/mobile evidence, and live
+authenticated A2A/Grok verification. No Teams completion message is justified
+until those gates pass.
