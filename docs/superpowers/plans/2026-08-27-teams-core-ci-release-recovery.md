@@ -459,3 +459,39 @@ Remaining gates are still approved external resource/OIDC configuration,
 merged-main immutable publish, same-identity public runtime, Portal and
 installed package read-back, Teams desktop/mobile evidence, and live
 authenticated A2A/Grok verification.
+
+## Current CI safety checkpoint — 2026-08-31
+
+The latest implementation commit for this checkpoint is
+`79297baa6177d9983313328906a71fea13a4cfa8` (`ci: scan release packages for
+credentials`) on `codex/agent-ledger-20260830`. It adds a fail-closed scan of
+the exact generated Teams ZIP: prohibited credential-bearing filenames and
+credential-like text values are rejected before any upload or image
+promotion. The scan is wired into Core CI, the external-container verification
+workflow, and immutable image publication, with contract tests for each
+workflow. This is a release-safety change, not a user-visible feature or a
+reproduced application bug, so the application remains at version `1.0.101`.
+
+Evidence from the clean implementation checkout at that commit:
+
+- `npm run test:release-artifact-secret-scan` passed.
+- `npm run check:release-artifact-secret-scan` passed for the exact generated
+  ZIP with SHA-256
+  `8699f2230d5bf0cd5253a3cc5f2ea8f13633584ef76dfc250c6c31bb790c9ea5` and
+  three entries.
+- `npm run test:core` passed after the commit, including Core build, runtime
+  smoke, Teams/A2A contracts, location/weather tests, and release checks.
+- PR [#17](https://github.com/devdoo-teams/teams-app/pull/17) is still Draft
+  and clean. Exact-head run
+  [33325534900](https://github.com/devdoo-teams/teams-app/actions/runs/33325534900)
+  passed Core, A2A, Optional/Grok contract, atomic continuity, and Docker
+  Core runtime. The immutable release candidate was skipped because this was
+  a pull-request event.
+
+The ZIP and runtime identity above were generated from the implementation
+commit for verification only; no package was uploaded, no public service was
+replaced, and no Teams completion message was sent. The external-hosting
+research remains a bounded official-document audit, not a literal inventory
+of every Internet provider. Actual Azure/GCP/Oracle resources, stable public
+runtime, portal read-back, desktop/mobile evidence, and live authenticated
+A2A/Grok remain open gates.
