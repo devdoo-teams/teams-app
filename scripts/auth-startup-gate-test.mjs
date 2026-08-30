@@ -40,6 +40,7 @@ async function expectStartupFailure(label, overrides, expectedOutput) {
       WORK_ITEM_STORE_PATH: path.join(tempRoot, 'work-items.json'),
       COLLABORATION_STORE_PATH: path.join(tempRoot, 'collaboration.json'),
       AGENT_JOB_STORE_PATH: path.join(tempRoot, 'agent-jobs.json'),
+      AGENT_EVENT_STORE_PATH: path.join(tempRoot, 'agent-events.json'),
       GENUI_ACTION_STORE_PATH: path.join(tempRoot, 'genui-actions.json'),
       RESPONSE_MODE_STORE_PATH: path.join(tempRoot, 'response-modes.json'),
       AGENT_WORKSPACE: root,

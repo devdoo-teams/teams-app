@@ -172,6 +172,7 @@ try {
     WORK_ITEM_STORE_PATH: path.join(dataRoot, 'work-items.json'),
     COLLABORATION_STORE_PATH: path.join(dataRoot, 'collaboration.json'),
     AGENT_JOB_STORE_PATH: path.join(dataRoot, 'agent-jobs.json'),
+    AGENT_EVENT_STORE_PATH: path.join(dataRoot, 'agent-events.json'),
     A2A_STORE_PATH: path.join(dataRoot, 'a2a.json'),
     A2A_OUTBOUND_STORE_PATH: path.join(dataRoot, 'a2a-outbound.json'),
     AGENT_ADMISSION_JOURNAL_PATH: path.join(dataRoot, 'agent-admission.json'),

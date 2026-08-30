@@ -405,6 +405,7 @@ async function assertIndexDoesNotAdvertiseUnverifiedWorkers() {
         WORK_ITEM_STORE_PATH: path.join(dataDir, 'work-items.json'),
         COLLABORATION_STORE_PATH: path.join(dataDir, 'collaboration.json'),
         AGENT_JOB_STORE_PATH: path.join(dataDir, 'agent-jobs.json'),
+        AGENT_EVENT_STORE_PATH: path.join(dataDir, 'agent-events.json'),
         AGENT_ADMISSION_JOURNAL_PATH: path.join(dataDir, 'agent-admission.json'),
         A2A_STORE_PATH: path.join(dataDir, 'a2a.json'),
         A2A_OUTBOUND_STORE_PATH: path.join(dataDir, 'a2a-outbound.json'),
