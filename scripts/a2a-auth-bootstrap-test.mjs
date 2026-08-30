@@ -278,6 +278,69 @@ try {
   }
 }
 
+const cleanupFailureMarker = path.join(root, 'login-process-group-cleanup-failure-marker');
+const cleanupFailureScript = [
+  "const { spawn } = require('node:child_process');",
+  "const fs = require('node:fs');",
+  `const marker = ${JSON.stringify(cleanupFailureMarker)};`,
+  "const descendant = spawn(process.execPath, ['-e', \"process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)\"], { stdio: 'ignore' });",
+  "fs.writeFileSync(marker, String(process.pid) + '\\n' + String(descendant.pid) + '\\n');",
+  "process.on('SIGTERM', () => process.exit(0));",
+  "setInterval(() => {}, 1000);",
+].join('\n');
+let cleanupFailurePids;
+let cleanupFailureLogin;
+let cleanupFailureAttempts = 0;
+const originalProcessKill = process.kill;
+try {
+  cleanupFailureLogin = runWorkerLogin({
+    codexBin: executableFixture,
+    codexBinSha256: executableDigest,
+    codexHome: '/var/lib/teams/codex-worker-1',
+    env: { PATH: '/usr/bin' },
+    maxAttempts: 2,
+    timeoutMs: 250,
+    spawnImpl: (_command, _args, options) => {
+      cleanupFailureAttempts += 1;
+      return realSpawn(process.execPath, ['-e', cleanupFailureScript], {
+        detached: options.detached,
+        stdio: 'ignore',
+      });
+    },
+  });
+  cleanupFailurePids = await waitForProcessMarker(cleanupFailureMarker);
+  if (process.platform !== 'win32') {
+    process.kill = (pid, signal) => {
+      if (pid === -cleanupFailurePids.parentPid && signal === 'SIGKILL') return true;
+      return originalProcessKill(pid, signal);
+    };
+    await assert.rejects(
+      cleanupFailureLogin,
+      (error) => error?.code === 'CODEX_LOGIN_REAP_FAILED',
+      'a SIGKILL cleanup failure must be reported before timeout rejection or retry',
+    );
+    assert.equal(cleanupFailureAttempts, 1, 'cleanup failure must not start an overlapping retry');
+  } else {
+    await assert.rejects(cleanupFailureLogin, (error) => error?.code === 'CODEX_LOGIN_TIMEOUT');
+  }
+} finally {
+  process.kill = originalProcessKill;
+  if (cleanupFailurePids?.descendantPid && processIsAlive(cleanupFailurePids.descendantPid)) {
+    try {
+      process.kill(cleanupFailurePids.descendantPid, 'SIGKILL');
+    } catch {
+      // The child may have exited during the assertion or cleanup.
+    }
+  }
+  if (cleanupFailurePids?.parentPid && processIsAlive(cleanupFailurePids.parentPid)) {
+    try {
+      process.kill(cleanupFailurePids.parentPid, 'SIGKILL');
+    } catch {
+      // The child may have exited during the assertion or cleanup.
+    }
+  }
+}
+
 const callerAbortController = new AbortController();
 let callerAbortSignal;
 let callerAbortAttempts = 0;

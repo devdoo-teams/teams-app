@@ -322,6 +322,16 @@ function signalLoginProcess(child, signal) {
   child?.kill?.(signal);
 }
 
+function isLoginProcessGroupGone(child) {
+  if (process.platform === 'win32' || !Number.isInteger(child?.pid) || child.pid <= 0) return true;
+  try {
+    process.kill(-child.pid, 0);
+    return false;
+  } catch (error) {
+    return error?.code === 'ESRCH';
+  }
+}
+
 async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeoutMs, abortSignal, validateExecutable }) {
   if (abortSignal?.aborted) throw new CodexLoginAbortedError();
   await validateExecutable();
@@ -399,7 +409,7 @@ async function runLoginAttempt({ invocation, childEnvironment, spawnImpl, timeou
           }
           reapGraceHandle = setTimeout(() => {
             if (settled) return;
-            if (!childClosed) {
+            if (!childClosed || !isLoginProcessGroupGone(child)) {
               settle(() => reject(reapError));
               return;
             }
