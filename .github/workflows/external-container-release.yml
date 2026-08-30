@@ -1,0 +1,415 @@
+name: External container release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      deploy_external:
+        description: Deploy the verified image to the protected external production environment
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: teams-external-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: 24.19.0
+  IMAGE_REPOSITORY: ghcr.io/${{ github.repository }}
+
+jobs:
+  verify:
+    name: Verify immutable container inputs
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    env:
+      TEAMS_SOURCE_COMMIT: ${{ github.sha }}
+      TEAMS_APP_ID: ${{ vars.TEAMS_APP_ID }}
+      TEAMS_CATALOG_APP_ID: ${{ vars.TEAMS_CATALOG_APP_ID }}
+      BOT_ID: ${{ vars.BOT_ID }}
+      BOT_CLIENT_ID: ${{ vars.BOT_CLIENT_ID }}
+      TENANT_ID: ${{ vars.TENANT_ID }}
+      TAB_DOMAIN: ${{ vars.TAB_DOMAIN }}
+      CLIENT_ID: ${{ vars.CLIENT_ID }}
+      APPLICATION_ID_URI: ${{ vars.APPLICATION_ID_URI }}
+    steps:
+      - name: Check out the exact commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify source and workflow contracts
+        run: |
+          npm run typecheck:core
+          npm run test:typecheck-boundary
+          npm run test:core-source-check
+          npm run test:ci-workflow-contract
+          npm run test:docker-build-contract
+          npm run test:docker-runtime-contract
+          npm run test:image-publish-workflow-contract
+          npm run test:external-container-workflow
+      - name: Build the verified Core runtime
+        run: npm run build:core
+      - name: Verify the exact Docker inputs
+        run: npm run test:docker-build-inputs
+      - name: Run the Core runtime suite
+        run: npm run test:core
+      - name: Validate the Teams package contract
+        run: |
+          npm run test:runtime-dist
+          npm run validate:manifest
+          npm run check:deployment
+          npm run package:app
+          npm run test:package-determinism
+          npm run test:package-output-determinism
+          npm run test:package-atomic
+      - name: Rebuild the final Core artifact after all tests
+        run: |
+          npm run build:core
+          npm run test:docker-build-inputs
+      - name: Upload verified build inputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: teams-container-inputs-${{ github.sha }}
+          path: |
+            dist/
+            appPackage/build/teams-sdk-mvp.zip
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  publish:
+    name: Publish immutable GHCR image
+    if: github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      artifact-metadata: write
+      id-token: write
+    outputs:
+      image_digest: ${{ steps.build-image.outputs.digest }}
+    steps:
+      - name: Check out the exact commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Download verified build inputs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: teams-container-inputs-${{ github.sha }}
+          path: .
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - name: Log in to GHCR
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push the immutable image
+        id: build-image
+        uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4 # v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_REPOSITORY }}:sha-${{ github.sha }}
+          build-args: |
+            TEAMS_SOURCE_COMMIT=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+      - name: Record release identity before smoke
+        env:
+          RELEASE_SOURCE_COMMIT: ${{ github.sha }}
+          RELEASE_IMAGE_REPOSITORY: ${{ env.IMAGE_REPOSITORY }}
+          RELEASE_IMAGE_DIGEST: ${{ steps.build-image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/evidence
+          node --input-type=module <<'NODE'
+          import crypto from 'node:crypto';
+          import fs from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+
+          const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
+          const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const packagePath = 'appPackage/build/teams-sdk-mvp.zip';
+          const packageBytes = fs.readFileSync(packagePath);
+          const manifestBytes = execFileSync('unzip', ['-p', packagePath, 'manifest.json']);
+          const manifest = JSON.parse(manifestBytes.toString('utf8'));
+          const marker = JSON.parse(fs.readFileSync('dist/server/.teams-server-build-commit', 'utf8'));
+          const serverBytes = fs.readFileSync('dist/server/index.js');
+          const serverBundleSha256 = sha256(serverBytes);
+          if (
+            marker.schemaVersion !== 3
+            || marker.commit !== process.env.RELEASE_SOURCE_COMMIT
+            || marker.mode !== 'core'
+            || marker.worktree !== 'clean'
+            || marker.bundleSha256 !== serverBundleSha256
+          ) {
+            throw new Error('server build marker does not prove the exact clean Core source commit');
+          }
+          if (manifest.version !== packageJson.version) throw new Error('package and manifest versions differ');
+          if (!manifest.devicePermissions?.includes('geolocation')) throw new Error('geolocation permission is missing');
+          if (!process.env.RELEASE_IMAGE_DIGEST?.match(/^sha256:[0-9a-f]{64}$/)) {
+            throw new Error('Docker build did not return an immutable image digest');
+          }
+          const identity = {
+            schema: 2,
+            sourceCommit: process.env.RELEASE_SOURCE_COMMIT,
+            version: packageJson.version,
+            teamsPackageSha256: sha256(packageBytes),
+            serverBundleSha256,
+            manifestSha256: sha256(manifestBytes),
+            image: `${process.env.RELEASE_IMAGE_REPOSITORY}@${process.env.RELEASE_IMAGE_DIGEST}`,
+            imageDigest: process.env.RELEASE_IMAGE_DIGEST,
+            tabOrigin: new URL(manifest.staticTabs[0].contentUrl).origin,
+            manifest: {
+              id: manifest.id,
+              version: manifest.version,
+              devicePermissions: manifest.devicePermissions,
+            },
+          };
+          fs.writeFileSync('dist/evidence/release-identity.json', `${JSON.stringify(identity, null, 2)}\n`);
+          fs.copyFileSync('dist/evidence/release-identity.json', 'release-identity.json');
+          NODE
+      - name: Smoke the exact pushed image by immutable digest
+        env:
+          IMAGE_REF: ${{ env.IMAGE_REPOSITORY }}@${{ steps.build-image.outputs.digest }}
+          EXPECTED_SOURCE_COMMIT: ${{ github.sha }}
+          RELEASE_IDENTITY_PATH: dist/evidence/release-identity.json
+        run: node scripts/docker-runtime-image-smoke.mjs
+      - name: Attest image provenance
+        if: github.event.repository.visibility == 'public'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE_REPOSITORY }}
+          subject-digest: ${{ steps.build-image.outputs.digest }}
+          push-to-registry: true
+      - name: Record provenance policy for private repository
+        if: github.event.repository.visibility != 'public'
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const path = 'dist/evidence/release-identity.json';
+          const identity = JSON.parse(fs.readFileSync(path, 'utf8'));
+          identity.provenance = {
+            method: 'github-artifact-attestation',
+            state: 'unavailable',
+            reason: 'private-repository-plan',
+          };
+          fs.writeFileSync(path, `${JSON.stringify(identity, null, 2)}\n`);
+          fs.copyFileSync(path, 'release-identity.json');
+          NODE
+      - name: Record provenance policy for public repository
+        if: github.event.repository.visibility == 'public'
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const path = 'dist/evidence/release-identity.json';
+          const identity = JSON.parse(fs.readFileSync(path, 'utf8'));
+          identity.provenance = { method: 'github-artifact-attestation', state: 'attested' };
+          fs.writeFileSync(path, `${JSON.stringify(identity, null, 2)}\n`);
+          fs.copyFileSync(path, 'release-identity.json');
+          NODE
+      - name: Upload immutable release identity
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: teams-container-release-${{ github.sha }}
+          path: |
+            release-identity.json
+            appPackage/build/teams-sdk-mvp.zip
+            dist/server/**
+            dist/client/**
+            dist/evidence/release-identity.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  deploy:
+    name: Deploy to protected external production
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy_external == true && github.ref == 'refs/heads/main'
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: ${{ vars.PUBLIC_BASE_URL }}
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
+    env:
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      AZURE_CONTAINER_APP: ${{ vars.AZURE_CONTAINER_APP }}
+      AZURE_CONTAINER_REGISTRY: ${{ vars.AZURE_CONTAINER_REGISTRY }}
+      AZURE_CONTAINER_REGISTRY_REPOSITORY: ${{ vars.AZURE_CONTAINER_REGISTRY_REPOSITORY }}
+      AZURE_DATA_VOLUME_NAME: ${{ vars.AZURE_DATA_VOLUME_NAME }}
+      PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+      IMAGE_DIGEST: ${{ needs.publish.outputs.image_digest }}
+      SOURCE_IMAGE_REPOSITORY: ${{ env.IMAGE_REPOSITORY }}
+    steps:
+      - name: Check out the exact commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Download the immutable release identity
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: teams-container-release-${{ github.sha }}
+          path: release-artifact
+      - name: Require external deployment configuration
+        run: |
+          set -euo pipefail
+          test -n "$AZURE_CLIENT_ID"
+          test -n "$AZURE_TENANT_ID"
+          test -n "$AZURE_SUBSCRIPTION_ID"
+          test -n "$AZURE_RESOURCE_GROUP"
+          test -n "$AZURE_CONTAINER_APP"
+          test -n "$AZURE_CONTAINER_REGISTRY"
+          test -n "$AZURE_CONTAINER_REGISTRY_REPOSITORY"
+          test -n "$AZURE_DATA_VOLUME_NAME"
+          test -n "$PUBLIC_BASE_URL"
+          test -n "$IMAGE_DIGEST"
+          test -n "${GITHUB_TOKEN:-}"
+          test -f release-artifact/release-identity.json
+          case "$PUBLIC_BASE_URL" in https://*) ;; *) echo 'PUBLIC_BASE_URL must use HTTPS' >&2; exit 1 ;; esac
+      - name: Log in to Azure with GitHub OIDC
+        uses: azure/login@2035af27c2cea8ff426397d10e3edb28906b51df # v2.3.1
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Verify persistent single-replica storage contract
+        run: |
+          set -euo pipefail
+          storage_type="$(az containerapp show --name "$AZURE_CONTAINER_APP" --resource-group "$AZURE_RESOURCE_GROUP" --query "properties.template.volumes[?name=='${AZURE_DATA_VOLUME_NAME}'] | [0].storageType" --output tsv)"
+          storage_name="$(az containerapp show --name "$AZURE_CONTAINER_APP" --resource-group "$AZURE_RESOURCE_GROUP" --query "properties.template.volumes[?name=='${AZURE_DATA_VOLUME_NAME}'] | [0].storageName" --output tsv)"
+          mount_path="$(az containerapp show --name "$AZURE_CONTAINER_APP" --resource-group "$AZURE_RESOURCE_GROUP" --query "properties.template.containers[0].volumeMounts[?volumeName=='${AZURE_DATA_VOLUME_NAME}'] | [0].mountPath" --output tsv)"
+          max_replicas="$(az containerapp show --name "$AZURE_CONTAINER_APP" --resource-group "$AZURE_RESOURCE_GROUP" --query 'properties.template.scale.maxReplicas' --output tsv)"
+          test "$storage_type" = "AzureFile"
+          test -n "$storage_name"
+          test "$mount_path" = "/app/data"
+          test "$max_replicas" = "1"
+      - name: Mirror the verified image into Azure Container Registry
+        env:
+          SOURCE_IMAGE: ${{ env.IMAGE_REPOSITORY }}@${{ needs.publish.outputs.image_digest }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          acr_login_server="$(az acr show --name "$AZURE_CONTAINER_REGISTRY" --resource-group "$AZURE_RESOURCE_GROUP" --query loginServer --output tsv)"
+          test -n "$acr_login_server"
+          configured_registry="$(az containerapp show --name "$AZURE_CONTAINER_APP" --resource-group "$AZURE_RESOURCE_GROUP" --query "properties.configuration.registries[?server=='${acr_login_server}'] | [0].server" --output tsv)"
+          test "$configured_registry" = "$acr_login_server"
+          az acr login --name "$AZURE_CONTAINER_REGISTRY"
+          printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker pull "$SOURCE_IMAGE"
+          target_image="$acr_login_server/$AZURE_CONTAINER_REGISTRY_REPOSITORY:sha-${GITHUB_SHA}"
+          docker tag "$SOURCE_IMAGE" "$target_image"
+          push_output="$(docker push "$target_image" 2>&1)"
+          printf '%s\n' "$push_output"
+          acr_digest="$(printf '%s\n' "$push_output" | grep -Eo 'digest: sha256:[0-9a-f]{64}' | sed 's/^digest: //' | tail -n 1)"
+          test "$acr_digest" = "$IMAGE_DIGEST"
+          echo "DEPLOY_IMAGE_REPOSITORY=$acr_login_server/$AZURE_CONTAINER_REGISTRY_REPOSITORY" >> "$GITHUB_ENV"
+      - name: Deploy the immutable image revision
+        run: |
+          set -euo pipefail
+          az containerapp update \
+            --name "$AZURE_CONTAINER_APP" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --image "$DEPLOY_IMAGE_REPOSITORY@$IMAGE_DIGEST" \
+            --revision-suffix "sha-${GITHUB_SHA:0:12}"
+      - name: Verify the deployed image reference
+        run: |
+          deployed_image="$(az containerapp show --name "$AZURE_CONTAINER_APP" --resource-group "$AZURE_RESOURCE_GROUP" --query 'properties.template.containers[0].image' --output tsv)"
+          test "$deployed_image" = "$DEPLOY_IMAGE_REPOSITORY@$IMAGE_DIGEST"
+      - name: Verify public runtime identity and tab assets
+        env:
+          EXPECTED_SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import crypto from 'node:crypto';
+          import fs from 'node:fs';
+
+          const identity = JSON.parse(fs.readFileSync('release-artifact/release-identity.json', 'utf8'));
+          const baseUrl = new URL(process.env.PUBLIC_BASE_URL);
+          assert.equal(baseUrl.protocol, 'https:', 'external Teams runtime must use HTTPS');
+          assert.equal(baseUrl.origin, identity.tabOrigin, 'public origin must match the packaged tab origin');
+          const timeoutMs = 30_000;
+          async function get(pathname) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
+            try {
+              const response = await fetch(new URL(pathname, baseUrl), { redirect: 'follow', signal: controller.signal });
+              return { response, body: await response.text() };
+            } finally {
+              clearTimeout(timer);
+            }
+          }
+          const healthResult = await get('/api/health');
+          assert.equal(healthResult.response.status, 200, 'public health must return HTTP 200');
+          const health = JSON.parse(healthResult.body);
+          assert.equal(health.ok, true);
+          assert.equal(health.environment, 'production');
+          assert.equal(health.sourceCommit, process.env.EXPECTED_SOURCE_COMMIT);
+          assert.equal(health.version, identity.version);
+          assert.equal(health.serverBundleSha256, identity.serverBundleSha256);
+          assert.equal(health.auth, 'teams-authenticated');
+          assert.equal(health.userAuth, 'entra-sso');
+          assert.equal(health.bot, 'teams-sdk');
+          assert.equal(health.outbound, 'teams-sdk');
+          const tabResult = await get('/tabs/home/');
+          assert.equal(tabResult.response.status, 200, 'public Teams tab must return HTTP 200');
+          const assetPath = tabResult.body.match(/(?:src|href)=["']([^"']*assets\/main\.js(?:\?[^"']*)?)["']/)?.[1];
+          assert.ok(assetPath, 'public Teams tab must reference its client bundle');
+          const assetUrl = new URL(assetPath, tabResult.response.url);
+          const buildId = assetUrl.searchParams.get('v');
+          assert.match(buildId ?? '', /^[a-f0-9]{12}$/, 'client asset must carry its content hash');
+          const assetResponse = await fetch(assetUrl, { redirect: 'manual' });
+          assert.equal(assetResponse.status, 200, 'public client bundle must return HTTP 200');
+          const assetBytes = new Uint8Array(await assetResponse.arrayBuffer());
+          assert.ok(assetBytes.byteLength > 0, 'public client bundle must not be empty');
+          const assetSha256 = crypto.createHash('sha256').update(assetBytes).digest('hex');
+          assert.equal(assetSha256.slice(0, 12), buildId, 'client asset hash must match its URL identity');
+          const evidence = {
+            status: 'PASS',
+            sourceCommit: health.sourceCommit,
+            version: health.version,
+            serverBundleSha256: health.serverBundleSha256,
+            publicOrigin: baseUrl.origin,
+            imageDigest: identity.imageDigest,
+            clientAssetSha256: assetSha256,
+          };
+          fs.mkdirSync('deployment-evidence', { recursive: true });
+          fs.writeFileSync('deployment-evidence/public-runtime-verification.json', `${JSON.stringify(evidence, null, 2)}\n`);
+          console.log(JSON.stringify(evidence, null, 2));
+          NODE
+      - name: Upload external runtime verification
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: teams-external-runtime-${{ github.sha }}
+          path: |
+            release-artifact/release-identity.json
+            deployment-evidence/public-runtime-verification.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0

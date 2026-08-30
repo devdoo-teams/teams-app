@@ -22,12 +22,15 @@ assert.doesNotMatch(dockerfile, /RUN npm run build/, 'the image must not rebuild
 assert.match(dockerfile, /ARG TEAMS_SOURCE_COMMIT/, 'the image build must accept the source commit identity');
 assert.match(dockerfile, /ENV TEAMS_SOURCE_COMMIT=\$\{TEAMS_SOURCE_COMMIT\}/, 'the source commit must be carried into the build and runtime stages');
 assert.match(dockerfile, /COPY dist \.\/dist/, 'the image must reuse the CI-verified dist artifact');
+assert.match(dockerfile, /COPY scripts\/start-server\.mjs/, 'the image must include the runtime loader');
+assert.match(dockerfile, /COPY scripts\/runtime-dist\.mjs/, 'the image must include the runtime dist resolver');
 assert.match(dockerfile, /COPY scripts\/verify-runtime-dist\.mjs/, 'the image must run the dist provenance verifier');
+assert.match(dockerfile, /TEAMS_RUNTIME_DIST_DIR=\/app\/dist/, 'the image must use one explicit runtime dist root');
 assert.match(runtimeDistVerifier, /schemaVersion !== 3/, 'the image verifier must validate the release marker schema');
 assert.match(runtimeDistVerifier, /bundleSha256/, 'the image verifier must validate the server bundle digest');
 assert.match(dockerfile, /EXPOSE 3978/, 'the image must expose the Teams runtime port');
 assert.match(dockerfile, /HEALTHCHECK[\s\S]*\/api\/health/, 'the image must define an HTTP health check');
-assert.match(dockerfile, /CMD \["node", "dist\/server\/index\.js"\]/, 'the image must start the Core server entrypoint');
+assert.match(dockerfile, /CMD \["npm", "start"\]/, 'the image must start through the runtime loader contract');
 assert.equal(ignoredEntries.has('.git'), true, 'the artifact-only build context must not include Git history');
 assert.match(dockerignore, /^dist\/\*$/m, 'the build context must exclude unverified dist entries by default');
 assert.match(dockerignore, /^!dist\/client\/$/m, 'the build context must include the verified client artifact');

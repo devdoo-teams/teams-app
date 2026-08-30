@@ -186,6 +186,9 @@ teams app create --name teams-sdk-mvp --endpoint https://<tunnel-host>/api/messa
 
 공개 HTTPS 환경에 배포할 때 사용할 수 있는 Dockerfile도 포함되어 있습니다. 플랫폼에서 다음 환경변수를 주입하고 `TEAMS_SKIP_AUTH`는 설정하지 않습니다.
 
+외부 컨테이너 배포 후보와 무료 플랜의 한계는 [`docs/research/2026-08-30-external-hosting-free-tier-audit.md`](docs/research/2026-08-30-external-hosting-free-tier-audit.md),
+실제 Azure Container Apps promotion 계약은 [`docs/external-container-deployment.md`](docs/external-container-deployment.md)에 기록되어 있습니다.
+
 ```bash
 docker build -t teams-sdk-mvp .
 docker run --rm -p 3978:3978 \
