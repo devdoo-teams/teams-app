@@ -40,11 +40,20 @@ requireText(/IMAGE_DIGEST:\s*\$\{\{ needs\.publish\.outputs\.image_digest \}\}/,
 const deploySectionStart = workflow.indexOf('\n  deploy:');
 assert.notEqual(deploySectionStart, -1, 'external workflow must contain a deploy job');
 const deploySection = workflow.slice(deploySectionStart);
-assert.match(
+assert.doesNotMatch(
   deploySection,
   /^      GITHUB_TOKEN:\s*\$\{\{ secrets\.GITHUB_TOKEN \}\}$/m,
-  'deployment preflight must receive GITHUB_TOKEN at job scope',
+  'GHCR credentials must not be exposed at deployment job scope',
 );
+const mirrorSectionStart = deploySection.indexOf('      - name: Mirror the verified image into Azure Container Registry');
+assert.notEqual(mirrorSectionStart, -1, 'deployment must have a dedicated image mirror step');
+const mirrorSectionEnd = deploySection.indexOf('\n      - name:', mirrorSectionStart + 1);
+const mirrorSection = deploySection.slice(
+  mirrorSectionStart,
+  mirrorSectionEnd === -1 ? deploySection.length : mirrorSectionEnd,
+);
+assert.match(mirrorSection, /GHCR_TOKEN:\s*\$\{\{ secrets\.GITHUB_TOKEN \}\}/, 'GHCR token must be scoped to the mirror step');
+assert.match(mirrorSection, /password-stdin/, 'the mirror step must pass the GHCR token through stdin');
 requireText(/--image "\$DEPLOY_IMAGE_REPOSITORY@\$IMAGE_DIGEST"/, 'deployment must use an immutable image digest');
 requireText(/test "\$deployed_image" = "\$DEPLOY_IMAGE_REPOSITORY@\$IMAGE_DIGEST"/, 'deployment must read back the immutable image reference');
 requireText(/az acr login/, 'deployment must authenticate to the target Azure registry');
@@ -58,6 +67,8 @@ requireText(/test "\$mount_path" = "\/app\/data"/, 'the JSON store must use the 
 requireText(/test "\$max_replicas" = "1"/, 'file-backed storage must stay single-replica');
 requireText(/release-identity\.json/, 'the release identity must be retained and transported');
 requireText(/clientAssetSha256/, 'the release identity must bind the exact client asset');
+requireText(/assert\.equal\(identity\.clientAssetSha256, assetSha256/, 'public verification must compare the full client asset hash');
+requireText(/assert\.equal\(assetUrl\.origin, baseUrl\.origin/, 'public verification must keep assets on the packaged public origin');
 requireText(/health\.sourceCommit/, 'public verification must compare source identity');
 requireText(/health\.version/, 'public verification must compare application version');
 requireText(/health\.serverBundleSha256/, 'public verification must compare server bundle identity');
@@ -79,6 +90,11 @@ requireText(/npm run package:app/, 'external verification must build a new Teams
 requireText(/npm run test:package-determinism/, 'external verification must test package determinism');
 requireText(/npm run test:docker-build-inputs/, 'external verification must validate Docker inputs');
 requireText(/npm run test:docker-runtime-contract/, 'external verification must validate the Docker runtime contract');
+requireText(/activeRevisionsMode/, 'deployment must inspect the Container Apps revision mode');
+requireText(/test "\$active_revisions_mode" = "Single"/, 'file-backed deployment must use a single active revision');
+requireText(/previous_image/, 'deployment must capture an immutable rollback image');
+requireText(/if: failure\(\).*DEPLOYMENT_ATTEMPTED/s, 'failed deployment verification must trigger rollback');
+requireText(/rollback-\$\{GITHUB_RUN_ID/, 'rollback must create a traceable revision suffix');
 requireText(/TEAMS_APP_ID:\s*\$\{\{ vars\.TEAMS_APP_ID \}\}/, 'Teams deployment variables must remain external');
 for (const variable of [
   'TEAMS_CATALOG_APP_ID',

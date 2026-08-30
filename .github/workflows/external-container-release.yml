@@ -273,7 +273,6 @@ jobs:
       PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
       IMAGE_DIGEST: ${{ needs.publish.outputs.image_digest }}
       SOURCE_IMAGE_REPOSITORY: ${{ env.IMAGE_REPOSITORY }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Check out the exact commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -295,7 +294,6 @@ jobs:
           test -n "$AZURE_DATA_VOLUME_NAME"
           test -n "$PUBLIC_BASE_URL"
           test -n "$IMAGE_DIGEST"
-          test -n "${GITHUB_TOKEN:-}"
           test -f release-artifact/release-identity.json
           case "$PUBLIC_BASE_URL" in https://*) ;; *) echo 'PUBLIC_BASE_URL must use HTTPS' >&2; exit 1 ;; esac
       - name: Log in to Azure with GitHub OIDC
@@ -315,10 +313,28 @@ jobs:
           test -n "$storage_name"
           test "$mount_path" = "/app/data"
           test "$max_replicas" = "1"
+      - name: Capture single-revision rollback target
+        run: |
+          set -euo pipefail
+          app_json="$(az containerapp show --name "$AZURE_CONTAINER_APP" --resource-group "$AZURE_RESOURCE_GROUP" --output json)"
+          active_revisions_mode="$(printf '%s' "$app_json" | jq -r '.properties.configuration.activeRevisionsMode // empty')"
+          test "$active_revisions_mode" = "Single"
+          traffic_count="$(printf '%s' "$app_json" | jq -r '(.properties.configuration.ingress.traffic // []) | length')"
+          if test "$traffic_count" -gt 0; then
+            test "$traffic_count" = "1"
+            traffic_weight="$(printf '%s' "$app_json" | jq -r '.properties.configuration.ingress.traffic[0].weight // empty')"
+            test "$traffic_weight" = "100"
+          fi
+          previous_image="$(printf '%s' "$app_json" | jq -r '.properties.template.containers[0].image // empty')"
+          test -n "$previous_image"
+          printf '%s' "$previous_image" | grep -Eq '@sha256:[0-9a-f]{64}$'
+          echo "PREVIOUS_IMAGE=$previous_image" >> "$GITHUB_ENV"
+          echo "DEPLOYMENT_ATTEMPTED=false" >> "$GITHUB_ENV"
       - name: Mirror the verified image into Azure Container Registry
         env:
           SOURCE_IMAGE: ${{ env.IMAGE_REPOSITORY }}@${{ needs.publish.outputs.image_digest }}
           GITHUB_ACTOR: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           acr_login_server="$(az acr show --name "$AZURE_CONTAINER_REGISTRY" --resource-group "$AZURE_RESOURCE_GROUP" --query loginServer --output tsv)"
@@ -326,7 +342,7 @@ jobs:
           configured_registry="$(az containerapp show --name "$AZURE_CONTAINER_APP" --resource-group "$AZURE_RESOURCE_GROUP" --query "properties.configuration.registries[?server=='${acr_login_server}'] | [0].server" --output tsv)"
           test "$configured_registry" = "$acr_login_server"
           az acr login --name "$AZURE_CONTAINER_REGISTRY"
-          printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           docker pull "$SOURCE_IMAGE"
           target_image="$acr_login_server/$AZURE_CONTAINER_REGISTRY_REPOSITORY:sha-${GITHUB_SHA}"
           docker tag "$SOURCE_IMAGE" "$target_image"
@@ -338,6 +354,7 @@ jobs:
       - name: Deploy the immutable image revision
         run: |
           set -euo pipefail
+          echo "DEPLOYMENT_ATTEMPTED=true" >> "$GITHUB_ENV"
           az containerapp update \
             --name "$AZURE_CONTAINER_APP" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
@@ -345,8 +362,21 @@ jobs:
             --revision-suffix "sha-${GITHUB_SHA:0:12}"
       - name: Verify the deployed image reference
         run: |
+          set -euo pipefail
           deployed_image="$(az containerapp show --name "$AZURE_CONTAINER_APP" --resource-group "$AZURE_RESOURCE_GROUP" --query 'properties.template.containers[0].image' --output tsv)"
           test "$deployed_image" = "$DEPLOY_IMAGE_REPOSITORY@$IMAGE_DIGEST"
+      - name: Verify deployed revision and traffic safety
+        run: |
+          set -euo pipefail
+          app_json="$(az containerapp show --name "$AZURE_CONTAINER_APP" --resource-group "$AZURE_RESOURCE_GROUP" --output json)"
+          active_revisions_mode="$(printf '%s' "$app_json" | jq -r '.properties.configuration.activeRevisionsMode // empty')"
+          test "$active_revisions_mode" = "Single"
+          traffic_count="$(printf '%s' "$app_json" | jq -r '(.properties.configuration.ingress.traffic // []) | length')"
+          if test "$traffic_count" -gt 0; then
+            test "$traffic_count" = "1"
+            traffic_weight="$(printf '%s' "$app_json" | jq -r '.properties.configuration.ingress.traffic[0].weight // empty')"
+            test "$traffic_weight" = "100"
+          fi
       - name: Verify public runtime identity and tab assets
         env:
           EXPECTED_SOURCE_COMMIT: ${{ github.sha }}
@@ -365,8 +395,10 @@ jobs:
           async function get(pathname) {
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), timeoutMs);
+            const expectedUrl = new URL(pathname, baseUrl);
             try {
-              const response = await fetch(new URL(pathname, baseUrl), { redirect: 'follow', signal: controller.signal });
+              const response = await fetch(expectedUrl, { redirect: 'manual', signal: controller.signal });
+              assert.equal(response.url, expectedUrl.toString(), `${pathname} must not redirect`);
               return { response, body: await response.text() };
             } finally {
               clearTimeout(timer);
@@ -389,6 +421,7 @@ jobs:
           const assetPath = tabResult.body.match(/(?:src|href)=["']([^"']*assets\/main\.js(?:\?[^"']*)?)["']/)?.[1];
           assert.ok(assetPath, 'public Teams tab must reference its client bundle');
           const assetUrl = new URL(assetPath, tabResult.response.url);
+          assert.equal(assetUrl.origin, baseUrl.origin, 'public client asset must stay on the packaged public origin');
           const buildId = assetUrl.searchParams.get('v');
           assert.match(buildId ?? '', /^[a-f0-9]{12}$/, 'client asset must carry its content hash');
           const assetResponse = await fetch(assetUrl, { redirect: 'manual' });
@@ -397,6 +430,7 @@ jobs:
           assert.ok(assetBytes.byteLength > 0, 'public client bundle must not be empty');
           const assetSha256 = crypto.createHash('sha256').update(assetBytes).digest('hex');
           assert.equal(assetSha256.slice(0, 12), buildId, 'client asset hash must match its URL identity');
+          assert.equal(identity.clientAssetSha256, assetSha256, 'client asset must match the immutable release identity');
           const evidence = {
             status: 'PASS',
             sourceCommit: health.sourceCommit,
@@ -410,6 +444,19 @@ jobs:
           fs.writeFileSync('deployment-evidence/public-runtime-verification.json', `${JSON.stringify(evidence, null, 2)}\n`);
           console.log(JSON.stringify(evidence, null, 2));
           NODE
+      - name: Roll back after failed deployment verification
+        if: failure() && env.DEPLOYMENT_ATTEMPTED == 'true'
+        run: |
+          set -euo pipefail
+          test -n "${PREVIOUS_IMAGE:-}"
+          printf '%s' "$PREVIOUS_IMAGE" | grep -Eq '@sha256:[0-9a-f]{64}$'
+          az containerapp update \
+            --name "$AZURE_CONTAINER_APP" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --image "$PREVIOUS_IMAGE" \
+            --revision-suffix "rollback-${GITHUB_RUN_ID:0:12}"
+          rolled_back_image="$(az containerapp show --name "$AZURE_CONTAINER_APP" --resource-group "$AZURE_RESOURCE_GROUP" --query 'properties.template.containers[0].image' --output tsv)"
+          test "$rolled_back_image" = "$PREVIOUS_IMAGE"
       - name: Upload external runtime verification
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
