@@ -22,12 +22,14 @@ function getFreePort() {
   });
 }
 
-async function waitForHealth(url, childOutput) {
+async function waitForHealth(url, localAccessToken, childOutput) {
   const deadline = Date.now() + 5_000;
   let lastError;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, {
+        headers: { 'x-teams-local-access-token': localAccessToken },
+      });
       const body = await response.text();
       if (response.status === 200) return JSON.parse(body);
       lastError = new Error(`health returned HTTP ${response.status}: ${body}`);
@@ -81,7 +83,11 @@ child.stdout.on('data', (chunk) => { output += chunk.toString(); });
 child.stderr.on('data', (chunk) => { output += chunk.toString(); });
 
 try {
-  const health = await waitForHealth(`http://127.0.0.1:${port}/api/health`, () => output);
+  const health = await waitForHealth(
+    `http://127.0.0.1:${port}/api/health`,
+    'remote-startup-test-token-0123456789abcdef',
+    () => output,
+  );
   assert.equal(health.ok, true);
   assert.ok(
     health.a2aRemoteFailures?.some(
