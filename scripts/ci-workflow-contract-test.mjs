@@ -68,6 +68,8 @@ for (const script of [
   'package:app',
   'test:package-determinism',
   'test:package-output-determinism',
+  'test:release-artifact-secret-scan',
+  'check:release-artifact-secret-scan',
   'test:package-atomic',
   'test:release-timeout',
 ]) {

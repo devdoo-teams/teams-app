@@ -33,6 +33,8 @@
     "test:manifest": "node scripts/validate-manifest-test.mjs",
     "test:package-determinism": "node scripts/package-app-determinism-test.mjs",
     "test:package-output-determinism": "node scripts/package-app-output-determinism-test.mjs",
+    "test:release-artifact-secret-scan": "node scripts/release-artifact-secret-scan-test.mjs",
+    "check:release-artifact-secret-scan": "node scripts/release-artifact-secret-scan.mjs",
     "test:package-atomic": "node scripts/package-app-atomic-test.mjs",
     "test:agent-execution-readiness": "tsx scripts/agent-execution-readiness-test.ts",
     "test:release-timeout": "node scripts/release-gate-timeout-test.mjs",

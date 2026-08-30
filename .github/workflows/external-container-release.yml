@@ -73,6 +73,8 @@ jobs:
           npm run package:app
           npm run test:package-determinism
           npm run test:package-output-determinism
+          npm run test:release-artifact-secret-scan
+          npm run check:release-artifact-secret-scan
           npm run test:package-atomic
       - name: Rebuild the final Core artifact after all tests
         run: |

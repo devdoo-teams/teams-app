@@ -101,6 +101,8 @@ requireText(/npm run package:app/, 'external verification must build a new Teams
 requireText(/npm run test:package-determinism/, 'external verification must test package determinism');
 requireText(/npm run test:docker-build-inputs/, 'external verification must validate Docker inputs');
 requireText(/npm run test:docker-runtime-contract/, 'external verification must validate the Docker runtime contract');
+requireText(/npm run test:release-artifact-secret-scan/, 'external verification must run the artifact secret-scan contract test');
+requireText(/npm run check:release-artifact-secret-scan/, 'external verification must scan the exact generated ZIP');
 requireText(/npm run test:containerapp-runtime-contract/, 'external verification must validate the Container App runtime contract');
 requireText(/activeRevisionsMode/, 'deployment must inspect the Container Apps revision mode');
 requireText(/test "\$active_revisions_mode" = "Single"/, 'file-backed deployment must use a single active revision');

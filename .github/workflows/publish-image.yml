@@ -79,6 +79,8 @@ jobs:
           npm run package:app
           npm run test:package-determinism
           npm run test:package-output-determinism
+          npm run test:release-artifact-secret-scan
+          npm run check:release-artifact-secret-scan
           npm run test:package-atomic
 
       - name: Record package and server identity before image push

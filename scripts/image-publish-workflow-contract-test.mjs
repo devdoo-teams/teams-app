@@ -42,6 +42,8 @@ requireText(/npm run typecheck:core/, 'publishing must verify the Core source fi
 requireText(/npm run test:core/, 'publishing must verify the Core test suite first');
 requireText(/npm run check:deployment/, 'publishing must verify the deployment variable contract');
 requireText(/npm run package:app/, 'publishing must package the exact source commit');
+requireText(/npm run test:release-artifact-secret-scan/, 'publishing must run the artifact secret-scan contract test');
+requireText(/npm run check:release-artifact-secret-scan/, 'publishing must scan the exact generated ZIP');
 requireText(/teamsPackageSha256/, 'promotion evidence must bind the Teams package digest');
 requireText(/serverBundleSha256/, 'promotion evidence must bind the server bundle digest');
 requireText(/manifestSha256/, 'promotion evidence must bind the manifest digest');
