@@ -399,3 +399,29 @@ configuration, merged-main immutable publish, stable public runtime, Portal
 and installed package read-back, Teams desktop/mobile evidence, and live
 authenticated A2A/Grok verification. No Teams completion message is justified
 until those gates pass.
+
+## Verification checkpoint — 2026-08-31
+
+The exact current HEAD `42eb00fa7b65b2ff17f796e4c1d134f3323f87d8` was rechecked
+in the clean implementation worktree after the hosting audit:
+
+- `npm run typecheck:core`, `npm run test:core`,
+  `npm run test:external-container-workflow`,
+  `npm run test:ci-workflow-contract`,
+  `npm run test:image-publish-workflow-contract`, and
+  `npm run test:docker-runtime-contract` passed.
+- PR [#17](https://github.com/devdoo-teams/teams-app/pull/17) remains Draft.
+  The exact-head PR run is
+  [33319928376](https://github.com/devdoo-teams/teams-app/actions/runs/33319928376);
+  Core, A2A, optional/Grok contract, continuity, and Docker jobs passed, while
+  the immutable release job was skipped because the event was a pull request.
+- Historical external workflow failures on earlier commits were retained as
+  evidence; they do not prove a failure of the current HEAD. No current-main
+  external publish run exists.
+- The preserved public host still reports `1.0.100`; the locally packaged
+  candidate is `1.0.101`. `release:public` therefore fails closed on identity
+  mismatch, and the existing service was not restarted or replaced.
+- The hosting audit remains bounded official-document research, not a literal
+  inventory of every Internet provider. Cloudflare Free is not a drop-in host
+  for the current Express/Codex-worker process; Azure Container Apps + Azure
+  Files remains the primary candidate and Cloud Run the alternative.
