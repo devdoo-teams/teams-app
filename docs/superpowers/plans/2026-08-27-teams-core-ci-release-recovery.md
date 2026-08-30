@@ -348,10 +348,11 @@ send a Teams completion message from CI/health/card evidence alone.
 
 ## Current execution addendum — 2026-08-31
 
-The 2026-08-30 block above is historical. The authoritative implementation
-candidate for this continuation is the clean worktree branch
-`codex/agent-ledger-20260830` at commit
-`d7ac22fe7b21d024395da1753faeb5b676b2bec7`. The original
+The 2026-08-30 block above is historical. The functional implementation
+baseline for this continuation is commit
+`d7ac22fe7b21d024395da1753faeb5b676b2bec7`; the clean worktree branch
+`codex/agent-ledger-20260830` also contains the documentation-only current
+state addendum commits below. The original
 `/Users/doosansmacbookpro/Documents/TeamsApp` checkout remains dirty user work
 and was not modified, cleaned, or used as release source.
 
