@@ -68,6 +68,7 @@ const mockFetch: A2ARemoteFetch = async (input, init = {}) => {
 
 await testHappyPath();
 await testPinnedEndpointAndIdentity();
+await testStandardCardMayOmitExtensionIdentity();
 await testEndpointAndIdentityMismatches();
 await testRedirectsAreRejected();
 await testAdvertisedCapabilitiesDoNotBlockBaseRpc();
@@ -175,6 +176,26 @@ async function testPinnedEndpointAndIdentity(): Promise<void> {
   });
   assert.equal(client.card.agentId, 'remote-agent');
   assert.equal(client.card.providerId, 'remote-provider');
+  assert.deepEqual(await client.getTask('task-1'), completedTask);
+}
+
+async function testStandardCardMayOmitExtensionIdentity(): Promise<void> {
+  calls.length = 0;
+  nextResponse = (url, init) => {
+    if (url.pathname === '/.well-known/agent-card.json') return jsonResponse(validCard);
+    assert.equal(url.origin, 'https://agent.example.test');
+    assert.equal(url.pathname, '/a2a/v1');
+    const request = JSON.parse(String(init.body)) as { id: string };
+    return jsonResponse({ jsonrpc: '2.0', id: request.id, result: completedTask });
+  };
+
+  const client = await createA2ARemoteClient('https://agent.example.test/a2a/v1', {
+    fetch: mockFetch,
+    bearerTokenProvider: () => 'test-token',
+    expectedIdentity: { agentId: 'configured-agent', providerId: 'configured-provider' },
+  });
+  assert.equal(client.card.agentId, undefined);
+  assert.equal(client.card.providerId, undefined);
   assert.deepEqual(await client.getTask('task-1'), completedTask);
 }
 

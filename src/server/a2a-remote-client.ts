@@ -203,7 +203,10 @@ function assertPinnedIdentity(
   expected: A2ARemotePeerIdentity | undefined,
 ): void {
   if (!expected) return;
-  if (card.agentId !== expected.agentId) fail('INVALID_AGENT_CARD');
+  // A2A's standard Agent Card does not define a mandatory unique agent ID.
+  // Treat these fields as an optional project extension: reject an advertised
+  // conflict, but keep interoperating with a standard card that omits it.
+  if (card.agentId !== undefined && card.agentId !== expected.agentId) fail('INVALID_AGENT_CARD');
   if (card.providerId !== undefined && card.providerId !== expected.providerId) fail('INVALID_AGENT_CARD');
 }
 
