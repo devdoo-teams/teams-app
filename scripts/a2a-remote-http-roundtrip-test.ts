@@ -74,7 +74,20 @@ try {
 const mappedFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const requested = new URL(String(input));
   assert.equal(requested.hostname, 'agent-b.example.test', 'fixture fetch must target the declared remote identity');
-  return fetch(`http://127.0.0.1:${bPort}${requested.pathname}${requested.search}`, init);
+  // Keep the fixture's transport mapping private to the test. The remote
+  // client must still observe the URL it requested, and redirects must remain
+  // rejected just as they are for the real fetch implementation.
+  const response = await fetch(`http://127.0.0.1:${bPort}${requested.pathname}${requested.search}`, {
+    ...init,
+    redirect: 'error',
+  });
+  const mapped = new Response(await response.arrayBuffer(), {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+  Object.defineProperty(mapped, 'url', { value: requested.toString() });
+  return mapped;
 };
 
 const remoteClient = await createA2ARemoteClient('https://agent-b.example.test', {
