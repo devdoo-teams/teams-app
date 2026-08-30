@@ -61,6 +61,24 @@ Cloud Run은 컨테이너 계약과 사용량 기반 무료 구간 때문에 유
 
 Cloudflare는 현재 primary compute가 아니다. Workers Free는 Edge/API facade, Tunnel은 기존 외부 서버 앞단의 연결·보호 계층, Containers는 유료 canary/재설계 후 선택지로 분리한다. Cloudflare가 무료라는 이유만으로 현재 Express 서버와 worker를 옮겼다고 보고하지 않는다.
 
+### 4. 무료 데이터·큐 서비스까지 포함한 재검토
+
+호스팅 비용만 비교하면 판단이 불완전하므로, 앱을 Cloudflare-native로 재작성했을 때 사용할 수 있는 무료 데이터 계층도 별도로 확인했다.
+
+| 서비스 | 공식 무료 조건 | 현재 앱에 적용할 수 있는 범위 | 판정 |
+| --- | --- | --- | --- |
+| Cloudflare D1 | Workers Free에 일일 500만 rows read, 10만 rows written, 총 5GB storage가 포함된다. 한도 초과 시 쿼리가 오류를 반환한다. | JSON job/event store를 SQL로 이전하는 후보다. 단, 현재 Node `fs`/atomic file store를 그대로 연결할 수 없고 Worker adapter와 schema/migration이 필요하다. | `FUTURE_STORAGE_CANDIDATE` |
+| Cloudflare R2 | Standard storage 10GB-month, Class A 100만, Class B 1,000만 operations/month가 free이고 인터넷 egress는 무료다. | ZIP·로그 아카이브·큰 agent artifact 저장 후보다. 트랜잭션 job state의 대체 DB로 사용하지 않는다. | `STORAGE_CANDIDATE` |
+| Cloudflare Queues | Workers Free에 10,000 operations/day가 포함되지만 message retention은 24시간으로 고정된다. | 짧은 webhook-to-worker handoff에는 쓸 수 있지만, 장기 실행 Codex job·재시작 복구·감사 보존의 유일한 저장소로 쓰지 않는다. | `SHORT_LIVED_QUEUE_ONLY` |
+| Supabase Free | 500MB DB, 1GB file storage, 2개 active free project가 제공되지만 7일 낮은 활동 후 프로젝트가 pause될 수 있다. | Cloud Run/Azure/VM의 외부 DB 후보와 staging/canary에는 유용하다. 상시 Teams webhook의 production SLA로 확정하지 않는다. | `CANARY_OR_LOW_TRAFFIC` |
+
+따라서 Cloudflare를 활용하는 현실적인 2단계 경로는 다음과 같다.
+
+1. 현재 릴리스: Express/Teams SDK와 서버 측 agent worker를 유지하고, Cloudflare는 DNS/Tunnel/WAF 또는 정적 asset 계층으로만 사용한다. 원본 Dev Tunnel을 교체하지 않는다.
+2. 재설계 릴리스: Teams webhook/tab facade를 Workers로 별도 구현하고 D1을 job/event state, R2를 artifact, Queues를 짧은 handoff로 사용한다. Codex CLI를 실행하는 worker는 Cloud Run·Azure Container Apps·Oracle VM 같은 별도 컴퓨트에 두고, 인증 home과 실행 파일을 분리한다. 이 경로는 새 adapter, 인증 계약, 분산 lock, 장애 복구 및 동일-release UI 검증을 통과하기 전에는 현재 서비스에 병합하지 않는다.
+
+즉, Cloudflare의 무료 D1/R2/Queues는 “무료 외부 서비스가 전혀 없다”는 뜻을 뒤집지만, 현재 서버를 그대로 무료 Cloudflare Workers에 배포할 수 있다는 뜻은 아니다. 무료 쿼리·저장 한도도 초과 시 오류/보존 기간 제한이 있으므로 release gate와 운영 SLA에 포함해 측정해야 한다.
+
 ## 릴리스 및 교체 순서
 
 1. PR/main에서 bounded Core source check, build, Core tests, manifest, deterministic package, Docker contract/smoke를 통과시킨다.
@@ -83,6 +101,9 @@ Cloudflare는 현재 primary compute가 아니다. Workers Free는 Edge/API faca
 - Cloudflare Containers pricing: <https://developers.cloudflare.com/containers/platform/pricing/>
 - Cloudflare Containers architecture: <https://developers.cloudflare.com/containers/concepts/architecture/>
 - Cloudflare Tunnel: <https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/>
+- Cloudflare D1 pricing: <https://developers.cloudflare.com/d1/platform/pricing/>
+- Cloudflare R2 pricing: <https://developers.cloudflare.com/r2/pricing/>
+- Cloudflare Queues pricing: <https://developers.cloudflare.com/queues/platform/pricing/>
 - Google Cloud Run pricing: <https://cloud.google.com/run/pricing>
 - Google Cloud Run container contract: <https://docs.cloud.google.com/run/docs/container-contract>
 - Google Cloud free program: <https://docs.cloud.google.com/free/docs/free-cloud-features>
@@ -96,6 +117,8 @@ Cloudflare는 현재 primary compute가 아니다. Workers Free는 Edge/API faca
 - Vercel function limits: <https://vercel.com/docs/functions/limitations>
 - Netlify Background Functions: <https://docs.netlify.com/build/functions/background-functions/>
 - AWS Lambda pricing: <https://aws.amazon.com/lambda/pricing/>
+- Supabase pricing: <https://supabase.com/pricing>
+- Supabase Free project pausing: <https://supabase.com/docs/guides/platform/free-project-pausing>
 
 ## 증거 경계
 
