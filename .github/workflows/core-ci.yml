@@ -136,14 +136,11 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build optional runtime surfaces without live credentials
+        run: npm run build:optional
       - name: Verify optional provider contracts without live credentials
         run: |
-          npm run test:openai-engine
-          npm run test:local-engine
-          npm run test:grok-engine
-          npm run test:grok-bot-runtime
-          npm run test:response-mode-optional-unconfigured
-          npm run build:server
+          npm run test:optional
 
   container:
     name: Docker Core runtime build
