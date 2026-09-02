@@ -877,6 +877,23 @@ function assertSafeStoredRecord(record: ProviderLifecycleRecord): void {
     throw new Error('Provider lifecycle store contains a non-opaque credential reference.');
   }
   assertNoRawCredentialPayload(record.payload);
+  assertSafeStoredText(record.rawProviderState, 200, 'raw provider state');
+  if (record.receipt) {
+    for (const [value, label] of [
+      [record.receipt.providerExecutionId, 'receipt execution id'],
+      [record.receipt.providerSessionId, 'receipt session id'],
+      [record.receipt.providerContextId, 'receipt context id'],
+    ] as const) {
+      if (value !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(value)) {
+        throw new Error(`Provider lifecycle store contains invalid ${label}.`);
+      }
+    }
+    if (!Number.isFinite(Date.parse(record.receipt.acceptedAt))) {
+      throw new Error('Provider lifecycle store contains an invalid receipt timestamp.');
+    }
+    assertSafeStoredText(record.receipt.rawState, 200, 'receipt raw state');
+    assertSafeStoredText(record.receipt.reconciliationRef, 512, 'receipt reconciliation reference');
+  }
   for (const [value, maximum, label] of [
     [record.result, 65_536, 'result'],
     [record.error, 4_000, 'error'],
@@ -891,11 +908,32 @@ function assertSafeStoredRecord(record: ProviderLifecycleRecord): void {
     throw new Error('Provider lifecycle store contains unsafe audit references.');
   }
   if (record.artifacts && (record.artifacts.length > 32 || record.artifacts.some((artifact) => (
-    !artifact || artifact.artifactId.length > 200 || artifact.name.length > 512 || artifact.mediaType.length > 200
+    !artifact || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(artifact.artifactId)
+    || artifact.name.length > 512 || redactProviderRuntimeText(artifact.name, 512) !== artifact.name.trim()
+    || artifact.mediaType.length > 200 || redactProviderRuntimeText(artifact.mediaType, 200) !== artifact.mediaType.trim()
     || (artifact.text !== undefined && (
       artifact.text.length > 65_536 || redactProviderRuntimeText(artifact.text, 65_536) !== artifact.text
     ))
     || (artifact.uri !== undefined && !isSafeStoredArtifactUri(artifact.uri))
+    || (artifact.sha256 !== undefined && !/^[a-f0-9]{64}$/u.test(artifact.sha256))
+    || (artifact.text !== undefined && artifact.sha256 !== undefined
+      && crypto.createHash('sha256').update(artifact.text).digest('hex') !== artifact.sha256)
+    || (artifact.byteSize !== undefined && (!Number.isSafeInteger(artifact.byteSize) || artifact.byteSize < 0))
+    || (artifact.repository !== undefined && (
+      artifact.repository.length > 512
+      || redactProviderRuntimeText(artifact.repository, 512) !== artifact.repository.trim()
+      || (/^[a-z][a-z0-9+.-]*:\/\//iu.test(artifact.repository) && !isSafeStoredArtifactUri(artifact.repository))
+    ))
+    || (artifact.commitSha !== undefined && !/^[a-f0-9]{7,64}$/u.test(artifact.commitSha))
+    || (artifact.authorship !== undefined && (
+      !artifact.authorship || typeof artifact.authorship !== 'object' || Array.isArray(artifact.authorship)
+      || Object.entries(artifact.authorship).length > 32
+      || Object.entries(artifact.authorship).some(([key, value]) => (
+        key.length > 100 || redactProviderRuntimeText(key, 100) !== key.trim()
+        || typeof value !== 'string' || value.length > 512
+        || redactProviderRuntimeText(value, 512) !== value.trim()
+      ))
+    ))
   )))) {
     throw new Error('Provider lifecycle store contains unsafe artifacts.');
   }
@@ -904,6 +942,12 @@ function assertSafeStoredRecord(record: ProviderLifecycleRecord): void {
       || !Number.isFinite(Date.parse(record.lease.expiresAt))) {
       throw new Error('Provider lifecycle store contains an invalid lease.');
     }
+  }
+}
+
+function assertSafeStoredText(value: string | undefined, maximum: number, label: string): void {
+  if (value !== undefined && (value.length > maximum || redactProviderRuntimeText(value, maximum) !== value.trim())) {
+    throw new Error(`Provider lifecycle store contains unsafe ${label}.`);
   }
 }
 
