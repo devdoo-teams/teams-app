@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { A2AScope } from './a2a-contract.js';
 import { atomicWriteJson, readAtomicJsonStore } from './atomic-file.js';
 import {
+  hasProviderCompletionEvidence,
   isOpaqueProviderCredentialReference,
   redactProviderRuntimeText,
   validateProviderRuntimeObservation,
@@ -338,7 +339,7 @@ export class ProviderLifecycleRunner {
         if (controller.signal.aborted) return this.requestCancellation(record, operation, controller.signal.reason);
         return this.quarantine(record, 'delivery-unknown', 'DELIVERY_UNKNOWN', safeError(error));
       }
-      record = await this.applyObservation(record, submitted, 'submit', input.onAccepted);
+      record = await this.applyObservation(record, submitted, 'submit', input.onAccepted, controller.signal);
       return record.state === 'accepted' || record.state === 'working'
         ? await this.observe(record, operation, controller)
         : record;
@@ -439,7 +440,7 @@ export class ProviderLifecycleRunner {
       return this.requestCancellation(record, operation, new Error('Resuming durable provider cancellation.'));
     }
     if (record.receipt) {
-      await onAccepted?.(record.receipt);
+      await this.invokeAcceptedCallback(record, onAccepted, controller.signal);
       return this.observe(record, operation, controller);
     }
     return this.reconcileWithoutReceipt(record, operation, controller, onAccepted);
@@ -505,7 +506,13 @@ export class ProviderLifecycleRunner {
       if (record.state === 'quarantined') return this.releaseOwnedLease(record);
       return this.quarantine(record, 'delivery-unknown', 'DELIVERY_UNKNOWN', safeError(error));
     }
-    const reconciled = await this.applyObservation(record, observation, 'reconcile', onAccepted);
+    const reconciled = await this.applyObservation(
+      record,
+      observation,
+      'reconcile',
+      onAccepted,
+      controller.signal,
+    );
     return reconciled.state === 'accepted' || reconciled.state === 'working'
       ? this.observe(reconciled, operation, controller)
       : reconciled;
@@ -516,6 +523,7 @@ export class ProviderLifecycleRunner {
     observation: ProviderRuntimeObservation,
     phase: ProviderRuntimeObservationPhase,
     onAccepted?: (receipt: ProviderAcceptedReceipt) => Promise<void> | void,
+    acceptedCallbackSignal?: AbortSignal,
   ): Promise<ProviderLifecycleRecord> {
     let validated: ValidatedProviderRuntimeObservation;
     try {
@@ -550,7 +558,7 @@ export class ProviderLifecycleRunner {
         quarantine: undefined,
         terminalAt: undefined,
       });
-      await onAccepted?.(requiredReceipt(current));
+      await this.invokeAcceptedCallback(current, onAccepted, acceptedCallbackSignal);
     } else {
       const receipt = mergeReceiptContinuity(requiredReceipt(current), validated);
       if (receipt !== current.receipt) current = await this.persist(current, { receipt });
@@ -675,6 +683,24 @@ export class ProviderLifecycleRunner {
       }
     }
     throw new ProviderLifecycleRevisionConflictError();
+  }
+
+  private async invokeAcceptedCallback(
+    record: ProviderLifecycleRecord,
+    onAccepted: ((receipt: ProviderAcceptedReceipt) => Promise<void> | void) | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    if (!onAccepted) return;
+    if (!signal) throw new Error('Provider accepted callback requires a lifecycle signal.');
+    try {
+      await raceAgainstSignal(
+        () => Promise.resolve(onAccepted(requiredReceipt(record))),
+        signal,
+      );
+    } catch (error) {
+      await this.releaseOwnedLease(record);
+      throw error;
+    }
   }
 
   private async persist(
@@ -878,21 +904,25 @@ function assertSafeStoredRecord(record: ProviderLifecycleRecord): void {
   }
   assertNoRawCredentialPayload(record.payload);
   assertSafeStoredText(record.rawProviderState, 200, 'raw provider state');
-  if (record.receipt) {
+  const storedReceipt = record.receipt as ProviderAcceptedReceipt | null | undefined;
+  if (storedReceipt !== undefined) {
+    if (!storedReceipt || typeof storedReceipt.providerExecutionId !== 'string'
+      || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(storedReceipt.providerExecutionId)) {
+      throw new Error('Provider lifecycle store contains invalid receipt execution id.');
+    }
     for (const [value, label] of [
-      [record.receipt.providerExecutionId, 'receipt execution id'],
-      [record.receipt.providerSessionId, 'receipt session id'],
-      [record.receipt.providerContextId, 'receipt context id'],
+      [storedReceipt.providerSessionId, 'receipt session id'],
+      [storedReceipt.providerContextId, 'receipt context id'],
     ] as const) {
       if (value !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(value)) {
         throw new Error(`Provider lifecycle store contains invalid ${label}.`);
       }
     }
-    if (!Number.isFinite(Date.parse(record.receipt.acceptedAt))) {
+    if (!Number.isFinite(Date.parse(storedReceipt.acceptedAt))) {
       throw new Error('Provider lifecycle store contains an invalid receipt timestamp.');
     }
-    assertSafeStoredText(record.receipt.rawState, 200, 'receipt raw state');
-    assertSafeStoredText(record.receipt.reconciliationRef, 512, 'receipt reconciliation reference');
+    assertSafeStoredText(storedReceipt.rawState, 200, 'receipt raw state');
+    assertSafeStoredText(storedReceipt.reconciliationRef, 512, 'receipt reconciliation reference');
   }
   for (const [value, maximum, label] of [
     [record.result, 65_536, 'result'],
@@ -912,7 +942,7 @@ function assertSafeStoredRecord(record: ProviderLifecycleRecord): void {
     || artifact.name.length > 512 || redactProviderRuntimeText(artifact.name, 512) !== artifact.name.trim()
     || artifact.mediaType.length > 200 || redactProviderRuntimeText(artifact.mediaType, 200) !== artifact.mediaType.trim()
     || (artifact.text !== undefined && (
-      artifact.text.length > 65_536 || redactProviderRuntimeText(artifact.text, 65_536) !== artifact.text
+      artifact.text.length > 65_536 || redactProviderRuntimeText(artifact.text, 65_536) !== artifact.text.trim()
     ))
     || (artifact.uri !== undefined && !isSafeStoredArtifactUri(artifact.uri))
     || (artifact.sha256 !== undefined && !/^[a-f0-9]{64}$/u.test(artifact.sha256))
@@ -936,6 +966,9 @@ function assertSafeStoredRecord(record: ProviderLifecycleRecord): void {
     ))
   )))) {
     throw new Error('Provider lifecycle store contains unsafe artifacts.');
+  }
+  if (record.state === 'completed' && !hasProviderCompletionEvidence(record)) {
+    throw new Error('Provider lifecycle store completed record requires validated completion evidence.');
   }
   if (record.lease) {
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(record.lease.ownerId)

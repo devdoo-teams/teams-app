@@ -210,6 +210,42 @@ const credentialUrlText = validateProviderRuntimeObservation(adapter, {
 }, { phase: 'get', receipt: acceptedReceipt });
 assert.equal(credentialUrlText.result?.includes('password'), false);
 assert.equal(credentialUrlText.result?.includes('raw-secret'), false);
+
+for (const credentialBearingUri of [
+  'ftp://user:password@files.example.test/result',
+  'ssh://user@files.example.test/result',
+  ...[
+    'OAuth',
+    'code',
+    'access_token',
+    'sig',
+    'token',
+    'secret',
+    'password',
+    'auth',
+    'credential',
+    'api_key',
+    'authorization',
+    'refresh_token',
+    'oauth_token',
+  ].flatMap((parameter) => [
+    `provider+task://runtime.example.test/callback?${parameter}=query-secret`,
+    `provider+task://runtime.example.test/callback#${parameter}=fragment-secret`,
+  ]),
+]) {
+  const sanitizedUri = validateProviderRuntimeObservation(adapter, {
+    rawState: 'DONE',
+    providerExecutionId: 'provider-execution-1',
+    providerSessionId: 'provider-session-1',
+    providerContextId: 'provider-context-1',
+    result: `Before ${credentialBearingUri} after`,
+  }, { phase: 'get', receipt: acceptedReceipt });
+  assert.equal(
+    sanitizedUri.result,
+    'Before [REDACTED_URL] after',
+    `credential-bearing URI must be redacted regardless of scheme: ${credentialBearingUri}`,
+  );
+}
 assert.throws(
   () => validateProviderRuntimeObservation(adapter, {
     rawState: 'DONE',

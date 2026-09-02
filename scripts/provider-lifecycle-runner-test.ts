@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -926,6 +927,102 @@ async function testAcceptedCallbackPrecedesPolling(): Promise<void> {
   assert.equal(result.state, 'completed');
 }
 
+async function testAcceptedCallbackFailureIsBoundedAndReleasesOwnedLease(): Promise<void> {
+  const throwingStore = new MemoryLifecycleStore();
+  let throwingPolls = 0;
+  const throwingRunner = createRunner(throwingStore, {
+    get: async () => {
+      throwingPolls += 1;
+      return { rawState: 'DONE', result: 'throwing callback recovered' };
+    },
+  });
+  await assert.rejects(
+    () => within(throwingRunner.run({
+      ...input('accepted-callback-throws'),
+      onAccepted: () => {
+        throw new Error('accepted callback failed');
+      },
+    })),
+    /accepted callback failed/,
+  );
+  assert.equal(
+    (await throwingStore.get(scope, input('accepted-callback-throws').idempotencyKey))?.lease,
+    undefined,
+    'a thrown accepted callback must release its owner lease',
+  );
+  const throwingRecovered = await within(throwingRunner.run({
+    ...input('accepted-callback-throws'),
+    timeoutMs: 100,
+  }), 300);
+  assert.equal(throwingRecovered.state, 'completed');
+  assert.equal(throwingRecovered.result, 'throwing callback recovered');
+  assert.equal(throwingPolls, 1);
+
+  const hangingStore = new MemoryLifecycleStore();
+  let hangingPolls = 0;
+  let hangingCancels = 0;
+  const hangingRunner = createRunner(hangingStore, {
+    get: async () => {
+      hangingPolls += 1;
+      return { rawState: 'DONE', result: 'hanging callback recovered' };
+    },
+    cancel: async () => {
+      hangingCancels += 1;
+      return { rawState: 'CANCELED' };
+    },
+  });
+  await assert.rejects(
+    () => within(hangingRunner.run({
+      ...input('accepted-callback-hangs'),
+      timeoutMs: 20,
+      onAccepted: async () => await never(),
+    }), 200),
+    /deadline/i,
+  );
+  assert.equal(hangingCancels, 0, 'callback timeout must not cancel an accepted provider execution');
+  assert.equal(
+    (await hangingStore.get(scope, input('accepted-callback-hangs').idempotencyKey))?.lease,
+    undefined,
+    'a timed-out accepted callback must release its owner lease',
+  );
+  const hangingRecovered = await within(hangingRunner.run({
+    ...input('accepted-callback-hangs'),
+    timeoutMs: 100,
+  }), 300);
+  assert.equal(hangingRecovered.state, 'completed');
+  assert.equal(hangingRecovered.result, 'hanging callback recovered');
+  assert.equal(hangingPolls, 1);
+
+  const replacedLeaseStore = new MemoryLifecycleStore();
+  const replacedLeaseRunner = createRunner(replacedLeaseStore);
+  await assert.rejects(
+    () => replacedLeaseRunner.run({
+      ...input('accepted-callback-foreign-lease'),
+      onAccepted: async () => {
+        const persisted = await replacedLeaseStore.get(
+          scope,
+          input('accepted-callback-foreign-lease').idempotencyKey,
+        );
+        assert.ok(persisted);
+        await replacedLeaseStore.update({
+          ...persisted,
+          lease: {
+            ownerId: 'replacement-owner',
+            expiresAt: new Date(Date.now() + 10_000).toISOString(),
+          },
+        }, persisted.revision);
+        throw new Error('accepted callback failed after lease replacement');
+      },
+    }),
+    /lease replacement/,
+  );
+  assert.equal(
+    (await replacedLeaseStore.get(scope, input('accepted-callback-foreign-lease').idempotencyKey))?.lease?.ownerId,
+    'replacement-owner',
+    'callback failure must not release a lease now owned by another runner',
+  );
+}
+
 async function testExplicitRecoveryAndCancellationUseDurableReceipt(): Promise<void> {
   const store = new MemoryLifecycleStore();
   let recoveryPolls = 0;
@@ -1010,6 +1107,136 @@ async function testFileStoreSurvivesRestartWithoutIdentityCollapse(): Promise<vo
   }
 }
 
+async function testFileStoreRequiresValidPersistedReceiptExecutionId(): Promise<void> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'provider-lifecycle-store-receipt-'));
+  const filePath = path.join(root, 'private', 'lifecycle.json');
+  try {
+    const store = new FileProviderLifecycleStore(filePath);
+    await store.initialize();
+    const { timeoutMs: _timeoutMs, ...intent } = input('file-receipt-validation');
+    const created = await store.createOrGetSubmitting(intent);
+    const acceptedRecord = await store.update({
+      ...created.record,
+      state: 'accepted',
+      receipt: {
+        providerExecutionId: 'provider-file-receipt',
+        acceptedAt: '2026-09-03T00:00:00.000Z',
+        rawState: 'ACCEPTED',
+      },
+    }, created.record.revision);
+    const persisted = JSON.parse(await fs.readFile(filePath, 'utf8')) as {
+      records: Record<string, ProviderLifecycleRecord>;
+    };
+    const recordKey = Object.keys(persisted.records)[0];
+    assert.ok(recordKey);
+    const { providerExecutionId: _removedExecutionId, ...receiptWithoutExecutionId } = acceptedRecord.receipt!;
+
+    for (const receipt of [
+      receiptWithoutExecutionId,
+      { ...acceptedRecord.receipt!, providerExecutionId: 'invalid execution id' },
+      null,
+    ]) {
+      await atomicWriteJson(filePath, {
+        ...persisted,
+        records: {
+          ...persisted.records,
+          [recordKey]: { ...acceptedRecord, receipt },
+        },
+      });
+      await assert.rejects(
+        () => new FileProviderLifecycleStore(filePath).initialize(),
+        /receipt execution id/i,
+      );
+    }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}
+
+async function testFileStoreRejectsCompletedRecordWithoutEvidenceOnReopen(): Promise<void> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'provider-lifecycle-store-completion-'));
+  const filePath = path.join(root, 'private', 'lifecycle.json');
+  try {
+    const store = new FileProviderLifecycleStore(filePath);
+    await store.initialize();
+    const { timeoutMs: _timeoutMs, ...intent } = input('file-completion-validation');
+    const created = await store.createOrGetSubmitting(intent);
+    const completedRecord = await store.update({
+      ...created.record,
+      state: 'completed',
+      receipt: {
+        providerExecutionId: 'provider-file-completion',
+        acceptedAt: '2026-09-03T00:00:00.000Z',
+        rawState: 'DONE',
+      },
+      result: 'validated persisted result',
+      terminalAt: '2026-09-03T00:00:01.000Z',
+    }, created.record.revision);
+    const persisted = JSON.parse(await fs.readFile(filePath, 'utf8')) as {
+      records: Record<string, ProviderLifecycleRecord>;
+    };
+    const recordKey = Object.keys(persisted.records)[0];
+    assert.ok(recordKey);
+    const { result: _removedResult, artifacts: _removedArtifacts, ...withoutCompletionEvidence } = completedRecord;
+    await atomicWriteJson(filePath, {
+      ...persisted,
+      records: {
+        ...persisted.records,
+        [recordKey]: withoutCompletionEvidence,
+      },
+    });
+
+    await assert.rejects(
+      () => new FileProviderLifecycleStore(filePath).initialize(),
+      /completion evidence/i,
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}
+
+async function testFileStorePreservesNewlineExactContentAddressedArtifactText(): Promise<void> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'provider-lifecycle-store-artifact-text-'));
+  const filePath = path.join(root, 'private', 'lifecycle.json');
+  const artifactText = '\nfirst line\nsecond line\n\n';
+  try {
+    const store = new FileProviderLifecycleStore(filePath);
+    await store.initialize();
+    const { timeoutMs: _timeoutMs, ...intent } = input('file-artifact-text');
+    const created = await store.createOrGetSubmitting(intent);
+    const completed = await store.update({
+      ...created.record,
+      state: 'completed',
+      receipt: {
+        providerExecutionId: 'provider-file-artifact-text',
+        acceptedAt: '2026-09-03T00:00:00.000Z',
+        rawState: 'DONE',
+      },
+      artifacts: [{
+        artifactId: 'artifact-file-text',
+        name: 'result.txt',
+        mediaType: 'text/plain',
+        text: artifactText,
+        sha256: crypto.createHash('sha256').update(artifactText).digest('hex'),
+      }],
+      terminalAt: '2026-09-03T00:00:01.000Z',
+    }, created.record.revision);
+    assert.equal(completed.artifacts?.[0]?.text, artifactText);
+
+    const reopened = new FileProviderLifecycleStore(filePath);
+    await reopened.initialize();
+    const loaded = await reopened.get(scope, intent.idempotencyKey);
+    assert.equal(loaded?.state, 'completed');
+    assert.equal(loaded?.artifacts?.[0]?.text, artifactText);
+    assert.equal(
+      loaded?.artifacts?.[0]?.sha256,
+      crypto.createHash('sha256').update(artifactText).digest('hex'),
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}
+
 async function testFileStoreSerializesWritersRollsBackAndScansRecovery(): Promise<void> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'provider-lifecycle-store-concurrency-'));
   const filePath = path.join(root, 'private', 'lifecycle.json');
@@ -1072,24 +1299,36 @@ async function testFileStoreSerializesWritersRollsBackAndScansRecovery(): Promis
     assert.equal(Object.keys(persisted.records).length, 2);
     assert.deepEqual((await fs.readdir(path.dirname(filePath))).filter((name) => name.endsWith('.tmp')), []);
 
-    const poisoned = structuredClone(persisted) as { records: Record<string, ProviderLifecycleRecord> };
-    const poisonedKey = Object.keys(poisoned.records)[0];
-    const poisonedRecord = poisoned.records[poisonedKey!];
+    const poisonedKey = Object.keys(persisted.records)[0];
+    const poisonedRecord = (persisted.records as Record<string, ProviderLifecycleRecord>)[poisonedKey!];
     assert.ok(poisonedRecord);
-    poisoned.records[poisonedKey!] = {
-      ...poisonedRecord,
-      rawProviderState: 'https://user:password@example.test/state',
-      receipt: poisonedRecord.receipt && {
-        ...poisonedRecord.receipt,
-        rawState: 'https://example.test/state?credential=raw-secret',
-        reconciliationRef: 'https://example.test/cursor#token=raw-secret',
+    for (const unsafePatch of [
+      { rawProviderState: 'provider+task://runtime.example.test/state?code=raw-secret' },
+      {
+        receipt: poisonedRecord.receipt && {
+          ...poisonedRecord.receipt,
+          rawState: 'ftp://user:password@runtime.example.test/state',
+        },
       },
-    };
-    await atomicWriteJson(filePath, poisoned);
-    await assert.rejects(
-      () => new FileProviderLifecycleStore(filePath).initialize(),
-      /unsafe/i,
-    );
+      {
+        receipt: poisonedRecord.receipt && {
+          ...poisonedRecord.receipt,
+          reconciliationRef: 'provider+task://runtime.example.test/cursor#access_token=raw-secret',
+        },
+      },
+    ]) {
+      await atomicWriteJson(filePath, {
+        ...persisted,
+        records: {
+          ...persisted.records,
+          [poisonedKey!]: { ...poisonedRecord, ...unsafePatch },
+        },
+      });
+      await assert.rejects(
+        () => new FileProviderLifecycleStore(filePath).initialize(),
+        /unsafe/i,
+      );
+    }
     await atomicWriteJson(filePath, persisted);
 
     let failWrites = false;
@@ -1133,8 +1372,12 @@ await testConcurrentSameRequestWaitsForLeaseAndReloads();
 await testAllObservationsAreValidatedAndDurableFieldsAreSanitized();
 await testFailedPollAndReconcileReleaseOwnedLease();
 await testAcceptedCallbackPrecedesPolling();
+await testAcceptedCallbackFailureIsBoundedAndReleasesOwnedLease();
 await testExplicitRecoveryAndCancellationUseDurableReceipt();
 await testFileStoreSurvivesRestartWithoutIdentityCollapse();
+await testFileStoreRequiresValidPersistedReceiptExecutionId();
+await testFileStoreRejectsCompletedRecordWithoutEvidenceOnReopen();
+await testFileStorePreservesNewlineExactContentAddressedArtifactText();
 await testFileStoreSerializesWritersRollsBackAndScansRecovery();
 
 console.log('provider-lifecycle-runner-test: PASS');

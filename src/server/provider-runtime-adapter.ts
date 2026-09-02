@@ -331,13 +331,11 @@ function redactCredentialFragments(value: string): string {
 }
 
 function redactCredentialUrls(value: string): string {
-  return value.replace(/\bhttps?:\/\/[^\s<>"']+/giu, (candidate) => {
+  return value.replace(/\b[A-Za-z][A-Za-z0-9+.-]*:[^\s<>"']+/gu, (candidate) => {
     try {
       const parsed = new URL(candidate);
-      const sensitiveQuery = [...parsed.searchParams.keys()].some((key) => (
-        /api.?key|auth|credential|password|secret|sig|token/iu.test(key)
-      ));
-      const sensitiveFragment = /api.?key|auth|credential|password|secret|sig|token/iu.test(parsed.hash);
+      const sensitiveQuery = hasSensitiveUriParameters(parsed.search);
+      const sensitiveFragment = hasSensitiveUriParameters(parsed.hash);
       return parsed.username || parsed.password || sensitiveQuery || sensitiveFragment
         ? '[REDACTED_URL]'
         : candidate;
@@ -345,6 +343,23 @@ function redactCredentialUrls(value: string): string {
       return candidate;
     }
   });
+}
+
+function hasSensitiveUriParameters(value: string): boolean {
+  const parameters = value.replace(/^[?#]/u, '');
+  if ([...new URLSearchParams(parameters).keys()].some(isSensitiveUriParameterName)) return true;
+  let decoded = parameters;
+  try {
+    decoded = decodeURIComponent(parameters);
+  } catch {
+    // Invalid escapes remain inspectable in their original representation.
+  }
+  return decoded.split(/[?&#;/]/u).some(isSensitiveUriParameterName);
+}
+
+function isSensitiveUriParameterName(value: string): boolean {
+  const normalized = value.split('=', 1)[0]?.toLowerCase().replace(/[^a-z0-9]/gu, '') ?? '';
+  return /api.?key|oauth|code|accesstoken|sig|token|secret|password|auth|credential/u.test(normalized);
 }
 
 function validateArtifactUrl(value: string): string {
