@@ -212,7 +212,23 @@ export class AgentService {
     const missingProvider = this.store.listLocalOnly(Number.MAX_SAFE_INTEGER).find((job) => !job.provider);
     if (missingProvider) throw new AgentProviderIdentityError(missingProvider);
     await this.admissionController.initialize();
-    await this.store.recoverInterruptedJobs();
+    if (this.options.executionDispatcher) {
+      await this.reconstructAdmissionFromStore();
+      for (const job of this.store.listLocalOnly(Number.MAX_SAFE_INTEGER)) {
+        const scope = scopeForJob(job);
+        if (!scope || job.status === 'awaiting_approval') continue;
+        const reconciled = await this.reconcileDurableObservation(job, scope);
+        if (reconciled && !isTerminalJob(job) && isTerminalJob(reconciled)) {
+          await this.finalizeAdmission(reconciled, scope);
+        }
+      }
+    } else {
+      await this.store.recoverInterruptedJobs();
+      await this.reconstructAdmissionFromStore();
+    }
+  }
+
+  private async reconstructAdmissionFromStore(): Promise<void> {
     await this.admissionController.reconstruct(
       this.store.listLocalOnly(Number.MAX_SAFE_INTEGER).flatMap((job) =>
         typeof job.tenantId === 'string' && job.tenantId
@@ -438,6 +454,8 @@ export class AgentService {
       cancelledWasRunning = job.status === 'running';
       if (this.options.executionDispatcher) {
         await this.options.executionDispatcher.cancel(job, 'cancellation requested by the Teams user');
+        const durable = await this.reconcileDurableObservation(job, scope);
+        if (durable && isTerminalJob(durable)) return durable;
       } else if (cancelledWasRunning) {
         this.runnerFor(provider).cancel(id);
       }
@@ -456,7 +474,7 @@ export class AgentService {
     if (cancelledWasRunning) await this.executionByJob.get(id);
     if (cancelled) await this.finalizeAdmission(cancelled, scope);
 
-    if (options.notify && cancelled) {
+    if (options.notify && cancelled?.status === 'cancelled') {
       await this.notifyIfEnabled(cancelled, {
         kind: 'cancelled',
         phase: 'cancelled',
@@ -532,27 +550,43 @@ export class AgentService {
   async observe(id: string, scope: AgentJobScope): Promise<AgentJob | undefined> {
     const job = this.store.get(id, scope);
     const dispatcher = this.options.executionDispatcher;
-    if (!job || !dispatcher || job.status === 'awaiting_approval' || isTerminalJob(job)) return job;
+    if (!job || !dispatcher || job.status === 'awaiting_approval') return job;
 
+    const refreshed = await this.reconcileDurableObservation(job, scope);
+    if (refreshed && !isTerminalJob(job) && isTerminalJob(refreshed)) {
+      await this.finalizeAdmission(refreshed, scope);
+    }
+    return refreshed;
+  }
+
+  private async reconcileDurableObservation(
+    job: AgentJob,
+    scope: AgentJobScope,
+  ): Promise<AgentJob | undefined> {
+    const dispatcher = this.options.executionDispatcher;
+    if (!dispatcher) return job;
     const observation = await dispatcher.observe(job);
     if (!observation) return job;
     const status = observation.status === 'quarantined' ? 'failed' : observation.status;
+    if (isTerminalJob(job) && !isTerminalStatus(status)) return job;
     const update: Partial<AgentJob> = { status };
     if (status === 'running' && !job.startedAt) update.startedAt = new Date().toISOString();
     if (status === 'completed') {
       update.result = observation.result;
+      update.error = undefined;
       update.finishedAt = new Date().toISOString();
     } else if (status === 'failed') {
+      update.result = undefined;
       update.error = observation.error ?? (observation.status === 'quarantined'
         ? 'AZURE_DISPATCH_QUARANTINED: durable worker delivery was quarantined.'
         : 'AZURE_DISPATCH_FAILED: durable worker execution failed.');
       update.finishedAt = new Date().toISOString();
     } else if (status === 'cancelled') {
+      update.result = undefined;
+      update.error = undefined;
       update.finishedAt = new Date().toISOString();
     }
-    const refreshed = await this.store.update(id, scope, update);
-    if (refreshed && isTerminalJob(refreshed)) await this.finalizeAdmission(refreshed, scope);
-    return refreshed;
+    return this.store.update(job.id, scope, update);
   }
 
   list(scope: AgentJobScope, limit = 8): AgentJob[] {
@@ -1154,6 +1188,10 @@ export class AgentService {
 
 function isTerminalJob(job: AgentJob): boolean {
   return job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled';
+}
+
+function isTerminalStatus(status: AgentJob['status']): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled';
 }
 
 function recordedChangedPaths(job: AgentJob): string[] | undefined {

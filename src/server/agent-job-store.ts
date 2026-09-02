@@ -87,7 +87,13 @@ export class AgentJobIdempotencyConflictError extends Error {
 
 export type AgentJobStoreOptions = Readonly<{
   legacyProvider?: CliAgentProvider;
+  durableLedger?: AgentJobDurableLedger;
 }>;
+
+export interface AgentJobDurableLedger {
+  load(): Promise<unknown>;
+  persist(previousJobs: readonly AgentJob[], nextJobs: readonly AgentJob[]): Promise<void>;
+}
 
 export class AgentJobStore {
   private jobs: AgentJob[] = [];
@@ -128,23 +134,33 @@ export class AgentJobStore {
       try {
         let nextJobs: AgentJob[];
         let requiresPersistence = false;
-        try {
-          const raw = await readAtomicJsonStore(this.filePath);
-          const parsed = JSON.parse(raw) as unknown;
-          const loaded = loadJobs(parsed, this.filePath, this.options.legacyProvider);
+        if (this.options.durableLedger) {
+          const loaded = loadJobs(
+            await this.options.durableLedger.load(),
+            'durable AgentJob ledger',
+            this.options.legacyProvider,
+          );
           nextJobs = loaded.jobs.map(cloneAgentJob);
           requiresPersistence = loaded.migrated;
-        } catch (error: any) {
-          if (error?.code !== 'ENOENT') throw error;
-          nextJobs = [];
-          requiresPersistence = true;
+        } else {
+          try {
+            const raw = await readAtomicJsonStore(this.filePath);
+            const parsed = JSON.parse(raw) as unknown;
+            const loaded = loadJobs(parsed, this.filePath, this.options.legacyProvider);
+            nextJobs = loaded.jobs.map(cloneAgentJob);
+            requiresPersistence = loaded.migrated;
+          } catch (error: any) {
+            if (error?.code !== 'ENOENT') throw error;
+            nextJobs = [];
+            requiresPersistence = true;
+          }
         }
 
         // Initialization shares the mutation queue. Readers continue seeing
         // the last durable snapshot, and migrated/new-store state is published
         // only after its atomic write succeeds.
         if (requiresPersistence) {
-          await this.writeAtomicJson(this.filePath, nextJobs.map(cloneAgentJob));
+          await this.persistJobs(previousJobs, nextJobs);
         }
         this.jobs = nextJobs;
         this.initialized = true;
@@ -355,7 +371,7 @@ export class AgentJobStore {
       }
       this.jobs = previousJobs;
       try {
-        await this.writeAtomicJson(this.filePath, nextJobs);
+        await this.persistJobs(previousJobs, nextJobs);
       } catch (error) {
         this.jobs = previousJobs;
         throw error;
@@ -369,6 +385,13 @@ export class AgentJobStore {
 
   private writeAtomicJson(filePath: string, value: unknown): Promise<void> {
     return (this.testOnlyWriteAtomicJson ?? atomicWriteJson)(filePath, value);
+  }
+
+  private persistJobs(previousJobs: readonly AgentJob[], nextJobs: readonly AgentJob[]): Promise<void> {
+    if (this.options.durableLedger) {
+      return this.options.durableLedger.persist(previousJobs, nextJobs);
+    }
+    return this.writeAtomicJson(this.filePath, nextJobs.map(cloneAgentJob));
   }
 }
 
