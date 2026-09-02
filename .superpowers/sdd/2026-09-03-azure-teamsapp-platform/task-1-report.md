@@ -260,3 +260,90 @@ FIXED_WITH_EXTERNAL_BOUNDARIES. All ten review findings are addressed in the loc
 - Existing official Bicep compilation emits non-blocking linter warnings for child-resource `parent` style and the literal VM admin username. These were outside the ten review findings and do not prevent compilation.
 - Rollback deliberately rejects legacy revisions that lack the full release identity environment fields or environments without a `teamsapp-platform-current` Bicep deployment record. A first successful hardened deployment is required before this rollback contract can operate.
 - Public health still exposes only commit, version, and server bundle digest. The pipeline compensates with attested artifact plus exact revision checks, but a later runtime task should expose a single public release-identity document containing all six release fields.
+
+## Fix Round 2
+
+### Status
+
+FIXED_WITH_EXTERNAL_BOUNDARIES. Public `/api/health` now exposes `azureReleaseIdentity` only for an explicitly enabled Azure revision. It includes the attested commit, version, immutable image digest, Teams ZIP SHA-256, client-bundle SHA-256, and server-bundle SHA-256. Azure mode rejects missing, malformed, or runtime-mismatched commit/version/server-bundle values before the server listens; local/Core health does not claim an Azure identity. No Azure resource, Dev Tunnel, public service, Teams package, or application version was changed. `package.json` and `appPackage/manifest.json` remain `1.0.100`.
+
+### RED evidence
+
+1. `npm run test:azure-release-identity`
+
+   Exit `1` before implementation:
+
+   ```text
+   Error [ERR_MODULE_NOT_FOUND]: Cannot find module '.../src/server/azure-release-identity.js'
+   ```
+
+   The new regression exercised the absent public Azure release-identity contract, so the failure was caused by the missing implementation rather than a fixture error.
+
+### GREEN evidence
+
+- `npm run test:azure-release-identity`
+
+  ```text
+  PASS: Azure release identity is complete, matched to the running server, and absent outside Azure release mode.
+  ```
+
+- `npm run test:azure-deployment-contract`
+
+  ```text
+  PASS: Bicep output consumption, traffic-aware rollback, revision readiness, provenance, and full release identity are behaviorally validated.
+  ```
+
+  The regression mutates each of the six public identity fields in turn and requires deployment verification to reject it.
+
+- `BICEP_BIN=/tmp/teamsapp-bicep-20260903/bicep npm run test:azure-platform-contract`
+
+  ```text
+  PASS: official Bicep compilation, compiled ARM behavior, parsed Azure Pipeline schema, and executable deployment helpers satisfy the Azure platform contract.
+  ```
+
+- `npm run typecheck:core`
+
+  ```text
+  PASS: core source compile check covered 22 Teams/CLI files
+  ```
+
+- `npm run build:core` and `npm run test:runtime`
+
+  ```text
+  PASS: Azure release-mode health exposes every immutable release identity field from the revision environment
+  PASS: Azure release identity does not expose URLs or credentials
+  Runtime verification complete.
+  ```
+
+- `npm run test:core`
+
+  Exit `0`:
+
+  ```text
+  PASS: bounded Teams core test suite completed without optional API/MCP paths
+  ```
+
+- `git diff --check`
+
+  Exit `0`.
+
+### Changed files
+
+- `src/server/azure-release-identity.ts`
+- `src/server/index.ts`
+- `scripts/azure-release-identity-test.ts`
+- `scripts/runtime-test.mjs`
+- `scripts/azure-deployment-contract.mjs`
+- `scripts/azure-deployment-contract-test.mjs`
+- `scripts/azure-platform-contract-test.mjs`
+- `infra/azure/modules/container-app.bicep`
+- `package.json`
+
+### Commit
+
+- `bdd472922cff23f4122955cde2466c4e9016609d` — `fix(azure): expose complete release identity`
+
+### Remaining concerns and external boundaries
+
+- The public identity change is verified in a local production-style runtime fixture and contracts only. Azure DevOps approval, attested-artifact retrieval, ACR import, Container App revision deployment, and public HTTPS health remain unexecuted because this task forbids Azure and Dev Tunnel changes.
+- Any already-deployed Azure revision without `AZURE_RELEASE_MODE=true` and all six receipt fields will fail the strengthened Azure deployment verification rather than being accepted from revision metadata alone. That is the intended fail-closed behavior.
