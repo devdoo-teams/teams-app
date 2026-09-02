@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 
 import {
   createProviderRuntimeAdapter,
   hasProviderCompletionEvidence,
+  isOpaqueProviderCredentialReference,
   resolveProviderRuntimeState,
+  validateProviderRuntimeObservation,
   type ProviderRuntimeOperationInput,
   type ProviderRuntimeState,
 } from '../src/server/provider-runtime-adapter.js';
@@ -40,6 +43,10 @@ const adapter = createProviderRuntimeAdapter({
     calls.push(`cancel:${input.receipt.providerExecutionId}`);
     return { rawState: 'CANCELED' };
   },
+  async reconcile(input) {
+    calls.push(`reconcile:${input.idempotencyKey}`);
+    return { rawState: 'ACCEPTED', providerExecutionId: 'provider-execution-1' };
+  },
 });
 
 assert.equal(adapter.providerId, 'provider-a');
@@ -63,8 +70,17 @@ assert.equal(hasProviderCompletionEvidence({
     name: 'report.md',
     mediaType: 'text/markdown',
     text: '# Report',
+    sha256: crypto.createHash('sha256').update('# Report').digest('hex'),
   }],
 }), true);
+assert.equal(hasProviderCompletionEvidence({
+  artifacts: [{
+    artifactId: 'artifact-mutable-uri',
+    name: 'report.md',
+    mediaType: 'text/markdown',
+    uri: 'https://artifacts.example.test/report.md',
+  }],
+}), false, 'a mutable locator without a content digest is not completion evidence');
 assert.equal(hasProviderCompletionEvidence({
   artifacts: [{
     artifactId: 'artifact-empty',
@@ -106,11 +122,97 @@ const receipt = {
 };
 await adapter.get({ ...operationInput, receipt });
 await adapter.cancel({ ...operationInput, receipt });
+await adapter.reconcile?.(operationInput);
 assert.deepEqual(calls, [
   'preflight:provider-a',
   'submit:request-a',
   'get:provider-execution-1',
   'cancel:provider-execution-1',
+  'reconcile:request-a',
 ]);
+
+assert.equal(isOpaqueProviderCredentialReference('env://PROVIDER_A_TOKEN'), true);
+assert.equal(isOpaqueProviderCredentialReference('key-vault://provider-a/credentials/runtime'), true);
+assert.equal(isOpaqueProviderCredentialReference('sk-raw-secret-value'), false);
+assert.equal(isOpaqueProviderCredentialReference('https://user:password@example.test/secret'), false);
+
+const acceptedReceipt = {
+  providerExecutionId: 'provider-execution-1',
+  providerSessionId: 'provider-session-1',
+  providerContextId: 'provider-context-1',
+  acceptedAt: '2026-09-03T00:00:00.000Z',
+  rawState: 'ACCEPTED',
+};
+const redacted = validateProviderRuntimeObservation(adapter, {
+  rawState: 'DONE',
+  providerExecutionId: 'provider-execution-1',
+  providerSessionId: 'provider-session-1',
+  providerContextId: 'provider-context-1',
+  result: `Bearer ${'r'.repeat(96)} ${'x'.repeat(70_000)}`,
+  error: `api_key=${'k'.repeat(96)}`,
+  artifacts: [{
+    artifactId: 'artifact-safe',
+    name: 'result.txt',
+    mediaType: 'text/plain',
+    text: `password=${'p'.repeat(96)}`,
+    sha256: crypto.createHash('sha256').update(`password=${'p'.repeat(96)}`).digest('hex'),
+  }],
+  auditRefs: [`trace:run-1?token=${'t'.repeat(96)}`],
+}, { phase: 'get', receipt: acceptedReceipt });
+assert.equal(redacted.state, 'completed');
+assert.ok(redacted.result);
+assert.equal(redacted.result.includes('r'.repeat(32)), false, 'provider result credentials must be redacted');
+assert.equal(redacted.result.length <= 65_536, true, 'provider result must be bounded');
+assert.equal(redacted.error?.includes('k'.repeat(32)), false, 'provider errors must be redacted');
+assert.equal(redacted.artifacts?.[0]?.text?.includes('p'.repeat(32)), false, 'artifact text must be redacted');
+assert.equal(redacted.auditRefs?.[0]?.includes('t'.repeat(32)), false, 'audit references must be redacted');
+
+assert.throws(
+  () => validateProviderRuntimeObservation(adapter, {
+    rawState: 'DONE',
+    providerExecutionId: 'provider-execution-1',
+    providerSessionId: 'wrong-session',
+    providerContextId: 'provider-context-1',
+    result: 'result',
+  }, { phase: 'get', receipt: acceptedReceipt }),
+  /continuity/i,
+);
+assert.throws(
+  () => validateProviderRuntimeObservation(adapter, {
+    rawState: 'DONE',
+    providerExecutionId: 'provider-execution-1',
+    artifacts: [{
+      artifactId: 'artifact-credential-url',
+      name: 'result.json',
+      mediaType: 'application/json',
+      uri: 'https://artifacts.example.test/result.json?token=raw-secret',
+      sha256: 'b'.repeat(64),
+    }],
+  }, { phase: 'get', receipt }),
+  /artifact uri/i,
+);
+assert.throws(
+  () => validateProviderRuntimeObservation(adapter, {
+    rawState: 'DONE',
+    providerExecutionId: 'provider-execution-1',
+    result: 'cancel endpoint claimed completion',
+  }, { phase: 'cancel', receipt }),
+  /cancel.*completed/i,
+);
+
+const whitespaceArtifactText = '\n  immutable report  \n';
+const whitespaceArtifact = validateProviderRuntimeObservation(adapter, {
+  rawState: 'DONE',
+  providerExecutionId: 'provider-execution-1',
+  artifacts: [{
+    artifactId: 'artifact-whitespace',
+    name: 'report.txt',
+    mediaType: 'text/plain',
+    text: whitespaceArtifactText,
+    sha256: crypto.createHash('sha256').update(whitespaceArtifactText).digest('hex'),
+  }],
+}, { phase: 'get', receipt });
+assert.equal(whitespaceArtifact.state, 'completed');
+assert.equal(whitespaceArtifact.artifacts?.[0]?.text, whitespaceArtifactText);
 
 console.log('provider-runtime-adapter-test: PASS');
