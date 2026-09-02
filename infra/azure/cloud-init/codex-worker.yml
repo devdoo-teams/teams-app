@@ -11,18 +11,22 @@ write_files:
     owner: root:teamsworker
     permissions: '0640'
     content: |
-      # Non-secret resource identity/configuration only.
-      AZURE_CLIENT_ID=SET_AZURE_CLIENT_ID
-      AZURE_STORAGE_QUEUE_ENDPOINT=SET_AZURE_STORAGE_QUEUE_ENDPOINT
-      AZURE_STORAGE_POISON_QUEUE_ENDPOINT=SET_AZURE_STORAGE_POISON_QUEUE_ENDPOINT
+      # Non-secret shape only. The verified runtime installer writes worker.env.
+      AZURE_CLIENT_ID=SET_BY_MANAGED_IDENTITY
+      AZURE_STORAGE_QUEUE_ENDPOINT=SET_BY_DEPLOYMENT
+      AZURE_STORAGE_POISON_QUEUE_ENDPOINT=SET_BY_DEPLOYMENT
       TEAMS_STORAGE_BACKEND=cosmos
-      AZURE_COSMOS_ENDPOINT=SET_AZURE_COSMOS_ENDPOINT
-      AZURE_COSMOS_DATABASE=SET_AZURE_COSMOS_DATABASE
-      AZURE_COSMOS_CONTAINER=SET_AZURE_COSMOS_CONTAINER
+      AZURE_COSMOS_ENDPOINT=SET_BY_DEPLOYMENT
+      AZURE_COSMOS_DATABASE=teamsapp
+      AZURE_COSMOS_CONTAINER=runtime-records
+      NODE_ENV=production
+      TEAMS_SOURCE_COMMIT=SET_BY_DEPLOYMENT
       AGENT_CODEX_HOME=/var/lib/teamsapp/codex-home
-      CODEX_BIN=/opt/teamsapp/bin/codex
+      CODEX_BIN=/opt/teamsapp/current/bin/codex
       CODEX_BIN_SHA256=SET_BY_DEPLOYMENT
       TEAMS_WORKER_COMPOSITION_MODULE=/opt/teamsapp/current/dist/worker/composition.js
+      TEAMS_WORKER_WORKSPACE=/var/lib/teamsapp/workspace
+      TEAMS_WORKER_EXECUTION_MODE=workspace-write
   - path: /etc/systemd/system/teamsapp-worker.service
     owner: root:root
     permissions: '0644'
@@ -38,7 +42,7 @@ write_files:
       Group=teamsworker
       EnvironmentFile=/etc/teamsapp/worker.env
       WorkingDirectory=/opt/teamsapp/current
-      ExecStart=/usr/bin/npm run start:worker
+      ExecStart=/opt/teamsapp/current/node/bin/node /opt/teamsapp/current/dist/worker/index.js --run
       Restart=always
       RestartSec=5
       KillMode=control-group
@@ -57,5 +61,5 @@ runcmd:
   - [install, -d, -o, root, -g, teamsworker, -m, '0750', /etc/teamsapp]
   - [install, -d, -o, root, -g, root, -m, '0755', /opt/teamsapp/bin]
   - [systemctl, daemon-reload]
-  # The service is enabled only after the immutable app, verified CODEX_BIN,
-  # managed-identity settings, and out-of-band worker authentication are present.
+  # The managed-identity Custom Script extension installs the immutable archive,
+  # writes the owner-only environment file, then enables and starts this unit.

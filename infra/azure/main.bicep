@@ -20,6 +20,22 @@ param enableCosmosFreeTier bool = true
 @description('Foundation-only deployments provision shared resources and expose their exact outputs before the image import.')
 param deployContainerApp bool = true
 
+@description('Provision the worker VM only after an immutable worker archive has been staged.')
+param deployWorkerVm bool = true
+
+@description('Private Blob URL for the immutable worker runtime archive.')
+param workerArtifactUrl string = 'https://invalid.example/worker-runtime.tar'
+
+@description('SHA-256 of the immutable worker runtime archive.')
+@minLength(64)
+@maxLength(64)
+param workerArtifactSha256 string = '0000000000000000000000000000000000000000000000000000000000000000'
+
+@description('Approved SHA-256 of the Codex executable contained in the worker archive.')
+@minLength(64)
+@maxLength(64)
+param codexBinSha256 string = '0000000000000000000000000000000000000000000000000000000000000000'
+
 @description('Full source commit from the attested GitHub release receipt.')
 @minLength(40)
 @maxLength(40)
@@ -158,7 +174,7 @@ module containerApp './modules/container-app.bicep' = if (deployContainerApp) {
   }
 }
 
-module workerVm './modules/worker-vm.bicep' = {
+module workerVm './modules/worker-vm.bicep' = if (deployWorkerVm) {
   name: 'workerVm'
   params: {
     location: location
@@ -171,7 +187,14 @@ module workerVm './modules/worker-vm.bicep' = {
     cosmosEndpoint: cosmos.outputs.endpoint
     cosmosDatabase: cosmos.outputs.databaseName
     cosmosContainer: cosmos.outputs.containerName
+    workerArtifactUrl: workerArtifactUrl
+    workerArtifactSha256: workerArtifactSha256
+    codexBinSha256: codexBinSha256
+    releaseSourceCommit: releaseSourceCommit
   }
+  dependsOn: [
+    storage
+  ]
 }
 
 output registryName string = acrName
@@ -185,4 +208,7 @@ output containerAppName string = appName
 output containerAppFqdn string = deployContainerApp ? containerApp!.outputs.fqdn : ''
 output containerAppRevisionName string = deployContainerApp ? containerApp!.outputs.revisionName : ''
 output containerAppResourceId string = resourceId('Microsoft.App/containerApps', appName)
-output workerVmResourceId string = workerVm.outputs.resourceId
+output workerVmResourceId string = deployWorkerVm ? workerVm!.outputs.resourceId : ''
+output workerArtifactStorageAccountName string = storage.outputs.accountName
+output workerArtifactContainerName string = storage.outputs.workerArtifactContainerName
+output workerArtifactContainerUrl string = storage.outputs.workerArtifactContainerUrl

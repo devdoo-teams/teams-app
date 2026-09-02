@@ -8,16 +8,18 @@ param agentDispatchPoisonQueueEndpoint string
 param cosmosEndpoint string
 param cosmosDatabase string
 param cosmosContainer string
+param workerArtifactUrl string
+@minLength(64)
+@maxLength(64)
+param workerArtifactSha256 string
+@minLength(64)
+@maxLength(64)
+param codexBinSha256 string
+@minLength(40)
+@maxLength(40)
+param releaseSourceCommit string
 
-var cloudInitTemplate = loadTextContent('../cloud-init/codex-worker.yml')
-var renderedCloudInit = replace(replace(replace(replace(replace(replace(
-  cloudInitTemplate,
-  'SET_AZURE_CLIENT_ID', workerIdentityClientId),
-  'SET_AZURE_STORAGE_QUEUE_ENDPOINT', agentDispatchQueueEndpoint),
-  'SET_AZURE_STORAGE_POISON_QUEUE_ENDPOINT', agentDispatchPoisonQueueEndpoint),
-  'SET_AZURE_COSMOS_ENDPOINT', cosmosEndpoint),
-  'SET_AZURE_COSMOS_DATABASE', cosmosDatabase),
-  'SET_AZURE_COSMOS_CONTAINER', cosmosContainer)
+var renderedCloudInit = loadTextContent('../cloud-init/codex-worker.yml')
 
 var virtualNetworkName = '${workerName}-network'
 var networkInterfaceName = '${workerName}-nic'
@@ -113,6 +115,28 @@ resource workerVm 'Microsoft.Compute/virtualMachines@2024-03-01' = {
           }
         }
       ]
+    }
+  }
+}
+
+resource workerRuntimeExtension 'Microsoft.Compute/virtualMachines/extensions@2024-03-01' = {
+  parent: workerVm
+  name: 'teamsapp-worker-runtime'
+  location: location
+  properties: {
+    publisher: 'Microsoft.Azure.Extensions'
+    type: 'CustomScript'
+    typeHandlerVersion: '2.1'
+    autoUpgradeMinorVersion: true
+    forceUpdateTag: workerArtifactSha256
+    protectedSettings: {
+      fileUris: [
+        workerArtifactUrl
+      ]
+      managedIdentity: {
+        clientId: workerIdentityClientId
+      }
+      commandToExecute: 'cloud-init status --wait && tar -xOf worker-runtime-${releaseSourceCommit}.tar ./install-worker-runtime.sh > /tmp/install-worker-runtime.sh && chmod 0500 /tmp/install-worker-runtime.sh && /tmp/install-worker-runtime.sh --archive worker-runtime-${releaseSourceCommit}.tar --archive-sha256 ${workerArtifactSha256} --codex-sha256 ${codexBinSha256} --commit ${releaseSourceCommit} --azure-client-id ${workerIdentityClientId} --queue-endpoint ${agentDispatchQueueEndpoint} --poison-queue-endpoint ${agentDispatchPoisonQueueEndpoint} --cosmos-endpoint ${cosmosEndpoint} --cosmos-database ${cosmosDatabase} --cosmos-container ${cosmosContainer}'
     }
   }
 }

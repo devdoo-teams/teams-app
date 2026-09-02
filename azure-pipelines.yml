@@ -18,6 +18,14 @@ parameters:
     displayName: Roll back the current traffic-serving revision
     type: boolean
     default: false
+  - name: codexArtifactUrl
+    displayName: Approved HTTPS URL of the Linux Codex executable
+    type: string
+    default: ''
+  - name: codexArtifactSha256
+    displayName: Approved SHA-256 of the Linux Codex executable
+    type: string
+    default: ''
 
 variables:
   azureServiceConnection: teamsapp-azure-canary
@@ -108,6 +116,10 @@ stages:
                   artifact: validated-github-handoff
                 - download: current
                   artifact: approval-configuration-receipt
+                - task: UseNode@1
+                  displayName: Install the pinned worker Node runtime
+                  inputs:
+                    version: 24.19.0
                 - task: AzureCLI@2
                   displayName: Provision from Bicep outputs, import digest, deploy, and verify
                   inputs:
@@ -118,6 +130,8 @@ stages:
                       set -euo pipefail
                       test "$(az account show --query id --output tsv)" = "$AZURE_SUBSCRIPTION_ID"
                       test -n "$WORKER_ADMIN_SSH_PUBLIC_KEY"
+                      [[ "$CODEX_ARTIFACT_URL" =~ ^https://[^?#]+$ ]]
+                      [[ "$CODEX_ARTIFACT_SHA256" =~ ^[0-9a-f]{64}$ ]]
                       receipt="$(Pipeline.Workspace)/validated-github-handoff/dist/evidence/azure-release-receipt.json"
                       provenance="$(Pipeline.Workspace)/validated-github-handoff/github-handoff-provenance.json"
                       node scripts/azure-release-input.mjs "$receipt"
@@ -135,7 +149,7 @@ stages:
                         --name teamsapp-platform-foundation \
                         --resource-group "$AZURE_RESOURCE_GROUP" \
                         --template-file infra/azure/main.bicep \
-                        --parameters workloadName="$AZURE_WORKLOAD_NAME" location="$AZURE_LOCATION" enableCosmosFreeTier=true deployContainerApp=false \
+                        --parameters workloadName="$AZURE_WORKLOAD_NAME" location="$AZURE_LOCATION" enableCosmosFreeTier=true deployContainerApp=false deployWorkerVm=false \
                         containerImage="${source_image}@${source_digest}" workerAdminSshPublicKey="$WORKER_ADMIN_SSH_PUBLIC_KEY" \
                         releaseSourceCommit="$commit" releaseVersion="$version" releaseImageDigest="$source_digest" \
                         releaseTeamsPackageSha256="$teams_package_sha" releaseClientBundleSha256="$client_sha" releaseServerBundleSha256="$server_sha" \
@@ -143,6 +157,48 @@ stages:
                       node scripts/azure-deployment-contract.mjs outputs "$(Agent.TempDirectory)/foundation-outputs.json" foundation > "$(Agent.TempDirectory)/foundation.json"
                       registry_name="$(jq -er '.registryName' "$(Agent.TempDirectory)/foundation.json")"
                       registry_server="$(jq -er '.registryLoginServer' "$(Agent.TempDirectory)/foundation.json")"
+                      worker_storage_account="$(jq -er '.workerArtifactStorageAccountName.value' "$(Agent.TempDirectory)/foundation-outputs.json")"
+                      worker_artifact_container="$(jq -er '.workerArtifactContainerName.value' "$(Agent.TempDirectory)/foundation-outputs.json")"
+                      worker_artifact_base_url="$(jq -er '.workerArtifactContainerUrl.value' "$(Agent.TempDirectory)/foundation-outputs.json")"
+
+                      git fetch --no-tags origin "$commit" --depth=1
+                      git checkout --detach "$commit"
+                      test "$(git rev-parse HEAD)" = "$commit"
+                      test -z "$(git status --porcelain=v1 --untracked-files=no)"
+                      npm ci --ignore-scripts --no-audit --no-fund
+                      npm run build:worker
+
+                      worker_stage="$(Agent.TempDirectory)/worker-runtime"
+                      rm -rf "$worker_stage"
+                      mkdir -p "$worker_stage/dist" "$worker_stage/bin"
+                      cp -R dist/worker "$worker_stage/dist/worker"
+                      cp infra/azure/scripts/install-worker-runtime.sh "$worker_stage/install-worker-runtime.sh"
+                      chmod 0500 "$worker_stage/install-worker-runtime.sh"
+                      node_root="$(dirname "$(dirname "$(command -v node)")")"
+                      cp -RL "$node_root" "$worker_stage/node"
+                      curl --proto '=https' --tlsv1.2 --fail --location --retry 4 --output "$worker_stage/bin/codex" "$CODEX_ARTIFACT_URL"
+                      printf '%s  %s\n' "$CODEX_ARTIFACT_SHA256" "$worker_stage/bin/codex" | sha256sum --check --strict
+                      chmod 0500 "$worker_stage/bin/codex"
+                      printf '{"schemaVersion":1,"commit":"%s","codexBinSha256":"%s"}\n' "$commit" "$CODEX_ARTIFACT_SHA256" > "$worker_stage/manifest.json"
+                      worker_archive="$(Agent.TempDirectory)/worker-runtime-${commit}.tar"
+                      tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner --format=posix -cf "$worker_archive" -C "$worker_stage" .
+                      worker_artifact_sha="$(sha256sum "$worker_archive" | awk '{print $1}')"
+                      worker_blob_name="${commit}/worker-runtime-${commit}.tar"
+                      if [[ "$(az storage blob exists --auth-mode login --account-name "$worker_storage_account" --container-name "$worker_artifact_container" --name "$worker_blob_name" --query exists --output tsv)" == true ]]; then
+                        existing_sha="$(az storage blob metadata show --auth-mode login --account-name "$worker_storage_account" --container-name "$worker_artifact_container" --name "$worker_blob_name" --query metadata.sha256 --output tsv)"
+                        test "$existing_sha" = "$worker_artifact_sha"
+                      else
+                        az storage blob upload \
+                          --auth-mode login \
+                          --account-name "$worker_storage_account" \
+                          --container-name "$worker_artifact_container" \
+                          --name "$worker_blob_name" \
+                          --file "$worker_archive" \
+                          --metadata sha256="$worker_artifact_sha" \
+                          --overwrite false \
+                          --output none
+                      fi
+                      worker_artifact_url="${worker_artifact_base_url}/${worker_blob_name}"
 
                       image_tag="${commit:0:12}"
                       az acr import --name "$registry_name" --source "${source_image}@${source_digest}" --image "teamsapp:${image_tag}" --username "$GHCR_IMPORT_USERNAME" --password "$GHCR_IMPORT_TOKEN" --force
@@ -154,8 +210,9 @@ stages:
                         --name teamsapp-platform-current \
                         --resource-group "$AZURE_RESOURCE_GROUP" \
                         --template-file infra/azure/main.bicep \
-                        --parameters workloadName="$AZURE_WORKLOAD_NAME" location="$AZURE_LOCATION" enableCosmosFreeTier=true deployContainerApp=true \
+                        --parameters workloadName="$AZURE_WORKLOAD_NAME" location="$AZURE_LOCATION" enableCosmosFreeTier=true deployContainerApp=true deployWorkerVm=true \
                         containerImage="$deployed_image" workerAdminSshPublicKey="$WORKER_ADMIN_SSH_PUBLIC_KEY" \
+                        workerArtifactUrl="$worker_artifact_url" workerArtifactSha256="$worker_artifact_sha" codexBinSha256="$CODEX_ARTIFACT_SHA256" \
                         releaseSourceCommit="$commit" releaseVersion="$version" releaseImageDigest="$source_digest" \
                         releaseTeamsPackageSha256="$teams_package_sha" releaseClientBundleSha256="$client_sha" releaseServerBundleSha256="$server_sha" \
                         --query properties.outputs --output json > "$(Agent.TempDirectory)/deployment-outputs.json"
@@ -176,6 +233,8 @@ stages:
                     GHCR_IMPORT_USERNAME: $(githubArtifactUsername)
                     GHCR_IMPORT_TOKEN: $(githubArtifactReadToken)
                     WORKER_ADMIN_SSH_PUBLIC_KEY: $(workerAdminSshPublicKey)
+                    CODEX_ARTIFACT_URL: ${{ parameters.codexArtifactUrl }}
+                    CODEX_ARTIFACT_SHA256: ${{ parameters.codexArtifactSha256 }}
 
   - stage: RollbackCanary
     displayName: Roll back the current traffic-serving revision

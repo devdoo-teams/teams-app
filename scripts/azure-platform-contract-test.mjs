@@ -114,15 +114,36 @@ try {
   assert.match(workerVm.properties.osProfile.customData, /base64\(variables\('renderedCloudInit'\)\)/, 'worker VM must base64-encode rendered cloud-init');
   const compiledJson = JSON.stringify(compiled);
   assert.match(compiledJson, /teamsapp-worker\\u002Eservice|teamsapp-worker\.service/, 'rendered cloud-init must contain the worker systemd unit');
-  assert.match(compiledJson, /TEAMS_WORKER_COMPOSITION_MODULE/, 'rendered cloud-init must configure the packaged composition module');
+  assert.match(compiledJson, /dist\/worker\/index\.js/, 'rendered cloud-init must execute the packaged worker entrypoint');
+
+  const workerExtension = findResource(resources, 'Microsoft.Compute/virtualMachines/extensions');
+  assert.ok(workerExtension, 'worker VM must install the immutable runtime through a VM extension');
+  assert.equal(workerExtension.properties?.publisher, 'Microsoft.Azure.Extensions');
+  assert.equal(workerExtension.properties?.type, 'CustomScript');
+  assert.equal(workerExtension.properties?.typeHandlerVersion, '2.1');
+  assert.ok(
+    workerExtension.properties?.protectedSettings?.managedIdentity?.clientId,
+    'private worker artifact download must use the VM user-assigned managed identity',
+  );
+  assert.equal(
+    workerExtension.properties?.protectedSettings?.storageAccountKey,
+    undefined,
+    'worker artifact download must not use a storage account key',
+  );
+  assert.match(
+    String(workerExtension.properties?.protectedSettings?.commandToExecute),
+    /install-worker-runtime\.sh.*workerArtifactSha256.*codexBinSha256|install-worker-runtime\.sh/i,
+    'extension must execute the fail-closed worker installer with immutable digest inputs',
+  );
 
   const roleAssignments = resources.filter((resource) => resource.type === 'Microsoft.Authorization/roleAssignments');
+  const roleDefinitions = resources.filter((resource) => resource.type === 'Microsoft.Authorization/roleDefinitions');
   const appSenderRole = roleAssignments.find((resource) => (
     String(resource.properties?.roleDefinitionId).includes('storageQueueDataMessageSenderRoleDefinitionId')
     && String(resource.properties?.principalId).includes('appIdentityPrincipalId')
   ));
   const workerProcessorRole = roleAssignments.find((resource) => (
-    String(resource.properties?.roleDefinitionId).includes('storageQueueDataMessageProcessorRoleDefinitionId')
+    String(resource.properties?.roleDefinitionId).includes('teamsapp-worker-queue-lease')
     && String(resource.properties?.principalId).includes('workerIdentityPrincipalId')
   ));
   const workerPoisonSenderRole = roleAssignments.find((resource) => (
@@ -131,7 +152,7 @@ try {
     && String(resource.scope).includes('agent-dispatch-poison')
   ));
   assert.ok(appSenderRole, 'Container App identity must receive the sender-only queue role');
-  assert.ok(workerProcessorRole, 'worker identity must receive queue message processing permission');
+  assert.ok(workerProcessorRole, 'worker identity must receive the custom queue lease role');
   assert.ok(workerPoisonSenderRole, 'worker identity must receive sender-only access to the poison queue');
   assert.match(String(appSenderRole.scope), /agent-dispatch/i, 'Container App sender role must be scoped to the dispatch queue');
   assert.match(String(workerProcessorRole.scope), /agent-dispatch/i, 'worker processor role must be scoped to the dispatch queue');
@@ -139,6 +160,26 @@ try {
     !JSON.stringify(compiled).includes('974c5e8b-45b9-4653-ba55-5f855dd0fb88'),
     'broad Storage Queue Data Contributor must not be granted to either runtime identity',
   );
+  const workerQueueLeaseRole = roleDefinitions.find((resource) => String(resource.properties?.roleName).includes('TeamsApp Worker Queue Lease'));
+  assert.ok(workerQueueLeaseRole, 'worker queue lease custom role must exist');
+  assert.deepEqual(
+    [...(workerQueueLeaseRole.properties?.permissions?.[0]?.dataActions ?? [])].sort(),
+    [
+      'Microsoft.Storage/storageAccounts/queueServices/queues/messages/process/action',
+      'Microsoft.Storage/storageAccounts/queueServices/queues/messages/read',
+      'Microsoft.Storage/storageAccounts/queueServices/queues/messages/write',
+    ].sort(),
+    'worker custom role must contain only receive/delete, peek, and visibility-update data actions',
+  );
+  const workerArtifactContainer = findResource(resources, 'Microsoft.Storage/storageAccounts/blobServices/containers');
+  assert.ok(workerArtifactContainer, 'private worker artifact container must be provisioned');
+  assert.equal(workerArtifactContainer.properties?.publicAccess, 'None');
+  const workerArtifactReader = roleAssignments.find((resource) => (
+    String(resource.properties?.roleDefinitionId).includes('storageBlobDataReaderRoleDefinitionId')
+    && String(resource.properties?.principalId).includes('workerIdentityPrincipalId')
+  ));
+  assert.ok(workerArtifactReader, 'worker managed identity must receive blob reader access to only the artifact container');
+  assert.match(String(workerArtifactReader.scope), /worker-artifacts/i);
 
   const containerApp = findResource(resources, 'Microsoft.App/containerApps');
   const appContainer = containerApp.properties?.template?.containers?.find((container) => container.name === 'teams-core');
@@ -202,6 +243,16 @@ try {
   assert.ok(deployScript?.includes('az deployment group create'), 'deployment must provision with an Azure resource-group deployment');
   assert.ok(deployScript?.includes('--template-file infra/azure/main.bicep'), 'deployment must execute the compiled main.bicep contract');
   assert.ok(deployScript?.includes('scripts/azure-deployment-contract.mjs outputs'), 'deployment must consume validated Bicep outputs');
+  assert.ok(deployScript?.includes('npm run build:worker'), 'deployment must build the worker from the exact attested source commit');
+  assert.ok(deployScript?.includes('git checkout --detach "$commit"'), 'worker build must check out the exact attested commit');
+  assert.ok(deployScript?.includes('version: 24.19.0') || JSON.stringify(deploySteps).includes('24.19.0'), 'worker archive must carry the pinned Node runtime');
+  assert.ok(deployScript?.includes('CODEX_ARTIFACT_URL'), 'deployment must require an approved Codex artifact reference');
+  assert.ok(deployScript?.includes('CODEX_ARTIFACT_SHA256'), 'deployment must require and verify the approved Codex digest');
+  assert.ok(deployScript?.includes('az storage blob upload'), 'deployment must stage the immutable worker archive in private Azure Blob storage');
+  assert.ok(deployScript?.includes('--auth-mode login'), 'artifact staging must use Entra authentication rather than account keys or SAS');
+  assert.ok(deployScript?.includes('metadata.sha256'), 'an existing immutable worker blob must be accepted only when its SHA-256 metadata matches');
+  assert.ok(deployScript?.includes('workerArtifactSha256='), 'deployment must bind the worker archive digest into Bicep');
+  assert.ok(deployScript?.includes('codexBinSha256='), 'deployment must bind the approved Codex digest into Bicep');
   assert.ok(!Object.hasOwn(pipeline.variables ?? {}, 'azureContainerApp'), 'pipeline must not substitute a hard-coded Container App name for Bicep outputs');
   assert.ok(!Object.hasOwn(pipeline.variables ?? {}, 'azureContainerRegistry'), 'pipeline must not substitute a hard-coded ACR name for Bicep outputs');
 

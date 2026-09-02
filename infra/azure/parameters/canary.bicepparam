@@ -16,3 +16,7 @@ param releaseServerBundleSha256 = '000000000000000000000000000000000000000000000
 
 // This is a non-secret format placeholder. The deployer supplies the approved owner public key.
 param workerAdminSshPublicKey = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAzureCanaryContractOnly teamsapp@azure-canary'
+param deployWorkerVm = true
+param workerArtifactUrl = 'https://teamsapp.invalid.blob.core.windows.net/worker-artifacts/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/worker-runtime-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.tar'
+param workerArtifactSha256 = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+param codexBinSha256 = 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
