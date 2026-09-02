@@ -45,7 +45,14 @@
             { "title": "help", "description": "사용 가능한 명령을 보여줍니다." },
             { "title": "날씨", "description": "현재 위치 날씨 위젯을 확인합니다." },
             { "title": "status", "description": "앱 상태를 확인합니다." },
-            { "title": "list", "description": "진행 중인 업무 목록을 보여줍니다." }
+            { "title": "list", "description": "진행 중인 업무 목록을 보여줍니다." },
+            { "title": "agent run", "description": "읽기 전용 Core 에이전트 작업을 시작합니다." },
+            { "title": "agent status", "description": "Core 에이전트 작업 상태를 확인합니다." },
+            { "title": "agent list", "description": "Core 에이전트 작업 목록을 확인합니다." },
+            { "title": "agent cancel", "description": "Core 에이전트 작업 취소를 요청합니다." },
+            { "title": "agent approve", "description": "쓰기 작업 승인을 처리합니다." },
+            { "title": "agent retry", "description": "실패한 Core 에이전트 작업을 다시 시도합니다." },
+            { "title": "agent input", "description": "입력이 필요한 Core 에이전트 작업에 값을 전달합니다." }
           ]
         }
       ]

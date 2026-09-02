@@ -5,6 +5,10 @@ import type { AgentNotification } from './agent-service.js';
 import type { GenUiActionStore } from './genui-action-store.js';
 import type { Item } from './item-store.js';
 import type { WeatherResponse } from './weather-service.js';
+import type {
+  CoreOrchestrationJob,
+  CoreProviderFact,
+} from '../shared/core-orchestration.js';
 import { redactSensitiveText } from './sensitive-text.js';
 import { normalizeCliCapability, type CliCapability } from './codex-capability.js';
 import {
@@ -47,6 +51,144 @@ export type GenUiStatusFacts = {
   ghcp: CliCapability;
   a2aProviders?: readonly GenUiA2AProviderFact[];
 };
+
+type CoreOrchestrationAdaptiveCard = Readonly<{
+  type: 'AdaptiveCard';
+  $schema: 'http://adaptivecards.io/schemas/adaptive-card.json';
+  version: '1.2';
+  msteams: Readonly<{ width: 'Full' }>;
+  body: readonly Record<string, unknown>[];
+  actions?: readonly Record<string, unknown>[];
+}>;
+
+export type CoreOrchestrationTeamsActivity = Readonly<{
+  type: 'message';
+  attachmentLayout: 'list';
+  attachments: readonly [{
+    contentType: 'application/vnd.microsoft.card.adaptive';
+    content: CoreOrchestrationAdaptiveCard;
+  }];
+}>;
+
+function orchestrationPayload(action: string, jobId: string): Record<string, string> {
+  return { schemaVersion: '1', action, jobId };
+}
+
+function orchestrationAction(type: string, title: string, jobId: string, style?: string): Record<string, unknown> {
+  return {
+    type: 'Action.Submit',
+    title,
+    data: orchestrationPayload(type, jobId),
+    ...(style ? { style } : {}),
+  };
+}
+
+function orchestrationActions(job: CoreOrchestrationJob): readonly Record<string, unknown>[] {
+  if (job.status === 'queued' || job.status === 'running') {
+    return [orchestrationAction('orchestration.cancel', '취소', job.id, 'destructive')];
+  }
+  if (job.status === 'awaiting_approval') {
+    return [
+      orchestrationAction('orchestration.approve', '승인', job.id, 'positive'),
+      orchestrationAction('orchestration.cancel', '취소', job.id, 'destructive'),
+    ];
+  }
+  if (job.status === 'failed') {
+    return [orchestrationAction('orchestration.retry', '다시 시도', job.id)];
+  }
+  if (job.status === 'input_required') {
+    return [{
+      type: 'Action.ShowCard',
+      title: '추가 입력',
+      card: {
+        type: 'AdaptiveCard',
+        $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+        version: '1.2',
+        body: [{
+          type: 'Input.Text',
+          id: 'input',
+          label: '작업에 전달할 입력',
+          isMultiline: true,
+          maxLength: 2_000,
+        }],
+        actions: [{
+          type: 'Action.Submit',
+          title: '입력 보내기',
+          data: orchestrationPayload('orchestration.provide-input', job.id),
+        }],
+      },
+    }];
+  }
+  return [];
+}
+
+function orchestrationActivity(card: CoreOrchestrationAdaptiveCard): CoreOrchestrationTeamsActivity {
+  return {
+    type: 'message',
+    attachmentLayout: 'list',
+    attachments: [{
+      contentType: 'application/vnd.microsoft.card.adaptive',
+      content: card,
+    }],
+  };
+}
+
+/** Attachment-only Teams 1.2 rendering for a durable Core job identity. */
+export function createCoreOrchestrationJobActivity(job: CoreOrchestrationJob): CoreOrchestrationTeamsActivity {
+  const actions = orchestrationActions(job);
+  const detail = job.result ?? job.error ?? job.progress.at(-1) ?? '세부 진행 정보가 없습니다.';
+  return orchestrationActivity({
+    type: 'AdaptiveCard',
+    $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.2',
+    msteams: { width: 'Full' },
+    body: [
+      { type: 'TextBlock', text: 'Core 에이전트 작업', size: 'Large', weight: 'Bolder', wrap: true },
+      {
+        type: 'FactSet',
+        facts: [
+          { title: '작업 ID', value: identifierText(job.id, 200, 'unknown-job') },
+          { title: '상태', value: identifierText(job.status, 40, 'unknown') },
+          { title: '권한', value: identifierText(job.mode, 40, 'unknown') },
+          { title: 'Provider', value: identifierText(job.provider, 40, '미지정') },
+        ],
+      },
+      { type: 'TextBlock', text: displayText(job.prompt, 2_000, '(작업 설명 없음)'), wrap: true },
+      { type: 'TextBlock', text: displayText(detail, 2_000, '세부 진행 정보가 없습니다.'), wrap: true, isSubtle: true },
+    ],
+    ...(actions.length > 0 ? { actions } : {}),
+  });
+}
+
+/** Render observed provider facts without promoting unknown/unavailable state. */
+export function createCoreOrchestrationListActivity(
+  jobs: readonly CoreOrchestrationJob[],
+  providers: readonly CoreProviderFact[],
+): CoreOrchestrationTeamsActivity {
+  const jobItems = jobs.slice(0, 10).map((job) => ({
+    type: 'TextBlock',
+    text: `${identifierText(job.id, 200, 'unknown-job')} · ${identifierText(job.status, 40, 'unknown')}`,
+    wrap: true,
+  }));
+  const providerFacts = providers.slice(0, 10).map((provider) => ({
+    title: displayText(provider.provider, 80, 'unknown-provider'),
+    value: identifierText(provider.availability, 40, 'unknown'),
+  }));
+  return orchestrationActivity({
+    type: 'AdaptiveCard',
+    $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.2',
+    msteams: { width: 'Full' },
+    body: [
+      { type: 'TextBlock', text: 'Core 에이전트 작업 목록', size: 'Large', weight: 'Bolder', wrap: true },
+      ...(jobItems.length > 0 ? jobItems : [{ type: 'TextBlock', text: '작업이 없습니다.', wrap: true }]),
+      { type: 'TextBlock', text: 'Provider 관찰 상태', weight: 'Bolder', wrap: true },
+      ...(providerFacts.length > 0
+        ? [{ type: 'FactSet', facts: providerFacts }]
+        : [{ type: 'TextBlock', text: '관찰된 provider 정보가 없습니다.', wrap: true }]),
+    ],
+  });
+}
 
 const JOB_STATUSES = ['queued', 'awaiting_approval', 'running', 'completed', 'failed', 'cancelled'] as const;
 type SafeJobStatus = (typeof JOB_STATUSES)[number];
