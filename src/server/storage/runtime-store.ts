@@ -78,7 +78,7 @@ export function stableRuntimeJson(value: unknown): string {
     if (seen.has(candidate)) throw new RuntimeStoreValidationError('runtime value must not contain cycles');
     seen.add(candidate);
     const record = candidate as Record<string, unknown>;
-    const normalized: Record<string, unknown> = {};
+    const normalized: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
     for (const key of Object.keys(record).sort()) {
       if (record[key] === undefined) throw new RuntimeStoreValidationError('runtime value must not contain undefined');
       normalized[key] = normalize(record[key]);

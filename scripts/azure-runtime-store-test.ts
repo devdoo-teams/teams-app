@@ -2,13 +2,16 @@ import assert from 'node:assert/strict';
 
 import {
   deriveRuntimePartitionKey,
+  runtimeContentHash,
   RuntimeStoreConflictError,
   RuntimeStoreValidationError,
+  stableRuntimeJson,
   type RuntimeRecordDocument,
   type RuntimeScope,
 } from '../src/server/storage/runtime-store.js';
 import {
   CosmosRuntimeStore,
+  type CosmosPortResult,
   type CosmosRuntimeContainerPort,
 } from '../src/server/storage/cosmos-runtime-store.js';
 import { createRuntimeStore } from '../src/server/storage/runtime-store-factory.js';
@@ -74,6 +77,73 @@ class MemoryCosmosPort implements CosmosRuntimeContainerPort {
   }
 }
 
+class ConflictReadbackPort implements CosmosRuntimeContainerPort {
+  readonly calls: string[] = [];
+  private conflicted = false;
+
+  constructor(
+    private readonly operation: 'create' | 'replace',
+    private readonly statusCode: 409 | 412,
+    private readonly initial: { document: RuntimeRecordDocument; etag: string } | null,
+    private readonly readBack: Array<{ document: RuntimeRecordDocument; etag: string } | null>,
+  ) {}
+
+  async read(_id: string, _partitionKey: string): Promise<CosmosPortResult | null> {
+    this.calls.push(this.conflicted ? 'read-back' : 'read-initial');
+    if (!this.conflicted) return this.initial ? structuredClone(this.initial) : null;
+    const result = this.readBack.shift() ?? null;
+    return result ? structuredClone(result) : null;
+  }
+
+  async create(_document: RuntimeRecordDocument): Promise<CosmosPortResult> {
+    this.calls.push('create');
+    assert.equal(this.operation, 'create');
+    this.conflicted = true;
+    throw Object.assign(new Error('write conflict'), { statusCode: this.statusCode });
+  }
+
+  async replace(
+    _id: string,
+    _partitionKey: string,
+    _document: RuntimeRecordDocument,
+    _ifMatch: string,
+  ): Promise<CosmosPortResult> {
+    this.calls.push('replace');
+    assert.equal(this.operation, 'replace');
+    this.conflicted = true;
+    throw Object.assign(new Error('write conflict'), { statusCode: this.statusCode });
+  }
+
+  async queryPartition(_partitionKey: string, _limit: number): Promise<CosmosPortResult[]> {
+    return [];
+  }
+}
+
+function persistedDocument(options: {
+  scope?: RuntimeScope;
+  id?: string;
+  idempotencyKey: string;
+  value: unknown;
+  etag: string;
+}): { document: RuntimeRecordDocument; etag: string } {
+  const recordScope = options.scope ?? scopeA;
+  const timestamp = '2026-09-03T00:00:00.000Z';
+  return {
+    document: {
+      id: options.id ?? 'race-task',
+      ...recordScope,
+      partitionKey: deriveRuntimePartitionKey(recordScope),
+      idempotencyKey: options.idempotencyKey,
+      contentHash: runtimeContentHash(options.value),
+      value: structuredClone(options.value),
+      etag: options.etag,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
+    etag: options.etag,
+  };
+}
+
 const port = new MemoryCosmosPort();
 let now = Date.parse('2026-09-03T00:00:00.000Z');
 const store = new CosmosRuntimeStore({ container: port, now: () => new Date(now) });
@@ -86,6 +156,22 @@ assert.throws(
   () => deriveRuntimePartitionKey({ ...scopeA, tenantId: '' }),
   RuntimeStoreValidationError,
   'empty server-derived scope is rejected',
+);
+
+const protoOnlyValue = Object.create(null) as Record<string, unknown>;
+Object.defineProperty(protoOnlyValue, '__proto__', {
+  enumerable: true,
+  value: { marker: 'preserved' },
+});
+assert.equal(
+  stableRuntimeJson(protoOnlyValue),
+  '{"__proto__":{"marker":"preserved"}}',
+  'canonical JSON preserves an enumerable own __proto__ key',
+);
+assert.notEqual(
+  runtimeContentHash(protoOnlyValue),
+  runtimeContentHash({}),
+  'an own __proto__ key participates in the content hash',
 );
 
 const created = await store.write(scopeA, {
@@ -109,6 +195,80 @@ await assert.rejects(
   RuntimeStoreConflictError,
   'reusing an idempotency key for different content fails closed',
 );
+
+const oversizedProtoValue = Object.create(null) as Record<string, unknown>;
+Object.defineProperty(oversizedProtoValue, '__proto__', {
+  enumerable: true,
+  value: 'x'.repeat(300_000),
+});
+await assert.rejects(
+  () => store.write(scopeA, {
+    id: 'oversized-proto',
+    idempotencyKey: 'oversized-proto-1',
+    value: oversizedProtoValue,
+  }),
+  RuntimeStoreValidationError,
+  'an oversized own __proto__ value cannot bypass the 256 KiB record limit',
+);
+
+for (const [operation, statusCode] of [
+  ['create', 409],
+  ['create', 412],
+  ['replace', 409],
+  ['replace', 412],
+] as const) {
+  const desiredValue = { state: 'committed-by-racer', operation, statusCode };
+  const winner = persistedDocument({
+    idempotencyKey: `${operation}-${statusCode}`,
+    value: desiredValue,
+    etag: `\"winner-${operation}-${statusCode}\"`,
+  });
+  const initial = operation === 'replace'
+    ? persistedDocument({ idempotencyKey: 'previous-write', value: { state: 'previous' }, etag: '"previous"' })
+    : null;
+  const conflictPort = new ConflictReadbackPort(operation, statusCode, initial, [null, null, winner]);
+  const conflictStore = new CosmosRuntimeStore({ container: conflictPort });
+  const replay = await conflictStore.write(scopeA, {
+    id: 'race-task',
+    idempotencyKey: `${operation}-${statusCode}`,
+    ...(operation === 'replace' ? { expectedEtag: '"previous"' } : {}),
+    value: desiredValue,
+  });
+  assert.equal(replay.etag, winner.etag, `${operation} ${statusCode} returns the matching committed replay`);
+  assert.equal(
+    conflictPort.calls.filter((call) => call === 'read-back').length,
+    3,
+    `${operation} ${statusCode} uses bounded read-back attempts`,
+  );
+}
+
+for (const mismatch of ['scope', 'id', 'idempotencyKey', 'contentHash'] as const) {
+  const desiredValue = { state: 'desired' };
+  const mismatchScope = { ...scopeA, requesterId: 'other-user' };
+  const winner = persistedDocument({
+    scope: mismatch === 'scope' ? mismatchScope : scopeA,
+    id: mismatch === 'id' ? 'other-task' : 'race-task',
+    idempotencyKey: mismatch === 'idempotencyKey' ? 'other-key' : 'create-conflict',
+    value: mismatch === 'contentHash' ? { state: 'other' } : desiredValue,
+    etag: `\"mismatch-${mismatch}\"`,
+  });
+  const conflictPort = new ConflictReadbackPort('create', 409, null, [winner, winner, winner]);
+  const conflictStore = new CosmosRuntimeStore({ container: conflictPort });
+  await assert.rejects(
+    () => conflictStore.write(scopeA, {
+      id: 'race-task',
+      idempotencyKey: 'create-conflict',
+      value: desiredValue,
+    }),
+    RuntimeStoreConflictError,
+    `a conflicting ${mismatch} never qualifies as an idempotent replay`,
+  );
+  assert.equal(
+    conflictPort.calls.filter((call) => call === 'read-back').length,
+    3,
+    `a ${mismatch} mismatch exhausts only the bounded read-back window`,
+  );
+}
 await assert.rejects(
   () => store.write(scopeA, { id: 'task-1', idempotencyKey: 'update-without-etag', value: { state: 'working' } }),
   RuntimeStoreConflictError,

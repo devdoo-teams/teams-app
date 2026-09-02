@@ -30,6 +30,8 @@ export interface CosmosRuntimeContainerPort {
   queryPartition(partitionKey: string, limit: number): Promise<CosmosPortResult[]>;
 }
 
+const MAX_CONFLICT_READ_BACK_ATTEMPTS = 3;
+
 export class CosmosRuntimeStore implements RuntimeStore {
   private readonly container: CosmosRuntimeContainerPort;
   private readonly now: () => Date;
@@ -90,6 +92,14 @@ export class CosmosRuntimeStore implements RuntimeStore {
         ));
       } catch (error) {
         if (hasStatusCode(error, 409) || hasStatusCode(error, 412)) {
+          const replay = await this.readConflictReplay<T>(
+            scope,
+            input.id,
+            partitionKey,
+            input.idempotencyKey,
+            contentHash,
+          );
+          if (replay) return replay;
           throw new RuntimeStoreConflictError('runtime record changed concurrently');
         }
         throw error;
@@ -101,17 +111,43 @@ export class CosmosRuntimeStore implements RuntimeStore {
     try {
       return this.fromPortResult<T>(scope, await this.container.create(document));
     } catch (error) {
-      if (!hasStatusCode(error, 409)) throw error;
-      const raced = await this.container.read(input.id, partitionKey);
-      if (
-        raced &&
-        raced.document.idempotencyKey === input.idempotencyKey &&
-        raced.document.contentHash === contentHash
-      ) {
-        return this.fromPortResult<T>(scope, raced);
-      }
+      if (!hasStatusCode(error, 409) && !hasStatusCode(error, 412)) throw error;
+      const replay = await this.readConflictReplay<T>(
+        scope,
+        input.id,
+        partitionKey,
+        input.idempotencyKey,
+        contentHash,
+      );
+      if (replay) return replay;
       throw new RuntimeStoreConflictError('runtime record was created concurrently');
     }
+  }
+
+  private async readConflictReplay<T>(
+    scope: RuntimeScope,
+    id: string,
+    partitionKey: string,
+    idempotencyKey: string,
+    contentHash: string,
+  ): Promise<RuntimeRecord<T> | null> {
+    for (let attempt = 0; attempt < MAX_CONFLICT_READ_BACK_ATTEMPTS; attempt += 1) {
+      const result = await this.container.read(id, partitionKey);
+      if (!result) continue;
+      const document = result.document;
+      if (
+        document.id === id &&
+        document.partitionKey === partitionKey &&
+        document.tenantId === scope.tenantId &&
+        document.requesterId === scope.requesterId &&
+        document.conversationId === scope.conversationId &&
+        document.idempotencyKey === idempotencyKey &&
+        document.contentHash === contentHash
+      ) {
+        return this.fromPortResult<T>(scope, result);
+      }
+    }
+    return null;
   }
 
   private buildDocument<T>(
