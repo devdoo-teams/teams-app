@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -12,6 +13,7 @@ const coreBuildSteps = [
 ];
 const plainTests = [
   'scripts/core-test-runner-test.mjs',
+  'scripts/core-orchestration-gate-registration-test.mjs',
   'scripts/core-test-workspace-test.mjs',
   'scripts/core-optional-boundary-test.mjs',
   'scripts/server-build-mode-test.mjs',
@@ -44,6 +46,10 @@ const runtimeTests = [
   'scripts/a2a-index-integration-test.mjs',
 ];
 const tsTests = [
+  'scripts/core-orchestration-service-test.ts',
+  'scripts/core-orchestration-route-test.ts',
+  'scripts/client-orchestration-panel-test.tsx',
+  'scripts/client-app-orchestration-integration-test.tsx',
   'scripts/status-card-test.ts',
   'scripts/genui-contract-test.ts',
   'scripts/teams-tab-link-test.ts',
@@ -340,6 +346,12 @@ export function createCoreTestInvocations({
     throw new Error('sourceCommit must be one full immutable Git OID for every Core child test');
   }
   const childEnv = { ...env, TEAMS_SOURCE_COMMIT: sourceCommit };
+  const optionalRouteMountTests = [
+    'scripts/core-orchestration-route-mount-integration-test.ts',
+    'scripts/core-orchestration-route-mount-test.ts',
+    'scripts/core-orchestration-index-mount-test.ts',
+    'scripts/core-orchestration-index-integration-test.ts',
+  ].filter((script) => existsSync(path.resolve(sourceCwd, script)));
   return [
     ...coreBuildSteps.map(([script, ...args]) => ({
       kind: 'build',
@@ -363,7 +375,7 @@ export function createCoreTestInvocations({
       cwd: rootCwd,
       env: childEnv,
     })),
-    ...tsTests.map((script) => ({
+    ...[...tsTests, ...optionalRouteMountTests].map((script) => ({
       kind: 'source',
       command: process.execPath,
       args: ['--import', 'tsx/esm', moduleRunner, script],
