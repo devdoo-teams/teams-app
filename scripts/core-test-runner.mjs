@@ -65,6 +65,7 @@ const tsTests = [
   'scripts/azure-runtime-store-test.ts',
   'scripts/azure-agent-dispatch-queue-test.ts',
   'scripts/azure-worker-contract-test.ts',
+  'scripts/azure-worker-build-contract-test.mjs',
   'scripts/azure-index-integration-test.ts',
   'scripts/genui-action-store-test.ts',
   'scripts/item-store-hardening-test.ts',

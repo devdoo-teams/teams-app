@@ -56,7 +56,6 @@ var storageName = take('${compactPrefix}${uniqueSuffix}', 24)
 var cosmosName = take('${workloadName}-cosmos-${uniqueSuffix}', 44)
 var cosmosDatabaseName = 'teamsapp'
 var cosmosContainerName = 'runtime-records'
-var agentDispatchQueueName = 'agent-dispatch'
 var appName = take('${workloadName}-canary-${uniqueSuffix}', 32)
 var environmentName = take('${workloadName}-env-${uniqueSuffix}', 40)
 var workerName = take('${workloadName}-worker-${uniqueSuffix}', 64)
@@ -96,13 +95,6 @@ module storage './modules/storage.bicep' = {
     appIdentityPrincipalId: identities.outputs.appIdentityPrincipalId
     workerIdentityPrincipalId: identities.outputs.workerIdentityPrincipalId
   }
-}
-
-resource agentDispatchPoisonQueue 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = {
-  name: '${storageName}/default/agent-dispatch-poison'
-  dependsOn: [
-    storage
-  ]
 }
 
 module cosmos './modules/cosmos.bicep' = {
@@ -154,8 +146,8 @@ module containerApp './modules/container-app.bicep' = if (deployContainerApp) {
     cosmosEndpoint: cosmos.outputs.endpoint
     cosmosDatabase: cosmos.outputs.databaseName
     cosmosContainer: cosmos.outputs.containerName
-    agentDispatchQueueEndpoint: '${storage.outputs.queueEndpoint}${agentDispatchQueueName}'
-    agentDispatchPoisonQueueEndpoint: '${storage.outputs.queueEndpoint}agent-dispatch-poison'
+    agentDispatchQueueEndpoint: storage.outputs.dispatchQueueEndpoint
+    agentDispatchPoisonQueueEndpoint: storage.outputs.poisonQueueEndpoint
     revisionSuffix: take(releaseSourceCommit, 10)
     releaseSourceCommit: releaseSourceCommit
     releaseVersion: releaseVersion
@@ -172,7 +164,13 @@ module workerVm './modules/worker-vm.bicep' = {
     location: location
     workerName: workerName
     workerIdentityResourceId: identities.outputs.workerIdentityResourceId
+    workerIdentityClientId: identities.outputs.workerIdentityClientId
     workerAdminSshPublicKey: workerAdminSshPublicKey
+    agentDispatchQueueEndpoint: storage.outputs.dispatchQueueEndpoint
+    agentDispatchPoisonQueueEndpoint: storage.outputs.poisonQueueEndpoint
+    cosmosEndpoint: cosmos.outputs.endpoint
+    cosmosDatabase: cosmos.outputs.databaseName
+    cosmosContainer: cosmos.outputs.containerName
   }
 }
 

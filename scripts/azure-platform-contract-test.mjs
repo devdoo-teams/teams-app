@@ -93,6 +93,52 @@ try {
 
   const cosmos = findResource(resources, 'Microsoft.DocumentDB/databaseAccounts');
   assert.equal(cosmos.properties?.disableLocalAuth, true, 'Cosmos must reject key-based local authentication and use RBAC only');
+  assert.ok(
+    !(cosmos.properties?.capabilities ?? []).some((capability) => capability.name === 'EnableServerless'),
+    'Cosmos canary account must explicitly use provisioned throughput rather than implicit serverless behavior',
+  );
+  const cosmosDatabase = findResource(resources, 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases');
+  const autoscaleThroughput = cosmosDatabase.properties?.options?.autoscaleSettings?.maxThroughput;
+  assert.ok(
+    autoscaleThroughput === 1_000 || String(autoscaleThroughput).includes("parameters('autoscaleMaxThroughput')"),
+    'provisioned Cosmos database must declare bounded autoscale throughput',
+  );
+  assert.match(
+    JSON.stringify(compiled),
+    /"autoscaleMaxThroughput":\{"type":"int","defaultValue":1000/,
+    'compiled Cosmos module must bind autoscale max throughput to a 1000 RU/s default',
+  );
+
+  const workerVm = findResource(resources, 'Microsoft.Compute/virtualMachines');
+  assert.equal(typeof workerVm.properties?.osProfile?.customData, 'string', 'worker VM must attach rendered cloud-init as customData');
+  assert.match(workerVm.properties.osProfile.customData, /base64\(variables\('renderedCloudInit'\)\)/, 'worker VM must base64-encode rendered cloud-init');
+  const compiledJson = JSON.stringify(compiled);
+  assert.match(compiledJson, /teamsapp-worker\\u002Eservice|teamsapp-worker\.service/, 'rendered cloud-init must contain the worker systemd unit');
+  assert.match(compiledJson, /TEAMS_WORKER_COMPOSITION_MODULE/, 'rendered cloud-init must configure the packaged composition module');
+
+  const roleAssignments = resources.filter((resource) => resource.type === 'Microsoft.Authorization/roleAssignments');
+  const appSenderRole = roleAssignments.find((resource) => (
+    String(resource.properties?.roleDefinitionId).includes('storageQueueDataMessageSenderRoleDefinitionId')
+    && String(resource.properties?.principalId).includes('appIdentityPrincipalId')
+  ));
+  const workerProcessorRole = roleAssignments.find((resource) => (
+    String(resource.properties?.roleDefinitionId).includes('storageQueueDataMessageProcessorRoleDefinitionId')
+    && String(resource.properties?.principalId).includes('workerIdentityPrincipalId')
+  ));
+  const workerPoisonSenderRole = roleAssignments.find((resource) => (
+    String(resource.properties?.roleDefinitionId).includes('storageQueueDataMessageSenderRoleDefinitionId')
+    && String(resource.properties?.principalId).includes('workerIdentityPrincipalId')
+    && String(resource.scope).includes('agent-dispatch-poison')
+  ));
+  assert.ok(appSenderRole, 'Container App identity must receive the sender-only queue role');
+  assert.ok(workerProcessorRole, 'worker identity must receive queue message processing permission');
+  assert.ok(workerPoisonSenderRole, 'worker identity must receive sender-only access to the poison queue');
+  assert.match(String(appSenderRole.scope), /agent-dispatch/i, 'Container App sender role must be scoped to the dispatch queue');
+  assert.match(String(workerProcessorRole.scope), /agent-dispatch/i, 'worker processor role must be scoped to the dispatch queue');
+  assert.ok(
+    !JSON.stringify(compiled).includes('974c5e8b-45b9-4653-ba55-5f855dd0fb88'),
+    'broad Storage Queue Data Contributor must not be granted to either runtime identity',
+  );
 
   const containerApp = findResource(resources, 'Microsoft.App/containerApps');
   const appContainer = containerApp.properties?.template?.containers?.find((container) => container.name === 'teams-core');

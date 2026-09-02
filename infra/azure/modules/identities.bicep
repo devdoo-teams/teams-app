@@ -17,3 +17,4 @@ output appIdentityPrincipalId string = appIdentity.properties.principalId
 output appIdentityClientId string = appIdentity.properties.clientId
 output workerIdentityResourceId string = workerIdentity.id
 output workerIdentityPrincipalId string = workerIdentity.properties.principalId
+output workerIdentityClientId string = workerIdentity.properties.clientId

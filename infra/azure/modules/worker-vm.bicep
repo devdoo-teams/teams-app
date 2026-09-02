@@ -1,7 +1,23 @@
 param location string
 param workerName string
 param workerIdentityResourceId string
+param workerIdentityClientId string
 param workerAdminSshPublicKey string
+param agentDispatchQueueEndpoint string
+param agentDispatchPoisonQueueEndpoint string
+param cosmosEndpoint string
+param cosmosDatabase string
+param cosmosContainer string
+
+var cloudInitTemplate = loadTextContent('../cloud-init/codex-worker.yml')
+var renderedCloudInit = replace(replace(replace(replace(replace(replace(
+  cloudInitTemplate,
+  'SET_AZURE_CLIENT_ID', workerIdentityClientId),
+  'SET_AZURE_STORAGE_QUEUE_ENDPOINT', agentDispatchQueueEndpoint),
+  'SET_AZURE_STORAGE_POISON_QUEUE_ENDPOINT', agentDispatchPoisonQueueEndpoint),
+  'SET_AZURE_COSMOS_ENDPOINT', cosmosEndpoint),
+  'SET_AZURE_COSMOS_DATABASE', cosmosDatabase),
+  'SET_AZURE_COSMOS_CONTAINER', cosmosContainer)
 
 var virtualNetworkName = '${workerName}-network'
 var networkInterfaceName = '${workerName}-nic'
@@ -61,6 +77,7 @@ resource workerVm 'Microsoft.Compute/virtualMachines@2024-03-01' = {
     osProfile: {
       computerName: workerName
       adminUsername: 'teamsworker'
+      customData: base64(renderedCloudInit)
       linuxConfiguration: {
         disablePasswordAuthentication: true
         ssh: {

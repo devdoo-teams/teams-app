@@ -6,6 +6,10 @@ param workerIdentityPrincipalId string
 param databaseName string
 param containerName string
 
+@minValue(1000)
+@maxValue(1000000)
+param autoscaleMaxThroughput int = 1000
+
 var cosmosDataContributorRoleId = '00000000-0000-0000-0000-000000000002'
 
 resource account 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
@@ -18,6 +22,7 @@ resource account 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
     disableKeyBasedMetadataWriteAccess: true
     disableLocalAuth: true
     publicNetworkAccess: 'Enabled'
+    capabilities: []
     consistencyPolicy: {
       defaultConsistencyLevel: 'Session'
     }
@@ -37,6 +42,11 @@ resource database 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-05-15
   properties: {
     resource: {
       id: databaseName
+    }
+    options: {
+      autoscaleSettings: {
+        maxThroughput: autoscaleMaxThroughput
+      }
     }
   }
 }
