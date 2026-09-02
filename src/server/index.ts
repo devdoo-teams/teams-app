@@ -160,6 +160,7 @@ import {
 import { mountMcpAuthenticatedBoundary } from './mcp-authenticated-route.js';
 import { resolveAzureReleaseIdentity } from './azure-release-identity.js';
 import { createRuntimeStore } from './storage/runtime-store-factory.js';
+import { RuntimeStoreAgentJobLedger } from './storage/agent-job-durable-ledger.js';
 import {
   RuntimeStoreConflictError,
   type RuntimeScope,
@@ -405,10 +406,7 @@ const publishWorkItemChange = async (change: WorkItemChange): Promise<void> => {
 const workItemService = new WorkItemService(new WorkItemStore(workItemStorePath), {
   onChanged: publishWorkItemChange,
 });
-const agentJobStore = new AgentJobStore(
-  agentJobStorePath,
-  { legacyProvider: agentProvider },
-);
+let agentJobStore: AgentJobStore;
 const a2aStore = new A2AStore(a2aStorePath);
 const a2aOutboundStore = new TeamsA2AOutboundStore(a2aOutboundStorePath);
 const providerLifecycleStore = hermesA2ARoster.length > 0
@@ -880,7 +878,7 @@ storeProcessLease = await acquireStoreProcessLease([
   itemStorePath,
   workItemStorePath,
   collaborationStorePath,
-  agentJobStorePath,
+  ...(azureQueueDispatch ? [] : [agentJobStorePath]),
   a2aStorePath,
   a2aOutboundStorePath,
   agentAdmissionJournalPath,
@@ -903,6 +901,13 @@ const runtimeStore = await createRuntimeStore({
   env: process.env,
   fileStore: createUnmigratedRuntimeCompatibilityStore(),
 });
+const agentJobDurableLedger = azureQueueDispatch
+  ? new RuntimeStoreAgentJobLedger(runtimeStore)
+  : undefined;
+agentJobStore = new AgentJobStore(
+  agentJobStorePath,
+  { legacyProvider: agentProvider, durableLedger: agentJobDurableLedger },
+);
 let agentExecutionDispatcher: AgentExecutionDispatcher | undefined;
 let azureAgentDispatchQueue: AzureAgentDispatchQueue | undefined;
 if (azureQueueDispatch) {
@@ -1871,6 +1876,11 @@ http.get('/api/health', async (_request: any, response: any) => {
     cliCapabilities,
     storage: {
       backend: storageBackend === 'cosmos' ? 'cosmos-configured' : 'file-json-single-process',
+      agentJobs: {
+        backend: azureQueueDispatch ? 'cosmos-runtime-store' : 'file-json-single-process',
+        migration: azureQueueDispatch ? 'durable-ledger-active' : 'not-migrated',
+        readiness: azureQueueDispatch ? 'configured-unverified' : 'local-process',
+      },
       authoritativeStores: [
         'ItemStore',
         'WorkItemStore',
