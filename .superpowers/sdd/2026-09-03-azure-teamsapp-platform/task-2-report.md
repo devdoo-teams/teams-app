@@ -103,3 +103,27 @@ None for the bounded local Task 2 implementation.
 ## NEXT ACTION
 
 Task 3 may replace the file lifecycle store with the accepted shared transactional storage port and recovery worker. Live Hermes readiness requires separately approved real endpoint/credential configuration and same-run Teams/Azure evidence; it must not reuse these fixture results.
+
+## FINAL ACCEPTANCE ADDENDUM — 2026-09-03
+
+The initial closeout above was reopened by independent review. The final bounded acceptance identity is `fa5e7019195aef36185be5758aeb8ca30dd1534e`, not `3d2ecb690034e58b26a2633d02b9f05caa7bdd05`.
+
+Additional reviewed fixes:
+
+- `263e8443fefebaae3e064e6e5738c107e8bb7576` — official A2A v1 security schema, selected interface/origin validation, and terminal cancellation acknowledgement.
+- `0e9470cab4f3dddeacfe7d5d298c5ac7f85bdb5c` — persisted lifecycle validation, credential URI filtering, byte-exact artifacts, and bounded accepted callbacks.
+- `66788097e3a0d0f2f45600d19cedc9eceeadde2e` — route validation before credential resolution, first-supported interface selection, tenant propagation, and optional capability handling.
+- `1881c1ceb7e48752245c07b54bdbed09da982a1a` — missing receipts, invalid states, nested credential values, repeated URI encoding, and callback cancellation generation handling.
+- `185d348e9e1bfb78efa7123e4e1c71a7c9be2f6c` — IPv6 literal/redirect validation, JSON-RPC response correlation, nonselected interface isolation, and child Agent Card schema validation.
+- `fa5e7019195aef36185be5758aeb8ca30dd1534e` — immutable receipt execution binding, sensitive non-string primitive rejection, and legacy/custom-store compatibility.
+
+Committed-tree verification at `fa5e701`:
+
+- `npm run test:provider-lifecycle` — PASS.
+- `npm run test:a2a-remote-client` — PASS.
+- `npm run typecheck:core` — PASS.
+- Full `npm run test:core` passed at the preceding clean integration identity `0e9470c`; the final acceptance commits were then covered by the focused suites and two independent bounded reviews. A new full-Core run remains required after Task 3 integration.
+- Independent lifecycle acceptance — PASS for MP-222, MP-223, MP-224, MP-227, MP-230, and MP-231.
+- Independent Hermes/A2A acceptance — PASS for MP-225, MP-226, MP-228, and MP-232 through MP-238.
+
+Jira issues MP-222 through MP-228, MP-230 through MP-238 were updated with the final local evidence and moved to `In Review`, not `Done`. Live Hermes, Azure, package, public runtime, Teams desktop, and Teams mobile evidence remain unverified.
