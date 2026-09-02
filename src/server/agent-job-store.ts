@@ -22,6 +22,8 @@ export const MAX_AGENT_COMMIT_MESSAGE_LENGTH = 2_000;
 export const MAX_AGENT_PROGRESS_ENTRIES = 100;
 export const MAX_AGENT_CHANGED_PATH_LENGTH = 512;
 export const MAX_AGENT_CHANGED_PATHS = 256;
+export const MAX_AGENT_IDEMPOTENCY_KEY_LENGTH = 200;
+export const AGENT_REQUEST_HASH_LENGTH = 64;
 
 const AGENT_JOB_STATUSES: readonly AgentJobStatus[] = [
   'queued',
@@ -54,6 +56,8 @@ export interface AgentJob {
   requesterId: string;
   /** Missing only on legacy records; scoped access deliberately rejects them. */
   tenantId?: string;
+  idempotencyKey?: string;
+  requestHash?: string;
   parentJobId?: string;
   threadId?: string;
   result?: string;
@@ -65,6 +69,20 @@ export interface AgentJob {
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;
+}
+
+export class AgentJobIdempotentReplayError extends Error {
+  constructor(readonly job: AgentJob) {
+    super(`Agent job idempotent replay: ${job.id}`);
+    this.name = 'AgentJobIdempotentReplayError';
+  }
+}
+
+export class AgentJobIdempotencyConflictError extends Error {
+  constructor(readonly idempotencyKey: string) {
+    super(`Agent job idempotency key conflict: ${idempotencyKey}`);
+    this.name = 'AgentJobIdempotencyConflictError';
+  }
 }
 
 export type AgentJobStoreOptions = Readonly<{
@@ -152,7 +170,10 @@ export class AgentJobStore {
     scope: AgentJobScope;
     parentJobId?: string;
     threadId?: string;
+    idempotencyKey?: string;
+    requestHash?: string;
   }): Promise<AgentJob> {
+    validateIdempotencyInput(input.idempotencyKey, input.requestHash);
     const job: AgentJob = {
       id: `task-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`,
       prompt: input.prompt,
@@ -162,6 +183,7 @@ export class AgentJobStore {
       conversationId: input.scope.conversationId,
       requesterId: input.scope.requesterId,
       tenantId: input.scope.tenantId,
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey, requestHash: input.requestHash } : {}),
       parentJobId: input.parentJobId,
       threadId: input.threadId,
       progress: [],
@@ -169,6 +191,17 @@ export class AgentJobStore {
     };
 
     return this.enqueueMutation(() => {
+      if (input.idempotencyKey) {
+        const existing = this.jobs.find((candidate) =>
+          matchesScope(candidate, input.scope) && candidate.idempotencyKey === input.idempotencyKey,
+        );
+        if (existing) {
+          if (existing.requestHash === input.requestHash) {
+            throw new AgentJobIdempotentReplayError(cloneAgentJob(existing));
+          }
+          throw new AgentJobIdempotencyConflictError(input.idempotencyKey);
+        }
+      }
       this.jobs = [job, ...this.jobs];
       return cloneAgentJob(job);
     });
@@ -201,6 +234,20 @@ export class AgentJobStore {
       .filter((job) => matchesScope(job, scope))
       .slice(0, limit)
       .map(cloneAgentJob);
+  }
+
+  resolveIdempotentSubmission(
+    scope: AgentJobScope,
+    idempotencyKey: string,
+    requestHash: string,
+  ): AgentJob | undefined {
+    validateIdempotencyInput(idempotencyKey, requestHash);
+    const job = this.jobs.find((candidate) =>
+      matchesScope(candidate, scope) && candidate.idempotencyKey === idempotencyKey,
+    );
+    if (!job) return undefined;
+    if (job.requestHash !== requestHash) throw new AgentJobIdempotencyConflictError(idempotencyKey);
+    return cloneAgentJob(job);
   }
 
   latestCompletedWithThread(scope: AgentJobScope): AgentJob | undefined {
@@ -367,11 +414,39 @@ function loadJobs(
   const loaded = value.map((record, index) => loadJob(record, index, ids, legacyProvider));
   const jobs = loaded.map((entry) => entry.job);
   validateParentScopes(jobs);
+  validateIdempotencyScopes(jobs);
 
   return {
     jobs,
     migrated: loaded.some((entry) => entry.migrated),
   };
+}
+
+function validateIdempotencyInput(idempotencyKey?: string, requestHash?: string): void {
+  if (Boolean(idempotencyKey) !== Boolean(requestHash)) {
+    throw new Error('agent job idempotencyKey and requestHash must be present together');
+  }
+  if (!idempotencyKey) return;
+  if (idempotencyKey.length > MAX_AGENT_IDEMPOTENCY_KEY_LENGTH
+    || idempotencyKey.trim() !== idempotencyKey
+    || CONTROL_CHARACTERS.test(idempotencyKey)) {
+    CONTROL_CHARACTERS.lastIndex = 0;
+    throw new Error('agent job idempotencyKey is invalid');
+  }
+  CONTROL_CHARACTERS.lastIndex = 0;
+  if (!requestHash || !/^[a-f0-9]{64}$/u.test(requestHash)) {
+    throw new Error('agent job requestHash must be a lowercase SHA-256 digest');
+  }
+}
+
+function validateIdempotencyScopes(jobs: readonly AgentJob[]): void {
+  const keys = new Set<string>();
+  for (const [index, job] of jobs.entries()) {
+    if (!job.idempotencyKey) continue;
+    const key = JSON.stringify([job.tenantId, job.requesterId, job.conversationId, job.idempotencyKey]);
+    if (keys.has(key)) throw invalidJob(index, 'idempotencyKey must be unique within its scope');
+    keys.add(key);
+  }
 }
 
 function loadJob(
@@ -417,6 +492,23 @@ function loadJob(
   const tenantId = hasOwn(value, 'tenantId')
     ? readRequiredText(value.tenantId, 'tenantId', MAX_AGENT_SCOPE_VALUE_LENGTH, index, false).value
     : undefined;
+  const idempotencyKey = readOptionalText(
+    value,
+    'idempotencyKey',
+    MAX_AGENT_IDEMPOTENCY_KEY_LENGTH,
+    index,
+    legacy,
+  );
+  const requestHash = readOptionalText(value, 'requestHash', AGENT_REQUEST_HASH_LENGTH, index, legacy);
+  if (Boolean(idempotencyKey.value) !== Boolean(requestHash.value)) {
+    throw invalidJob(index, 'idempotencyKey and requestHash must be present together');
+  }
+  if (idempotencyKey.value && idempotencyKey.value.trim() !== idempotencyKey.value) {
+    throw invalidJob(index, 'idempotencyKey must not contain surrounding whitespace');
+  }
+  if (requestHash.value && !/^[a-f0-9]{64}$/u.test(requestHash.value)) {
+    throw invalidJob(index, 'requestHash must be a lowercase SHA-256 digest');
+  }
 
   const parentJobId = readOptionalText(
     value,
@@ -456,6 +548,8 @@ function loadJob(
     prompt.migrated,
     conversationId.migrated,
     requesterId.migrated,
+    idempotencyKey.migrated,
+    requestHash.migrated,
     parentJobId.migrated,
     threadId.migrated,
     result.migrated,
@@ -478,6 +572,7 @@ function loadJob(
     conversationId: conversationId.value,
     requesterId: requesterId.value,
     ...(tenantId ? { tenantId } : {}),
+    ...(idempotencyKey.value ? { idempotencyKey: idempotencyKey.value, requestHash: requestHash.value } : {}),
     ...(parentJobId.value ? { parentJobId: parentJobId.value } : {}),
     ...(threadId.value ? { threadId: threadId.value } : {}),
     ...(result.value ? { result: result.value } : {}),
