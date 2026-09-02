@@ -1,0 +1,142 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: githubReleaseReceiptUrl
+    displayName: Immutable GitHub release receipt URL
+    type: string
+    default: ''
+  - name: rollback
+    displayName: Roll back to the previous active revision
+    type: boolean
+    default: false
+
+variables:
+  azureServiceConnection: teamsapp-azure-canary
+  azureSubscriptionId: 0e58c3cb-474d-4e70-978a-4939c586f867
+  azureResourceGroup: rg-teamsapp-canary
+  azureContainerApp: teamsapp-canary
+  azureContainerRegistry: teamsappcanary
+
+stages:
+  - stage: ValidateHandoff
+    displayName: Validate immutable GitHub handoff
+    jobs:
+      - job: ValidateReceipt
+        displayName: Download and validate the GitHub release receipt
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - checkout: self
+          - bash: |
+              set -euo pipefail
+              test -n "$GITHUB_RELEASE_RECEIPT_URL"
+              mkdir -p "$(Pipeline.Workspace)/github-handoff"
+              curl --fail --location --proto '=https' --output "$(Pipeline.Workspace)/github-handoff/azure-release-receipt.json" "$GITHUB_RELEASE_RECEIPT_URL"
+              node scripts/azure-release-input.mjs "$(Pipeline.Workspace)/github-handoff/azure-release-receipt.json"
+            displayName: Download and validate immutable GitHub receipt
+            env:
+              GITHUB_RELEASE_RECEIPT_URL: ${{ parameters.githubReleaseReceiptUrl }}
+          - task: PublishPipelineArtifact@1
+            displayName: Retain validated GitHub handoff for Azure deployment
+            inputs:
+              targetPath: $(Pipeline.Workspace)/github-handoff
+              artifact: validated-github-handoff
+
+  - stage: DeployCanary
+    displayName: Deploy immutable canary image
+    dependsOn: ValidateHandoff
+    condition: and(succeeded(), eq(${{ parameters.rollback }}, false))
+    jobs:
+      - deployment: DeployCanaryRevision
+        displayName: Deploy the validated GitHub image digest
+        environment: teamsapp-canary
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - download: current
+                  artifact: validated-github-handoff
+                - task: AzureCLI@2
+                  displayName: Import and deploy immutable image digest
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      set -euo pipefail
+                      test "$(az account show --query id --output tsv)" = "$AZURE_SUBSCRIPTION_ID"
+                      receipt="$(Pipeline.Workspace)/validated-github-handoff/azure-release-receipt.json"
+                      node scripts/azure-release-input.mjs "$receipt"
+                      readarray -t release < <(node --input-type=module -- "$receipt" <<'NODE'
+                      import fs from 'node:fs';
+                      const receipt = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+                      for (const key of ['commit', 'version', 'image', 'imageDigest', 'serverBundleSha256']) console.log(receipt[key]);
+                      NODE
+                      )
+                      commit="${release[0]}"
+                      version="${release[1]}"
+                      source_image="${release[2]}"
+                      source_digest="${release[3]}"
+                      server_digest="${release[4]}"
+                      image_tag="${commit:0:12}"
+                      test -n "$GHCR_IMPORT_USERNAME"
+                      test -n "$GHCR_IMPORT_TOKEN"
+                      az acr import --name "$AZURE_CONTAINER_REGISTRY" --source "${source_image}@${source_digest}" --image "teamsapp:${image_tag}" --username "$GHCR_IMPORT_USERNAME" --password "$GHCR_IMPORT_TOKEN" --force
+                      registry_server="$(az acr show --name "$AZURE_CONTAINER_REGISTRY" --query loginServer --output tsv)"
+                      imported_digest="$(az acr repository show --name "$AZURE_CONTAINER_REGISTRY" --image "teamsapp:${image_tag}" --query digest --output tsv)"
+                      test "$imported_digest" = "$source_digest"
+                      az containerapp update --resource-group "$AZURE_RESOURCE_GROUP" --name "$AZURE_CONTAINER_APP" --image "${registry_server}/teamsapp@${imported_digest}" --revision-suffix "${commit:0:10}" --output none
+                      revision="$(az containerapp revision list --resource-group "$AZURE_RESOURCE_GROUP" --name "$AZURE_CONTAINER_APP" --query "sort_by([?properties.active], &properties.createdTime)[-1].name" --output tsv)"
+                      test -n "$revision"
+                      running_state="$(az containerapp revision show --resource-group "$AZURE_RESOURCE_GROUP" --name "$AZURE_CONTAINER_APP" --revision "$revision" --query properties.runningState --output tsv)"
+                      test "$running_state" = 'Running'
+                      fqdn="$(az containerapp show --resource-group "$AZURE_RESOURCE_GROUP" --name "$AZURE_CONTAINER_APP" --query properties.configuration.ingress.fqdn --output tsv)"
+                      curl --fail --retry 6 --retry-all-errors --output health.json "https://${fqdn}/api/health"
+                      EXPECTED_COMMIT="$commit" EXPECTED_VERSION="$version" EXPECTED_SERVER_DIGEST="$server_digest" node --input-type=module <<'NODE'
+                      import fs from 'node:fs';
+                      const health = JSON.parse(fs.readFileSync('health.json', 'utf8'));
+                      if (health.ok !== true || health.sourceCommit !== process.env.EXPECTED_COMMIT || health.version !== process.env.EXPECTED_VERSION || health.serverBundleSha256 !== process.env.EXPECTED_SERVER_DIGEST) {
+                        throw new Error('public health identity does not match the immutable GitHub release receipt');
+                      }
+                      NODE
+                  env:
+                    AZURE_RESOURCE_GROUP: $(azureResourceGroup)
+                    AZURE_CONTAINER_APP: $(azureContainerApp)
+                    AZURE_CONTAINER_REGISTRY: $(azureContainerRegistry)
+                    AZURE_SUBSCRIPTION_ID: $(azureSubscriptionId)
+                    GHCR_IMPORT_USERNAME: $(ghcrImportUsername)
+                    GHCR_IMPORT_TOKEN: $(ghcrImportToken)
+
+  - stage: RollbackCanary
+    displayName: Roll back to the previous active revision
+    dependsOn: ValidateHandoff
+    condition: and(succeeded(), eq(${{ parameters.rollback }}, true))
+    jobs:
+      - deployment: RollbackCanaryRevision
+        displayName: Activate the previous immutable canary revision
+        environment: teamsapp-canary
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureCLI@2
+                  displayName: Restore the previous active revision
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      set -euo pipefail
+                      test "$(az account show --query id --output tsv)" = "$AZURE_SUBSCRIPTION_ID"
+                      readarray -t successful_revisions < <(az containerapp revision list --resource-group "$AZURE_RESOURCE_GROUP" --name "$AZURE_CONTAINER_APP" --query "sort_by([?properties.provisioningState == 'Succeeded'], &properties.createdTime)[].name" --output tsv)
+                      test "${#successful_revisions[@]}" -ge 2
+                      current_revision="${successful_revisions[-1]}"
+                      previous_revision="${successful_revisions[-2]}"
+                      az containerapp revision activate --resource-group "$AZURE_RESOURCE_GROUP" --name "$AZURE_CONTAINER_APP" --revision "$previous_revision" --output none
+                      az containerapp revision deactivate --resource-group "$AZURE_RESOURCE_GROUP" --name "$AZURE_CONTAINER_APP" --revision "$current_revision" --output none
+                  env:
+                    AZURE_RESOURCE_GROUP: $(azureResourceGroup)
+                    AZURE_CONTAINER_APP: $(azureContainerApp)
+                    AZURE_SUBSCRIPTION_ID: $(azureSubscriptionId)

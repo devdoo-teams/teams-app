@@ -30,6 +30,8 @@
     "test:package-determinism": "node scripts/package-app-determinism-test.mjs",
     "test:package-output-determinism": "node scripts/package-app-output-determinism-test.mjs",
     "test:package-atomic": "node scripts/package-app-atomic-test.mjs",
+    "test:azure-platform-contract": "node scripts/azure-platform-contract-test.mjs",
+    "test:azure-release-input": "node scripts/azure-release-input-test.mjs",
     "test:agent-execution-readiness": "tsx scripts/agent-execution-readiness-test.ts",
     "test:release-timeout": "node scripts/release-gate-timeout-test.mjs",
     "test:core-boundary": "node scripts/core-optional-boundary-test.mjs",
