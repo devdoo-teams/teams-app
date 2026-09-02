@@ -14,5 +14,6 @@ resource workerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-0
 
 output appIdentityResourceId string = appIdentity.id
 output appIdentityPrincipalId string = appIdentity.properties.principalId
+output appIdentityClientId string = appIdentity.properties.clientId
 output workerIdentityResourceId string = workerIdentity.id
 output workerIdentityPrincipalId string = workerIdentity.properties.principalId

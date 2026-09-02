@@ -200,43 +200,21 @@ jobs:
           NODE
 
       - name: Attest image provenance
-        if: github.event.repository.visibility == 'public'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
-      - name: Record provenance policy for private repository
-        if: github.event.repository.visibility != 'public'
-        run: |
-          set -euo pipefail
-          node --input-type=module <<'NODE'
-          import fs from 'node:fs';
-          const identityPath = 'dist/evidence/release-identity.json';
-          const identity = JSON.parse(fs.readFileSync(identityPath, 'utf8'));
-          identity.provenance = {
-            method: 'github-artifact-attestation',
-            state: 'unavailable',
-            reason: 'private-repository-plan',
-          };
-          fs.writeFileSync(identityPath, `${JSON.stringify(identity, null, 2)}\n`);
-          NODE
+      - name: Attest the Azure release receipt
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/evidence/azure-release-receipt.json
 
-      - name: Record provenance policy for public repository
-        if: github.event.repository.visibility == 'public'
-        run: |
-          set -euo pipefail
-          node --input-type=module <<'NODE'
-          import fs from 'node:fs';
-          const identityPath = 'dist/evidence/release-identity.json';
-          const identity = JSON.parse(fs.readFileSync(identityPath, 'utf8'));
-          identity.provenance = {
-            method: 'github-artifact-attestation',
-            state: 'attested',
-          };
-          fs.writeFileSync(identityPath, `${JSON.stringify(identity, null, 2)}\n`);
-          NODE
+      - name: Attest the Teams package bound by the receipt
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: appPackage/build/teams-sdk-mvp.zip
 
       - name: Upload immutable release identity
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

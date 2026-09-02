@@ -4,7 +4,15 @@ param managedEnvironmentId string
 param containerImage string
 param registryServer string
 param appIdentityResourceId string
+param appIdentityClientId string
 param keyVaultUri string
+param revisionSuffix string
+param releaseSourceCommit string
+param releaseVersion string
+param releaseImageDigest string
+param releaseTeamsPackageSha256 string
+param releaseClientBundleSha256 string
+param releaseServerBundleSha256 string
 
 resource app 'Microsoft.App/containerApps@2024-03-01' = {
   name: appName
@@ -23,6 +31,12 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
         external: true
         targetPort: 3978
         transport: 'auto'
+        traffic: [
+          {
+            latestRevision: true
+            weight: 100
+          }
+        ]
       }
       registries: [
         {
@@ -49,6 +63,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
       ]
     }
     template: {
+      revisionSuffix: revisionSuffix
       containers: [
         {
           name: 'teams-core'
@@ -58,6 +73,10 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             memory: '1Gi'
           }
           env: [
+            {
+              name: 'AZURE_CLIENT_ID'
+              value: appIdentityClientId
+            }
             {
               name: 'AZURE_COSMOS_ENDPOINT'
               secretRef: 'azure-cosmos-endpoint'
@@ -69,6 +88,30 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'AZURE_STORAGE_FILE_ENDPOINT'
               secretRef: 'azure-storage-file-endpoint'
+            }
+            {
+              name: 'RELEASE_SOURCE_COMMIT'
+              value: releaseSourceCommit
+            }
+            {
+              name: 'RELEASE_APP_VERSION'
+              value: releaseVersion
+            }
+            {
+              name: 'RELEASE_IMAGE_DIGEST'
+              value: releaseImageDigest
+            }
+            {
+              name: 'RELEASE_TEAMS_PACKAGE_SHA256'
+              value: releaseTeamsPackageSha256
+            }
+            {
+              name: 'RELEASE_CLIENT_BUNDLE_SHA256'
+              value: releaseClientBundleSha256
+            }
+            {
+              name: 'RELEASE_SERVER_BUNDLE_SHA256'
+              value: releaseServerBundleSha256
             }
           ]
         }
@@ -94,3 +137,4 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
 output appName string = app.name
 output fqdn string = app.properties.configuration.ingress.fqdn
 output resourceId string = app.id
+output revisionName string = app.properties.latestRevisionName

@@ -17,6 +17,37 @@ param workerAdminSshPublicKey string
 @description('Creates the account with the Cosmos DB free tier when the subscription remains eligible.')
 param enableCosmosFreeTier bool = true
 
+@description('Foundation-only deployments provision shared resources and expose their exact outputs before the image import.')
+param deployContainerApp bool = true
+
+@description('Full source commit from the attested GitHub release receipt.')
+@minLength(40)
+@maxLength(40)
+param releaseSourceCommit string
+
+@description('Application version from the attested GitHub release receipt.')
+param releaseVersion string
+
+@description('Immutable OCI digest from the attested GitHub release receipt.')
+@minLength(71)
+@maxLength(71)
+param releaseImageDigest string
+
+@description('Teams package SHA-256 from the attested GitHub release receipt.')
+@minLength(64)
+@maxLength(64)
+param releaseTeamsPackageSha256 string
+
+@description('Client bundle SHA-256 from the attested GitHub release receipt.')
+@minLength(64)
+@maxLength(64)
+param releaseClientBundleSha256 string
+
+@description('Server bundle SHA-256 from the attested GitHub release receipt.')
+@minLength(64)
+@maxLength(64)
+param releaseServerBundleSha256 string
+
 var uniqueSuffix = toLower(take(uniqueString(resourceGroup().id, workloadName), 8))
 var compactPrefix = toLower(replace(workloadName, '-', ''))
 var acrName = take('${compactPrefix}${uniqueSuffix}', 50)
@@ -97,7 +128,7 @@ module containerEnvironment './modules/container-environment.bicep' = {
   }
 }
 
-module containerApp './modules/container-app.bicep' = {
+module containerApp './modules/container-app.bicep' = if (deployContainerApp) {
   name: 'containerApp'
   params: {
     location: location
@@ -106,7 +137,15 @@ module containerApp './modules/container-app.bicep' = {
     containerImage: containerImage
     registryServer: registry.outputs.loginServer
     appIdentityResourceId: identities.outputs.appIdentityResourceId
+    appIdentityClientId: identities.outputs.appIdentityClientId
     keyVaultUri: keyVault.outputs.vaultUri
+    revisionSuffix: take(releaseSourceCommit, 10)
+    releaseSourceCommit: releaseSourceCommit
+    releaseVersion: releaseVersion
+    releaseImageDigest: releaseImageDigest
+    releaseTeamsPackageSha256: releaseTeamsPackageSha256
+    releaseClientBundleSha256: releaseClientBundleSha256
+    releaseServerBundleSha256: releaseServerBundleSha256
   }
 }
 
@@ -120,7 +159,12 @@ module workerVm './modules/worker-vm.bicep' = {
   }
 }
 
-output containerAppName string = containerApp.outputs.appName
-output containerAppFqdn string = containerApp.outputs.fqdn
-output containerAppResourceId string = containerApp.outputs.resourceId
+output registryName string = acrName
+output registryLoginServer string = registry.outputs.loginServer
+output containerEnvironmentName string = environmentName
+output appIdentityClientId string = identities.outputs.appIdentityClientId
+output containerAppName string = appName
+output containerAppFqdn string = deployContainerApp ? containerApp!.outputs.fqdn : ''
+output containerAppRevisionName string = deployContainerApp ? containerApp!.outputs.revisionName : ''
+output containerAppResourceId string = resourceId('Microsoft.App/containerApps', appName)
 output workerVmResourceId string = workerVm.outputs.resourceId

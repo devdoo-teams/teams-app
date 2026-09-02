@@ -14,6 +14,7 @@ resource account 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
     databaseAccountOfferType: 'Standard'
     enableFreeTier: enableFreeTier
     disableKeyBasedMetadataWriteAccess: true
+    disableLocalAuth: true
     publicNetworkAccess: 'Enabled'
     consistencyPolicy: {
       defaultConsistencyLevel: 'Session'

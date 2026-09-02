@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const allowedKeys = new Set([
   'schemaVersion',
@@ -52,6 +53,13 @@ export function validateAzureReleaseInput(value) {
   return Object.freeze({ ...value });
 }
 
+export function readAzureReleaseInput(receiptPath) {
+  const resolvedPath = path.resolve(receiptPath);
+  const stat = fs.statSync(resolvedPath);
+  if (!stat.isFile() || stat.size === 0 || stat.size > 64 * 1024) fail('receipt must be a non-empty JSON file no larger than 64 KiB');
+  return validateAzureReleaseInput(JSON.parse(fs.readFileSync(resolvedPath, 'utf8')));
+}
+
 function parseArguments(argv) {
   const args = [...argv];
   const json = args[0] === '--json';
@@ -62,9 +70,7 @@ function parseArguments(argv) {
 
 function main() {
   const { json, receiptPath } = parseArguments(process.argv.slice(2));
-  const stat = fs.statSync(receiptPath);
-  if (!stat.isFile() || stat.size === 0 || stat.size > 64 * 1024) fail('receipt must be a non-empty JSON file no larger than 64 KiB');
-  const receipt = validateAzureReleaseInput(JSON.parse(fs.readFileSync(receiptPath, 'utf8')));
+  const receipt = readAzureReleaseInput(receiptPath);
   if (json) {
     process.stdout.write(`${JSON.stringify(receipt)}\n`);
   } else {
@@ -72,9 +78,11 @@ function main() {
   }
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+  try {
+    main();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
 }

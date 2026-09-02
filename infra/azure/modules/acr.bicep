@@ -16,15 +16,9 @@ resource registry 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' = 
     dataEndpointEnabled: false
     networkRuleBypassOptions: 'AzureServices'
     publicNetworkAccess: 'Enabled'
-    policies: {
-      quarantinePolicy: {
-        status: 'enabled'
-      }
-      retentionPolicy: {
-        days: 7
-        status: 'enabled'
-      }
-    }
+    // Basic has no untagged-manifest retention policy. Quarantine is also
+    // intentionally omitted because this free-first flow has no supported
+    // scanner-to-release transition and must not make imported images unpullable.
   }
 }
 
