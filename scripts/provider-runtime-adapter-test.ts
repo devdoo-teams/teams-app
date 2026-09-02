@@ -214,6 +214,10 @@ assert.equal(credentialUrlText.result?.includes('raw-secret'), false);
 for (const credentialBearingUri of [
   'ftp://user:password@files.example.test/result',
   'ssh://user@files.example.test/result',
+  'prefix_ftp://user:password@files.example.test/result',
+  'provider+task://runtime.example.test/callback?%2574oken=query-secret',
+  'provider+task://runtime.example.test/callback#%2563ode=fragment-secret',
+  'provider+task://runtime.example.test/callback?%252525252574oken=deep-query-secret',
   ...[
     'OAuth',
     'code',
@@ -242,7 +246,9 @@ for (const credentialBearingUri of [
   }, { phase: 'get', receipt: acceptedReceipt });
   assert.equal(
     sanitizedUri.result,
-    'Before [REDACTED_URL] after',
+    credentialBearingUri.startsWith('prefix_')
+      ? 'Before prefix_[REDACTED_URL] after'
+      : 'Before [REDACTED_URL] after',
     `credential-bearing URI must be redacted regardless of scheme: ${credentialBearingUri}`,
   );
 }

@@ -331,7 +331,7 @@ function redactCredentialFragments(value: string): string {
 }
 
 function redactCredentialUrls(value: string): string {
-  return value.replace(/\b[A-Za-z][A-Za-z0-9+.-]*:[^\s<>"']+/gu, (candidate) => {
+  return value.replace(/[A-Za-z][A-Za-z0-9+.-]*:[^\s<>"']+/gu, (candidate) => {
     try {
       const parsed = new URL(candidate);
       const sensitiveQuery = hasSensitiveUriParameters(parsed.search);
@@ -349,10 +349,14 @@ function hasSensitiveUriParameters(value: string): boolean {
   const parameters = value.replace(/^[?#]/u, '');
   if ([...new URLSearchParams(parameters).keys()].some(isSensitiveUriParameterName)) return true;
   let decoded = parameters;
-  try {
-    decoded = decodeURIComponent(parameters);
-  } catch {
-    // Invalid escapes remain inspectable in their original representation.
+  for (let attempt = 0; attempt <= parameters.length; attempt += 1) {
+    try {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) break;
+      decoded = next;
+    } catch {
+      break;
+    }
   }
   return decoded.split(/[?&#;/]/u).some(isSensitiveUriParameterName);
 }

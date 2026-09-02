@@ -993,6 +993,42 @@ async function testAcceptedCallbackFailureIsBoundedAndReleasesOwnedLease(): Prom
   assert.equal(hangingRecovered.result, 'hanging callback recovered');
   assert.equal(hangingPolls, 1);
 
+  const lateStore = new MemoryLifecycleStore();
+  const effects: string[] = [];
+  let callbackAttempts = 0;
+  const lateRunner = createRunner(lateStore, {
+    get: async () => ({ rawState: 'DONE', result: 'late callback recovered' }),
+  });
+  await assert.rejects(
+    () => within(lateRunner.run({
+      ...input('accepted-callback-late-settlement'),
+      timeoutMs: 20,
+      onAccepted: async (_receipt, signal) => {
+        callbackAttempts += 1;
+        const attempt = callbackAttempts;
+        if (!signal) {
+          effects.push(`missing-signal:${attempt}`);
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, attempt === 1 ? 60 : 1));
+        if (!signal.aborted) effects.push(`attempt:${attempt}`);
+      },
+    }), 200),
+    /deadline/i,
+  );
+  const lateRecovered = await within(lateRunner.run({
+    ...input('accepted-callback-late-settlement'),
+    timeoutMs: 100,
+    onAccepted: async (_receipt, signal) => {
+      callbackAttempts += 1;
+      assert.ok(signal, 'accepted callback must receive its cancellation signal');
+      if (!signal.aborted) effects.push(`attempt:${callbackAttempts}`);
+    },
+  }), 300);
+  await new Promise((resolve) => setTimeout(resolve, 70));
+  assert.equal(lateRecovered.state, 'completed');
+  assert.deepEqual(effects, ['attempt:2'], 'an aborted callback generation must not apply a late side effect');
+
   const replacedLeaseStore = new MemoryLifecycleStore();
   const replacedLeaseRunner = createRunner(replacedLeaseStore);
   await assert.rejects(
@@ -1148,6 +1184,81 @@ async function testFileStoreRequiresValidPersistedReceiptExecutionId(): Promise<
         /receipt execution id/i,
       );
     }
+    const { receipt: _removedReceipt, ...acceptedWithoutReceipt } = acceptedRecord;
+    await atomicWriteJson(filePath, {
+      ...persisted,
+      records: {
+        ...persisted.records,
+        [recordKey]: acceptedWithoutReceipt,
+      },
+    });
+    await assert.rejects(
+      () => new FileProviderLifecycleStore(filePath).initialize(),
+      /accepted receipt/i,
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}
+
+async function testFileStoreRejectsInvalidPersistedLifecycleState(): Promise<void> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'provider-lifecycle-store-state-'));
+  const filePath = path.join(root, 'private', 'lifecycle.json');
+  try {
+    const store = new FileProviderLifecycleStore(filePath);
+    await store.initialize();
+    const { timeoutMs: _timeoutMs, ...intent } = input('file-state-validation');
+    const created = await store.createOrGetSubmitting(intent);
+    const persisted = JSON.parse(await fs.readFile(filePath, 'utf8')) as {
+      records: Record<string, ProviderLifecycleRecord>;
+    };
+    const recordKey = Object.keys(persisted.records)[0];
+    assert.ok(recordKey);
+    await atomicWriteJson(filePath, {
+      ...persisted,
+      records: {
+        ...persisted.records,
+        [recordKey]: { ...created.record, state: 'completed ' },
+      },
+    });
+    await assert.rejects(
+      () => new FileProviderLifecycleStore(filePath).initialize(),
+      /lifecycle state/i,
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}
+
+async function testFileStoreRejectsSecretsNestedBelowSensitivePayloadKeys(): Promise<void> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'provider-lifecycle-store-nested-secret-'));
+  const filePath = path.join(root, 'private', 'lifecycle.json');
+  try {
+    const store = new FileProviderLifecycleStore(filePath);
+    await store.initialize();
+    const { timeoutMs: _timeoutMs, ...intent } = input('file-nested-secret');
+    const created = await store.createOrGetSubmitting(intent);
+    const persisted = JSON.parse(await fs.readFile(filePath, 'utf8')) as {
+      records: Record<string, ProviderLifecycleRecord>;
+    };
+    const recordKey = Object.keys(persisted.records)[0];
+    assert.ok(recordKey);
+    for (const payload of [
+      { password: { value: 'plain-credential-value' } },
+      { accessToken: [{ nested: 'plain-credential-value' }] },
+    ]) {
+      await atomicWriteJson(filePath, {
+        ...persisted,
+        records: {
+          ...persisted.records,
+          [recordKey]: { ...created.record, payload },
+        },
+      });
+      await assert.rejects(
+        () => new FileProviderLifecycleStore(filePath).initialize(),
+        /raw credential value/i,
+      );
+    }
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
@@ -1288,6 +1399,11 @@ async function testFileStoreSerializesWritersRollsBackAndScansRecovery(): Promis
     const completed = await reopened.update({
       ...secondCreated.record,
       state: 'completed',
+      receipt: {
+        providerExecutionId: 'provider-file-completed',
+        acceptedAt: '2026-09-03T00:00:00.000Z',
+        rawState: 'DONE',
+      },
       result: 'complete',
       terminalAt: '2026-09-03T00:00:01.000Z',
     }, secondCreated.record.revision);
@@ -1304,6 +1420,8 @@ async function testFileStoreSerializesWritersRollsBackAndScansRecovery(): Promis
     assert.ok(poisonedRecord);
     for (const unsafePatch of [
       { rawProviderState: 'provider+task://runtime.example.test/state?code=raw-secret' },
+      { rawProviderState: 'prefix_ftp://user:password@runtime.example.test/state' },
+      { rawProviderState: 'provider+task://runtime.example.test/state?%2574oken=raw-secret' },
       {
         receipt: poisonedRecord.receipt && {
           ...poisonedRecord.receipt,
@@ -1376,6 +1494,8 @@ await testAcceptedCallbackFailureIsBoundedAndReleasesOwnedLease();
 await testExplicitRecoveryAndCancellationUseDurableReceipt();
 await testFileStoreSurvivesRestartWithoutIdentityCollapse();
 await testFileStoreRequiresValidPersistedReceiptExecutionId();
+await testFileStoreRejectsInvalidPersistedLifecycleState();
+await testFileStoreRejectsSecretsNestedBelowSensitivePayloadKeys();
 await testFileStoreRejectsCompletedRecordWithoutEvidenceOnReopen();
 await testFileStorePreservesNewlineExactContentAddressedArtifactText();
 await testFileStoreSerializesWritersRollsBackAndScansRecovery();

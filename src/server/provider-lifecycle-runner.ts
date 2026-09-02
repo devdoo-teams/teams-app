@@ -76,7 +76,7 @@ export type ProviderLifecycleStore = Readonly<{
 export type ProviderLifecycleRunInput = ProviderLifecycleSubmittingIntent & Readonly<{
   timeoutMs: number;
   signal?: AbortSignal;
-  onAccepted?: (receipt: ProviderAcceptedReceipt) => Promise<void> | void;
+  onAccepted?: (receipt: ProviderAcceptedReceipt, signal: AbortSignal) => Promise<void> | void;
 }>;
 
 export type ProviderLifecycleRecoveryInput = Readonly<{
@@ -428,7 +428,7 @@ export class ProviderLifecycleRunner {
     operation: ProviderRuntimeOperationInput,
     controller: AbortController,
     leaseOwnerId: string,
-    onAccepted?: (receipt: ProviderAcceptedReceipt) => Promise<void> | void,
+    onAccepted?: (receipt: ProviderAcceptedReceipt, signal: AbortSignal) => Promise<void> | void,
   ): Promise<ProviderLifecycleRecord> {
     if (isProviderLifecycleTerminal(record.state)) return record;
     if (record.cancelRequestedAt || record.state === 'canceling') {
@@ -489,7 +489,7 @@ export class ProviderLifecycleRunner {
     record: ProviderLifecycleRecord,
     operation: ProviderRuntimeOperationInput,
     controller: AbortController,
-    onAccepted?: (receipt: ProviderAcceptedReceipt) => Promise<void> | void,
+    onAccepted?: (receipt: ProviderAcceptedReceipt, signal: AbortSignal) => Promise<void> | void,
   ): Promise<ProviderLifecycleRecord> {
     if (!this.options.adapter.reconcile) {
       return record.state === 'quarantined'
@@ -522,7 +522,7 @@ export class ProviderLifecycleRunner {
     record: ProviderLifecycleRecord,
     observation: ProviderRuntimeObservation,
     phase: ProviderRuntimeObservationPhase,
-    onAccepted?: (receipt: ProviderAcceptedReceipt) => Promise<void> | void,
+    onAccepted?: (receipt: ProviderAcceptedReceipt, signal: AbortSignal) => Promise<void> | void,
     acceptedCallbackSignal?: AbortSignal,
   ): Promise<ProviderLifecycleRecord> {
     let validated: ValidatedProviderRuntimeObservation;
@@ -687,14 +687,14 @@ export class ProviderLifecycleRunner {
 
   private async invokeAcceptedCallback(
     record: ProviderLifecycleRecord,
-    onAccepted: ((receipt: ProviderAcceptedReceipt) => Promise<void> | void) | undefined,
+    onAccepted: ((receipt: ProviderAcceptedReceipt, signal: AbortSignal) => Promise<void> | void) | undefined,
     signal: AbortSignal | undefined,
   ): Promise<void> {
     if (!onAccepted) return;
     if (!signal) throw new Error('Provider accepted callback requires a lifecycle signal.');
     try {
       await raceAgainstSignal(
-        () => Promise.resolve(onAccepted(requiredReceipt(record))),
+        () => Promise.resolve(onAccepted(requiredReceipt(record), signal)),
         signal,
       );
     } catch (error) {
@@ -899,12 +899,18 @@ function isRecoverableRecord(record: ProviderLifecycleRecord): boolean {
 }
 
 function assertSafeStoredRecord(record: ProviderLifecycleRecord): void {
+  if (!PROVIDER_LIFECYCLE_STATES.has(record.state)) {
+    throw new Error('Provider lifecycle store contains an invalid lifecycle state.');
+  }
   if (!isOpaqueProviderCredentialReference(record.identities?.credential?.reference)) {
     throw new Error('Provider lifecycle store contains a non-opaque credential reference.');
   }
   assertNoRawCredentialPayload(record.payload);
   assertSafeStoredText(record.rawProviderState, 200, 'raw provider state');
   const storedReceipt = record.receipt as ProviderAcceptedReceipt | null | undefined;
+  if (requiresAcceptedReceipt(record) && storedReceipt === undefined) {
+    throw new Error('Provider lifecycle store record requires an accepted receipt.');
+  }
   if (storedReceipt !== undefined) {
     if (!storedReceipt || typeof storedReceipt.providerExecutionId !== 'string'
       || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(storedReceipt.providerExecutionId)) {
@@ -999,15 +1005,25 @@ function assertNoRawCredentialPayload(value: unknown): void {
     if (seen.has(candidate)) throw new Error('Provider lifecycle payload must not contain cycles.');
     seen.add(candidate);
     if (Array.isArray(candidate)) {
-      for (const entry of candidate) inspect(entry, false, depth + 1);
+      for (const entry of candidate) inspect(entry, sensitiveKey, depth + 1);
     } else {
       for (const [key, entry] of Object.entries(candidate)) {
-        inspect(entry, /api.?key|authorization|credential|password|secret|token/iu.test(key), depth + 1);
+        inspect(entry, sensitiveKey || /api.?key|authorization|credential|password|secret|token/iu.test(key), depth + 1);
       }
     }
     seen.delete(candidate);
   };
   inspect(value);
+}
+
+const PROVIDER_LIFECYCLE_STATES = new Set<ProviderLifecycleState>([
+  'accepted', 'working', 'input-required', 'auth-required', 'completed',
+  'failed', 'canceled', 'rejected', 'submitting', 'canceling', 'quarantined',
+]);
+
+function requiresAcceptedReceipt(record: ProviderLifecycleRecord): boolean {
+  return record.state !== 'submitting'
+    && !(record.state === 'quarantined' && record.quarantine?.reason === 'delivery-unknown');
 }
 
 function isSafeStoredArtifactUri(value: string): boolean {
