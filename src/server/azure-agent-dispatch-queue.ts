@@ -189,7 +189,10 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
     const nowMs = this.clock.now().getTime();
     const leaseExpired = !record.leaseExpiresAt || Date.parse(record.leaseExpiresAt) <= nowMs;
     const sameMessageRedelivery = record.leaseMessageId === message.messageId && message.dequeueCount > record.dequeueCount;
-    if (record.leaseOwner && !leaseExpired && !sameMessageRedelivery) return undefined;
+    if (record.leaseOwner && !leaseExpired && !sameMessageRedelivery) {
+      await this.client.deleteMessage(message.messageId, message.popReceipt);
+      return undefined;
+    }
 
     const leaseOwner = crypto.randomUUID();
     const leaseGeneration = record.leaseGeneration + 1;
@@ -210,7 +213,10 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
         updatedAt: this.now(),
       };
     });
-    if (!claimed) return undefined;
+    if (!claimed) {
+      await this.client.deleteMessage(message.messageId, message.popReceipt);
+      return undefined;
+    }
     return { task, messageId: message.messageId, popReceipt: message.popReceipt, dequeueCount: message.dequeueCount, leaseOwner, leaseGeneration };
   }
 

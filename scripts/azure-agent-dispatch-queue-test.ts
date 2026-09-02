@@ -102,6 +102,7 @@ async function testDurableLeaseGenerationRejectsDuplicateAndStaleCompletion(): P
     undefined,
     'a second queue message must not acquire an active task lease',
   );
+  assert.equal(fixture.client.messageCount, 1, 'an active duplicate message must be deleted instead of poisoning the live lease');
 
   fixture.client.expire(first!.messageId);
   const recovered = await fixture.queue.lease({ visibilityTimeoutSeconds: 1 });
@@ -206,6 +207,7 @@ class MemoryQueueClient implements AzureQueueClientPort {
   readonly sent: string[] = [];
   readonly poison: string[] = [];
   private readonly messages: Array<{ id: string; text: string; receipt: string; count: number; visible: boolean }> = [];
+  get messageCount(): number { return this.messages.length; }
   async sendMessage(text: string) {
     const item = { id: `message-${this.messages.length + 1}`, text, receipt: 'send', count: 0, visible: true };
     this.messages.push(item);
