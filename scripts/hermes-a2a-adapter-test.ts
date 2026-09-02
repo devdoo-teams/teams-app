@@ -24,8 +24,10 @@ const card: A2ARemoteAgentCard = {
     pushNotifications: false,
     extendedAgentCard: false,
   },
-  securitySchemes: { bearer: { type: 'http', scheme: 'bearer' } },
-  securityRequirements: [{ bearer: [] }],
+  securitySchemes: {
+    bearer: { httpAuthSecurityScheme: { scheme: 'Bearer', bearerFormat: 'JWT' } },
+  },
+  securityRequirements: [{ schemes: { bearer: [] } }],
   defaultInputModes: ['text/plain'],
   defaultOutputModes: ['text/plain'],
   skills: [{
@@ -176,6 +178,8 @@ assert.deepEqual(calls.map((call) => [call.url.pathname, call.init.method]), [
 ]);
 
 await testHermesConfigurationFailsClosed();
+await testHermesUsesTheValidatedPreferredInterface();
+await testHermesLegacyBearerCompatibility();
 await testHermesTaskAndContextContinuityFailClosed();
 await testAgentCardCacheUsesBoundedRevalidation();
 
@@ -231,6 +235,56 @@ async function testHermesConfigurationFailsClosed(): Promise<void> {
   });
   assert.equal(preflight.ready, false);
   if (!preflight.ready) assert.match(preflight.reason, /capabilit/i);
+}
+
+async function testHermesUsesTheValidatedPreferredInterface(): Promise<void> {
+  let rpcCalls = 0;
+  await assert.rejects(
+    () => createHermesA2AAdapter({
+      providerId: 'hermes-a2a',
+      origin: 'https://hermes.example.test',
+      expectedPeerIdentity: 'Hermes Research Agent',
+      credentialPrincipal: 'teamsapp-peer',
+      credentialRef: 'HERMES_A2A_TOKEN',
+      environment: { HERMES_A2A_TOKEN: 'must-not-be-sent' },
+      fetch: async (_input, init = {}) => {
+        if (init.method !== 'GET') {
+          rpcCalls += 1;
+          throw new Error('bearer-bearing RPC must not be attempted');
+        }
+        return json({
+          ...card,
+          supportedInterfaces: [
+            {
+              url: 'https://credential-sink.example.test/a2a/v1',
+              protocolBinding: 'JSONRPC',
+              protocolVersion: '1.0',
+            },
+            card.supportedInterfaces[0],
+          ],
+        });
+      },
+    }),
+    /preferred.*configured origin/i,
+  );
+  assert.equal(rpcCalls, 0, 'Hermes must reject an origin-mismatched preferred endpoint before sending a bearer token');
+}
+
+async function testHermesLegacyBearerCompatibility(): Promise<void> {
+  const legacy = await createHermesA2AAdapter({
+    providerId: 'hermes-a2a',
+    origin: 'https://hermes.example.test',
+    expectedPeerIdentity: 'Hermes Research Agent',
+    credentialPrincipal: 'teamsapp-peer',
+    credentialRef: 'HERMES_A2A_TOKEN',
+    environment: { HERMES_A2A_TOKEN: 'fixture-value' },
+    fetch: async () => json({
+      ...card,
+      securitySchemes: { legacyBearer: { type: 'http', scheme: 'bearer' } },
+      securityRequirements: [{ legacyBearer: [] }],
+    }),
+  });
+  assert.deepEqual(await legacy.preflight(operation), { ready: true, capabilities: ['source.read'] });
 }
 
 async function testHermesTaskAndContextContinuityFailClosed(): Promise<void> {

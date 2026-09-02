@@ -27,8 +27,10 @@ const card: A2ARemoteAgentCard = {
     protocolVersion: '1.0',
   }],
   capabilities: { streaming: false, pushNotifications: false, extendedAgentCard: false },
-  securitySchemes: { bearer: { type: 'http', scheme: 'bearer' } },
-  securityRequirements: [{ bearer: [] }],
+  securitySchemes: {
+    bearer: { httpAuthSecurityScheme: { scheme: 'Bearer', bearerFormat: 'JWT' } },
+  },
+  securityRequirements: [{ schemes: { bearer: [] } }],
   defaultInputModes: ['text/plain'],
   defaultOutputModes: ['text/plain'],
   skills: [{ id: 'source.read', name: 'Read', description: 'Read sources.', tags: ['review.report'] }],
@@ -158,18 +160,20 @@ try {
   assert.deepEqual(replay, completed);
   assert.equal(sends, 1, 'same key and hash must reconcile without a second SendMessage');
 
-  await agent.cancelChild?.({
-    scope,
-    parentTaskId: 'parent-hermes-1',
-    childKey: 'review',
-    childIdempotencyKey: 'child-hermes-1',
-    agentId: 'hermes-reviewer',
-    providerId: 'hermes-a2a',
-    executionIdentity: 'hermes-review-execution',
-    executionBoundaryId: 'hermes-review-boundary',
-    agentJobId: 'hermes-task-production-1',
-    cancelRequestedAt: new Date().toISOString(),
-  });
+  await assert.rejects(() => agent.cancelChild!({
+      scope,
+      parentTaskId: 'parent-hermes-1',
+      childKey: 'review',
+      childIdempotencyKey: 'child-hermes-1',
+      agentId: 'hermes-reviewer',
+      providerId: 'hermes-a2a',
+      executionIdentity: 'hermes-review-execution',
+      executionBoundaryId: 'hermes-review-boundary',
+      agentJobId: 'hermes-task-production-1',
+      cancelRequestedAt: new Date().toISOString(),
+    }),
+    /cancellation.*terminal/i,
+  );
   assert.equal(cancels, 0, 'terminal replay must not issue a provider cancellation');
 
   let inputContext = '';
@@ -238,9 +242,12 @@ try {
     bindChild: async () => markInputAccepted(),
   });
   await inputAccepted;
+  await waitForStoredState(store, 'child-hermes-input-1', 'input-required');
   inputController.abort(new Error('fixture user cancellation'));
   assert.equal((await inputRun).status, 'canceled');
   assert.equal(inputCancels, 1, 'input-required remains nonterminal until explicit cancellation');
+
+  await testCancelChildRequiresCancellationTerminalState();
 
   console.log('hermes-a2a-production-agent-test: PASS');
 } finally {
@@ -253,4 +260,135 @@ function response(value: unknown): Response {
 
 function rpc(id: string, result: unknown): Response {
   return response({ jsonrpc: '2.0', id, result });
+}
+
+async function testCancelChildRequiresCancellationTerminalState(): Promise<void> {
+  const cancelStore = new FileProviderLifecycleStore(path.join(root, 'cancel-states', 'provider-lifecycle.json'));
+  await cancelStore.initialize();
+  const remoteStates = new Map<string, string>();
+  const cancelAgent = await createHermesA2AProductionAgent({
+    store: cancelStore,
+    agentId: 'hermes-cancel-agent',
+    providerId: 'hermes-cancel-provider',
+    origin: 'https://hermes-cancel.example.test',
+    expectedPeerIdentity: 'Hermes Cancel Agent',
+    credentialPrincipal: 'teamsapp-hermes-cancel-caller',
+    credentialRef: 'HERMES_CANCEL_TOKEN',
+    executionIdentity: 'hermes-cancel-execution',
+    executionBoundaryId: 'hermes-cancel-boundary',
+    roles: ['reviewer'],
+    capabilities: ['source.read'],
+    authorizationPolicy: createA2AAgentAuthorizationPolicy({ authorize: () => true }),
+    environment: { HERMES_CANCEL_TOKEN: 'fixture-cancel-token' },
+    requestTimeoutMs: 100,
+    cancellationTimeoutMs: 100,
+    fetch: async (_input, init = {}) => {
+      if (init.method === 'GET') return response({
+        ...card,
+        name: 'Hermes Cancel Agent',
+        supportedInterfaces: [{
+          url: 'https://hermes-cancel.example.test/',
+          protocolBinding: 'JSONRPC',
+          protocolVersion: '1.0',
+        }],
+      });
+      const request = JSON.parse(String(init.body)) as {
+        id: string;
+        method: string;
+        params: { id: string };
+      };
+      assert.equal(request.method, 'CancelTask');
+      const rawState = remoteStates.get(request.params.id);
+      assert.ok(rawState, `missing cancellation fixture state for ${request.params.id}`);
+      return rpc(request.id, {
+        id: request.params.id,
+        contextId: `context-${request.params.id}`,
+        status: { state: rawState },
+      });
+    },
+  });
+
+  for (const [label, rawState] of [
+    ['accepted', 'TASK_STATE_SUBMITTED'],
+    ['working', 'TASK_STATE_WORKING'],
+    ['input-required', 'TASK_STATE_INPUT_REQUIRED'],
+    ['auth-required', 'TASK_STATE_AUTH_REQUIRED'],
+  ] as const) {
+    const input = await seedCancellationRecord(cancelStore, label);
+    remoteStates.set(input.agentJobId, rawState);
+    await assert.rejects(
+      () => cancelAgent.cancelChild!(input),
+      /cancellation.*terminal/i,
+      `${label} cancellation response must fail closed`,
+    );
+    assert.equal((await cancelStore.get(scope, input.childIdempotencyKey))?.state, 'canceling');
+  }
+
+  for (const [label, rawState] of [
+    ['canceled', 'TASK_STATE_CANCELED'],
+    ['rejected', 'TASK_STATE_REJECTED'],
+    ['failed', 'TASK_STATE_FAILED'],
+  ] as const) {
+    const input = await seedCancellationRecord(cancelStore, label);
+    remoteStates.set(input.agentJobId, rawState);
+    await cancelAgent.cancelChild!(input);
+    assert.equal((await cancelStore.get(scope, input.childIdempotencyKey))?.state, label);
+  }
+}
+
+async function seedCancellationRecord(store: FileProviderLifecycleStore, label: string) {
+  const childIdempotencyKey = `child-cancel-${label}`;
+  const agentJobId = `task-cancel-${label}`;
+  const contextId = `context-${agentJobId}`;
+  const created = await store.createOrGetSubmitting({
+    scope,
+    idempotencyKey: childIdempotencyKey,
+    requestHash: 'c'.repeat(64),
+    payload: { prompt: 'Cancel this task.', messageId: childIdempotencyKey, contextId },
+    requestedCapabilities: ['source.read'],
+    identities: {
+      provider: { id: 'hermes-cancel-provider' },
+      credential: { principalId: 'teamsapp-hermes-cancel-caller', reference: 'env://HERMES_CANCEL_TOKEN' },
+      execution: { id: 'hermes-cancel-execution' },
+      context: { id: contextId },
+      runtime: { boundaryId: 'hermes-cancel-boundary' },
+      audit: { id: `audit-cancel-${label}` },
+    },
+  });
+  await store.update({
+    ...created.record,
+    state: 'accepted',
+    rawProviderState: 'TASK_STATE_SUBMITTED',
+    receipt: {
+      providerExecutionId: agentJobId,
+      providerContextId: contextId,
+      acceptedAt: new Date().toISOString(),
+      rawState: 'TASK_STATE_SUBMITTED',
+      reconciliationRef: childIdempotencyKey,
+    },
+  }, created.record.revision);
+  return {
+    scope,
+    parentTaskId: 'parent-cancel-states',
+    childKey: `cancel-${label}`,
+    childIdempotencyKey,
+    agentId: 'hermes-cancel-agent',
+    providerId: 'hermes-cancel-provider',
+    executionIdentity: 'hermes-cancel-execution',
+    executionBoundaryId: 'hermes-cancel-boundary',
+    agentJobId,
+    cancelRequestedAt: new Date().toISOString(),
+  };
+}
+
+async function waitForStoredState(
+  store: FileProviderLifecycleStore,
+  idempotencyKey: string,
+  expectedState: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if ((await store.get(scope, idempotencyKey))?.state === expectedState) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 1));
+  }
+  assert.fail(`provider lifecycle did not persist ${expectedState}`);
 }

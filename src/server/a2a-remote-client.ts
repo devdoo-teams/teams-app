@@ -12,8 +12,9 @@ export type A2ARemoteAgentCard = Readonly<{
   version: string;
   supportedInterfaces: readonly Readonly<{
     url: string;
-    protocolBinding: 'JSONRPC';
-    protocolVersion: '1.0';
+    protocolBinding: string;
+    protocolVersion: string;
+    tenant?: string;
   }>[];
   capabilities: Readonly<{
     streaming: boolean;
@@ -21,10 +22,21 @@ export type A2ARemoteAgentCard = Readonly<{
     extendedAgentCard: boolean;
   }>;
   securitySchemes: Record<string, unknown>;
-  securityRequirements: readonly Record<string, readonly string[]>[];
+  securityRequirements: readonly A2ARemoteSecurityRequirement[];
   defaultInputModes: readonly string[];
   defaultOutputModes: readonly string[];
   skills: readonly Record<string, unknown>[];
+}>;
+
+export type A2ARemoteSecurityRequirement =
+  | Readonly<{ schemes: Readonly<Record<string, readonly string[]>> }>
+  | Readonly<Record<string, readonly string[]>>;
+
+export type A2ARemoteJsonRpcInterface = Readonly<{
+  url: string;
+  protocolBinding: 'JSONRPC';
+  protocolVersion: '1.0';
+  tenant?: string;
 }>;
 
 export type A2ARemoteFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -77,6 +89,7 @@ export function serializeA2ARemoteError(error: unknown): Record<string, string> 
 
 export type A2ARemoteClient = Readonly<{
   card: A2ARemoteAgentCard;
+  selectedInterface: A2ARemoteJsonRpcInterface;
   sendMessage: (input: Readonly<{
     messageId: string;
     contextId?: string;
@@ -134,26 +147,111 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function asCardRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) fail('INVALID_AGENT_CARD');
+  return value as Record<string, unknown>;
+}
+
+const OFFICIAL_SECURITY_SCHEME_FIELDS = Object.freeze([
+  'apiKeySecurityScheme',
+  'httpAuthSecurityScheme',
+  'oauth2SecurityScheme',
+  'openIdConnectSecurityScheme',
+  'mtlsSecurityScheme',
+] as const);
+
+function validateSecurityScheme(value: unknown): Readonly<Record<string, unknown>> {
+  const scheme = asCardRecord(value);
+  const officialFields = OFFICIAL_SECURITY_SCHEME_FIELDS.filter((field) => Object.hasOwn(scheme, field));
+  if (officialFields.length > 0) {
+    if (officialFields.length !== 1 || Object.keys(scheme).length !== 1) fail('INVALID_AGENT_CARD');
+    const field = officialFields[0];
+    const definition = asCardRecord(scheme[field]);
+    if (field === 'httpAuthSecurityScheme'
+      && (typeof definition.scheme !== 'string' || !definition.scheme.trim())) {
+      fail('INVALID_AGENT_CARD');
+    }
+    return Object.freeze({ [field]: Object.freeze({ ...definition }) });
+  }
+
+  const legacyFields = new Set(['type', 'scheme', 'description', 'bearerFormat']);
+  if (
+    scheme.type !== 'http'
+    || typeof scheme.scheme !== 'string'
+    || scheme.scheme.toLowerCase() !== 'bearer'
+    || Object.keys(scheme).some((field) => !legacyFields.has(field))
+  ) {
+    fail('INVALID_AGENT_CARD');
+  }
+  return Object.freeze({ ...scheme });
+}
+
+function validateRequirementSchemes(
+  value: unknown,
+  securitySchemes: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, readonly string[]>> {
+  const schemes = asCardRecord(value);
+  return Object.freeze(Object.fromEntries(Object.entries(schemes).map(([name, scopes]) => {
+    if (
+      !Object.hasOwn(securitySchemes, name)
+      || !Array.isArray(scopes)
+      || scopes.some((scope) => typeof scope !== 'string')
+    ) {
+      fail('INVALID_AGENT_CARD');
+    }
+    return [name, Object.freeze([...scopes])];
+  })));
+}
+
+function validateSecurityRequirement(
+  value: unknown,
+  securitySchemes: Readonly<Record<string, unknown>>,
+): A2ARemoteSecurityRequirement {
+  const requirement = asCardRecord(value);
+  if (Object.hasOwn(requirement, 'schemes')) {
+    if (Object.keys(requirement).length !== 1) fail('INVALID_AGENT_CARD');
+    return Object.freeze({
+      schemes: validateRequirementSchemes(requirement.schemes, securitySchemes),
+    });
+  }
+  return validateRequirementSchemes(requirement, securitySchemes);
+}
+
 function validateCard(value: unknown): A2ARemoteAgentCard {
-  const card = asRecord(value);
+  const card = asCardRecord(value);
   if (typeof card.name !== 'string' || typeof card.description !== 'string' || typeof card.version !== 'string') fail('INVALID_AGENT_CARD');
   if (!Array.isArray(card.supportedInterfaces) || card.supportedInterfaces.length === 0) fail('INVALID_AGENT_CARD');
   const supportedInterfaces = card.supportedInterfaces.map((entry) => {
-    const item = asRecord(entry);
-    if (item.protocolBinding !== 'JSONRPC' || item.protocolVersion !== PROTOCOL_VERSION || typeof item.url !== 'string') fail('INVALID_AGENT_CARD');
+    const item = asCardRecord(entry);
+    if (
+      typeof item.protocolBinding !== 'string'
+      || !item.protocolBinding.trim()
+      || typeof item.protocolVersion !== 'string'
+      || !item.protocolVersion.trim()
+      || typeof item.url !== 'string'
+      || (item.tenant !== undefined && (typeof item.tenant !== 'string' || !item.tenant))
+    ) fail('INVALID_AGENT_CARD');
     const endpoint = validateBaseUrl(item.url);
-    return Object.freeze({ url: endpoint.toString(), protocolBinding: 'JSONRPC' as const, protocolVersion: PROTOCOL_VERSION });
+    return Object.freeze({
+      url: endpoint.toString(),
+      protocolBinding: item.protocolBinding,
+      protocolVersion: item.protocolVersion,
+      ...(typeof item.tenant === 'string' ? { tenant: item.tenant } : {}),
+    });
   });
-  const securitySchemes = asRecord(card.securitySchemes);
+  const preferredInterface = supportedInterfaces[0];
+  if (preferredInterface.protocolBinding !== 'JSONRPC' || preferredInterface.protocolVersion !== PROTOCOL_VERSION) {
+    fail('UNSUPPORTED_PROTOCOL');
+  }
+  const rawSecuritySchemes = asCardRecord(card.securitySchemes);
+  const securitySchemes = Object.freeze(Object.fromEntries(
+    Object.entries(rawSecuritySchemes).map(([name, scheme]) => [name, validateSecurityScheme(scheme)]),
+  ));
   if (!Array.isArray(card.securityRequirements)) fail('INVALID_AGENT_CARD');
-  const securityRequirements = card.securityRequirements.map((entry) => {
-    const requirement = asRecord(entry);
-    return Object.freeze(Object.fromEntries(Object.entries(requirement).map(([name, scopes]) => {
-      if (!(name in securitySchemes) || !Array.isArray(scopes) || scopes.some((scope) => typeof scope !== 'string')) fail('INVALID_AGENT_CARD');
-      return [name, Object.freeze([...scopes])];
-    })) as Record<string, readonly string[]>);
-  });
-  const capabilities = asRecord(card.capabilities);
+  const securityRequirements = card.securityRequirements.map((entry) => (
+    validateSecurityRequirement(entry, securitySchemes)
+  ));
+  const capabilities = asCardRecord(card.capabilities);
   if (
     typeof capabilities.streaming !== 'boolean'
     || typeof capabilities.pushNotifications !== 'boolean'
@@ -270,7 +368,8 @@ export async function createA2ARemoteClient(baseUrl: string, options: ClientOpti
   if (!cardResponse.ok) fail('HTTP_ERROR');
   const rawCard = await readJson(cardResponse);
   const card = validateCard(rawCard);
-  const endpoint = new URL(card.supportedInterfaces[0].url);
+  const selectedInterface = card.supportedInterfaces[0] as A2ARemoteJsonRpcInterface;
+  const endpoint = new URL(selectedInterface.url);
 
   async function authorizationHeaders(): Promise<Record<string, string>> {
     if (card.securityRequirements.length === 0) return {};
@@ -302,6 +401,7 @@ export async function createA2ARemoteClient(baseUrl: string, options: ClientOpti
 
   return Object.freeze({
     card,
+    selectedInterface,
     async sendMessage(input, requestOptions = {}) {
       const messageId = boundedId(input.messageId);
       const parts = input.parts.map((part) => ({ text: boundedText(part.text), mediaType: part.mediaType ?? 'text/plain' }));

@@ -14,7 +14,9 @@ import {
   type A2ARemoteAgentCard,
   type A2ARemoteClient,
   type A2ARemoteFetch,
+  type A2ARemoteJsonRpcInterface,
   type A2ARemoteMessage,
+  type A2ARemoteSecurityRequirement,
   type A2ARemoteTask,
 } from './a2a-remote-client.js';
 import {
@@ -76,7 +78,12 @@ export async function createHermesA2AAdapter(
     });
     return {
       client,
-      advertisedCapabilities: validateHermesCard(client.card, origin, expectedPeerIdentity),
+      advertisedCapabilities: validateHermesCard(
+        client.card,
+        client.selectedInterface,
+        origin,
+        expectedPeerIdentity,
+      ),
       validatedAt: now(),
     };
   }
@@ -287,12 +294,15 @@ export async function createHermesA2AProductionAgent(
     },
     async cancelChild(input) {
       validateProductionIdentity(input, { agentId, providerId, executionIdentity, executionBoundaryId });
-      await runner.cancel({
+      const record = await runner.cancel({
         scope: input.scope,
         idempotencyKey: input.childIdempotencyKey,
         expectedProviderExecutionId: input.agentJobId,
         reason: 'A2A parent requested child cancellation.',
       });
+      if (record.state !== 'canceled' && record.state !== 'rejected' && record.state !== 'failed') {
+        throw new Error(`Hermes cancellation did not reach an allowed terminal state: ${record.state}.`);
+      }
     },
   });
 }
@@ -324,16 +334,18 @@ function configuredOrigin(value: string): URL {
 
 function validateHermesCard(
   card: A2ARemoteAgentCard,
+  selectedInterface: A2ARemoteJsonRpcInterface,
   configured: URL,
   expectedPeerIdentity: string,
 ): readonly string[] {
   if (card.name !== expectedPeerIdentity) throw new Error('Hermes A2A Agent Card peer identity does not match configuration.');
-  if (!card.supportedInterfaces.some((entry) => (
-    entry.protocolBinding === 'JSONRPC'
-    && entry.protocolVersion === '1.0'
-    && new URL(entry.url).origin === configured.origin
-  ))) {
-    throw new Error('Hermes A2A Agent Card does not advertise JSON-RPC 1.0 at the configured origin.');
+  if (
+    selectedInterface !== card.supportedInterfaces[0]
+    || selectedInterface.protocolBinding !== 'JSONRPC'
+    || selectedInterface.protocolVersion !== '1.0'
+    || new URL(selectedInterface.url).origin !== configured.origin
+  ) {
+    throw new Error('Hermes A2A preferred JSON-RPC 1.0 interface is not at the configured origin.');
   }
   if (!card.defaultInputModes.includes('text/plain') || !card.defaultOutputModes.includes('text/plain')) {
     throw new Error('Hermes A2A Agent Card must advertise text/plain input and output modes.');
@@ -341,11 +353,20 @@ function validateHermesCard(
   const bearerSchemes = new Set(Object.entries(card.securitySchemes).flatMap(([name, value]) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
     const scheme = value as Record<string, unknown>;
-    return scheme.type === 'http' && String(scheme.scheme).toLowerCase() === 'bearer' ? [name] : [];
+    const officialHttp = recordValue(scheme.httpAuthSecurityScheme);
+    const officialBearer = typeof officialHttp?.scheme === 'string'
+      && officialHttp.scheme.toLowerCase() === 'bearer';
+    const legacyBearer = scheme.type === 'http'
+      && typeof scheme.scheme === 'string'
+      && scheme.scheme.toLowerCase() === 'bearer';
+    return officialBearer || legacyBearer ? [name] : [];
   }));
   if (
     bearerSchemes.size === 0
-    || !card.securityRequirements.some((requirement) => Object.keys(requirement).some((name) => bearerSchemes.has(name)))
+    || !card.securityRequirements.some((requirement) => {
+      const names = Object.keys(requirementSchemes(requirement));
+      return names.length === 1 && bearerSchemes.has(names[0]);
+    })
   ) {
     throw new Error('Hermes A2A Agent Card must require bearer authentication.');
   }
@@ -355,6 +376,15 @@ function validateHermesCard(
     return [...id, ...tags];
   });
   return Object.freeze(uniqueStrings(capabilities));
+}
+
+function requirementSchemes(
+  requirement: A2ARemoteSecurityRequirement,
+): Readonly<Record<string, readonly string[]>> {
+  const official = recordValue((requirement as Readonly<{ schemes?: unknown }>).schemes);
+  return official
+    ? official as Record<string, readonly string[]>
+    : requirement as Readonly<Record<string, readonly string[]>>;
 }
 
 function validateOperationIdentity(
