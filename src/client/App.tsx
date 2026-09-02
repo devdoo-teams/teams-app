@@ -24,6 +24,7 @@ import {
 } from './ResponseModeSelector.js';
 import { WorkItemPanel } from './WorkItemPanel.js';
 import { CollaborationPanel } from './CollaborationPanel.js';
+import { OrchestrationPanel } from './OrchestrationPanel.js';
 import { TodaySummary } from './TodaySummary.js';
 import {
   buildHubNavigation,
@@ -31,6 +32,33 @@ import {
   parseHubView,
   type HubView,
 } from './hub-navigation.js';
+
+type AppView = HubView | 'orchestration';
+
+const appViewLabels: Record<AppView, string> = {
+  ...hubViewLabels,
+  orchestration: '에이전트',
+};
+
+function parseAppView(search: string | undefined): AppView {
+  const params = new URLSearchParams(search ?? '');
+  return params.get('view')?.trim() === 'orchestration'
+    ? 'orchestration'
+    : parseHubView(search);
+}
+
+function buildAppNavigation(search: string | undefined, view: AppView): {
+  search: string;
+  view: AppView;
+} {
+  if (view !== 'orchestration') return buildHubNavigation(search, view);
+
+  const params = new URLSearchParams(search ?? '');
+  params.set('view', view);
+  params.delete('collaborationType');
+  params.delete('collaborationId');
+  return { search: `?${params.toString()}`, view };
+}
 
 declare const __TEAMS_OPTIONAL_RUNTIME__: boolean | undefined;
 const optionalRuntimeEnabled = typeof __TEAMS_OPTIONAL_RUNTIME__ === 'undefined'
@@ -377,8 +405,8 @@ export function weatherLocationMeta(input: {
 }
 
 export function App() {
-  const [hubView, setHubView] = useState<HubView>(() => (
-    typeof window === 'undefined' ? 'today' : parseHubView(window.location.search)
+  const [hubView, setHubView] = useState<AppView>(() => (
+    typeof window === 'undefined' ? 'today' : parseAppView(window.location.search)
   ));
   const [items, setItems] = useState<Item[]>([]);
   const [title, setTitle] = useState('');
@@ -673,7 +701,7 @@ export function App() {
 
   useEffect(() => {
     const handleHistoryNavigation = (): void => {
-      setHubView(parseHubView(window.location.search));
+      setHubView(parseAppView(window.location.search));
     };
     window.addEventListener('popstate', handleHistoryNavigation);
     return () => window.removeEventListener('popstate', handleHistoryNavigation);
@@ -851,12 +879,12 @@ export function App() {
     if (typeof window !== 'undefined') window.location.reload();
   }
 
-  function navigateHubView(view: HubView): void {
+  function navigateHubView(view: AppView): void {
     if (typeof window === 'undefined') {
       setHubView(view);
       return;
     }
-    const next = buildHubNavigation(window.location.search, view);
+    const next = buildAppNavigation(window.location.search, view);
     window.history.replaceState(null, '', next.search);
     setHubView(next.view);
   }
@@ -879,7 +907,7 @@ export function App() {
       </header>
 
       <nav className="hub-nav" aria-label="업무 허브 메뉴">
-        {(Object.keys(hubViewLabels) as HubView[]).map((view) => (
+        {(Object.keys(appViewLabels) as AppView[]).map((view) => (
           <button
             aria-current={hubView === view ? 'page' : undefined}
             aria-pressed={hubView === view}
@@ -888,7 +916,7 @@ export function App() {
             onClick={() => navigateHubView(view)}
             type="button"
           >
-            {hubViewLabels[view]}
+            {appViewLabels[view]}
           </button>
         ))}
       </nav>
@@ -1234,6 +1262,11 @@ export function App() {
 
       {hubView === 'work' && <WorkItemPanel />}
       {hubView === 'activity' && <CollaborationPanel />}
+      {hubView === 'orchestration' && (
+        <OrchestrationPanel
+          mobile={['android', 'ios', 'ipados'].includes(teamsClientType) ? true : undefined}
+        />
+      )}
 
       <footer>Teams SDK · TypeScript · React · Express · Adaptive Cards</footer>
     </main>
