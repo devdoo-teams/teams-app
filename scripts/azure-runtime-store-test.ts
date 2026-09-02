@@ -174,6 +174,29 @@ assert.notEqual(
   'an own __proto__ key participates in the content hash',
 );
 
+const specialOwnKeysValue = Object.create(null) as Record<string, unknown>;
+for (const [key, marker] of [
+  ['__proto__', 'proto'],
+  ['constructor', 'ctor'],
+  ['prototype', 'prototype'],
+] as const) {
+  Object.defineProperty(specialOwnKeysValue, key, {
+    enumerable: true,
+    value: { marker },
+  });
+}
+const specialOwnKeysJson = '{"__proto__":{"marker":"proto"},"constructor":{"marker":"ctor"},"prototype":{"marker":"prototype"}}';
+assert.equal(
+  stableRuntimeJson(specialOwnKeysValue),
+  specialOwnKeysJson,
+  'canonical JSON preserves and sorts __proto__, constructor, and prototype as own keys',
+);
+assert.equal(
+  runtimeContentHash(specialOwnKeysValue),
+  '2a3be3dc029fa4abd0db24922636c98a754bb02e5c2c7b9917ab5e4dade9f298',
+  'special own keys produce the expected canonical content hash',
+);
+
 const created = await store.write(scopeA, {
   id: 'task-1',
   idempotencyKey: 'submit-1',
@@ -209,6 +232,23 @@ await assert.rejects(
   }),
   RuntimeStoreValidationError,
   'an oversized own __proto__ value cannot bypass the 256 KiB record limit',
+);
+
+const oversizedSpecialOwnKeysValue = Object.create(null) as Record<string, unknown>;
+for (const key of ['__proto__', 'constructor', 'prototype']) {
+  Object.defineProperty(oversizedSpecialOwnKeysValue, key, {
+    enumerable: true,
+    value: 'x'.repeat(90_000),
+  });
+}
+await assert.rejects(
+  () => store.write(scopeA, {
+    id: 'oversized-special-own-keys',
+    idempotencyKey: 'oversized-special-own-keys-1',
+    value: oversizedSpecialOwnKeysValue,
+  }),
+  RuntimeStoreValidationError,
+  'special own keys cannot bypass the 256 KiB record limit in aggregate',
 );
 
 for (const [operation, statusCode] of [
