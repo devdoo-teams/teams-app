@@ -1045,6 +1045,18 @@ async function testFileStoreSerializesWritersRollsBackAndScansRecovery(): Promis
       ProviderLifecycleRevisionConflictError,
     );
     assert.deepEqual(await first.get(scope, firstIntent.idempotencyKey), acceptedBySecond);
+    await assert.rejects(
+      () => second.update({
+        ...acceptedBySecond,
+        rawProviderState: 'https://user:password@example.test/state?token=raw-secret',
+        receipt: {
+          ...acceptedBySecond.receipt!,
+          reconciliationRef: 'https://example.test/cursor?sig=raw-secret',
+        },
+      }, acceptedBySecond.revision),
+      /unsafe/i,
+    );
+    assert.deepEqual(await second.get(scope, firstIntent.idempotencyKey), acceptedBySecond);
 
     const completed = await reopened.update({
       ...secondCreated.record,
@@ -1059,6 +1071,26 @@ async function testFileStoreSerializesWritersRollsBackAndScansRecovery(): Promis
     const persisted = JSON.parse(await fs.readFile(filePath, 'utf8')) as { records: Record<string, unknown> };
     assert.equal(Object.keys(persisted.records).length, 2);
     assert.deepEqual((await fs.readdir(path.dirname(filePath))).filter((name) => name.endsWith('.tmp')), []);
+
+    const poisoned = structuredClone(persisted) as { records: Record<string, ProviderLifecycleRecord> };
+    const poisonedKey = Object.keys(poisoned.records)[0];
+    const poisonedRecord = poisoned.records[poisonedKey!];
+    assert.ok(poisonedRecord);
+    poisoned.records[poisonedKey!] = {
+      ...poisonedRecord,
+      rawProviderState: 'https://user:password@example.test/state',
+      receipt: poisonedRecord.receipt && {
+        ...poisonedRecord.receipt,
+        rawState: 'https://example.test/state?credential=raw-secret',
+        reconciliationRef: 'https://example.test/cursor#token=raw-secret',
+      },
+    };
+    await atomicWriteJson(filePath, poisoned);
+    await assert.rejects(
+      () => new FileProviderLifecycleStore(filePath).initialize(),
+      /unsafe/i,
+    );
+    await atomicWriteJson(filePath, persisted);
 
     let failWrites = false;
     const rollbackPath = path.join(root, 'rollback', 'lifecycle.json');
