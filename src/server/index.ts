@@ -247,6 +247,10 @@ function createDispatchStatePort(runtimeStore: RuntimeStore): AgentDispatchState
       }
       return undefined;
     },
+    async probeDependency() {
+      await runtimeStore.read<AgentDispatchRecord>(AZURE_DISPATCH_STATE_SCOPE, 'teams-worker-health-probe');
+      return { reachable: true };
+    },
   };
 }
 
@@ -885,12 +889,14 @@ const runtimeStore = await createRuntimeStore({
   fileStore: createUnmigratedRuntimeCompatibilityStore(),
 });
 let agentExecutionDispatcher: AgentExecutionDispatcher | undefined;
+let azureAgentDispatchQueue: AzureAgentDispatchQueue | undefined;
 if (azureQueueDispatch) {
   if (storageBackend !== 'cosmos') {
     throw new Error('TEAMS_AGENT_DISPATCH_MODE=azure-queue requires TEAMS_STORAGE_BACKEND=cosmos.');
   }
   const queueClient = createProductionAzureQueueClient({ env: process.env });
   const queue = new AzureAgentDispatchQueue(queueClient, createDispatchStatePort(runtimeStore));
+  azureAgentDispatchQueue = queue;
   agentExecutionDispatcher = createQueueExecutionDispatcher(queue);
 }
 
@@ -1802,6 +1808,19 @@ http.get('/api/health', async (_request: any, response: any) => {
     // turning health into an implicit login or provider-availability claim.
     cliCapabilities = unknownCliCapabilities();
   }
+  const dispatchHealth = azureQueueDispatch && azureAgentDispatchQueue
+    ? await azureAgentDispatchQueue.readHealth()
+    : {
+        liveness: { state: 'alive' as const },
+        configuration: { state: 'configured' as const },
+        dependencies: {
+          queue: { state: 'unverified' as const },
+          state: { state: 'reachable' as const },
+        },
+        workerHeartbeat: { state: 'observed' as const, source: 'local-process' },
+        readiness: { state: 'ready' as const },
+        executionBoundary: 'local-process' as const,
+      };
 
   response.json({
     ok: true,
@@ -1837,8 +1856,8 @@ http.get('/api/health', async (_request: any, response: any) => {
     },
     dispatch: {
       mode: agentDispatchMode,
-      executionBoundary: azureQueueDispatch ? 'external-linux-worker' : 'local-process',
       localCli: !azureQueueDispatch,
+      ...dispatchHealth,
     },
     copilotKit: optionalRuntimeEnabled ? 'enabled' : 'disabled',
     copilotKitRuntime: optionalRuntimeEnabled ? '/api/copilotkit' : 'disabled',

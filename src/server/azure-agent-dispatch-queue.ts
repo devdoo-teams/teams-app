@@ -56,6 +56,8 @@ export interface AgentDispatchStatePort {
     expected: { leaseOwner?: string; leaseGeneration: number },
     mutate: (current: AgentDispatchRecord) => AgentDispatchRecord,
   ): Promise<AgentDispatchRecord | undefined>;
+  /** Performs a read-only dependency probe without creating durable state. */
+  probeDependency?(): Promise<{ reachable: true }>;
 }
 
 export interface AzureQueueClientPort {
@@ -74,10 +76,39 @@ export interface AzureQueueClientPort {
   ): Promise<{ popReceipt: string }>;
   deleteMessage(messageId: string, popReceipt: string): Promise<void>;
   sendPoisonMessage(messageText: string): Promise<void>;
+  /** Performs read-only Queue Storage metadata probes. */
+  probeDependency?(): Promise<{ reachable: true }>;
 }
 
-type QueueSdkPort = Pick<QueueClient, 'sendMessage' | 'receiveMessages' | 'updateMessage' | 'deleteMessage'>;
+type QueueSdkPort = Pick<QueueClient, 'sendMessage' | 'receiveMessages' | 'updateMessage' | 'deleteMessage'> & {
+  getProperties?: QueueClient['getProperties'];
+};
 type Clock = { now(): Date };
+
+type DependencyHealth = Readonly<{ state: 'reachable' | 'unavailable' | 'unverified' }>;
+
+export type AzureDispatchHealth = Readonly<{
+  liveness: Readonly<{ state: 'alive' }>;
+  configuration: Readonly<{ state: 'configured' }>;
+  dependencies: Readonly<{ queue: DependencyHealth; state: DependencyHealth }>;
+  workerHeartbeat: Readonly<{
+    state: 'observed' | 'stale' | 'not-observed';
+    observedAt?: string;
+    source?: string;
+  }>;
+  readiness: Readonly<{ state: 'ready' | 'unavailable' }>;
+  executionBoundary: 'external-linux-worker' | 'external-linux-worker-unverified';
+}>;
+
+const DIAGNOSTIC_FIELD_LIMITS = Object.freeze({
+  checkpoint: 1_024,
+  completionResult: 4_096,
+  providerExecutionId: 256,
+  errorCode: 128,
+  errorMessage: 1_024,
+  cancellationReason: 512,
+  quarantineReason: 512,
+});
 
 export type ProductionAzureQueueClientOptions = {
   env: Record<string, string | undefined>;
@@ -134,7 +165,7 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
       if (!existing || existing.requestHash !== requestHash || existing.idempotencyKey !== task.idempotencyKey) {
         throw new DispatchConflictError(task.taskId);
       }
-      if (existing.enqueued || isTerminalDispatchStatus(existing.status)) return clone(existing);
+      if (existing.enqueued || isTerminalDispatchStatus(existing.status)) return sanitizeRecordForResponse(existing);
     }
 
     await this.client.sendMessage(JSON.stringify(task));
@@ -145,12 +176,38 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
       updatedAt: this.now(),
     }));
     if (!persisted) throw new DispatchLeaseConflictError(task.taskId);
-    return clone(persisted);
+    return sanitizeRecordForResponse(persisted);
   }
 
   async observe(taskId: string): Promise<AgentDispatchRecord | undefined> {
     const record = await this.state.get(canonicalAgentTaskId(taskId));
-    return record && clone(record);
+    return record && sanitizeRecordForResponse(record);
+  }
+
+  async readHealth(options: {
+    workerHeartbeat?: { observedAt: string; source: string };
+    maximumHeartbeatAgeMs?: number;
+  } = {}): Promise<AzureDispatchHealth> {
+    const [queueDependency, stateDependency] = await Promise.all([
+      probeDependency(this.client.probeDependency?.bind(this.client)),
+      probeDependency(this.state.probeDependency?.bind(this.state)),
+    ]);
+    const maximumHeartbeatAgeMs = options.maximumHeartbeatAgeMs ?? 30_000;
+    if (!Number.isSafeInteger(maximumHeartbeatAgeMs) || maximumHeartbeatAgeMs < 1 || maximumHeartbeatAgeMs > 300_000) {
+      throw new TypeError('maximum heartbeat age must be between 1 and 300000 milliseconds');
+    }
+    const heartbeat = classifyWorkerHeartbeat(options.workerHeartbeat, this.clock.now(), maximumHeartbeatAgeMs);
+    const ready = queueDependency.state === 'reachable'
+      && stateDependency.state === 'reachable'
+      && heartbeat.state === 'observed';
+    return Object.freeze({
+      liveness: Object.freeze({ state: 'alive' as const }),
+      configuration: Object.freeze({ state: 'configured' as const }),
+      dependencies: Object.freeze({ queue: queueDependency, state: stateDependency }),
+      workerHeartbeat: heartbeat,
+      readiness: Object.freeze({ state: ready ? 'ready' as const : 'unavailable' as const }),
+      executionBoundary: ready ? 'external-linux-worker' : 'external-linux-worker-unverified',
+    });
   }
 
   async lease(options: { visibilityTimeoutSeconds: number; maxDequeueCount?: number }): Promise<AgentDispatchLease | undefined> {
@@ -167,7 +224,7 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
     }
     const record = await this.state.get(task.taskId);
     if (!record || record.requestHash !== hashTask(task)) {
-      await this.quarantineMessage(message, record, 'unknown or mismatched durable dispatch record');
+      await this.quarantineMessage(message, undefined, 'unknown or mismatched durable dispatch record');
       return undefined;
     }
     if (isTerminalDispatchStatus(record.status)) {
@@ -228,7 +285,7 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
     validateLease(lease);
     validateVisibility(visibilityTimeoutSeconds);
     if (!Number.isInteger(checkpoint.sequence) || checkpoint.sequence < 0) throw new TypeError('checkpoint sequence is invalid');
-    const message = requireText(checkpoint.message, 'checkpoint message');
+    const message = sanitizeDiagnostic(checkpoint.message, 'checkpoint message', DIAGNOSTIC_FIELD_LIMITS.checkpoint);
     const update = await this.client.updateMessage(lease.messageId, lease.popReceipt, undefined, visibilityTimeoutSeconds);
     const persisted = await this.state.compareAndSwap(lease.task.taskId, leaseIdentity(lease), (record) => {
       assertOwned(record, lease);
@@ -245,8 +302,12 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
   }
 
   async complete(lease: AgentDispatchLease, receipt: AgentDispatchCompletionReceipt): Promise<void> {
-    const result = requireText(receipt.result, 'nonempty completion result');
-    const providerExecutionId = requireText(receipt.providerExecutionId, 'providerExecutionId');
+    const result = sanitizeDiagnostic(receipt.result, 'nonempty completion result', DIAGNOSTIC_FIELD_LIMITS.completionResult);
+    const providerExecutionId = sanitizeDiagnostic(
+      receipt.providerExecutionId,
+      'providerExecutionId',
+      DIAGNOSTIC_FIELD_LIMITS.providerExecutionId,
+    );
     await this.terminalUpdate(lease, (record) => {
       if (record.cancellationRequested) throw new Error('cancelled dispatch cannot be completed');
       return {
@@ -259,8 +320,8 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
   }
 
   async fail(lease: AgentDispatchLease, error: AgentDispatchErrorReceipt): Promise<void> {
-    const code = requireText(error.code, 'error code');
-    const message = requireText(error.message, 'error message');
+    const code = sanitizeDiagnostic(error.code, 'error code', DIAGNOSTIC_FIELD_LIMITS.errorCode);
+    const message = sanitizeDiagnostic(error.message, 'error message', DIAGNOSTIC_FIELD_LIMITS.errorMessage);
     await this.terminalUpdate(lease, (record) => ({
       ...record,
       status: 'failed',
@@ -269,7 +330,11 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
   }
 
   async cancel(lease: AgentDispatchLease, reason: string): Promise<void> {
-    const cancellationReason = requireText(reason, 'cancellation reason');
+    const cancellationReason = sanitizeDiagnostic(
+      reason,
+      'cancellation reason',
+      DIAGNOSTIC_FIELD_LIMITS.cancellationReason,
+    );
     await this.terminalUpdate(lease, (record) => ({
       ...record,
       status: 'cancelled',
@@ -280,7 +345,11 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
 
   async requestCancellation(taskId: string, reason: string): Promise<void> {
     const id = canonicalAgentTaskId(taskId);
-    const cancellationReason = requireText(reason, 'cancellation reason');
+    const cancellationReason = sanitizeDiagnostic(
+      reason,
+      'cancellation reason',
+      DIAGNOSTIC_FIELD_LIMITS.cancellationReason,
+    );
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const current = await this.requiredRecord(id);
       if (isTerminalDispatchStatus(current.status)) return;
@@ -323,10 +392,15 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
     record: AgentDispatchRecord | undefined,
     reason: string,
   ): Promise<void> {
+    const quarantineReason = sanitizeDiagnostic(
+      reason,
+      'quarantine reason',
+      DIAGNOSTIC_FIELD_LIMITS.quarantineReason,
+    );
     await this.client.sendPoisonMessage(JSON.stringify({
       schemaVersion: 1,
       quarantinedAt: this.now(),
-      reason,
+      reason: quarantineReason,
       messageId: message.messageId,
       dequeueCount: message.dequeueCount,
       messageSha256: crypto.createHash('sha256').update(message.messageText, 'utf8').digest('hex'),
@@ -335,7 +409,7 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
       const updated = await this.state.compareAndSwap(record.taskId, leaseIdentity(record), (current) => ({
         ...current,
         status: 'quarantined',
-        quarantineReason: reason,
+        quarantineReason,
         leaseExpiresAt: undefined,
         updatedAt: this.now(),
       }));
@@ -385,6 +459,13 @@ export function createProductionAzureQueueClient(options: ProductionAzureQueueCl
     },
     async sendPoisonMessage(messageText) {
       await poison.sendMessage(messageText);
+    },
+    async probeDependency() {
+      if (!queue.getProperties || !poison.getProperties) {
+        throw new Error('Queue metadata probe is unavailable.');
+      }
+      await Promise.all([queue.getProperties(), poison.getProperties()]);
+      return { reachable: true };
     },
   };
 }
@@ -487,9 +568,93 @@ function rejectSecretAuthentication(env: Record<string, string | undefined>): vo
 }
 
 function safeMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return sanitizeDiagnostic(
+    error instanceof Error ? error.message : String(error),
+    'diagnostic message',
+    DIAGNOSTIC_FIELD_LIMITS.errorMessage,
+  );
 }
 
-function clone<T>(value: T): T {
-  return structuredClone(value);
+function sanitizeRecordForResponse(value: AgentDispatchRecord): AgentDispatchRecord {
+  const record = structuredClone(value);
+  if (record.checkpoint) {
+    record.checkpoint.message = sanitizeDiagnostic(
+      record.checkpoint.message,
+      'checkpoint message',
+      DIAGNOSTIC_FIELD_LIMITS.checkpoint,
+    );
+  }
+  if (record.receipt) {
+    record.receipt.result = sanitizeDiagnostic(
+      record.receipt.result,
+      'completion result',
+      DIAGNOSTIC_FIELD_LIMITS.completionResult,
+    );
+    record.receipt.providerExecutionId = sanitizeDiagnostic(
+      record.receipt.providerExecutionId,
+      'providerExecutionId',
+      DIAGNOSTIC_FIELD_LIMITS.providerExecutionId,
+    );
+  }
+  if (record.error) {
+    record.error.code = sanitizeDiagnostic(record.error.code, 'error code', DIAGNOSTIC_FIELD_LIMITS.errorCode);
+    record.error.message = sanitizeDiagnostic(
+      record.error.message,
+      'error message',
+      DIAGNOSTIC_FIELD_LIMITS.errorMessage,
+    );
+  }
+  if (record.cancellationReason) {
+    record.cancellationReason = sanitizeDiagnostic(
+      record.cancellationReason,
+      'cancellation reason',
+      DIAGNOSTIC_FIELD_LIMITS.cancellationReason,
+    );
+  }
+  if (record.quarantineReason) {
+    record.quarantineReason = sanitizeDiagnostic(
+      record.quarantineReason,
+      'quarantine reason',
+      DIAGNOSTIC_FIELD_LIMITS.quarantineReason,
+    );
+  }
+  return record;
+}
+
+function sanitizeDiagnostic(value: unknown, label: string, maximumBytes: number): string {
+  const text = requireText(value, label)
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/giu, 'Bearer [REDACTED]')
+    .replace(/\b(?:sk|xai)-[A-Za-z0-9_-]{12,}\b/giu, '[REDACTED]')
+    .replace(/\b(api[_-]?key|token|secret|password)\s*([=:])\s*[^\s,;]+/giu, '$1$2[REDACTED]')
+    .replace(/(?:\/Users|\/home)\/[^\s,;]+/gu, '[REDACTED_PATH]')
+    .replace(/[A-Za-z]:\\[^\s,;]+/gu, '[REDACTED_PATH]');
+  const bytes = Buffer.from(text, 'utf8');
+  if (bytes.byteLength <= maximumBytes) return text;
+  return bytes.subarray(0, maximumBytes).toString('utf8').replace(/\uFFFD$/u, '');
+}
+
+async function probeDependency(
+  probe: (() => Promise<{ reachable: true }>) | undefined,
+): Promise<DependencyHealth> {
+  if (!probe) return Object.freeze({ state: 'unverified' });
+  try {
+    const result = await probe();
+    return Object.freeze({ state: result.reachable === true ? 'reachable' : 'unavailable' });
+  } catch {
+    return Object.freeze({ state: 'unavailable' });
+  }
+}
+
+function classifyWorkerHeartbeat(
+  heartbeat: { observedAt: string; source: string } | undefined,
+  now: Date,
+  maximumAgeMs: number,
+): AzureDispatchHealth['workerHeartbeat'] {
+  if (!heartbeat) return Object.freeze({ state: 'not-observed' });
+  const observedAtMs = Date.parse(heartbeat.observedAt);
+  const source = sanitizeDiagnostic(heartbeat.source, 'worker heartbeat source', 128);
+  if (!Number.isFinite(observedAtMs) || observedAtMs > now.getTime() || now.getTime() - observedAtMs > maximumAgeMs) {
+    return Object.freeze({ state: 'stale', observedAt: heartbeat.observedAt, source });
+  }
+  return Object.freeze({ state: 'observed', observedAt: heartbeat.observedAt, source });
 }

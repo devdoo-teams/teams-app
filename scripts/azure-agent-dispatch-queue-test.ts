@@ -85,6 +85,72 @@ async function testPoisonAndUnknownAreQuarantined(): Promise<void> {
   assert.equal((await fixture.queue.observe('task-poison'))?.status, 'quarantined');
 }
 
+async function testMismatchedMessageCannotQuarantineLegitimateRecord(): Promise<void> {
+  const fixture = createFixture();
+  await fixture.queue.enqueue(task('task-legitimate'));
+  const lease = await fixture.queue.lease({ visibilityTimeoutSeconds: 30 });
+  const before = await fixture.queue.observe('task-legitimate');
+
+  fixture.client.inject(JSON.stringify({
+    ...task('task-legitimate'),
+    prompt: 'attacker-controlled mismatched payload',
+  }));
+
+  assert.equal(await fixture.queue.lease({ visibilityTimeoutSeconds: 30 }), undefined);
+  assert.equal(fixture.client.poison.length, 1, 'the mismatched message is copied to the poison queue');
+  assert.equal(fixture.client.messageCount, 1, 'only the legitimate leased message remains');
+  assert.deepEqual(
+    await fixture.queue.observe('task-legitimate'),
+    before,
+    'a mismatched message must not mutate the legitimate durable record',
+  );
+  assert.equal(lease?.task.taskId, 'task-legitimate');
+}
+
+async function testDiagnosticFieldsAreRedactedAndBoundedAtPersistenceAndResponseBoundaries(): Promise<void> {
+  const fixture = createFixture();
+  const secret = 'sk-live-1234567890abcdefghijklmnop';
+  const token = 'Bearer eyJhbGciOiJIUzI1NiJ9.payload.signature';
+  const oversized = `prefix ${secret} ${token} ${'x'.repeat(12_000)}`;
+
+  await fixture.queue.enqueue(task('task-redaction-complete'));
+  let lease = await fixture.queue.lease({ visibilityTimeoutSeconds: 30 });
+  lease = await fixture.queue.heartbeat(lease!, { sequence: 1, message: oversized }, 30);
+  await fixture.queue.complete(lease, { result: oversized, providerExecutionId: oversized });
+  const completed = fixture.state.records.get('task-redaction-complete');
+  assert.ok(completed, 'completed record is persisted');
+  assert.equal(JSON.stringify(completed).includes(secret), false, 'persisted completion data redacts secret-like values');
+  assert.equal(JSON.stringify(completed).includes(token), false, 'persisted completion data redacts bearer tokens');
+  assert.ok(Buffer.byteLength(completed.receipt?.result ?? '', 'utf8') <= 4_096, 'completion result is byte bounded');
+  assert.ok(Buffer.byteLength(completed.receipt?.providerExecutionId ?? '', 'utf8') <= 256, 'provider execution id is byte bounded');
+  assert.ok(Buffer.byteLength(completed.checkpoint?.message ?? '', 'utf8') <= 1_024, 'checkpoint diagnostic is byte bounded');
+
+  await fixture.queue.enqueue(task('task-redaction-failure'));
+  const failedLease = await fixture.queue.lease({ visibilityTimeoutSeconds: 30 });
+  await fixture.queue.fail(failedLease!, { code: oversized, message: oversized });
+  const failed = fixture.state.records.get('task-redaction-failure');
+  assert.ok(failed, 'failed record is persisted');
+  assert.equal(JSON.stringify(failed).includes(secret), false, 'persisted failure data redacts secret-like values');
+  assert.ok(Buffer.byteLength(failed.error?.code ?? '', 'utf8') <= 128, 'error code is byte bounded');
+  assert.ok(Buffer.byteLength(failed.error?.message ?? '', 'utf8') <= 1_024, 'error message is byte bounded');
+
+  fixture.state.records.set('task-response-redaction', {
+    taskId: 'task-response-redaction',
+    idempotencyKey: 'idem:task-response-redaction',
+    requestHash: 'fixture-hash',
+    status: 'failed',
+    task: task('task-response-redaction'),
+    enqueued: true,
+    dequeueCount: 1,
+    leaseGeneration: 0,
+    updatedAt: clock.now().toISOString(),
+    error: { code: oversized, message: oversized, failedAt: clock.now().toISOString() },
+  });
+  const observed = await fixture.queue.observe('task-response-redaction');
+  assert.equal(JSON.stringify(observed).includes(secret), false, 'response boundary redacts legacy unsanitized diagnostics');
+  assert.ok(Buffer.byteLength(observed?.error?.message ?? '', 'utf8') <= 1_024, 'response diagnostics are byte bounded');
+}
+
 async function testCanonicalTaskIdentityAcrossEveryOperation(): Promise<void> {
   const fixture = createFixture();
   const created = await fixture.queue.enqueue(task('  task-canonical  '));
@@ -177,11 +243,13 @@ function task(taskId: string) {
   };
 }
 
-function createFixture(): { queue: AzureAgentDispatchQueue; client: MemoryQueueClient } {
+function createFixture(): { queue: AzureAgentDispatchQueue; client: MemoryQueueClient; state: MemoryState } {
   const client = new MemoryQueueClient();
+  const state = new MemoryState();
   return {
     client,
-    queue: new AzureAgentDispatchQueue(client, new MemoryState(), { clock }),
+    state,
+    queue: new AzureAgentDispatchQueue(client, state, { clock }),
   };
 }
 
@@ -251,6 +319,8 @@ class MemoryQueueClient implements AzureQueueClientPort {
 await testEnqueueIsStableAndIdempotent();
 await testLeaseRenewCompleteErrorCancelAndRecovery();
 await testPoisonAndUnknownAreQuarantined();
+await testMismatchedMessageCannotQuarantineLegitimateRecord();
+await testDiagnosticFieldsAreRedactedAndBoundedAtPersistenceAndResponseBoundaries();
 await testCanonicalTaskIdentityAcrossEveryOperation();
 await testDurableLeaseGenerationRejectsDuplicateAndStaleCompletion();
 await testProductionQueueFactoryUsesManagedIdentityOnly();
