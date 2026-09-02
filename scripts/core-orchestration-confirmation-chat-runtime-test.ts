@@ -76,6 +76,10 @@ try {
     schemaVersion: '1', action: 'orchestration.approve', jobId: approveJob,
   }))).body, approveJob);
   await assertNotStatus(baseUrl, approveJob, 'awaiting_approval', 'confirmed approve must mutate');
+  assertCard((await post(baseUrl, activity('', 'approve-confirmed-replay', {
+    schemaVersion: '1', action: 'orchestration.approve', jobId: approveJob,
+  }))).body, approveJob);
+  await assertNotStatus(baseUrl, approveJob, 'awaiting_approval', 'replayed approve must not restart the mutation');
 
   const malformed = await post(baseUrl, activity('', 'malformed-confirm', {
     schemaVersion: '1', action: 'orchestration.confirm-cancel', jobId: approveJob, tenantId: 'attacker',

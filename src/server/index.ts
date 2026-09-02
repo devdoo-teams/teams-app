@@ -3935,6 +3935,25 @@ async function handleCoreOrchestrationCardSubmission(activity: any, send: BotSen
       return;
     }
   }
+  if (value.action === 'orchestration.cancel' || value.action === 'orchestration.approve') {
+    const scope = activityScope(activity);
+    if (scope) {
+      try {
+        const job = coreOrchestrationService.get(createServerDerivedCoreScope(scope), { jobId: String(value.jobId) });
+        const isCancelReplay = value.action === 'orchestration.cancel' && job?.status === 'cancelled';
+        const isApproveReplay = value.action === 'orchestration.approve'
+          && job !== undefined
+          && job.status !== 'awaiting_approval'
+          && job.status !== 'cancelled';
+        if (isCancelReplay || isApproveReplay) {
+          await sendCoreOrchestrationActivity(send, createCoreOrchestrationJobActivity(job));
+          return;
+        }
+      } catch {
+        // The normal authenticated mutation path below owns safe error rendering.
+      }
+    }
+  }
   const kind = String(value.action).slice('orchestration.'.length);
   const command: CoreOrchestrationChatCommand = kind === 'provide-input'
     ? { kind, jobId: String(value.jobId), input: String(value.input) }
