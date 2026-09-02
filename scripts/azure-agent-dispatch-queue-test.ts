@@ -8,9 +8,16 @@ import {
   type AzureQueueClientPort,
   AzureAgentDispatchQueue,
 } from '../src/server/azure-agent-dispatch-queue.js';
+import { AzureAgentDispatchQueue as LegacyPathAzureAgentDispatchQueue } from '../src/server/queue/azure-agent-dispatch-queue.js';
 import { createAgentDispatchSubmissionPort } from '../src/server/queue/agent-dispatch-queue.js';
 
 const clock = { now: () => new Date('2026-09-03T00:00:00.000Z') };
+
+assert.equal(
+  LegacyPathAzureAgentDispatchQueue,
+  AzureAgentDispatchQueue,
+  'the legacy queue module path re-exports the authoritative lease-generation implementation',
+);
 
 async function testEnqueueIsStableAndIdempotent(): Promise<void> {
   const fixture = createFixture();
