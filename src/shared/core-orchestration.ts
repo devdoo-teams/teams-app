@@ -48,7 +48,10 @@ export type CoreProvideInputResult =
   | Readonly<{
       status: 'unsupported';
       job: CoreOrchestrationJob;
-      reason: 'agent-service-does-not-support-input';
+      reason:
+        | 'agent-service-does-not-support-input'
+        | 'provider-input-unsupported'
+        | 'job-not-awaiting-input';
     }>;
 
 export type CoreProviderAvailability = 'available' | 'unavailable' | 'unknown';

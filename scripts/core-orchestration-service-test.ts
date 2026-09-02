@@ -174,6 +174,118 @@ assert.deepEqual(inputBoundary, {
 });
 assert.equal(await service.provideInput(otherTenant, { jobId: first.job.id, input: 'hidden' }), undefined);
 
+const inputResumeCalls: Array<{ jobId: string; scope: AgentJobScope; input: unknown }> = [];
+const resumableService = new CoreOrchestrationService({
+  agentService,
+  jobStore: store,
+  inputResume: {
+    observe(job, observedScope) {
+      assert.equal(job.id, first.job.id);
+      assert.deepEqual(observedScope, scope);
+      return {
+        supported: true,
+        awaitingInput: true,
+        source: 'runtime-observation',
+        observedAt: new Date().toISOString(),
+      };
+    },
+    async resume(job, observedScope, input) {
+      inputResumeCalls.push({ jobId: job.id, scope: observedScope, input });
+      return job;
+    },
+  },
+});
+const acceptedInput = await resumableService.provideInput(scope, {
+  jobId: first.job.id,
+  input: { answer: 'operator supplied', choices: [1, true, null] },
+});
+assert.deepEqual(acceptedInput, { status: 'accepted', job: first.job });
+assert.deepEqual(inputResumeCalls, [{
+  jobId: first.job.id,
+  scope,
+  input: { answer: 'operator supplied', choices: [1, true, null] },
+}], 'the measured resume port receives the same durable job identity and server-derived scope');
+
+let unsupportedResumeCalls = 0;
+const unsupportedInputService = new CoreOrchestrationService({
+  agentService,
+  jobStore: store,
+  inputResume: {
+    observe: () => ({
+      supported: false,
+      awaitingInput: false,
+      source: 'runtime-probe',
+      observedAt: new Date().toISOString(),
+      reason: 'provider-input-unsupported',
+    }),
+    async resume(job) {
+      unsupportedResumeCalls += 1;
+      return job;
+    },
+  },
+});
+assert.deepEqual(await unsupportedInputService.provideInput(scope, {
+  jobId: first.job.id,
+  input: 'ignored',
+}), {
+  status: 'unsupported',
+  job: first.job,
+  reason: 'provider-input-unsupported',
+});
+assert.equal(unsupportedResumeCalls, 0, 'an unsupported measured provider is never asked to resume');
+
+const notAwaitingInputService = new CoreOrchestrationService({
+  agentService,
+  jobStore: store,
+  inputResume: {
+    observe: () => ({
+      supported: true,
+      awaitingInput: false,
+      source: 'runtime-observation',
+      observedAt: new Date().toISOString(),
+      reason: 'job-not-awaiting-input',
+    }),
+    async resume() {
+      throw new Error('resume must not run while the provider task is not awaiting input');
+    },
+  },
+});
+assert.equal((await notAwaitingInputService.provideInput(scope, {
+  jobId: first.job.id,
+  input: 'ignored',
+}))?.reason, 'job-not-awaiting-input');
+
+const mismatchedIdentityService = new CoreOrchestrationService({
+  agentService,
+  jobStore: store,
+  inputResume: {
+    observe: () => ({
+      supported: true,
+      awaitingInput: true,
+      source: 'runtime-probe',
+      observedAt: new Date().toISOString(),
+    }),
+    async resume(job) {
+      return { ...job, id: 'different-durable-task' };
+    },
+  },
+});
+await assert.rejects(
+  mismatchedIdentityService.provideInput(scope, { jobId: first.job.id, input: 'unsafe' }),
+  (error: unknown) => error instanceof CoreOrchestrationValidationError,
+  'a provider cannot replace the durable identity while resuming input',
+);
+await assert.rejects(
+  resumableService.provideInput(scope, { jobId: first.job.id, input: 'x'.repeat(8_193) }),
+  (error: unknown) => error instanceof CoreOrchestrationValidationError,
+  'provider input is byte bounded before reaching the resume port',
+);
+await assert.rejects(
+  resumableService.provideInput(scope, { jobId: first.job.id, input: { invalid: undefined } }),
+  (error: unknown) => error instanceof CoreOrchestrationValidationError,
+  'provider input must be JSON-safe rather than silently losing fields',
+);
+
 const observedAt = new Date().toISOString();
 const factsService = new CoreOrchestrationService({
   agentService,

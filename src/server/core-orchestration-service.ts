@@ -25,6 +25,8 @@ import {
 
 const SERVER_SCOPE = Symbol('server-derived-core-orchestration-scope');
 const MAX_LIST_LIMIT = 100;
+const MAX_PROVIDER_INPUT_BYTES = 8_192;
+const MAX_PROVIDER_INPUT_DEPTH = 8;
 const UNSUPPORTED_CONTROL_CHARACTERS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u;
 const SUBMISSION_LOCKS = new WeakMap<CoreAgentJobStorePort, Map<string, Promise<void>>>();
 
@@ -67,10 +69,25 @@ export interface CoreAgentJobStorePort {
   ): AgentJob | undefined;
 }
 
+export type CoreInputResumeObservation = Readonly<{
+  supported: boolean;
+  awaitingInput: boolean;
+  source: 'runtime-probe' | 'runtime-observation';
+  observedAt: string;
+  reason?: 'provider-input-unsupported' | 'job-not-awaiting-input';
+}>;
+
+/** A provider-specific port whose support and task state are measured at call time. */
+export interface CoreInputResumePort {
+  observe(job: AgentJob, scope: AgentJobScope): CoreInputResumeObservation | Promise<CoreInputResumeObservation>;
+  resume(job: AgentJob, scope: AgentJobScope, input: unknown): Promise<AgentJob>;
+}
+
 export type CoreOrchestrationServiceOptions = Readonly<{
   agentService: CoreAgentServicePort;
   jobStore: CoreAgentJobStorePort;
   observeProviderFacts?: () => readonly CoreProviderFact[];
+  inputResume?: CoreInputResumePort;
 }>;
 
 export class CoreOrchestrationService {
@@ -145,10 +162,36 @@ export class CoreOrchestrationService {
     assertNoClientScope(request);
     const job = this.options.agentService.get(normalizeJobId(request.jobId), scope);
     if (!job) return undefined;
+    if (!this.options.inputResume) {
+      return {
+        status: 'unsupported',
+        job: toCoreJob(job),
+        reason: 'agent-service-does-not-support-input',
+      };
+    }
+    const observation = validateInputResumeObservation(
+      await this.options.inputResume.observe(job, scope),
+    );
+    if (!observation.supported) {
+      return {
+        status: 'unsupported',
+        job: toCoreJob(job),
+        reason: 'provider-input-unsupported',
+      };
+    }
+    if (!observation.awaitingInput) {
+      return {
+        status: 'unsupported',
+        job: toCoreJob(job),
+        reason: 'job-not-awaiting-input',
+      };
+    }
+    const boundedInput = normalizeProviderInput(request.input);
+    const resumed = await this.options.inputResume.resume(job, scope, boundedInput);
+    assertSameDurableIdentity(job, resumed, scope);
     return {
-      status: 'unsupported',
-      job: toCoreJob(job),
-      reason: 'agent-service-does-not-support-input',
+      status: 'accepted',
+      job: toCoreJob(resumed),
     };
   }
 
@@ -164,6 +207,58 @@ export class CoreOrchestrationService {
     assertServerScope(scope);
     assertNoClientScope(request);
     return mapOptional(await operation(normalizeJobId(request.jobId)));
+  }
+}
+
+function validateInputResumeObservation(observation: CoreInputResumeObservation): CoreInputResumeObservation {
+  if (!observation || typeof observation !== 'object'
+    || typeof observation.supported !== 'boolean'
+    || typeof observation.awaitingInput !== 'boolean'
+    || (observation.source !== 'runtime-probe' && observation.source !== 'runtime-observation')
+    || typeof observation.observedAt !== 'string'
+    || !Number.isFinite(Date.parse(observation.observedAt))) {
+    throw new CoreOrchestrationValidationError('Input resume support requires a measured runtime observation.');
+  }
+  return observation;
+}
+
+function normalizeProviderInput(value: unknown): unknown {
+  assertJsonValue(value, 0);
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined || Buffer.byteLength(serialized, 'utf8') > MAX_PROVIDER_INPUT_BYTES) {
+    throw new CoreOrchestrationValidationError(`input must be JSON and at most ${MAX_PROVIDER_INPUT_BYTES} bytes.`);
+  }
+  return JSON.parse(serialized) as unknown;
+}
+
+function assertJsonValue(value: unknown, depth: number): void {
+  if (depth > MAX_PROVIDER_INPUT_DEPTH) {
+    throw new CoreOrchestrationValidationError(`input JSON depth must not exceed ${MAX_PROVIDER_INPUT_DEPTH}.`);
+  }
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return;
+  if (typeof value === 'number' && Number.isFinite(value)) return;
+  if (Array.isArray(value)) {
+    for (const item of value) assertJsonValue(item, depth + 1);
+    return;
+  }
+  if (typeof value === 'object') {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new CoreOrchestrationValidationError('input must contain only JSON objects.');
+    }
+    for (const item of Object.values(value as Record<string, unknown>)) assertJsonValue(item, depth + 1);
+    return;
+  }
+  throw new CoreOrchestrationValidationError('input must be JSON-safe.');
+}
+
+function assertSameDurableIdentity(previous: AgentJob, resumed: AgentJob, scope: AgentJobScope): void {
+  if (!resumed
+    || resumed.id !== previous.id
+    || resumed.tenantId !== scope.tenantId
+    || resumed.requesterId !== scope.requesterId
+    || resumed.conversationId !== scope.conversationId) {
+    throw new CoreOrchestrationValidationError('Input resume must preserve the durable job identity and scope.');
   }
 }
 
