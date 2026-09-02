@@ -51,7 +51,11 @@ import {
   ResponseEngineRouter,
   type ResponseEngineInput,
 } from './response-engine.js';
-import { DeterministicResponseEngine } from './response-engine-deterministic.js';
+import {
+  DeterministicResponseEngine,
+  parseCoreOrchestrationChatCommand,
+  type CoreOrchestrationChatCommand,
+} from './response-engine-deterministic.js';
 import { ResponseModeStore } from './response-mode-store.js';
 import {
   createResponseModeCardActivity,
@@ -61,7 +65,12 @@ import {
 } from './response-mode-card.js';
 import { formatWeatherMessage, getWeather } from './weather-service.js';
 import { GenUiActionStore, type GenUiActionName } from './genui-action-store.js';
-import { GenUiResponseFactory } from './genui-response.js';
+import {
+  GenUiResponseFactory,
+  createCoreOrchestrationJobActivity,
+  createCoreOrchestrationListActivity,
+  type CoreOrchestrationTeamsActivity,
+} from './genui-response.js';
 import {
   createA2AProviderFacts,
   type A2AProviderFact,
@@ -167,7 +176,10 @@ import {
   type AgentDispatchRecord,
   type AgentDispatchStatePort,
 } from './azure-agent-dispatch-queue.js';
-import { CoreOrchestrationService } from './core-orchestration-service.js';
+import {
+  CoreOrchestrationService,
+  createServerDerivedCoreScope,
+} from './core-orchestration-service.js';
 import { mountCoreOrchestrationRoutes } from './core-orchestration-route.js';
 import type { CoreProviderFact } from '../shared/core-orchestration.js';
 
@@ -3640,6 +3652,179 @@ function teamsBotResponseRequest(activity: any, scope: AgentJobScope, prompt: st
   } as ResponseEngineInput['request'];
 }
 
+const CORE_ORCHESTRATION_CARD_ACTIONS = new Set([
+  'orchestration.cancel',
+  'orchestration.approve',
+  'orchestration.retry',
+  'orchestration.provide-input',
+]);
+
+type CoreOrchestrationCardSubmission = Readonly<{
+  action: 'orchestration.cancel' | 'orchestration.approve' | 'orchestration.retry' | 'orchestration.provide-input';
+  jobId: string;
+  input?: string;
+}>;
+
+function coreOrchestrationCardValue(activity: any): Record<string, unknown> | undefined {
+  const direct = asRecord(activity?.value);
+  const nested = asRecord(asRecord(direct?.action)?.data);
+  return nested ?? direct;
+}
+
+function hasCoreOrchestrationCardValue(activity: any): boolean {
+  const action = coreOrchestrationCardValue(activity)?.action;
+  return typeof action === 'string' && action.startsWith('orchestration.');
+}
+
+function isCoreOrchestrationCardSubmission(activity: any): activity is { value: CoreOrchestrationCardSubmission } {
+  const value = coreOrchestrationCardValue(activity);
+  if (!value || value.schemaVersion !== '1' || typeof value.action !== 'string'
+    || !CORE_ORCHESTRATION_CARD_ACTIONS.has(value.action)
+    || typeof value.jobId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(value.jobId)) return false;
+  const allowed = value.action === 'orchestration.provide-input'
+    ? new Set(['schemaVersion', 'action', 'jobId', 'input'])
+    : new Set(['schemaVersion', 'action', 'jobId']);
+  if (Object.keys(value).some((key) => !allowed.has(key))) return false;
+  if (value.action === 'orchestration.provide-input') {
+    return typeof value.input === 'string' && value.input.trim().length > 0 && value.input.length <= 2_000;
+  }
+  return true;
+}
+
+function coreOrchestrationErrorActivity(message: string): CoreOrchestrationTeamsActivity {
+  return {
+    type: 'message',
+    attachmentLayout: 'list',
+    attachments: [{
+      contentType: 'application/vnd.microsoft.card.adaptive',
+      content: {
+        type: 'AdaptiveCard',
+        $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+        version: '1.2',
+        msteams: { width: 'Full' },
+        body: [
+          { type: 'TextBlock', text: 'Core 에이전트 작업', size: 'Large', weight: 'Bolder', wrap: true },
+          { type: 'TextBlock', text: message.slice(0, 2_000), wrap: true },
+        ],
+      },
+    }],
+  };
+}
+
+async function sendCoreOrchestrationActivity(
+  send: BotSend,
+  activity: CoreOrchestrationTeamsActivity,
+): Promise<void> {
+  await send('', undefined, activity);
+}
+
+function coreOrchestrationActivityIdempotencyKey(activity: any, scope: AgentJobScope): string {
+  const source = nonEmptyString(activity?.id, 200) ?? JSON.stringify({
+    timestamp: nonEmptyString(activity?.timestamp, 80) ?? '',
+    text: nonEmptyString(activity?.text, 2_000) ?? '',
+  });
+  const digest = crypto.createHash('sha256').update(JSON.stringify({ scope, source }), 'utf8').digest('hex');
+  return `teams-core-chat-v1:${digest}`;
+}
+
+async function resolveCoreOrchestrationCommand(
+  activity: any,
+  scope: AgentJobScope,
+  command: CoreOrchestrationChatCommand,
+): Promise<CoreOrchestrationTeamsActivity> {
+  const serverScope = createServerDerivedCoreScope(scope);
+  if (command.kind === 'submit') {
+    const result = await coreOrchestrationService.submit(serverScope, {
+      idempotencyKey: coreOrchestrationActivityIdempotencyKey(activity, scope),
+      prompt: command.prompt,
+      mode: command.mode,
+    });
+    return createCoreOrchestrationJobActivity(result.job);
+  }
+  if (command.kind === 'list') {
+    return createCoreOrchestrationListActivity(
+      coreOrchestrationService.list(serverScope, { limit: 20 }),
+      coreOrchestrationService.listProviderFacts(),
+    );
+  }
+  if (command.kind === 'status') {
+    const job = coreOrchestrationService.get(serverScope, { jobId: command.jobId });
+    return job
+      ? createCoreOrchestrationJobActivity(job)
+      : coreOrchestrationErrorActivity('요청한 작업을 찾을 수 없습니다.');
+  }
+  const request = { jobId: command.jobId };
+  if (command.kind === 'provide-input') {
+    const result = await coreOrchestrationService.provideInput(serverScope, { ...request, input: command.input });
+    if (!result) return coreOrchestrationErrorActivity('요청한 작업을 찾을 수 없습니다.');
+    if (result.status === 'unsupported') {
+      return coreOrchestrationErrorActivity('이 작업은 현재 추가 입력 재개를 지원하지 않습니다.');
+    }
+    return createCoreOrchestrationJobActivity(result.job);
+  }
+  const job = await coreOrchestrationService[command.kind](serverScope, request);
+  return job
+    ? createCoreOrchestrationJobActivity(job)
+    : coreOrchestrationErrorActivity('요청한 작업을 찾을 수 없습니다.');
+}
+
+async function handleCoreOrchestrationChatCommand(
+  activity: any,
+  send: BotSend,
+  command: CoreOrchestrationChatCommand,
+): Promise<void> {
+  const scope = activityScope(activity);
+  if (!scope) {
+    await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity('인증된 Teams 사용자·대화·테넌트 정보가 필요합니다.'));
+    return;
+  }
+  try {
+    await sendCoreOrchestrationActivity(send, await resolveCoreOrchestrationCommand(activity, scope, command));
+  } catch (error) {
+    const message = error instanceof AgentMutationAuthorizationError
+      ? '이 작업을 조회하거나 변경할 권한이 없습니다.'
+      : error instanceof AgentExecutionUnavailableError
+        ? '현재 실행 가능한 Core provider가 없습니다.'
+        : error instanceof AgentCapacityError
+          ? '현재 실행 용량이 가득 찼습니다. 잠시 후 다시 시도하세요.'
+          : 'Core 에이전트 요청을 처리하지 못했습니다.';
+    await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity(message));
+  }
+}
+
+async function handleCoreOrchestrationCardSubmission(activity: any, send: BotSend): Promise<void> {
+  if (!isCoreOrchestrationCardSubmission(activity)) {
+    await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity('유효하지 않은 Core 에이전트 카드 요청입니다.'));
+    return;
+  }
+  const value = coreOrchestrationCardValue(activity)!;
+  const kind = String(value.action).slice('orchestration.'.length);
+  const command: CoreOrchestrationChatCommand = kind === 'provide-input'
+    ? { kind, jobId: String(value.jobId), input: String(value.input) }
+    : { kind: kind as 'cancel' | 'approve' | 'retry', jobId: String(value.jobId) };
+  await handleCoreOrchestrationChatCommand(activity, send, command);
+}
+
+async function handleCoreOrchestrationInvoke(activity: any): Promise<{
+  status: 200;
+  body: { statusCode: 200; type: 'application/vnd.microsoft.card.adaptive'; value: unknown };
+}> {
+  let rendered = coreOrchestrationErrorActivity('유효하지 않은 Core 에이전트 카드 요청입니다.');
+  const capture: BotSend = async (_text, _envelope, activityOverride) => {
+    if (activityOverride) rendered = activityOverride as CoreOrchestrationTeamsActivity;
+    return { state: 'connector-accepted' };
+  };
+  await handleCoreOrchestrationCardSubmission(activity, capture);
+  return {
+    status: 200,
+    body: {
+      statusCode: 200,
+      type: 'application/vnd.microsoft.card.adaptive',
+      value: rendered.attachments[0].content,
+    },
+  };
+}
+
 async function handleBotResponseEngine(
   activity: any,
   send: BotSend,
@@ -3694,6 +3879,15 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
   const normalizedText = userText.toLowerCase();
   const scope = activityScope(activity);
   const execute = async (): Promise<void> => {
+    const coreCommand = parseCoreOrchestrationChatCommand(userText);
+    if (coreCommand) {
+      await handleCoreOrchestrationChatCommand(activity, send, coreCommand);
+      return;
+    }
+    if (/^(?:agent|에이전트)\b/iu.test(userText)) {
+      await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity('지원하지 않거나 형식이 잘못된 Core 에이전트 명령입니다.'));
+      return;
+    }
     if (normalizedText === 'mode' || normalizedText === 'response-mode' || normalizedText === '응답 모드') {
       await handleResponseModeCommand(activity, send);
       return;
@@ -4034,10 +4228,20 @@ if (teamsApp) {
       return;
     }
 
+    if (activity?.type === 'message' && hasCoreOrchestrationCardValue(activity)) {
+      const runtimeSend = createRuntimeBotSender(activity, send);
+      await handleCoreOrchestrationCardSubmission(activity, runtimeSend);
+      return;
+    }
+
     if (activity?.type === 'message' && hasGenUiActionValue(activity)) {
       const runtimeSend = createRuntimeBotSender(activity, send);
       await handleGenUiSubmit(activity, runtimeSend);
       return;
+    }
+
+    if (activity?.type === 'invoke' && hasCoreOrchestrationCardValue(activity)) {
+      return handleCoreOrchestrationInvoke(activity);
     }
 
     if (activity?.type === 'invoke' && hasGenUiActionValue(activity)) {
@@ -4050,6 +4254,9 @@ if (teamsApp) {
 
   for (const action of GENUI_CARD_ACTIONS) {
     teamsApp.on(`card.action.${action}`, async ({ activity }: any) => handleGenUiAction(activity));
+  }
+  for (const action of CORE_ORCHESTRATION_CARD_ACTIONS) {
+    teamsApp.on(`card.action.${action}`, async ({ activity }: any) => handleCoreOrchestrationInvoke(activity));
   }
 } else {
   http.post('/api/messages', async (request: any, response: any) => {
@@ -4067,12 +4274,27 @@ if (teamsApp) {
       return;
     }
 
+    if (request.body?.type === 'message' && hasCoreOrchestrationCardValue(request.body)) {
+      const messages: string[] = [];
+      const activities: unknown[] = [];
+      const send = createBotSender(undefined, messages, activities);
+      await handleCoreOrchestrationCardSubmission(request.body, send);
+      response.json({ messages, activities });
+      return;
+    }
+
     if (request.body?.type === 'message' && hasGenUiActionValue(request.body)) {
       const messages: string[] = [];
       const activities: unknown[] = [];
       const send = createBotSender(undefined, messages, activities);
       await handleGenUiSubmit(request.body, send);
       response.json({ messages, activities });
+      return;
+    }
+
+    if (request.body?.type === 'invoke' && hasCoreOrchestrationCardValue(request.body)) {
+      const invokeResponse = await handleCoreOrchestrationInvoke(request.body);
+      response.status(invokeResponse.status).json(invokeResponse.body);
       return;
     }
 
