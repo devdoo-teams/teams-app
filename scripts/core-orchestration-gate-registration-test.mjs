@@ -16,15 +16,20 @@ const task4Tests = [
   'scripts/core-orchestration-route-test.ts',
   'scripts/client-orchestration-panel-test.tsx',
   'scripts/client-app-orchestration-integration-test.tsx',
-];
-const optionalRouteMountTests = [
-  'scripts/core-orchestration-route-mount-integration-test.ts',
-  'scripts/core-orchestration-route-mount-test.ts',
   'scripts/core-orchestration-index-mount-test.ts',
-  'scripts/core-orchestration-index-integration-test.ts',
-].filter((script) => fs.existsSync(path.join(sourceCwd, script)));
+  'scripts/core-orchestration-chat-card-test.ts',
+  'scripts/core-orchestration-teams-chat-wiring-test.ts',
+  'scripts/core-orchestration-teams-chat-runtime-test.ts',
+  'scripts/core-orchestration-confirmation-idempotency-test.tsx',
+  'scripts/core-orchestration-runtime-composition-test.ts',
+];
 
-for (const script of [...task4Tests, ...optionalRouteMountTests]) {
+for (const script of task4Tests) {
+  assert.equal(
+    fs.existsSync(path.join(sourceCwd, script)),
+    true,
+    `Required MP-262 test file must exist: ${script}`,
+  );
   const matches = invocations.filter(({ args }) => args.at(-1) === script);
   assert.equal(
     matches.length,
