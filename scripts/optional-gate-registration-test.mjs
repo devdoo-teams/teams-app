@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const packageJson = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const workflow = fs.readFileSync(new URL('../.github/workflows/core-ci.yml', import.meta.url), 'utf8');
 const scripts = packageJson.scripts ?? {};
@@ -13,16 +16,24 @@ const expectedOptionalBuilds = [
   'build:client',
   'build:server',
   'build:mcp',
+  'build:optional-providers',
 ];
-const requiredOptionalTests = [
-  'test:grok-engine',
-  'test:grok-bot-runtime',
-  'test:github-agent-tasks-contract',
-  'test:github-agent-tasks-adapter',
-  'test:github-agent-tasks-pagination-rate-limit',
-  'test:github-agent-tasks-error-redaction',
-  'test:external-collaboration-boundary',
-];
+
+function testTarget(command = '') {
+  const match = String(command).match(/^(?:node(?: --import \S+)?|tsx) (scripts\/[A-Za-z0-9._/-]+-test\.(?:mjs|ts))(?:\s|$)/u);
+  return match?.[1];
+}
+
+const providerFixturePattern = /^(?:grok-(?:response-engine|bot-runtime|provider-runtime-adapter)|github-agent-tasks-[A-Za-z0-9-]+|external-collaboration-boundary|optional-provider-build)-test\.(?:mjs|ts)$/u;
+const requiredOptionalFixtures = fs.readdirSync(path.join(root, 'scripts'))
+  .filter((file) => providerFixturePattern.test(file))
+  .map((file) => `scripts/${file}`)
+  .sort();
+const scriptsByFixture = new Map();
+for (const [name, command] of Object.entries(scripts)) {
+  const target = testTarget(command);
+  if (target) scriptsByFixture.set(target, [...(scriptsByFixture.get(target) ?? []), name]);
+}
 
 assert.deepEqual(
   npmRunNames(scripts['build:optional']),
@@ -31,14 +42,22 @@ assert.deepEqual(
 );
 
 const optionalTests = npmRunNames(scripts['test:optional']);
-for (const testName of requiredOptionalTests) {
+for (const fixture of requiredOptionalFixtures) {
+  const mappedScripts = scriptsByFixture.get(fixture) ?? [];
+  assert.equal(mappedScripts.length, 1, `${fixture} must be mapped by exactly one declared npm test script`);
+  const [testName] = mappedScripts;
   assert.equal(
     optionalTests.filter((name) => name === testName).length,
     1,
-    `test:optional must register ${testName} exactly once`,
+    `test:optional must register ${testName} (${fixture}) exactly once`,
   );
-  assert.equal(typeof scripts[testName], 'string', `${testName} must resolve to a declared npm script`);
+  assert.equal(testTarget(scripts[testName]), fixture, `${testName} must execute ${fixture}`);
 }
+assert.equal(
+  optionalTests.includes('test:azure-github-handoff'),
+  false,
+  'azure-github-handoff is an Azure release handoff contract, not an optional provider fixture',
+);
 assert.equal(
   optionalTests.some((name) => /buzz/iu.test(name)),
   false,

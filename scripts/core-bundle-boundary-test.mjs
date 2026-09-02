@@ -51,6 +51,11 @@ assert.doesNotMatch(
 );
 assert.doesNotMatch(
   serverEntry,
+  /\b(?:createGitHubAgentTasksAdapter|createGrokProviderRuntimeAdapter|OPTIONAL_PROVIDER_BUILD_MANIFEST|github-agent-tasks)\b/,
+  'core server artifact must not embed optional durable provider implementations',
+);
+assert.doesNotMatch(
+  serverEntry,
   /OPENAI_API_KEY|OPENAI_MODEL|LOCAL_MODEL_BASE_URL|LOCAL_MODEL_NAME|XAI_API_KEY|XAI_MODEL|XAI_BASE_URL/,
   'core server artifact must not expose optional provider configuration paths',
 );
