@@ -58,6 +58,8 @@ export interface AgentDispatchStatePort {
   ): Promise<AgentDispatchRecord | undefined>;
   /** Performs a read-only dependency probe without creating durable state. */
   probeDependency?(): Promise<{ reachable: true }>;
+  /** Reads the latest durable worker observation without mutating shared state. */
+  readWorkerHeartbeat?(): Promise<{ observedAt: string; source: string } | undefined>;
 }
 
 export interface AzureQueueClientPort {
@@ -188,22 +190,32 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
     workerHeartbeat?: { observedAt: string; source: string };
     maximumHeartbeatAgeMs?: number;
   } = {}): Promise<AzureDispatchHealth> {
-    const [queueDependency, stateDependency] = await Promise.all([
-      probeDependency(this.client.probeDependency?.bind(this.client)),
+    const [stateDependency, durableHeartbeat] = await Promise.all([
       probeDependency(this.state.probeDependency?.bind(this.state)),
+      readWorkerHeartbeat(this.state.readWorkerHeartbeat?.bind(this.state)),
     ]);
     const maximumHeartbeatAgeMs = options.maximumHeartbeatAgeMs ?? 30_000;
     if (!Number.isSafeInteger(maximumHeartbeatAgeMs) || maximumHeartbeatAgeMs < 1 || maximumHeartbeatAgeMs > 300_000) {
       throw new TypeError('maximum heartbeat age must be between 1 and 300000 milliseconds');
     }
-    const heartbeat = classifyWorkerHeartbeat(options.workerHeartbeat, this.clock.now(), maximumHeartbeatAgeMs);
+    const heartbeat = classifyWorkerHeartbeat(
+      options.workerHeartbeat ?? durableHeartbeat.value,
+      this.clock.now(),
+      maximumHeartbeatAgeMs,
+    );
+    const observedStateDependency = durableHeartbeat.failed
+      ? Object.freeze({ state: 'unavailable' as const })
+      : stateDependency;
+    const queueDependency = Object.freeze({
+      state: heartbeat.state === 'observed' ? 'reachable' as const : 'unverified' as const,
+    });
     const ready = queueDependency.state === 'reachable'
-      && stateDependency.state === 'reachable'
+      && observedStateDependency.state === 'reachable'
       && heartbeat.state === 'observed';
     return Object.freeze({
       liveness: Object.freeze({ state: 'alive' as const }),
       configuration: Object.freeze({ state: 'configured' as const }),
-      dependencies: Object.freeze({ queue: queueDependency, state: stateDependency }),
+      dependencies: Object.freeze({ queue: queueDependency, state: observedStateDependency }),
       workerHeartbeat: heartbeat,
       readiness: Object.freeze({ state: ready ? 'ready' as const : 'unavailable' as const }),
       executionBoundary: ready ? 'external-linux-worker' : 'external-linux-worker-unverified',
@@ -460,14 +472,27 @@ export function createProductionAzureQueueClient(options: ProductionAzureQueueCl
     async sendPoisonMessage(messageText) {
       await poison.sendMessage(messageText);
     },
-    async probeDependency() {
-      if (!queue.getProperties || !poison.getProperties) {
-        throw new Error('Queue metadata probe is unavailable.');
-      }
-      await Promise.all([queue.getProperties(), poison.getProperties()]);
-      return { reachable: true };
-    },
   };
+}
+
+export function latestDurableWorkerHeartbeat(
+  records: readonly AgentDispatchRecord[],
+): { observedAt: string; source: string } | undefined {
+  let latest: { observedAt: string; source: string; observedAtMs: number } | undefined;
+  for (const record of records) {
+    const checkpoint = record.checkpoint;
+    if (checkpoint?.message !== 'worker heartbeat') continue;
+    const observedAt = checkpoint.recordedAt;
+    if (typeof observedAt !== 'string') continue;
+    const observedAtMs = Date.parse(observedAt);
+    if (!Number.isFinite(observedAtMs) || (latest && observedAtMs <= latest.observedAtMs)) continue;
+    latest = {
+      observedAt,
+      source: 'durable-dispatch-lease-renewal',
+      observedAtMs,
+    };
+  }
+  return latest && { observedAt: latest.observedAt, source: latest.source };
 }
 
 export function canonicalAgentTaskId(value: unknown): string {
@@ -667,6 +692,21 @@ async function probeDependency(
     return Object.freeze({ state: result.reachable === true ? 'reachable' : 'unavailable' });
   } catch {
     return Object.freeze({ state: 'unavailable' });
+  }
+}
+
+async function readWorkerHeartbeat(
+  read: (() => Promise<{ observedAt: string; source: string } | undefined>) | undefined,
+): Promise<Readonly<{
+  value?: { observedAt: string; source: string };
+  failed: boolean;
+}>> {
+  if (!read) return Object.freeze({ failed: false });
+  try {
+    const value = await read();
+    return Object.freeze({ ...(value ? { value } : {}), failed: false });
+  } catch {
+    return Object.freeze({ failed: true });
   }
 }
 

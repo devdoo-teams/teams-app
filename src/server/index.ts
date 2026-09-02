@@ -176,6 +176,7 @@ import {
   createProductionAzureQueueClient,
   type AgentDispatchRecord,
   type AgentDispatchStatePort,
+  latestDurableWorkerHeartbeat,
 } from './azure-agent-dispatch-queue.js';
 import {
   CoreOrchestrationService,
@@ -266,6 +267,10 @@ function createDispatchStatePort(runtimeStore: RuntimeStore): AgentDispatchState
     async probeDependency() {
       await runtimeStore.read<AgentDispatchRecord>(AZURE_DISPATCH_STATE_SCOPE, 'teams-worker-health-probe');
       return { reachable: true };
+    },
+    async readWorkerHeartbeat() {
+      const records = await runtimeStore.list<AgentDispatchRecord>(AZURE_DISPATCH_STATE_SCOPE, { limit: 100 });
+      return latestDurableWorkerHeartbeat(records.map(({ value }) => value));
     },
   };
 }
