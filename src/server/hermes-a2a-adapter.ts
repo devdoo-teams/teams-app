@@ -65,7 +65,6 @@ export async function createHermesA2AAdapter(
     throw new TypeError('Hermes credentialRef must be an uppercase environment variable reference.');
   }
   const environment = options.environment ?? process.env;
-  resolveBearerToken(environment, options.credentialRef);
   const now = options.now ?? (() => Date.now());
   const agentCardTtlMs = boundedTtl(options.agentCardTtlMs ?? 60_000);
   let cache = await loadClient();
@@ -76,14 +75,16 @@ export async function createHermesA2AAdapter(
       bearerTokenProvider: () => resolveBearerToken(environment, options.credentialRef),
       ...(options.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: options.requestTimeoutMs }),
     });
+    const advertisedCapabilities = validateHermesCard(
+      client.card,
+      client.selectedInterface,
+      origin,
+      expectedPeerIdentity,
+    );
+    resolveBearerToken(environment, options.credentialRef);
     return {
       client,
-      advertisedCapabilities: validateHermesCard(
-        client.card,
-        client.selectedInterface,
-        origin,
-        expectedPeerIdentity,
-      ),
+      advertisedCapabilities,
       validatedAt: now(),
     };
   }
@@ -340,8 +341,7 @@ function validateHermesCard(
 ): readonly string[] {
   if (card.name !== expectedPeerIdentity) throw new Error('Hermes A2A Agent Card peer identity does not match configuration.');
   if (
-    selectedInterface !== card.supportedInterfaces[0]
-    || selectedInterface.protocolBinding !== 'JSONRPC'
+    selectedInterface.protocolBinding !== 'JSONRPC'
     || selectedInterface.protocolVersion !== '1.0'
     || new URL(selectedInterface.url).origin !== configured.origin
   ) {

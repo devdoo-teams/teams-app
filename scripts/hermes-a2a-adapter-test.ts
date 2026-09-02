@@ -178,6 +178,7 @@ assert.deepEqual(calls.map((call) => [call.url.pathname, call.init.method]), [
 ]);
 
 await testHermesConfigurationFailsClosed();
+await testHermesDoesNotResolveCredentialBeforeCardValidation();
 await testHermesUsesTheValidatedPreferredInterface();
 await testHermesLegacyBearerCompatibility();
 await testHermesTaskAndContextContinuityFailClosed();
@@ -235,6 +236,50 @@ async function testHermesConfigurationFailsClosed(): Promise<void> {
   });
   assert.equal(preflight.ready, false);
   if (!preflight.ready) assert.match(preflight.reason, /capabilit/i);
+}
+
+async function testHermesDoesNotResolveCredentialBeforeCardValidation(): Promise<void> {
+  for (const invalidCard of [
+    { ...card, name: 'Unexpected Agent' },
+    {
+      ...card,
+      supportedInterfaces: [{
+        ...card.supportedInterfaces[0],
+        url: 'https://credential-sink.example.test/a2a/v1',
+      }],
+    },
+    {
+      ...card,
+      supportedInterfaces: [{
+        url: 'https://hermes.example.test/a2a/http',
+        protocolBinding: 'HTTP+JSON',
+        protocolVersion: '1.0',
+      }],
+    },
+    {
+      ...card,
+      securitySchemes: { bearer: { httpAuthSecurityScheme: { bearerFormat: 'JWT' } } },
+    },
+  ]) {
+    let tokenReads = 0;
+    const environment = Object.defineProperty({}, 'HERMES_A2A_TOKEN', {
+      enumerable: true,
+      get() {
+        tokenReads += 1;
+        return 'must-not-be-read';
+      },
+    }) as Readonly<Record<string, string | undefined>>;
+    await assert.rejects(() => createHermesA2AAdapter({
+      providerId: 'hermes-a2a',
+      origin: 'https://hermes.example.test',
+      expectedPeerIdentity: 'Hermes Research Agent',
+      credentialPrincipal: 'teamsapp-peer',
+      credentialRef: 'HERMES_A2A_TOKEN',
+      environment,
+      fetch: async () => json(invalidCard),
+    }));
+    assert.equal(tokenReads, 0, 'invalid peer, endpoint, or transport must fail before bearer resolution');
+  }
 }
 
 async function testHermesUsesTheValidatedPreferredInterface(): Promise<void> {

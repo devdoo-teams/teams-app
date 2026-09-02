@@ -217,6 +217,12 @@ function validateSecurityRequirement(
   return validateRequirementSchemes(requirement, securitySchemes);
 }
 
+function optionalCapabilityBoolean(value: unknown): boolean {
+  if (value === undefined) return false;
+  if (typeof value !== 'boolean') fail('INVALID_AGENT_CARD');
+  return value;
+}
+
 function validateCard(value: unknown): A2ARemoteAgentCard {
   const card = asCardRecord(value);
   if (typeof card.name !== 'string' || typeof card.description !== 'string' || typeof card.version !== 'string') fail('INVALID_AGENT_CARD');
@@ -239,10 +245,10 @@ function validateCard(value: unknown): A2ARemoteAgentCard {
       ...(typeof item.tenant === 'string' ? { tenant: item.tenant } : {}),
     });
   });
-  const preferredInterface = supportedInterfaces[0];
-  if (preferredInterface.protocolBinding !== 'JSONRPC' || preferredInterface.protocolVersion !== PROTOCOL_VERSION) {
-    fail('UNSUPPORTED_PROTOCOL');
-  }
+  const selectedInterface = supportedInterfaces.find((item) => (
+    item.protocolBinding === 'JSONRPC' && item.protocolVersion === PROTOCOL_VERSION
+  ));
+  if (!selectedInterface) fail('UNSUPPORTED_PROTOCOL');
   const rawSecuritySchemes = asCardRecord(card.securitySchemes);
   const securitySchemes = Object.freeze(Object.fromEntries(
     Object.entries(rawSecuritySchemes).map(([name, scheme]) => [name, validateSecurityScheme(scheme)]),
@@ -252,11 +258,9 @@ function validateCard(value: unknown): A2ARemoteAgentCard {
     validateSecurityRequirement(entry, securitySchemes)
   ));
   const capabilities = asCardRecord(card.capabilities);
-  if (
-    typeof capabilities.streaming !== 'boolean'
-    || typeof capabilities.pushNotifications !== 'boolean'
-    || typeof capabilities.extendedAgentCard !== 'boolean'
-  ) fail('INVALID_AGENT_CARD');
+  const streaming = optionalCapabilityBoolean(capabilities.streaming);
+  const pushNotifications = optionalCapabilityBoolean(capabilities.pushNotifications);
+  const extendedAgentCard = optionalCapabilityBoolean(capabilities.extendedAgentCard);
   if (!Array.isArray(card.defaultInputModes) || !Array.isArray(card.defaultOutputModes) || !Array.isArray(card.skills)) fail('INVALID_AGENT_CARD');
   return Object.freeze({
     name: card.name,
@@ -264,9 +268,9 @@ function validateCard(value: unknown): A2ARemoteAgentCard {
     version: card.version,
     supportedInterfaces: Object.freeze(supportedInterfaces),
     capabilities: Object.freeze({
-      streaming: capabilities.streaming,
-      pushNotifications: capabilities.pushNotifications,
-      extendedAgentCard: capabilities.extendedAgentCard,
+      streaming,
+      pushNotifications,
+      extendedAgentCard,
     }),
     securitySchemes,
     securityRequirements: Object.freeze(securityRequirements),
@@ -368,8 +372,16 @@ export async function createA2ARemoteClient(baseUrl: string, options: ClientOpti
   if (!cardResponse.ok) fail('HTTP_ERROR');
   const rawCard = await readJson(cardResponse);
   const card = validateCard(rawCard);
-  const selectedInterface = card.supportedInterfaces[0] as A2ARemoteJsonRpcInterface;
+  const selectedInterface = card.supportedInterfaces.find((item) => (
+    item.protocolBinding === 'JSONRPC' && item.protocolVersion === PROTOCOL_VERSION
+  )) as A2ARemoteJsonRpcInterface;
   const endpoint = new URL(selectedInterface.url);
+
+  function withSelectedTenant(params: Record<string, unknown>): Record<string, unknown> {
+    return selectedInterface.tenant === undefined
+      ? params
+      : { tenant: selectedInterface.tenant, ...params };
+  }
 
   async function authorizationHeaders(): Promise<Record<string, string>> {
     if (card.securityRequirements.length === 0) return {};
@@ -389,7 +401,12 @@ export async function createA2ARemoteClient(baseUrl: string, options: ClientOpti
     const response = await fetchWithTimeout(fetcher, endpoint, {
       method: 'POST',
       headers: { ...headers, accept: 'application/json', 'content-type': 'application/json', 'a2a-version': PROTOCOL_VERSION },
-      body: JSON.stringify({ jsonrpc: '2.0', id: requestId(), method, params }),
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: requestId(),
+        method,
+        params: withSelectedTenant(params),
+      }),
     }, timeoutMs, requestOptions.signal);
     if (response.status === 401 || response.status === 403) fail('AUTHENTICATION_FAILED');
     if (!response.ok) fail('HTTP_ERROR');
