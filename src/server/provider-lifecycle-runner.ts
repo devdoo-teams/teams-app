@@ -1,38 +1,31 @@
-import type { A2AJsonData, A2AScope } from './a2a-contract.js';
+import type { A2AScope } from './a2a-contract.js';
 import {
   hasProviderCompletionEvidence,
   resolveProviderRuntimeState,
+  type ProviderAcceptedReceipt,
   type ProviderRuntimeAdapter,
   type ProviderRuntimeArtifact,
   type ProviderRuntimeIdentities,
   type ProviderRuntimeObservation,
   type ProviderRuntimeOperationInput,
-  type ProviderRuntimeReceipt,
   type ProviderRuntimeState,
 } from './provider-runtime-adapter.js';
-
-export type ProviderLifecycleState =
-  | 'submitting'
-  | 'accepted'
-  | 'working'
-  | 'input-required'
-  | 'auth-required'
-  | 'completed'
-  | 'failed'
-  | 'canceled'
-  | 'quarantined';
 
 export type ProviderLifecycleQuarantineReason =
   | 'delivery-unknown'
   | 'unknown-provider-state'
-  | 'invalid-provider-response'
+  | 'missing-accepted-receipt'
   | 'invalid-completion-evidence';
+
+export type ProviderLifecycleState = Exclude<ProviderRuntimeState, 'delivery-unknown' | 'unknown'>
+  | 'submitting'
+  | 'quarantined';
 
 export type ProviderLifecycleSubmittingIntent = Readonly<{
   scope: A2AScope;
   idempotencyKey: string;
   requestHash: string;
-  payload: A2AJsonData;
+  payload: Readonly<Record<string, unknown>>;
   requestedCapabilities: readonly string[];
   identities: ProviderRuntimeIdentities;
 }>;
@@ -40,27 +33,25 @@ export type ProviderLifecycleSubmittingIntent = Readonly<{
 export type ProviderLifecycleRecord = ProviderLifecycleSubmittingIntent & Readonly<{
   state: ProviderLifecycleState;
   revision: number;
+  rawProviderState?: string;
+  receipt?: ProviderAcceptedReceipt;
+  result?: string;
+  error?: string;
+  artifacts?: readonly ProviderRuntimeArtifact[];
+  auditRefs?: readonly string[];
+  quarantine?: Readonly<{ reason: ProviderLifecycleQuarantineReason }>;
+  cancelRequestedAt?: string;
   createdAt: string;
   updatedAt: string;
-  rawProviderState?: string;
-  receipt?: ProviderRuntimeReceipt;
-  result?: string;
-  artifacts?: readonly ProviderRuntimeArtifact[];
-  error?: string;
-  cancelRequestedAt?: string;
   terminalAt?: string;
-  quarantine?: Readonly<{
-    reason: ProviderLifecycleQuarantineReason;
-    rawState?: string;
-  }>;
 }>;
 
 export type ProviderLifecycleStore = Readonly<{
-  get: (scope: A2AScope, idempotencyKey: string) => Promise<ProviderLifecycleRecord | undefined>;
-  createOrGetSubmitting: (
+  get(scope: A2AScope, idempotencyKey: string): Promise<ProviderLifecycleRecord | undefined>;
+  createOrGetSubmitting(
     intent: ProviderLifecycleSubmittingIntent,
-  ) => Promise<Readonly<{ record: ProviderLifecycleRecord; created: boolean }>>;
-  update: (record: ProviderLifecycleRecord, expectedRevision: number) => Promise<ProviderLifecycleRecord>;
+  ): Promise<{ record: ProviderLifecycleRecord; created: boolean }>;
+  update(record: ProviderLifecycleRecord, expectedRevision: number): Promise<ProviderLifecycleRecord>;
 }>;
 
 export type ProviderLifecycleRunInput = ProviderLifecycleSubmittingIntent & Readonly<{
@@ -68,366 +59,286 @@ export type ProviderLifecycleRunInput = ProviderLifecycleSubmittingIntent & Read
   signal?: AbortSignal;
 }>;
 
-export type ProviderLifecycleRunnerOptions = Readonly<{
-  adapter: ProviderRuntimeAdapter;
-  store: ProviderLifecycleStore;
-  pollIntervalMs?: number;
-  maxPolls?: number;
-  now?: () => number;
-}>;
-
 export class ProviderLifecycleConflictError extends Error {
-  constructor(readonly idempotencyKey: string) {
-    super('Provider lifecycle idempotency key already exists with a different request hash.');
+  readonly code = 'IDEMPOTENCY_CONFLICT' as const;
+
+  constructor() {
+    super('The provider lifecycle idempotency key is already bound to a different request hash.');
     this.name = 'ProviderLifecycleConflictError';
   }
 }
 
-export class ProviderLifecycleContractError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ProviderLifecycleContractError';
-  }
-}
-
-class LifecycleBoundaryError extends Error {
-  constructor(readonly kind: 'deadline' | 'canceled') {
-    super(kind === 'deadline' ? 'Provider lifecycle deadline exceeded.' : 'Provider lifecycle was canceled.');
-  }
-}
-
-type RunBoundary = Readonly<{
-  deadlineAtMs: number;
-  signal: AbortSignal;
-  termination: () => 'deadline' | 'canceled' | undefined;
-  close: () => void;
+export type ProviderLifecycleRunnerOptions = Readonly<{
+  adapter: ProviderRuntimeAdapter;
+  store: ProviderLifecycleStore;
+  pollIntervalMs?: number;
+  now?: () => number;
+  wait?: (delayMs: number, signal: AbortSignal) => Promise<void>;
 }>;
 
-const DEFAULT_POLL_INTERVAL_MS = 250;
-const DEFAULT_MAX_POLLS = 240;
-
 export class ProviderLifecycleRunner {
-  private readonly adapter: ProviderRuntimeAdapter;
-  private readonly store: ProviderLifecycleStore;
   private readonly pollIntervalMs: number;
-  private readonly maxPolls: number;
   private readonly now: () => number;
+  private readonly wait: (delayMs: number, signal: AbortSignal) => Promise<void>;
 
-  constructor(options: ProviderLifecycleRunnerOptions) {
-    this.adapter = options.adapter;
-    this.store = options.store;
-    this.pollIntervalMs = boundedInteger(options.pollIntervalMs, DEFAULT_POLL_INTERVAL_MS, 0, 60_000, 'pollIntervalMs');
-    this.maxPolls = boundedInteger(options.maxPolls, DEFAULT_MAX_POLLS, 1, 100_000, 'maxPolls');
-    this.now = options.now ?? Date.now;
+  constructor(private readonly options: ProviderLifecycleRunnerOptions) {
+    if (!options?.adapter || !options?.store) throw new TypeError('provider lifecycle adapter and store are required');
+    this.pollIntervalMs = boundedNonnegative(options.pollIntervalMs ?? 250, 'pollIntervalMs');
+    this.now = options.now ?? (() => Date.now());
+    this.wait = options.wait ?? waitForDelay;
   }
 
   async run(input: ProviderLifecycleRunInput): Promise<ProviderLifecycleRecord> {
-    const normalized = normalizeInput(input, this.adapter.providerId);
-    const existing = await this.store.get(normalized.scope, normalized.idempotencyKey);
-    if (existing) {
-      assertMatchingRequest(existing, normalized);
-      if (isProviderLifecycleTerminal(existing.state)) return existing;
-    }
+    validateInput(input, this.options.adapter.providerId);
+    const timeoutMs = boundedPositive(input.timeoutMs, 'timeoutMs');
+    const deadlineAtMs = this.now() + timeoutMs;
+    const controller = new AbortController();
+    const cleanupParent = forwardAbort(input.signal, controller);
+    const timer = setTimeout(() => {
+      controller.abort(new Error('Provider lifecycle deadline exceeded.'));
+    }, timeoutMs);
+    const operation = operationInput(input, deadlineAtMs, controller.signal);
 
-    const boundary = createBoundary(normalized.timeoutMs, input.signal, this.now);
-    const operation = operationInput(normalized, boundary);
     try {
-      const preflight = await withinBoundary(this.adapter.preflight(operation), boundary);
+      const preflight = await this.options.adapter.preflight(operation);
       if (!preflight.ready) {
-        throw new ProviderLifecycleContractError(nonempty(preflight.reason, 'preflight.reason'));
+        throw new Error(preflight.reason?.trim() || 'Provider preflight is not ready.');
+      }
+      if (input.requestedCapabilities.some((capability) => !preflight.capabilities.includes(capability))) {
+        throw new Error('Provider preflight does not advertise every requested capability.');
       }
 
-      const created = await this.store.createOrGetSubmitting(normalized);
-      assertMatchingRequest(created.record, normalized);
+      const created = await this.options.store.createOrGetSubmitting(intentFrom(input));
       let record = created.record;
+      assertSameRequest(record, input);
+
       if (!created.created) {
         if (isProviderLifecycleTerminal(record.state) || record.state === 'quarantined') return record;
-        if (record.state === 'submitting' && !record.receipt) {
-          return this.quarantine(record, 'delivery-unknown', record.rawProviderState);
-        }
         if (!record.receipt) {
-          return this.quarantine(record, 'invalid-provider-response', record.rawProviderState);
+          return this.quarantine(record, 'delivery-unknown', record.rawProviderState ?? 'DELIVERY_UNKNOWN');
         }
-        return await this.poll(record, normalized, boundary);
+        return await this.observe(record, operation, controller);
       }
 
+      let submitted: ProviderRuntimeObservation;
       try {
-        const observation = await withinBoundary(this.adapter.submit(operation), boundary);
-        record = await this.acceptSubmission(record, observation);
+        submitted = await this.options.adapter.submit(operation);
       } catch (error) {
-        if (error instanceof LifecycleBoundaryError) {
-          return this.quarantine(record, 'delivery-unknown', undefined, error.message);
-        }
-        return this.fail(record, safeError(error));
+        if (controller.signal.aborted) return this.cancel(record, operation, controller.signal.reason);
+        return this.quarantine(record, 'delivery-unknown', 'DELIVERY_UNKNOWN', safeError(error));
       }
-
-      if (record.state !== 'accepted' && record.state !== 'working') return record;
-      return await this.poll(record, normalized, boundary);
+      record = await this.applyObservation(record, submitted);
+      return record.state === 'accepted' || record.state === 'working'
+        ? await this.observe(record, operation, controller)
+        : record;
     } finally {
-      boundary.close();
+      clearTimeout(timer);
+      cleanupParent();
     }
   }
 
-  private async acceptSubmission(
+  private async observe(
     record: ProviderLifecycleRecord,
-    observation: ProviderRuntimeObservation,
+    operation: ProviderRuntimeOperationInput,
+    controller: AbortController,
   ): Promise<ProviderLifecycleRecord> {
-    const rawState = validRawState(observation.rawState);
-    const canonical = resolveProviderRuntimeState(this.adapter, rawState);
-    if (canonical === 'delivery-unknown') {
-      return this.quarantine(record, 'delivery-unknown', rawState);
-    }
-    if (canonical === 'unknown') {
-      return this.quarantine(record, 'unknown-provider-state', rawState);
-    }
-
-    if (requiresAcceptedReceipt(canonical)) {
-      const providerExecutionId = validProviderExecutionId(observation.providerExecutionId);
-      const receipt: ProviderRuntimeReceipt = {
-        providerExecutionId,
-        ...(observation.providerContextId === undefined
-          ? {}
-          : { providerContextId: nonempty(observation.providerContextId, 'providerContextId') }),
-        acceptedAt: isoNow(this.now),
-        rawState,
-      };
-      record = await this.transition(record, {
-        state: 'accepted',
-        receipt,
-        rawProviderState: rawState,
-      });
-    }
-    if (canonical === 'accepted') return record;
-    return this.applyObservation(record, observation, canonical);
-  }
-
-  private async poll(
-    initial: ProviderLifecycleRecord,
-    input: ProviderLifecycleRunInput,
-    boundary: RunBoundary,
-  ): Promise<ProviderLifecycleRecord> {
-    let record = initial;
-    if (!record.receipt) return this.quarantine(record, 'invalid-provider-response', record.rawProviderState);
-    const operation = { ...operationInput(input, boundary), receipt: record.receipt };
-
-    for (let poll = 0; poll < this.maxPolls; poll += 1) {
+    let current = record;
+    while (true) {
+      if (controller.signal.aborted) return this.cancel(current, operation, controller.signal.reason);
+      let observation: ProviderRuntimeObservation;
       try {
-        if (this.pollIntervalMs > 0) await wait(this.pollIntervalMs, boundary);
-        const observation = await withinBoundary(this.adapter.get(operation), boundary);
-        const rawState = validRawState(observation.rawState);
-        const canonical = resolveProviderRuntimeState(this.adapter, rawState);
-        if (canonical === 'delivery-unknown') {
-          return this.quarantine(record, 'delivery-unknown', rawState);
-        }
-        if (canonical === 'unknown') {
-          return this.quarantine(record, 'unknown-provider-state', rawState);
-        }
-        record = await this.applyObservation(record, observation, canonical);
-        if (record.state !== 'accepted' && record.state !== 'working') return record;
+        observation = await this.options.adapter.get({
+          ...operation,
+          signal: controller.signal,
+          receipt: requiredReceipt(current),
+        });
       } catch (error) {
-        if (error instanceof LifecycleBoundaryError) {
-          return this.cancel(record, input, boundary, error);
-        }
-        return this.quarantine(record, 'delivery-unknown', record.rawProviderState, safeError(error));
+        if (controller.signal.aborted) return this.cancel(current, operation, controller.signal.reason);
+        throw error;
       }
-    }
-    return this.cancel(record, input, boundary, new LifecycleBoundaryError('deadline'));
-  }
-
-  private async cancel(
-    record: ProviderLifecycleRecord,
-    input: ProviderLifecycleRunInput,
-    boundary: RunBoundary,
-    cause: LifecycleBoundaryError,
-  ): Promise<ProviderLifecycleRecord> {
-    if (!record.receipt) return this.quarantine(record, 'delivery-unknown', record.rawProviderState, cause.message);
-    const receipt = record.receipt;
-    record = await this.transition(record, {
-      cancelRequestedAt: isoNow(this.now),
-      error: cause.message,
-    });
-    try {
-      const cancellationBoundary = createBoundary(5_000, undefined, this.now);
-      try {
-        const observation = await withinBoundary(this.adapter.cancel({
-          ...operationInput(input, cancellationBoundary),
-          receipt,
-        }), cancellationBoundary);
-        const rawState = validRawState(observation.rawState);
-        const canonical = resolveProviderRuntimeState(this.adapter, rawState);
-        if (canonical === 'unknown') {
-          return this.quarantine(record, 'unknown-provider-state', rawState, cause.message);
+      current = await this.applyObservation(current, observation);
+      if (current.state !== 'accepted' && current.state !== 'working') return current;
+      if (this.pollIntervalMs > 0) {
+        try {
+          await this.wait(this.pollIntervalMs, controller.signal);
+        } catch {
+          return this.cancel(current, operation, controller.signal.reason);
         }
-        if (canonical === 'delivery-unknown') {
-          return this.quarantine(record, 'delivery-unknown', rawState, cause.message);
-        }
-        return this.applyObservation(record, { ...observation, error: cause.message }, canonical);
-      } finally {
-        cancellationBoundary.close();
       }
-    } catch (error) {
-      return this.quarantine(record, 'delivery-unknown', record.rawProviderState, safeError(error));
     }
   }
 
   private async applyObservation(
     record: ProviderLifecycleRecord,
     observation: ProviderRuntimeObservation,
-    state: Exclude<ProviderRuntimeState, 'delivery-unknown' | 'unknown'>,
   ): Promise<ProviderLifecycleRecord> {
-    const rawProviderState = validRawState(observation.rawState);
-    if (state === 'completed' && !hasProviderCompletionEvidence(observation)) {
-      return this.quarantine(record, 'invalid-completion-evidence', rawProviderState);
+    const state = resolveProviderRuntimeState(this.options.adapter, observation.rawState);
+    if (state === 'delivery-unknown') {
+      return this.quarantine(record, 'delivery-unknown', observation.rawState);
     }
-    const terminal = state === 'completed' || state === 'failed' || state === 'canceled';
-    return this.transition(record, {
+    if (state === 'unknown') {
+      return this.quarantine(record, 'unknown-provider-state', observation.rawState);
+    }
+
+    let current = record;
+    const acceptedNow = !current.receipt;
+    if (acceptedNow) {
+      if (!observation.providerExecutionId?.trim()) {
+        return this.quarantine(record, 'missing-accepted-receipt', observation.rawState);
+      }
+      current = await this.persist(current, {
+        state: 'accepted',
+        rawProviderState: observation.rawState,
+        receipt: receiptFrom(observation, this.now()),
+      });
+    } else if (
+      observation.providerExecutionId !== undefined
+      && observation.providerExecutionId !== current.receipt?.providerExecutionId
+    ) {
+      return this.quarantine(current, 'missing-accepted-receipt', observation.rawState);
+    }
+
+    if (state === 'completed' && !hasProviderCompletionEvidence(observation)) {
+      return this.quarantine(current, 'invalid-completion-evidence', observation.rawState);
+    }
+    if (state === 'accepted' && acceptedNow && noObservationEvidence(observation)) return current;
+
+    return this.persist(current, {
       state,
-      rawProviderState,
-      ...(observation.result === undefined ? {} : { result: observation.result }),
-      ...(observation.artifacts === undefined ? {} : { artifacts: observation.artifacts }),
+      rawProviderState: observation.rawState,
+      ...(observation.result === undefined ? {} : { result: observation.result.trim() }),
       ...(observation.error === undefined ? {} : { error: observation.error }),
-      ...(terminal ? { terminalAt: isoNow(this.now) } : {}),
+      ...(observation.artifacts === undefined ? {} : { artifacts: clone(observation.artifacts) }),
+      ...(observation.auditRefs === undefined ? {} : { auditRefs: clone(observation.auditRefs) }),
+      ...(isProviderLifecycleTerminal(state) ? { terminalAt: new Date(this.now()).toISOString() } : {}),
     });
   }
 
-  private quarantine(
+  private async cancel(
+    record: ProviderLifecycleRecord,
+    operation: ProviderRuntimeOperationInput,
+    reason: unknown,
+  ): Promise<ProviderLifecycleRecord> {
+    const message = safeError(reason) || 'Provider lifecycle canceled.';
+    if (!record.receipt) {
+      return this.quarantine(record, 'delivery-unknown', record.rawProviderState ?? 'DELIVERY_UNKNOWN', message);
+    }
+    let current = record;
+    if (!current.cancelRequestedAt) {
+      current = await this.persist(current, {
+        cancelRequestedAt: new Date(this.now()).toISOString(),
+      });
+    }
+    const observation = await this.options.adapter.cancel({
+      ...operation,
+      signal: new AbortController().signal,
+      receipt: requiredReceipt(current),
+    });
+    const state = resolveProviderRuntimeState(this.options.adapter, observation.rawState);
+    if (state === 'unknown' || state === 'delivery-unknown') {
+      return this.quarantine(
+        current,
+        state === 'unknown' ? 'unknown-provider-state' : 'delivery-unknown',
+        observation.rawState,
+        message,
+      );
+    }
+    return this.persist(current, {
+      state,
+      rawProviderState: observation.rawState,
+      error: message,
+      ...(observation.artifacts === undefined ? {} : { artifacts: clone(observation.artifacts) }),
+      ...(isProviderLifecycleTerminal(state) ? { terminalAt: new Date(this.now()).toISOString() } : {}),
+    });
+  }
+
+  private async quarantine(
     record: ProviderLifecycleRecord,
     reason: ProviderLifecycleQuarantineReason,
-    rawState?: string,
+    rawProviderState: string,
     error?: string,
   ): Promise<ProviderLifecycleRecord> {
-    return this.transition(record, {
+    return this.persist(record, {
       state: 'quarantined',
-      ...(rawState === undefined ? {} : { rawProviderState: rawState }),
-      ...(error === undefined ? {} : { error }),
-      quarantine: { reason, ...(rawState === undefined ? {} : { rawState }) },
-      terminalAt: isoNow(this.now),
+      rawProviderState,
+      quarantine: { reason },
+      ...(error ? { error } : {}),
+      terminalAt: new Date(this.now()).toISOString(),
     });
   }
 
-  private fail(record: ProviderLifecycleRecord, error: string): Promise<ProviderLifecycleRecord> {
-    return this.transition(record, {
-      state: 'failed',
-      error,
-      terminalAt: isoNow(this.now),
-    });
-  }
-
-  private transition(
+  private async persist(
     record: ProviderLifecycleRecord,
-    change: Partial<ProviderLifecycleRecord>,
+    patch: Partial<ProviderLifecycleRecord>,
   ): Promise<ProviderLifecycleRecord> {
-    return this.store.update({ ...record, ...change }, record.revision);
+    return this.options.store.update({ ...record, ...patch }, record.revision);
   }
 }
 
 export function isProviderLifecycleTerminal(state: ProviderLifecycleState): boolean {
-  return state === 'completed' || state === 'failed' || state === 'canceled' || state === 'quarantined';
+  return state === 'completed' || state === 'failed' || state === 'canceled' || state === 'rejected';
 }
 
-function normalizeInput(input: ProviderLifecycleRunInput, providerId: string): ProviderLifecycleRunInput {
-  const scope = normalizeScope(input.scope);
-  const normalized: ProviderLifecycleRunInput = {
-    scope,
-    idempotencyKey: nonempty(input.idempotencyKey, 'idempotencyKey'),
-    requestHash: validRequestHash(input.requestHash),
-    payload: structuredClone(input.payload),
-    requestedCapabilities: Object.freeze(input.requestedCapabilities.map((value) => nonempty(value, 'requestedCapability'))),
-    identities: normalizeIdentities(input.identities),
-    timeoutMs: boundedInteger(input.timeoutMs, 0, 1, 24 * 60 * 60 * 1_000, 'timeoutMs'),
-    ...(input.signal === undefined ? {} : { signal: input.signal }),
-  };
-  if (normalized.identities.provider.id !== providerId) {
-    throw new ProviderLifecycleContractError('Provider identity does not match the selected runtime adapter.');
+function validateInput(input: ProviderLifecycleRunInput, providerId: string): void {
+  if (!input || typeof input !== 'object') throw new TypeError('provider lifecycle input is required');
+  if (input.identities.provider.id !== providerId) {
+    throw new Error('Provider lifecycle identity does not match the registered adapter.');
   }
-  return normalized;
+  if (!/^[a-f0-9]{64}$/u.test(input.requestHash)) throw new TypeError('requestHash must be a SHA-256 digest');
+  if (!input.idempotencyKey.trim()) throw new TypeError('idempotencyKey is required');
+  for (const value of [input.scope.tenantId, input.scope.requesterId, input.scope.conversationId]) {
+    if (typeof value !== 'string' || !value.trim()) throw new TypeError('server-derived provider scope is required');
+  }
 }
 
-function normalizeScope(scope: A2AScope): A2AScope {
+function operationInput(
+  input: ProviderLifecycleRunInput,
+  deadlineAtMs: number,
+  signal: AbortSignal,
+): ProviderRuntimeOperationInput {
   return {
-    tenantId: nonempty(scope.tenantId, 'scope.tenantId'),
-    requesterId: nonempty(scope.requesterId, 'scope.requesterId'),
-    conversationId: nonempty(scope.conversationId, 'scope.conversationId'),
-  };
-}
-
-function normalizeIdentities(value: ProviderRuntimeIdentities): ProviderRuntimeIdentities {
-  return {
-    provider: { id: nonempty(value.provider.id, 'identities.provider.id') },
-    credential: {
-      principalId: nonempty(value.credential.principalId, 'identities.credential.principalId'),
-      reference: nonempty(value.credential.reference, 'identities.credential.reference'),
-    },
-    execution: { id: nonempty(value.execution.id, 'identities.execution.id') },
-    context: { id: nonempty(value.context.id, 'identities.context.id') },
-    runtime: { boundaryId: nonempty(value.runtime.boundaryId, 'identities.runtime.boundaryId') },
-    audit: { id: nonempty(value.audit.id, 'identities.audit.id') },
-  };
-}
-
-function operationInput(input: ProviderLifecycleRunInput, boundary: RunBoundary): ProviderRuntimeOperationInput {
-  return {
-    scope: input.scope,
+    scope: clone(input.scope),
     idempotencyKey: input.idempotencyKey,
     requestHash: input.requestHash,
-    payload: input.payload,
-    requestedCapabilities: input.requestedCapabilities,
-    identities: input.identities,
-    deadlineAtMs: boundary.deadlineAtMs,
-    signal: boundary.signal,
+    payload: clone(input.payload),
+    requestedCapabilities: Object.freeze([...input.requestedCapabilities]),
+    identities: clone(input.identities),
+    deadlineAtMs,
+    signal,
   };
 }
 
-function createBoundary(timeoutMs: number, parentSignal: AbortSignal | undefined, now: () => number): RunBoundary {
-  const controller = new AbortController();
-  let termination: 'deadline' | 'canceled' | undefined;
-  const abortFromParent = () => {
-    termination = 'canceled';
-    controller.abort(parentSignal?.reason ?? new Error('Provider lifecycle was canceled.'));
-  };
-  if (parentSignal?.aborted) abortFromParent();
-  else parentSignal?.addEventListener('abort', abortFromParent, { once: true });
-  const timer = setTimeout(() => {
-    if (controller.signal.aborted) return;
-    termination = 'deadline';
-    controller.abort(new Error('Provider lifecycle deadline exceeded.'));
-  }, timeoutMs);
+function intentFrom(input: ProviderLifecycleRunInput): ProviderLifecycleSubmittingIntent {
   return {
-    deadlineAtMs: now() + timeoutMs,
-    signal: controller.signal,
-    termination: () => termination,
-    close: () => {
-      clearTimeout(timer);
-      parentSignal?.removeEventListener('abort', abortFromParent);
-    },
+    scope: clone(input.scope),
+    idempotencyKey: input.idempotencyKey,
+    requestHash: input.requestHash,
+    payload: clone(input.payload),
+    requestedCapabilities: Object.freeze([...input.requestedCapabilities]),
+    identities: clone(input.identities),
   };
 }
 
-async function withinBoundary<T>(promise: Promise<T>, boundary: RunBoundary): Promise<T> {
-  if (boundary.signal.aborted) throw new LifecycleBoundaryError(boundary.termination() ?? 'canceled');
-  let onAbort: (() => void) | undefined;
-  const aborted = new Promise<never>((_resolve, reject) => {
-    onAbort = () => reject(new LifecycleBoundaryError(boundary.termination() ?? 'canceled'));
-    boundary.signal.addEventListener('abort', onAbort, { once: true });
-  });
-  try {
-    return await Promise.race([promise, aborted]);
-  } finally {
-    if (onAbort) boundary.signal.removeEventListener('abort', onAbort);
-  }
+function receiptFrom(observation: ProviderRuntimeObservation, now: number): ProviderAcceptedReceipt {
+  return {
+    providerExecutionId: observation.providerExecutionId!,
+    ...(observation.providerSessionId ? { providerSessionId: observation.providerSessionId } : {}),
+    ...(observation.providerContextId ? { providerContextId: observation.providerContextId } : {}),
+    acceptedAt: new Date(now).toISOString(),
+    rawState: observation.rawState,
+    ...(observation.providerCursor ? { reconciliationRef: observation.providerCursor } : {}),
+  };
 }
 
-function wait(delayMs: number, boundary: RunBoundary): Promise<void> {
-  return withinBoundary(new Promise<void>((resolve) => {
-    setTimeout(resolve, delayMs);
-  }), boundary);
+function requiredReceipt(record: ProviderLifecycleRecord): ProviderAcceptedReceipt {
+  if (!record.receipt) throw new Error('Provider accepted receipt is not available.');
+  return record.receipt;
 }
 
-function assertMatchingRequest(record: ProviderLifecycleRecord, input: ProviderLifecycleSubmittingIntent): void {
-  if (record.requestHash !== input.requestHash) throw new ProviderLifecycleConflictError(input.idempotencyKey);
-  if (!sameScope(record.scope, input.scope)) {
-    throw new ProviderLifecycleContractError('Provider lifecycle store returned a record outside server-derived scope.');
-  }
+function assertSameRequest(record: ProviderLifecycleRecord, input: ProviderLifecycleRunInput): void {
+  if (record.requestHash !== input.requestHash) throw new ProviderLifecycleConflictError();
+  if (!sameScope(record.scope, input.scope)) throw new ProviderLifecycleConflictError();
+  if (JSON.stringify(record.identities) !== JSON.stringify(input.identities)) throw new ProviderLifecycleConflictError();
 }
 
 function sameScope(left: A2AScope, right: A2AScope): boolean {
@@ -436,55 +347,51 @@ function sameScope(left: A2AScope, right: A2AScope): boolean {
     && left.conversationId === right.conversationId;
 }
 
-function requiresAcceptedReceipt(state: ProviderRuntimeState): boolean {
-  return state === 'accepted'
-    || state === 'working'
-    || state === 'input-required'
-    || state === 'auth-required'
-    || state === 'completed';
+function noObservationEvidence(observation: ProviderRuntimeObservation): boolean {
+  return observation.result === undefined
+    && observation.error === undefined
+    && observation.artifacts === undefined
+    && observation.auditRefs === undefined;
 }
 
-function validProviderExecutionId(value: string | undefined): string {
-  if (value === undefined) throw new ProviderLifecycleContractError('Accepted provider response requires providerExecutionId.');
-  return nonempty(value, 'providerExecutionId');
+function boundedPositive(value: number, field: string): number {
+  if (!Number.isFinite(value) || value < 1) throw new TypeError(`${field} must be positive`);
+  return Math.trunc(value);
 }
 
-function validRawState(value: string): string {
-  return nonempty(value, 'rawState');
+function boundedNonnegative(value: number, field: string): number {
+  if (!Number.isFinite(value) || value < 0) throw new TypeError(`${field} must be non-negative`);
+  return Math.trunc(value);
 }
 
-function validRequestHash(value: string): string {
-  if (!/^[a-f0-9]{64}$/i.test(value)) throw new ProviderLifecycleContractError('requestHash must be a SHA-256 hex digest.');
-  return value.toLowerCase();
+function forwardAbort(parent: AbortSignal | undefined, controller: AbortController): () => void {
+  if (!parent) return () => undefined;
+  const abort = (): void => controller.abort(parent.reason ?? new Error('Provider lifecycle canceled.'));
+  parent.addEventListener('abort', abort, { once: true });
+  if (parent.aborted) abort();
+  return () => parent.removeEventListener('abort', abort);
 }
 
-function nonempty(value: string, name: string): string {
-  if (typeof value !== 'string' || value.trim().length === 0 || value.length > 1_024) {
-    throw new ProviderLifecycleContractError(`${name} must be a non-empty bounded string.`);
-  }
-  return value;
-}
-
-function boundedInteger(
-  value: number | undefined,
-  fallback: number,
-  minimum: number,
-  maximum: number,
-  name: string,
-): number {
-  const candidate = value ?? fallback;
-  if (!Number.isFinite(candidate) || !Number.isInteger(candidate) || candidate < minimum || candidate > maximum) {
-    throw new ProviderLifecycleContractError(`${name} is outside its supported bounds.`);
-  }
-  return candidate;
-}
-
-function isoNow(now: () => number): string {
-  return new Date(now()).toISOString();
+async function waitForDelay(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) throw signal.reason;
+  await new Promise<void>((resolve, reject) => {
+    const abort = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', abort);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', abort);
+      resolve();
+    }, delayMs);
+    signal.addEventListener('abort', abort, { once: true });
+  });
 }
 
 function safeError(error: unknown): string {
-  return error instanceof Error && error.message.trim().length > 0
-    ? error.message.slice(0, 2_000)
-    : 'Provider runtime operation failed.';
+  return error instanceof Error && error.message.trim() ? error.message.slice(0, 4_000) : '';
+}
+
+function clone<T>(value: T): T {
+  return structuredClone(value);
 }

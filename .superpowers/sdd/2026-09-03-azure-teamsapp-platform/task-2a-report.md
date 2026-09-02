@@ -15,6 +15,8 @@ PASS — the provider-neutral lifecycle abstraction is implemented and focused v
 - Existing cancellation idempotency: `npx tsx scripts/a2a-cancel-idempotency-test.ts` — exit 0; `a2a-cancel-idempotency-test: PASS`.
 - Diff hygiene: `git diff --check` — exit 0.
 - Core source check: `npm run typecheck:core` after the implementation commit — exit 0; `PASS: core source compile check covered 22 Teams/CLI files`. The pre-commit invocation had been correctly stopped by the repository's clean-worktree protection with `EWORKTREEDIRTY`.
+- Orchestrator recovery: the implementation agent was shut down after repeated missing checkpoints. Its committed receipt was retained, incomplete post-commit edits were type-reconciled, and `npm run test:provider-lifecycle` then passed five consecutive runs before the follow-up commit.
+- Post-recovery strict check: `npx tsc --noEmit --strict --target ES2022 --module NodeNext --moduleResolution NodeNext --esModuleInterop --skipLibCheck --types node src/server/provider-runtime-adapter.ts src/server/provider-lifecycle-runner.ts scripts/provider-runtime-adapter-test.ts scripts/provider-lifecycle-runner-test.ts` — exit 0.
 
 ## COMPLETED
 

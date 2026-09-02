@@ -1,4 +1,6 @@
-import type { A2AJsonData, A2AScope } from './a2a-contract.js';
+import type { A2AScope } from './a2a-contract.js';
+
+const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u;
 
 export type ProviderRuntimeState =
   | 'accepted'
@@ -8,8 +10,14 @@ export type ProviderRuntimeState =
   | 'completed'
   | 'failed'
   | 'canceled'
+  | 'rejected'
   | 'delivery-unknown'
   | 'unknown';
+
+const PROVIDER_RUNTIME_STATES = new Set<ProviderRuntimeState>([
+  'accepted', 'working', 'input-required', 'auth-required', 'completed',
+  'failed', 'canceled', 'rejected', 'delivery-unknown', 'unknown',
+]);
 
 export type ProviderRuntimeIdentities = Readonly<{
   provider: Readonly<{ id: string }>;
@@ -24,32 +32,44 @@ export type ProviderRuntimeArtifact = Readonly<{
   artifactId: string;
   name: string;
   mediaType: string;
-  uri?: string;
   text?: string;
+  uri?: string;
   sha256?: string;
+  byteSize?: number;
+  repository?: string;
+  commitSha?: string;
+  authorship?: Readonly<Record<string, string>>;
 }>;
 
-export type ProviderRuntimeReceipt = Readonly<{
+export type ProviderAcceptedReceipt = Readonly<{
   providerExecutionId: string;
+  providerSessionId?: string;
   providerContextId?: string;
   acceptedAt: string;
   rawState: string;
+  reconciliationRef?: string;
 }>;
+
+/** Backward-compatible lifecycle name used by the durable runner. */
+export type ProviderRuntimeReceipt = ProviderAcceptedReceipt;
 
 export type ProviderRuntimeObservation = Readonly<{
   rawState: string;
   providerExecutionId?: string;
+  providerSessionId?: string;
   providerContextId?: string;
+  providerCursor?: string;
   result?: string;
-  artifacts?: readonly ProviderRuntimeArtifact[];
   error?: string;
+  artifacts?: readonly ProviderRuntimeArtifact[];
+  auditRefs?: readonly string[];
 }>;
 
 export type ProviderRuntimeOperationInput = Readonly<{
   scope: A2AScope;
   idempotencyKey: string;
   requestHash: string;
-  payload: A2AJsonData;
+  payload: Readonly<Record<string, unknown>>;
   requestedCapabilities: readonly string[];
   identities: ProviderRuntimeIdentities;
   deadlineAtMs: number;
@@ -57,68 +77,64 @@ export type ProviderRuntimeOperationInput = Readonly<{
 }>;
 
 export type ProviderRuntimeReceiptOperationInput = ProviderRuntimeOperationInput & Readonly<{
-  receipt: ProviderRuntimeReceipt;
+  receipt: ProviderAcceptedReceipt;
 }>;
 
-export type ProviderRuntimePreflightResult =
+export type ProviderRuntimePreflight =
   | Readonly<{ ready: true; capabilities: readonly string[] }>
   | Readonly<{ ready: false; reason: string }>;
 
 export type ProviderRuntimeAdapter = Readonly<{
   providerId: string;
-  classifyState: (rawState: string) => ProviderRuntimeState;
-  preflight: (input: ProviderRuntimeOperationInput) => Promise<ProviderRuntimePreflightResult>;
-  submit: (input: ProviderRuntimeOperationInput) => Promise<ProviderRuntimeObservation>;
-  get: (input: ProviderRuntimeReceiptOperationInput) => Promise<ProviderRuntimeObservation>;
-  cancel: (input: ProviderRuntimeReceiptOperationInput) => Promise<ProviderRuntimeObservation>;
+  classifyState(rawState: string): ProviderRuntimeState;
+  preflight(input: ProviderRuntimeOperationInput): Promise<ProviderRuntimePreflight>;
+  submit(input: ProviderRuntimeOperationInput): Promise<ProviderRuntimeObservation>;
+  get(input: ProviderRuntimeReceiptOperationInput): Promise<ProviderRuntimeObservation>;
+  cancel(input: ProviderRuntimeReceiptOperationInput): Promise<ProviderRuntimeObservation>;
 }>;
 
-const RUNTIME_STATES = new Set<ProviderRuntimeState>([
-  'accepted',
-  'working',
-  'input-required',
-  'auth-required',
-  'completed',
-  'failed',
-  'canceled',
-  'delivery-unknown',
-  'unknown',
-]);
-
-const IDENTITY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/;
-
 export function createProviderRuntimeAdapter(adapter: ProviderRuntimeAdapter): ProviderRuntimeAdapter {
-  if (!IDENTITY_PATTERN.test(adapter.providerId)) {
-    throw new TypeError('providerId must be a stable non-empty provider identity.');
+  if (!adapter || typeof adapter !== 'object') throw new TypeError('provider runtime adapter is required');
+  if (typeof adapter.providerId !== 'string' || !SAFE_ID.test(adapter.providerId)) {
+    throw new TypeError('provider runtime adapter providerId must be a bounded identifier');
   }
-  for (const operation of ['classifyState', 'preflight', 'submit', 'get', 'cancel'] as const) {
-    if (typeof adapter[operation] !== 'function') {
-      throw new TypeError(`Provider runtime adapter ${operation} must be a function.`);
+  for (const method of ['classifyState', 'preflight', 'submit', 'get', 'cancel'] as const) {
+    if (typeof adapter[method] !== 'function') {
+      throw new TypeError(`provider runtime adapter ${method} must be a function`);
     }
   }
   return Object.freeze({ ...adapter });
 }
 
-export function resolveProviderRuntimeState(adapter: ProviderRuntimeAdapter, rawState: string): ProviderRuntimeState {
-  if (typeof rawState !== 'string' || rawState.trim().length === 0) return 'unknown';
+export function resolveProviderRuntimeState(
+  adapter: Pick<ProviderRuntimeAdapter, 'classifyState'>,
+  rawState: string,
+): ProviderRuntimeState {
+  if (typeof rawState !== 'string' || !rawState.trim()) return 'unknown';
   try {
     const state = adapter.classifyState(rawState);
-    return RUNTIME_STATES.has(state) ? state : 'unknown';
+    return PROVIDER_RUNTIME_STATES.has(state) ? state : 'unknown';
   } catch {
     return 'unknown';
   }
 }
 
 export function hasProviderCompletionEvidence(
-  value: Pick<ProviderRuntimeObservation, 'result' | 'artifacts'>,
+  observation: Pick<ProviderRuntimeObservation, 'result' | 'artifacts'>,
 ): boolean {
-  if (typeof value.result === 'string' && value.result.trim().length > 0) return true;
-  return value.artifacts?.some((artifact) => {
-    if (!artifact || typeof artifact.artifactId !== 'string' || artifact.artifactId.trim().length === 0) return false;
-    return hasText(artifact.text) || hasText(artifact.uri) || hasText(artifact.sha256);
-  }) ?? false;
+  if (typeof observation.result === 'string' && Boolean(observation.result.trim())) return true;
+  return Boolean(observation.artifacts?.some((artifact) => (
+    typeof artifact.text === 'string' && Boolean(artifact.text.trim())
+    || typeof artifact.uri === 'string' && isHttpsUrl(artifact.uri)
+    || typeof artifact.sha256 === 'string' && /^[a-f0-9]{64}$/u.test(artifact.sha256)
+  )));
 }
 
-function hasText(value: string | undefined): boolean {
-  return typeof value === 'string' && value.trim().length > 0;
+function isHttpsUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'https:' && !parsed.username && !parsed.password;
+  } catch {
+    return false;
+  }
 }
