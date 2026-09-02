@@ -601,55 +601,77 @@ function safeMessage(error: unknown): string {
 }
 
 function sanitizeRecordForResponse(value: AgentDispatchRecord): AgentDispatchRecord {
-  const record = structuredClone(value);
   return {
-    ...record,
-    ...(record.checkpoint ? {
+    taskId: value.taskId,
+    idempotencyKey: value.idempotencyKey,
+    requestHash: value.requestHash,
+    status: value.status,
+    task: {
+      schemaVersion: value.task.schemaVersion,
+      taskId: value.task.taskId,
+      idempotencyKey: value.task.idempotencyKey,
+      tenantId: value.task.tenantId,
+      requesterId: value.task.requesterId,
+      conversationId: value.task.conversationId,
+      provider: value.task.provider,
+      prompt: value.task.prompt,
+      createdAt: value.task.createdAt,
+    },
+    enqueued: value.enqueued,
+    dequeueCount: value.dequeueCount,
+    updatedAt: value.updatedAt,
+    leaseGeneration: value.leaseGeneration,
+    ...(value.leaseOwner !== undefined ? { leaseOwner: value.leaseOwner } : {}),
+    ...(value.leaseMessageId !== undefined ? { leaseMessageId: value.leaseMessageId } : {}),
+    ...(value.leaseExpiresAt !== undefined ? { leaseExpiresAt: value.leaseExpiresAt } : {}),
+    ...(value.cancellationRequested !== undefined ? { cancellationRequested: value.cancellationRequested } : {}),
+    ...(value.checkpoint ? {
       checkpoint: {
-        ...record.checkpoint,
+        sequence: value.checkpoint.sequence,
         message: sanitizeDiagnostic(
-          record.checkpoint.message,
+          value.checkpoint.message,
           'checkpoint message',
           DIAGNOSTIC_FIELD_LIMITS.checkpoint,
         ),
+        recordedAt: value.checkpoint.recordedAt,
       },
     } : {}),
-    ...(record.receipt ? {
+    ...(value.receipt ? {
       receipt: {
-        ...record.receipt,
         result: sanitizeDiagnostic(
-          record.receipt.result,
+          value.receipt.result,
           'completion result',
           DIAGNOSTIC_FIELD_LIMITS.completionResult,
         ),
         providerExecutionId: sanitizeDiagnostic(
-          record.receipt.providerExecutionId,
+          value.receipt.providerExecutionId,
           'providerExecutionId',
           DIAGNOSTIC_FIELD_LIMITS.providerExecutionId,
         ),
+        completedAt: value.receipt.completedAt,
       },
     } : {}),
-    ...(record.error ? {
+    ...(value.error ? {
       error: {
-        ...record.error,
-        code: sanitizeDiagnostic(record.error.code, 'error code', DIAGNOSTIC_FIELD_LIMITS.errorCode),
+        code: sanitizeDiagnostic(value.error.code, 'error code', DIAGNOSTIC_FIELD_LIMITS.errorCode),
         message: sanitizeDiagnostic(
-          record.error.message,
+          value.error.message,
           'error message',
           DIAGNOSTIC_FIELD_LIMITS.errorMessage,
         ),
+        failedAt: value.error.failedAt,
       },
     } : {}),
-    ...(record.cancellationReason ? {
+    ...(value.cancellationReason ? {
       cancellationReason: sanitizeDiagnostic(
-        record.cancellationReason,
+        value.cancellationReason,
         'cancellation reason',
         DIAGNOSTIC_FIELD_LIMITS.cancellationReason,
       ),
     } : {}),
-    ...(record.quarantineReason ? {
+    ...(value.quarantineReason ? {
       quarantineReason: sanitizeDiagnostic(
-        record.quarantineReason,
+        value.quarantineReason,
         'quarantine reason',
         DIAGNOSTIC_FIELD_LIMITS.quarantineReason,
       ),
@@ -658,7 +680,11 @@ function sanitizeRecordForResponse(value: AgentDispatchRecord): AgentDispatchRec
 }
 
 function sanitizeDiagnostic(value: unknown, label: string, maximumBytes: number): string {
-  const text = requireText(value, label)
+  const text = redactDiagnosticCredentials(requireText(value, label))
+    .replace(/(?:\\\\|\/\/)[^|,;\r\n]+/gu, '[REDACTED_PATH]')
+    .replace(/[A-Za-z]:\\[^|,;\r\n]+/gu, '[REDACTED_PATH]')
+    .replace(/~\/[^\s"'`,;|()[\]{}<>]*/gu, '[REDACTED_PATH]')
+    .replace(/\/(?:[^\s"'`,;|()[\]{}<>]+\/?)+/gu, '[REDACTED_PATH]')
     .replace(
       /--(?:api[-_]?key|access[-_]?token|refresh[-_]?token|token|secret|password)(?:=|\s+)(?:"[^"]*"|'[^']*'|[^\s,;]+)/giu,
       '[REDACTED_CREDENTIAL_ARGUMENT]',
@@ -669,10 +695,16 @@ function sanitizeDiagnostic(value: unknown, label: string, maximumBytes: number)
     .replace(
       /\b(api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password)\b\s*(?:=|:|\s)\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/giu,
       '$1=[REDACTED]',
-    )
-    .replace(/\/(?:Users|home|opt|tmp|var|etc|private|root|srv)(?:\/[^\s"'`,;()[\]{}<>]*)?/gu, '[REDACTED_PATH]')
-    .replace(/[A-Za-z]:\\[^\s,;]+/gu, '[REDACTED_PATH]');
+    );
   return truncateUtf8(text, maximumBytes);
+}
+
+function redactDiagnosticCredentials(value: string): string {
+  const credentialAssignment = /(^|[^A-Za-z0-9_])((?:[A-Za-z][A-Za-z0-9_]*_)?(?:API_?KEY|CLIENT_?SECRET|ACCESS_?TOKEN|REFRESH_?TOKEN|TOKEN|SECRET|PASSWORD))\s*(=|:)\s*(?:"[^"]*"|'[^']*'|[^\s,;|]+)/giu;
+  return value.replace(
+    credentialAssignment,
+    (_match, prefix: string, key: string, separator: string) => `${prefix}${key}${separator}[REDACTED]`,
+  );
 }
 
 function truncateUtf8(value: string, maximumBytes: number): string {
