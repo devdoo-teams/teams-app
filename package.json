@@ -36,6 +36,7 @@
     "test:azure-approval-check": "node scripts/azure-approval-check-test.mjs",
     "test:azure-deployment-contract": "node scripts/azure-deployment-contract-test.mjs",
     "test:azure-release-identity": "tsx scripts/azure-release-identity-test.ts",
+    "test:azure-runtime-store": "tsx scripts/azure-runtime-store-test.ts",
     "test:agent-execution-readiness": "tsx scripts/agent-execution-readiness-test.ts",
     "test:release-timeout": "node scripts/release-gate-timeout-test.mjs",
     "test:core-boundary": "node scripts/core-optional-boundary-test.mjs",
@@ -193,6 +194,8 @@
     "test": "npm run test:api-free-runner && npm run test:api-free"
   },
   "dependencies": {
+    "@azure/cosmos": "^4.10.0",
+    "@azure/identity": "^4.13.2",
     "@copilotkit/channels-teams": "0.7.3",
     "@copilotkit/channels-ui": "0.7.3",
     "@copilotkit/react-core": "^1.66.2",
