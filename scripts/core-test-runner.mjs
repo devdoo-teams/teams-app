@@ -90,6 +90,8 @@ const tsTests = [
   'scripts/a2a-agent-authorization-policy-test.ts',
   'scripts/a2a-remote-client-test.ts',
   'scripts/a2a-remote-agent-adapter-test.ts',
+  'scripts/provider-runtime-adapter-test.ts',
+  'scripts/provider-lifecycle-runner-test.ts',
   'scripts/a2a-remote-roster-test.ts',
   'scripts/a2a-collaboration-plan-test.ts',
   'scripts/a2a-production-collaboration-test.ts',
