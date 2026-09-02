@@ -5,8 +5,9 @@ import path from 'node:path';
 import { createCoreTestInvocations } from './core-test-runner.mjs';
 
 const sourceCwd = process.cwd();
+const runtimeCwd = path.join(sourceCwd, '.core-runtime-root');
 const invocations = createCoreTestInvocations({
-  rootCwd: sourceCwd,
+  rootCwd: runtimeCwd,
   sourceCwd,
   sourceCommit: '0123456789abcdef0123456789abcdef01234567',
 });
@@ -31,13 +32,15 @@ for (const script of task4Tests) {
     `Required MP-262 test file must exist: ${script}`,
   );
   const matches = invocations.filter(({ args }) => args.at(-1) === script);
+  const expectedKind = script === 'scripts/core-orchestration-teams-chat-runtime-test.ts' ? 'runtime' : 'source';
+  const expectedCwd = expectedKind === 'runtime' ? runtimeCwd : sourceCwd;
   assert.equal(
     matches.length,
     1,
     `Core gate must execute ${script} exactly once; removing its registration must fail MP-262`,
   );
-  assert.equal(matches[0].kind, 'source', `${script} must run as a pinned-source test`);
-  assert.equal(matches[0].cwd, sourceCwd, `${script} must execute from the pinned source checkout`);
+  assert.equal(matches[0].kind, expectedKind, `${script} must run as a ${expectedKind} test`);
+  assert.equal(matches[0].cwd, expectedCwd, `${script} must execute from its required Core test workspace`);
 }
 
 console.log('core-orchestration-gate-registration-test: PASS');

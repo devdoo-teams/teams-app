@@ -44,6 +44,7 @@ const runtimeTests = [
   'scripts/teams-a2a-chat-regression-test.ts',
   'scripts/teams-a2a-outbound-restart-regression-test.ts',
   'scripts/a2a-index-integration-test.mjs',
+  'scripts/core-orchestration-teams-chat-runtime-test.ts',
 ];
 const tsTests = [
   'scripts/core-orchestration-service-test.ts',
@@ -52,7 +53,6 @@ const tsTests = [
   'scripts/client-app-orchestration-integration-test.tsx',
   'scripts/core-orchestration-chat-card-test.ts',
   'scripts/core-orchestration-teams-chat-wiring-test.ts',
-  'scripts/core-orchestration-teams-chat-runtime-test.ts',
   'scripts/core-orchestration-confirmation-idempotency-test.tsx',
   'scripts/core-orchestration-runtime-composition-test.ts',
   'scripts/status-card-test.ts',
