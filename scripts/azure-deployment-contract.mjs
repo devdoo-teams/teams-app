@@ -24,6 +24,14 @@ const releaseEnvironmentFields = {
   RELEASE_CLIENT_BUNDLE_SHA256: 'clientBundleSha256',
   RELEASE_SERVER_BUNDLE_SHA256: 'serverBundleSha256',
 };
+const publicReleaseIdentityFields = [
+  'commit',
+  'version',
+  'imageDigest',
+  'teamsPackageSha256',
+  'clientBundleSha256',
+  'serverBundleSha256',
+];
 
 function fail(message) {
   throw new Error(`Invalid Azure deployment contract: ${message}`);
@@ -127,6 +135,20 @@ export function validateReleaseDeployment({ receipt, provenance, revision, healt
     || health.version !== receipt.version
     || health.serverBundleSha256 !== receipt.serverBundleSha256
   ) fail('public health identity does not match commit, version, and serverBundleSha256 from the attested receipt');
+  const publicIdentity = health?.azureReleaseIdentity;
+  if (!publicIdentity || typeof publicIdentity !== 'object' || Array.isArray(publicIdentity)) {
+    fail('public health azureReleaseIdentity is missing or invalid');
+  }
+  const publicIdentityKeys = Object.keys(publicIdentity);
+  if (
+    publicIdentityKeys.length !== publicReleaseIdentityFields.length
+    || publicIdentityKeys.some((field) => !publicReleaseIdentityFields.includes(field))
+  ) fail('public health azureReleaseIdentity contains an unexpected field');
+  for (const field of publicReleaseIdentityFields) {
+    if (publicIdentity[field] !== receipt[field]) {
+      fail(`public health azureReleaseIdentity ${field} does not match the attested receipt`);
+    }
+  }
   return true;
 }
 

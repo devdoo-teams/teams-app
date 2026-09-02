@@ -99,6 +99,7 @@ try {
   const envNames = new Set((appContainer?.env ?? []).map((entry) => entry.name));
   for (const name of [
     'AZURE_CLIENT_ID',
+    'AZURE_RELEASE_MODE',
     'RELEASE_IMAGE_DIGEST',
     'RELEASE_CLIENT_BUNDLE_SHA256',
     'RELEASE_SERVER_BUNDLE_SHA256',
@@ -108,6 +109,11 @@ try {
   ]) {
     assert.ok(envNames.has(name), `compiled Container App revision must bind ${name}`);
   }
+  assert.equal(
+    appContainer?.env?.find((entry) => entry.name === 'AZURE_RELEASE_MODE')?.value,
+    'true',
+    'compiled Container App revision must explicitly enable strict Azure release identity mode',
+  );
   assert.equal(containerApp.properties?.template?.scale?.minReplicas, 0, 'Container App must scale to zero');
   assert.equal(containerApp.properties?.configuration?.activeRevisionsMode, 'multiple', 'Container App must retain rollback revisions');
 

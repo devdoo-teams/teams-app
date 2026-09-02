@@ -17,6 +17,15 @@ const LOCAL_ACCESS_TOKEN_HEADER = 'x-teams-local-access-token';
 const localAccessTokens = new Map();
 const optionalProviderTestsEnabled = process.env.TEAMS_OPTIONAL_RUNTIME === 'true';
 const manifestVersion = JSON.parse(await fs.readFile(path.join(root, 'appPackage/manifest.json'), 'utf8')).version;
+const runtimeServerBuildMarker = JSON.parse(await fs.readFile(path.join(runtimeDistRoot, 'server', '.teams-server-build-commit'), 'utf8'));
+const azureRuntimeIdentity = Object.freeze({
+  commit: runtimeServerBuildMarker.commit,
+  version: manifestVersion,
+  imageDigest: `sha256:${'a'.repeat(64)}`,
+  teamsPackageSha256: 'b'.repeat(64),
+  clientBundleSha256: 'c'.repeat(64),
+  serverBundleSha256: runtimeServerBuildMarker.bundleSha256,
+});
 const runtimeOutputReaders = new Map();
 const codexExecutableSha256 = crypto.createHash('sha256').update(await fs.readFile(process.execPath)).digest('hex');
 
@@ -357,6 +366,13 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
       DEV_TUNNEL_ID: '',
       MCP_PUBLIC_ENABLED: '',
       TEAMS_OPTIONAL_RUNTIME: '',
+      AZURE_RELEASE_MODE: '',
+      RELEASE_SOURCE_COMMIT: '',
+      RELEASE_APP_VERSION: '',
+      RELEASE_IMAGE_DIGEST: '',
+      RELEASE_TEAMS_PACKAGE_SHA256: '',
+      RELEASE_CLIENT_BUNDLE_SHA256: '',
+      RELEASE_SERVER_BUNDLE_SHA256: '',
       TEAMS_OPERATOR_REQUESTER_ALLOWLIST: [
         'local-tenant/local-user',
         'runtime-tenant/runtime-user',
@@ -1832,6 +1848,34 @@ async function runProductionAuthFlow(dataFile, jobDataFile) {
   }
 }
 
+async function runAzureReleaseIdentityFlow(dataFile, jobDataFile) {
+  const server = await startServer({
+    production: true,
+    teamsSdk: true,
+    dataFile,
+    jobDataFile,
+    extraEnv: {
+      WEATHER_MODE: 'live',
+      AZURE_RELEASE_MODE: 'true',
+      RELEASE_SOURCE_COMMIT: azureRuntimeIdentity.commit,
+      RELEASE_APP_VERSION: azureRuntimeIdentity.version,
+      RELEASE_IMAGE_DIGEST: azureRuntimeIdentity.imageDigest,
+      RELEASE_TEAMS_PACKAGE_SHA256: azureRuntimeIdentity.teamsPackageSha256,
+      RELEASE_CLIENT_BUNDLE_SHA256: azureRuntimeIdentity.clientBundleSha256,
+      RELEASE_SERVER_BUNDLE_SHA256: azureRuntimeIdentity.serverBundleSha256,
+    },
+  });
+
+  try {
+    const health = await request(server.baseUrl, '/api/health');
+    assert(health.response.status === 200, 'Azure release-mode health endpoint returns 200');
+    assert(JSON.stringify(health.body.azureReleaseIdentity) === JSON.stringify(azureRuntimeIdentity), 'Azure release-mode health exposes every immutable release identity field from the revision environment');
+    assert(!JSON.stringify(health.body.azureReleaseIdentity).includes('://'), 'Azure release identity does not expose URLs or credentials');
+  } finally {
+    await stopServer(server.child);
+  }
+}
+
 async function runTeamsSdkFlow(dataFile, jobDataFile) {
   const server = await startServer({
     production: false,
@@ -2003,6 +2047,8 @@ const localJobDataFile = path.join(tempDir, 'local-agent-jobs.json');
 const legacyDataFile = path.join(tempDir, 'legacy-items.json');
 const legacyJobDataFile = path.join(tempDir, 'legacy-agent-jobs.json');
 const productionJobDataFile = path.join(tempDir, 'production-agent-jobs.json');
+const azureReleaseDataFile = path.join(tempDir, 'azure-release-items.json');
+const azureReleaseJobDataFile = path.join(tempDir, 'azure-release-agent-jobs.json');
 const sdkDataFile = path.join(tempDir, 'sdk-items.json');
 const sdkJobDataFile = path.join(tempDir, 'sdk-agent-jobs.json');
 const gitWorkspace = await fs.mkdtemp(path.join(tempDir, 'git-workspace-'));
@@ -2053,6 +2099,8 @@ try {
     await runAgentTimeoutFlow(timeoutDataFile, timeoutJobDataFile);
     console.log('Runtime verification: production authentication guard');
     await runProductionAuthFlow(productionDataFile, productionJobDataFile);
+    console.log('Runtime verification: Azure public release identity');
+    await runAzureReleaseIdentityFlow(azureReleaseDataFile, azureReleaseJobDataFile);
   }
   console.log('Runtime verification complete.');
 } finally {

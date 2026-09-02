@@ -78,6 +78,10 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
               value: appIdentityClientId
             }
             {
+              name: 'AZURE_RELEASE_MODE'
+              value: 'true'
+            }
+            {
               name: 'AZURE_COSMOS_ENDPOINT'
               secretRef: 'azure-cosmos-endpoint'
             }

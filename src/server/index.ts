@@ -147,6 +147,7 @@ import {
   type McpAuthConfig,
 } from './mcp-auth-config.js';
 import { mountMcpAuthenticatedBoundary } from './mcp-authenticated-route.js';
+import { resolveAzureReleaseIdentity } from './azure-release-identity.js';
 
 /**
  * Same-UID process fixture for token-protected loopback integration tests.
@@ -527,6 +528,11 @@ const serverBuildIdentity = (() => {
     return unavailable;
   }
 })();
+const azureReleaseIdentity = resolveAzureReleaseIdentity(process.env, {
+  appVersion,
+  sourceCommit: serverBuildIdentity.sourceCommit,
+  serverBundleSha256: serverBuildIdentity.serverBundleSha256,
+});
 // The core artifact must not carry optional MCP/CopilotKit runtime graphs. A
 // normal source/optional build keeps MCP behind either the loopback-only local
 // gate or an explicit authenticated-provider contract; the `--core` bundle
@@ -1627,6 +1633,7 @@ http.get('/api/health', async (_request: any, response: any) => {
     version: appVersion,
     sourceCommit: serverBuildIdentity.sourceCommit,
     serverBundleSha256: serverBuildIdentity.serverBundleSha256,
+    ...(azureReleaseIdentity ? { azureReleaseIdentity } : {}),
     environment: process.env.NODE_ENV ?? 'development',
     auth: safeLocal ? 'local-bypass' : teamsApp ? 'teams-authenticated' : 'not-configured',
     userAuth: safeLocal ? 'local-bypass' : userAuthConfigured && userAuthValidator ? 'entra-sso' : 'not-configured',

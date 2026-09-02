@@ -65,7 +65,20 @@ const revision = {
     template: { containers: [{ name: 'teams-core', image: `teamsappabc123.azurecr.io/teamsapp@${receipt.imageDigest}`, env: releaseEnv }] },
   },
 };
-const health = { ok: true, sourceCommit: receipt.commit, version: receipt.version, serverBundleSha256: receipt.serverBundleSha256 };
+const health = {
+  ok: true,
+  sourceCommit: receipt.commit,
+  version: receipt.version,
+  serverBundleSha256: receipt.serverBundleSha256,
+  azureReleaseIdentity: {
+    commit: receipt.commit,
+    version: receipt.version,
+    imageDigest: receipt.imageDigest,
+    teamsPackageSha256: receipt.teamsPackageSha256,
+    clientBundleSha256: receipt.clientBundleSha256,
+    serverBundleSha256: receipt.serverBundleSha256,
+  },
+};
 
 assert.equal(validateReleaseDeployment({ receipt, provenance, revision, health, registryLoginServer: 'teamsappabc123.azurecr.io' }), true);
 assert.throws(
@@ -86,5 +99,32 @@ assert.throws(
 );
 assert.throws(() => validateReleaseDeployment({ receipt, provenance: { ...provenance, attestationVerified: false }, revision, health, registryLoginServer: 'teamsappabc123.azurecr.io' }), /attestation/i);
 assert.throws(() => validateReleaseDeployment({ receipt, provenance, revision: { ...revision, properties: { ...revision.properties, runningState: 'Degraded' } }, health, registryLoginServer: 'teamsappabc123.azurecr.io' }), /readiness/i);
+assert.throws(
+  () => validateReleaseDeployment({
+    receipt,
+    provenance,
+    revision,
+    health: { ...health, azureReleaseIdentity: undefined },
+    registryLoginServer: 'teamsappabc123.azurecr.io',
+  }),
+  /azureReleaseIdentity/i,
+  'public health without the complete Azure release identity must be rejected',
+);
+for (const field of Object.keys(health.azureReleaseIdentity)) {
+  assert.throws(
+    () => validateReleaseDeployment({
+      receipt,
+      provenance,
+      revision,
+      health: {
+        ...health,
+        azureReleaseIdentity: { ...health.azureReleaseIdentity, [field]: field === 'imageDigest' ? `sha256:${'f'.repeat(64)}` : 'f'.repeat(64) },
+      },
+      registryLoginServer: 'teamsappabc123.azurecr.io',
+    }),
+    new RegExp(`azureReleaseIdentity ${field}`, 'i'),
+    `public health ${field} must exactly match the attested receipt`,
+  );
+}
 
 console.log('PASS: Bicep output consumption, traffic-aware rollback, revision readiness, provenance, and full release identity are behaviorally validated.');

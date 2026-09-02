@@ -35,6 +35,7 @@
     "test:azure-github-handoff": "node scripts/azure-github-handoff-test.mjs",
     "test:azure-approval-check": "node scripts/azure-approval-check-test.mjs",
     "test:azure-deployment-contract": "node scripts/azure-deployment-contract-test.mjs",
+    "test:azure-release-identity": "tsx scripts/azure-release-identity-test.ts",
     "test:agent-execution-readiness": "tsx scripts/agent-execution-readiness-test.ts",
     "test:release-timeout": "node scripts/release-gate-timeout-test.mjs",
     "test:core-boundary": "node scripts/core-optional-boundary-test.mjs",
