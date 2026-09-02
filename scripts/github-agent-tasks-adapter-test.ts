@@ -7,10 +7,11 @@ const requests: Array<{ url: string; init?: RequestInit }> = [];
 let taskState = 'queued';
 const fetchFixture: typeof fetch = async (input, init) => {
   const url = String(input);
+  const path = new URL(url).pathname;
   requests.push({ url, init });
-  if (url.endsWith('/repos/octo/repo')) return Response.json({ full_name: 'octo/repo' });
-  if (url.endsWith('/agents/repos/octo/repo/tasks') && init?.method !== 'POST') return Response.json({ tasks: [] });
-  if (url.endsWith('/agents/repos/octo/repo/tasks') && init?.method === 'POST') {
+  if (path === '/repos/octo/repo') return Response.json({ full_name: 'octo/repo' });
+  if (path === '/agents/repos/octo/repo/tasks' && init?.method !== 'POST') return Response.json({ tasks: [] });
+  if (path === '/agents/repos/octo/repo/tasks' && init?.method === 'POST') {
     return Response.json({
       id: 'task-123',
       url: 'https://api.github.com/agents/repos/octo/repo/tasks/task-123',
@@ -19,7 +20,7 @@ const fetchFixture: typeof fetch = async (input, init) => {
       artifacts: [],
     }, { status: 201 });
   }
-  if (url.endsWith('/agents/repos/octo/repo/tasks/task-123')) {
+  if (path === '/agents/repos/octo/repo/tasks/task-123') {
     return Response.json({
       id: 'task-123',
       url: 'https://api.github.com/agents/repos/octo/repo/tasks/task-123',
@@ -28,7 +29,7 @@ const fetchFixture: typeof fetch = async (input, init) => {
       artifacts: taskState === 'completed' ? [{ provider: 'github', type: 'pull', data: { id: 42 } }] : [],
     });
   }
-  if (url.endsWith('/repos/octo/repo/pulls/42')) {
+  if (path === '/repos/octo/repo/pulls/42') {
     return Response.json({
       number: 42,
       html_url: 'https://github.com/octo/repo/pull/42',
@@ -42,6 +43,10 @@ const fetchFixture: typeof fetch = async (input, init) => {
 let resolvedReference = '';
 const adapter = createGitHubAgentTasksAdapter({
   fetch: fetchFixture,
+  verifyExecutionReadiness: async ({ repository, credentialReference }) => ({
+    ready: repository === 'octo/repo' && credentialReference === 'key-vault://github/user-token',
+    reason: 'fixture verification',
+  }),
   resolveUserToken: async (reference) => {
     resolvedReference = reference;
     return 'transient-user-token';
@@ -75,6 +80,13 @@ assert.deepEqual(submitted, {
   providerContextId: 'octo/repo',
   auditRefs: ['https://github.com/octo/repo/copilot/tasks/task-123'],
 });
+const submissionBody = JSON.parse(String(requests.find(({ init }) => init?.method === 'POST')?.init?.body));
+assert.equal(submissionBody.create_pull_request, true, 'PR-only adapter must force immutable PR artifact creation');
+
+await assert.rejects(
+  adapter.submit({ ...input, payload: { ...input.payload, createPullRequest: false } }),
+  /PR-only/i,
+);
 
 const receipt = { providerExecutionId: 'task-123', providerContextId: 'octo/repo', acceptedAt: '2026-09-03T00:00:00.000Z', rawState: 'queued' };
 assert.equal((await adapter.get({ ...input, receipt })).rawState, 'queued');
@@ -105,5 +117,11 @@ await assert.rejects(
   badCredentialAdapter.preflight({ ...input, identities: { ...input.identities, credential: { ...input.identities.credential, reference: 'raw-token' } } }),
   /opaque/i,
 );
+
+const unverifiedAdapter = createGitHubAgentTasksAdapter({ fetch: fetchFixture, resolveUserToken: async () => 'token' });
+assert.deepEqual(await unverifiedAdapter.preflight(input), {
+  ready: false,
+  reason: 'configured-unverified: GitHub Agent Tasks write entitlement and Copilot subscription were not verified.',
+});
 
 console.log('PASS: GitHub Agent Tasks adapter preflights, polls, and verifies immutable PR results');

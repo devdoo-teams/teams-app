@@ -58,6 +58,25 @@ assert.deepEqual(pullArtifact, {
   url: 'https://github.com/octo/repo/pull/42',
 });
 
+assert.throws(
+  () => verifyGitHubPullRequestArtifact({
+    repository: 'octo/repo',
+    pullNumber: 42,
+    task: {
+      ...accepted,
+      state: 'completed',
+      artifacts: [{ provider: 'github', type: 'pull', data: { id: 42 } }],
+    },
+    pullRequest: {
+      number: 42,
+      html_url: 'https://github.com/octo/repo/pull/42',
+      head: { sha: 'a'.repeat(40), repo: { full_name: 'fork/repo' } },
+      base: { repo: { full_name: 'other/repo' } },
+    },
+  }),
+  /base repository/i,
+);
+
 for (const invalid of [
   { repository: 'octo/repo', pullNumber: 42, task: { ...accepted, state: 'completed', artifacts: [] }, pullRequest: {} },
   { repository: 'octo/repo', pullNumber: 42, task: { ...accepted, state: 'completed', artifacts: [{ provider: 'github', type: 'pull', data: { id: 42 } }] }, pullRequest: { number: 42, html_url: 'https://evil.example/pull/42', head: { sha: 'a'.repeat(40), repo: { full_name: 'octo/repo' } }, base: { repo: { full_name: 'octo/repo' } } } },

@@ -116,10 +116,10 @@ export function verifyGitHubPullRequestArtifact(input: Readonly<{
   const base = asRecord(pull.base, 'Pull request base');
   const baseRepository = asRecord(base.repo, 'Pull request base repository');
   const expectedRepository = input.repository.toLowerCase();
-  const headFullName = requiredString(headRepository.full_name, 'Pull request head repository').toLowerCase();
+  requiredString(headRepository.full_name, 'Pull request head repository');
   const baseFullName = requiredString(baseRepository.full_name, 'Pull request base repository').toLowerCase();
-  if (headFullName !== expectedRepository && baseFullName !== expectedRepository) {
-    throw new GitHubAgentTasksContractError('invalid-artifact', 'Pull request repository does not match the requested repository.');
+  if (baseFullName !== expectedRepository) {
+    throw new GitHubAgentTasksContractError('invalid-artifact', 'Pull request base repository does not match the requested repository.');
   }
   const headSha = requiredString(head.sha, 'Pull request head SHA').toLowerCase();
   if (!COMMIT_SHA.test(headSha)) {
