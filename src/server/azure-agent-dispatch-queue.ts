@@ -577,60 +577,85 @@ function safeMessage(error: unknown): string {
 
 function sanitizeRecordForResponse(value: AgentDispatchRecord): AgentDispatchRecord {
   const record = structuredClone(value);
-  if (record.checkpoint) {
-    record.checkpoint.message = sanitizeDiagnostic(
-      record.checkpoint.message,
-      'checkpoint message',
-      DIAGNOSTIC_FIELD_LIMITS.checkpoint,
-    );
-  }
-  if (record.receipt) {
-    record.receipt.result = sanitizeDiagnostic(
-      record.receipt.result,
-      'completion result',
-      DIAGNOSTIC_FIELD_LIMITS.completionResult,
-    );
-    record.receipt.providerExecutionId = sanitizeDiagnostic(
-      record.receipt.providerExecutionId,
-      'providerExecutionId',
-      DIAGNOSTIC_FIELD_LIMITS.providerExecutionId,
-    );
-  }
-  if (record.error) {
-    record.error.code = sanitizeDiagnostic(record.error.code, 'error code', DIAGNOSTIC_FIELD_LIMITS.errorCode);
-    record.error.message = sanitizeDiagnostic(
-      record.error.message,
-      'error message',
-      DIAGNOSTIC_FIELD_LIMITS.errorMessage,
-    );
-  }
-  if (record.cancellationReason) {
-    record.cancellationReason = sanitizeDiagnostic(
-      record.cancellationReason,
-      'cancellation reason',
-      DIAGNOSTIC_FIELD_LIMITS.cancellationReason,
-    );
-  }
-  if (record.quarantineReason) {
-    record.quarantineReason = sanitizeDiagnostic(
-      record.quarantineReason,
-      'quarantine reason',
-      DIAGNOSTIC_FIELD_LIMITS.quarantineReason,
-    );
-  }
-  return record;
+  return {
+    ...record,
+    ...(record.checkpoint ? {
+      checkpoint: {
+        ...record.checkpoint,
+        message: sanitizeDiagnostic(
+          record.checkpoint.message,
+          'checkpoint message',
+          DIAGNOSTIC_FIELD_LIMITS.checkpoint,
+        ),
+      },
+    } : {}),
+    ...(record.receipt ? {
+      receipt: {
+        ...record.receipt,
+        result: sanitizeDiagnostic(
+          record.receipt.result,
+          'completion result',
+          DIAGNOSTIC_FIELD_LIMITS.completionResult,
+        ),
+        providerExecutionId: sanitizeDiagnostic(
+          record.receipt.providerExecutionId,
+          'providerExecutionId',
+          DIAGNOSTIC_FIELD_LIMITS.providerExecutionId,
+        ),
+      },
+    } : {}),
+    ...(record.error ? {
+      error: {
+        ...record.error,
+        code: sanitizeDiagnostic(record.error.code, 'error code', DIAGNOSTIC_FIELD_LIMITS.errorCode),
+        message: sanitizeDiagnostic(
+          record.error.message,
+          'error message',
+          DIAGNOSTIC_FIELD_LIMITS.errorMessage,
+        ),
+      },
+    } : {}),
+    ...(record.cancellationReason ? {
+      cancellationReason: sanitizeDiagnostic(
+        record.cancellationReason,
+        'cancellation reason',
+        DIAGNOSTIC_FIELD_LIMITS.cancellationReason,
+      ),
+    } : {}),
+    ...(record.quarantineReason ? {
+      quarantineReason: sanitizeDiagnostic(
+        record.quarantineReason,
+        'quarantine reason',
+        DIAGNOSTIC_FIELD_LIMITS.quarantineReason,
+      ),
+    } : {}),
+  };
 }
 
 function sanitizeDiagnostic(value: unknown, label: string, maximumBytes: number): string {
   const text = requireText(value, label)
+    .replace(
+      /--(?:api[-_]?key|access[-_]?token|refresh[-_]?token|token|secret|password)(?:=|\s+)(?:"[^"]*"|'[^']*'|[^\s,;]+)/giu,
+      '[REDACTED_CREDENTIAL_ARGUMENT]',
+    )
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/giu, 'Bearer [REDACTED]')
+    .replace(/\b[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/gu, '[REDACTED_TOKEN]')
     .replace(/\b(?:sk|xai)-[A-Za-z0-9_-]{12,}\b/giu, '[REDACTED]')
-    .replace(/\b(api[_-]?key|token|secret|password)\s*([=:])\s*[^\s,;]+/giu, '$1$2[REDACTED]')
-    .replace(/(?:\/Users|\/home)\/[^\s,;]+/gu, '[REDACTED_PATH]')
+    .replace(
+      /\b(api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password)\b\s*(?:=|:|\s)\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/giu,
+      '$1=[REDACTED]',
+    )
+    .replace(/\/(?:Users|home|opt|tmp|var|etc|private|root|srv)(?:\/[^\s"'`,;()[\]{}<>]*)?/gu, '[REDACTED_PATH]')
     .replace(/[A-Za-z]:\\[^\s,;]+/gu, '[REDACTED_PATH]');
-  const bytes = Buffer.from(text, 'utf8');
-  if (bytes.byteLength <= maximumBytes) return text;
-  return bytes.subarray(0, maximumBytes).toString('utf8').replace(/\uFFFD$/u, '');
+  return truncateUtf8(text, maximumBytes);
+}
+
+function truncateUtf8(value: string, maximumBytes: number): string {
+  const bytes = Buffer.from(value, 'utf8');
+  if (bytes.byteLength <= maximumBytes) return value;
+  let end = maximumBytes;
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end -= 1;
+  return bytes.subarray(0, end).toString('utf8');
 }
 
 async function probeDependency(

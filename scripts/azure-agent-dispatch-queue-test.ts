@@ -111,7 +111,15 @@ async function testDiagnosticFieldsAreRedactedAndBoundedAtPersistenceAndResponse
   const fixture = createFixture();
   const secret = 'sk-live-1234567890abcdefghijklmnop';
   const token = 'Bearer eyJhbGciOiJIUzI1NiJ9.payload.signature';
-  const oversized = `prefix ${secret} ${token} ${'x'.repeat(12_000)}`;
+  const reviewReproduction = [
+    '/opt/teamsapp/bin/codex exec --api-key supersecretvalue',
+    '/tmp/private.log',
+    '/var/lib/private',
+    'password supersecretvalue',
+    'secret supersecretvalue',
+    'token supersecretvalue',
+  ].join(' ');
+  const oversized = `prefix ${secret} ${token} ${reviewReproduction} ${'x'.repeat(12_000)}`;
 
   await fixture.queue.enqueue(task('task-redaction-complete'));
   let lease = await fixture.queue.lease({ visibilityTimeoutSeconds: 30 });
@@ -121,6 +129,9 @@ async function testDiagnosticFieldsAreRedactedAndBoundedAtPersistenceAndResponse
   assert.ok(completed, 'completed record is persisted');
   assert.equal(JSON.stringify(completed).includes(secret), false, 'persisted completion data redacts secret-like values');
   assert.equal(JSON.stringify(completed).includes(token), false, 'persisted completion data redacts bearer tokens');
+  for (const unsafeFragment of ['/opt/teamsapp', '/tmp/private.log', '/var/lib/private', 'supersecretvalue']) {
+    assert.equal(JSON.stringify(completed).includes(unsafeFragment), false, `persisted completion data redacts ${unsafeFragment}`);
+  }
   assert.ok(Buffer.byteLength(completed.receipt?.result ?? '', 'utf8') <= 4_096, 'completion result is byte bounded');
   assert.ok(Buffer.byteLength(completed.receipt?.providerExecutionId ?? '', 'utf8') <= 256, 'provider execution id is byte bounded');
   assert.ok(Buffer.byteLength(completed.checkpoint?.message ?? '', 'utf8') <= 1_024, 'checkpoint diagnostic is byte bounded');
@@ -131,6 +142,7 @@ async function testDiagnosticFieldsAreRedactedAndBoundedAtPersistenceAndResponse
   const failed = fixture.state.records.get('task-redaction-failure');
   assert.ok(failed, 'failed record is persisted');
   assert.equal(JSON.stringify(failed).includes(secret), false, 'persisted failure data redacts secret-like values');
+  assert.equal(JSON.stringify(failed).includes('supersecretvalue'), false, 'persisted failure data redacts whitespace credentials');
   assert.ok(Buffer.byteLength(failed.error?.code ?? '', 'utf8') <= 128, 'error code is byte bounded');
   assert.ok(Buffer.byteLength(failed.error?.message ?? '', 'utf8') <= 1_024, 'error message is byte bounded');
 
