@@ -51,6 +51,8 @@ export type ProviderLifecycleRecord = ProviderLifecycleSubmittingIntent & Readon
   revision: number;
   rawProviderState?: string;
   receipt?: ProviderAcceptedReceipt;
+  providerExecutionBindingVersion?: 1;
+  providerExecutionBinding?: string;
   result?: string;
   error?: string;
   artifacts?: readonly ProviderRuntimeArtifact[];
@@ -213,6 +215,10 @@ export class FileProviderLifecycleStore implements ProviderLifecycleStore {
         throw new ProviderLifecycleRevisionConflictError();
       }
       if (existing.requestHash !== record.requestHash) throw new ProviderLifecycleConflictError();
+      if (existing.providerExecutionBinding !== undefined
+        && existing.providerExecutionBinding !== record.providerExecutionBinding) {
+        throw new ProviderLifecycleConflictError();
+      }
       const updated: ProviderLifecycleRecord = {
         ...clone(record),
         revision: expectedRevision + 1,
@@ -430,6 +436,7 @@ export class ProviderLifecycleRunner {
     leaseOwnerId: string,
     onAccepted?: (receipt: ProviderAcceptedReceipt, signal: AbortSignal) => Promise<void> | void,
   ): Promise<ProviderLifecycleRecord> {
+    assertProviderExecutionBinding(record);
     if (isProviderLifecycleTerminal(record.state)) return record;
     if (record.cancelRequestedAt || record.state === 'canceling') {
       return this.requestCancellation(record, operation, new Error('Resuming durable provider cancellation.'));
@@ -555,6 +562,8 @@ export class ProviderLifecycleRunner {
         state: 'accepted',
         rawProviderState: validated.rawState,
         receipt: receiptFrom(validated, this.now()),
+        providerExecutionBindingVersion: 1,
+        providerExecutionBinding: validated.providerExecutionId,
         quarantine: undefined,
         terminalAt: undefined,
       });
@@ -708,6 +717,7 @@ export class ProviderLifecycleRunner {
     patch: Partial<ProviderLifecycleRecord>,
     conflictMode: 'reconcile' | 'throw' = 'reconcile',
   ): Promise<ProviderLifecycleRecord> {
+    assertImmutableProviderExecutionBinding(record, patch);
     let current = record;
     for (let attempt = 0; attempt < 4; attempt += 1) {
       try {
@@ -716,6 +726,7 @@ export class ProviderLifecycleRunner {
         if (!(error instanceof ProviderLifecycleRevisionConflictError) || conflictMode === 'throw') throw error;
         const latest = await this.options.store.get(record.scope, record.idempotencyKey);
         if (!latest) throw error;
+        assertProviderExecutionBinding(latest);
         if (latest.requestHash !== record.requestHash || !sameScope(latest.scope, record.scope)) {
           throw new ProviderLifecycleConflictError();
         }
@@ -930,6 +941,7 @@ function assertSafeStoredRecord(record: ProviderLifecycleRecord): void {
     assertSafeStoredText(storedReceipt.rawState, 200, 'receipt raw state');
     assertSafeStoredText(storedReceipt.reconciliationRef, 512, 'receipt reconciliation reference');
   }
+  if (record.providerExecutionBinding !== undefined) assertProviderExecutionBinding(record);
   for (const [value, maximum, label] of [
     [record.result, 65_536, 'result'],
     [record.error, 4_000, 'error'],
@@ -1001,7 +1013,13 @@ function assertNoRawCredentialPayload(value: unknown): void {
       }
       return;
     }
-    if (!candidate || typeof candidate !== 'object') return;
+    if (candidate === null) return;
+    if (typeof candidate !== 'object') {
+      if (sensitiveKey) {
+        throw new Error('Provider lifecycle rejected a raw credential value in payload.');
+      }
+      return;
+    }
     if (seen.has(candidate)) throw new Error('Provider lifecycle payload must not contain cycles.');
     seen.add(candidate);
     if (Array.isArray(candidate)) {
@@ -1014,6 +1032,33 @@ function assertNoRawCredentialPayload(value: unknown): void {
     seen.delete(candidate);
   };
   inspect(value);
+}
+
+function assertProviderExecutionBinding(record: ProviderLifecycleRecord): void {
+  if (record.providerExecutionBindingVersion === undefined
+    && record.providerExecutionBinding === undefined) return;
+  if (record.providerExecutionBindingVersion !== 1) {
+    throw new Error('Provider lifecycle provider execution binding version is invalid.');
+  }
+  if (!record.receipt) {
+    throw new Error('Provider lifecycle provider execution binding requires an accepted receipt.');
+  }
+  if (typeof record.providerExecutionBinding !== 'string'
+    || record.providerExecutionBinding !== record.receipt.providerExecutionId) {
+    throw new Error('Provider lifecycle provider execution binding does not match the accepted receipt.');
+  }
+}
+
+function assertImmutableProviderExecutionBinding(
+  record: ProviderLifecycleRecord,
+  patch: Partial<ProviderLifecycleRecord>,
+): void {
+  if (record.providerExecutionBinding !== undefined
+    && patch.providerExecutionBinding !== undefined
+    && patch.providerExecutionBinding !== record.providerExecutionBinding) {
+    throw new ProviderLifecycleConflictError();
+  }
+  assertProviderExecutionBinding({ ...record, ...patch });
 }
 
 const PROVIDER_LIFECYCLE_STATES = new Set<ProviderLifecycleState>([

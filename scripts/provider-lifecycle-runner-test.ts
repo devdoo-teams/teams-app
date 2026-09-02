@@ -117,6 +117,34 @@ async function testIdempotencyReconcilesSameHashAndRejectsDifferentHash(): Promi
   assert.equal(submits, 1, 'same idempotency key with a different hash must be rejected before submit');
 }
 
+async function testAutomaticRunRejectsMutatedProviderExecutionBinding(): Promise<void> {
+  const store = new MemoryLifecycleStore();
+  const lifecycleInput = input('automatic-binding-integrity');
+  const runner = createRunner(store, {
+    submit: async () => ({
+      rawState: 'NEEDS_INPUT',
+      providerExecutionId: 'provider-original',
+    }),
+  });
+  const acceptedRecord = await runner.run(lifecycleInput);
+  assert.equal(acceptedRecord.state, 'input-required');
+  assert.equal(acceptedRecord.receipt?.providerExecutionId, 'provider-original');
+
+  store.unsafeReplaceForTest({
+    ...acceptedRecord,
+    receipt: {
+      ...acceptedRecord.receipt!,
+      providerExecutionId: 'provider-replacement',
+    },
+  });
+
+  await assert.rejects(
+    () => runner.run(lifecycleInput),
+    /provider execution binding/i,
+    'ordinary run replay must reject a receipt whose execution id no longer matches its immutable binding',
+  );
+}
+
 async function testDeliveryUnknownAndUnknownProviderStateAreQuarantined(): Promise<void> {
   const deliveryStore = new MemoryLifecycleStore();
   const delivery = await createRunner(deliveryStore, {
@@ -618,6 +646,27 @@ async function testAllObservationsAreValidatedAndDurableFieldsAreSanitized(): Pr
   );
   assert.equal(rawPayloadStore.history.length, 0, 'raw payload credentials must never be persisted');
 
+  for (const [label, rawValue] of [
+    ['number', 77692],
+    ['boolean', true],
+    ['bigint', 123456n],
+  ] as const) {
+    const primitiveCredentialStore = new MemoryLifecycleStore();
+    await assert.rejects(
+      () => createRunner(primitiveCredentialStore).run({
+        ...input(`raw-${label}-payload-credential`),
+        payload: { password: { value: rawValue } },
+      }),
+      /raw credential.*payload/i,
+      `a ${label} primitive below a sensitive parent key must be rejected before persistence`,
+    );
+    assert.equal(
+      primitiveCredentialStore.history.length,
+      0,
+      `a ${label} primitive credential must never be persisted`,
+    );
+  }
+
   const redactionStore = new MemoryLifecycleStore();
   const providerSecret = 'r'.repeat(96);
   const auditSecret = 't'.repeat(96);
@@ -876,6 +925,10 @@ class MemoryLifecycleStore implements ProviderLifecycleStore {
       .filter((record) => !isProviderLifecycleTerminal(record.state)
         && (record.state !== 'quarantined' || record.quarantine?.reason === 'delivery-unknown'))
       .map(clone);
+  }
+
+  unsafeReplaceForTest(record: ProviderLifecycleRecord): void {
+    this.records.set(key(record.scope, record.idempotencyKey), clone(record));
   }
 }
 
@@ -1477,6 +1530,7 @@ async function testFileStoreSerializesWritersRollsBackAndScansRecovery(): Promis
 await testPreflightFailsClosedBeforeIntentOrSubmit();
 await testDurableIntentAndReceiptOrderingPreservesScopeAndIdentities();
 await testIdempotencyReconcilesSameHashAndRejectsDifferentHash();
+await testAutomaticRunRejectsMutatedProviderExecutionBinding();
 await testDeliveryUnknownAndUnknownProviderStateAreQuarantined();
 await testInputAndAuthRequiredRemainRecoverable();
 await testCompletedRequiresNonemptyEvidence();
