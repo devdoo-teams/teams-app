@@ -88,9 +88,9 @@ function actionPayloads(card: AdaptiveCard): Array<Record<string, unknown>> {
 }
 
 for (const [status, expectedActions] of [
-  ['queued', ['orchestration.cancel']],
-  ['running', ['orchestration.cancel']],
-  ['awaiting_approval', ['orchestration.approve', 'orchestration.cancel']],
+  ['queued', ['orchestration.confirm-cancel']],
+  ['running', ['orchestration.confirm-cancel']],
+  ['awaiting_approval', ['orchestration.confirm-approve', 'orchestration.confirm-cancel']],
   ['failed', ['orchestration.retry']],
   ['completed', []],
   ['cancelled', []],

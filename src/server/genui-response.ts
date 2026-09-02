@@ -85,12 +85,12 @@ function orchestrationAction(type: string, title: string, jobId: string, style?:
 
 function orchestrationActions(job: CoreOrchestrationJob): readonly Record<string, unknown>[] {
   if (job.status === 'queued' || job.status === 'running') {
-    return [orchestrationAction('orchestration.cancel', '취소', job.id, 'destructive')];
+    return [orchestrationAction('orchestration.confirm-cancel', '취소', job.id, 'destructive')];
   }
   if (job.status === 'awaiting_approval') {
     return [
-      orchestrationAction('orchestration.approve', '승인', job.id, 'positive'),
-      orchestrationAction('orchestration.cancel', '취소', job.id, 'destructive'),
+      orchestrationAction('orchestration.confirm-approve', '승인', job.id, 'positive'),
+      orchestrationAction('orchestration.confirm-cancel', '취소', job.id, 'destructive'),
     ];
   }
   if (job.status === 'failed') {
@@ -157,6 +157,43 @@ export function createCoreOrchestrationJobActivity(job: CoreOrchestrationJob): C
       { type: 'TextBlock', text: displayText(detail, 2_000, '세부 진행 정보가 없습니다.'), wrap: true, isSubtle: true },
     ],
     ...(actions.length > 0 ? { actions } : {}),
+  });
+}
+
+/**
+ * Second-step confirmation card. The Teams activity router must translate the
+ * distinct confirm-* request into this card before it accepts the mutation.
+ */
+export function createCoreOrchestrationConfirmationActivity(
+  job: CoreOrchestrationJob,
+  action: 'approve' | 'cancel',
+): CoreOrchestrationTeamsActivity {
+  const isApproval = action === 'approve';
+  return orchestrationActivity({
+    type: 'AdaptiveCard',
+    $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.2',
+    msteams: { width: 'Full' },
+    body: [
+      { type: 'TextBlock', text: isApproval ? '작업 승인 확인' : '작업 취소 확인', size: 'Large', weight: 'Bolder', wrap: true },
+      {
+        type: 'TextBlock',
+        text: isApproval
+          ? '이 작업을 승인해 계속 실행할까요?'
+          : '이 작업에 취소 요청을 보낼까요?',
+        wrap: true,
+      },
+      { type: 'FactSet', facts: [{ title: '작업 ID', value: identifierText(job.id, 200, 'unknown-job') }] },
+    ],
+    actions: [
+      orchestrationAction(
+        isApproval ? 'orchestration.approve' : 'orchestration.cancel',
+        isApproval ? '승인 확인' : '취소 확인',
+        job.id,
+        isApproval ? 'positive' : 'destructive',
+      ),
+      orchestrationAction('orchestration.dismiss-confirmation', '돌아가기', job.id),
+    ],
   });
 }
 

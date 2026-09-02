@@ -29,6 +29,41 @@ function nextIdempotencyKey(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+type SubmissionIdentity = Readonly<{
+  prompt: string;
+  provider: CoreOrchestrationProvider;
+  mode: CoreOrchestrationMode;
+}>;
+
+function submissionFingerprint(input: SubmissionIdentity): string {
+  return JSON.stringify({
+    prompt: input.prompt.trim(),
+    provider: input.provider,
+    mode: input.mode,
+  });
+}
+
+export type SubmissionIdempotencyController = {
+  keyFor: (input: SubmissionIdentity) => string;
+  complete: (input: SubmissionIdentity, key: string) => void;
+};
+
+export function createSubmissionIdempotencyController(
+  issueKey: () => string = () => nextIdempotencyKey('teams-tab-submit'),
+): SubmissionIdempotencyController {
+  let active: { fingerprint: string; key: string } | undefined;
+  return {
+    keyFor(input) {
+      const fingerprint = submissionFingerprint(input);
+      if (!active || active.fingerprint !== fingerprint) active = { fingerprint, key: issueKey() };
+      return active.key;
+    },
+    complete(input, key) {
+      if (active?.fingerprint === submissionFingerprint(input) && active.key === key) active = undefined;
+    },
+  };
+}
+
 function errorMessage(error: unknown): string {
   if (error instanceof CoreOrchestrationClientError || error instanceof Error) return error.message;
   return '오케스트레이션 요청을 처리하지 못했습니다.';
@@ -93,6 +128,7 @@ export type OrchestrationPanelViewProps = {
   notice: string;
   validationError: string;
   mobile: boolean;
+  pendingConfirmation?: Readonly<{ kind: 'approve' | 'cancel'; jobId: string }> | null;
   onPromptChange: (value: string) => void;
   onProviderChange: (value: string) => void;
   onModeChange: (value: CoreOrchestrationMode) => void;
@@ -101,6 +137,8 @@ export type OrchestrationPanelViewProps = {
   onSelectTask: (jobId: string) => void | Promise<void>;
   onCancel: (jobId: string) => void | Promise<void>;
   onApprove: (jobId: string) => void | Promise<void>;
+  onRequestConfirmation?: (kind: 'approve' | 'cancel', jobId: string) => void;
+  onDismissConfirmation?: () => void;
   onProvideInput: (jobId: string) => void | Promise<void>;
   onRetryTask: (jobId: string) => void | Promise<void>;
   onReload: () => void | Promise<void>;
@@ -128,6 +166,9 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
   const canCancel = props.selectedJob
     && ['queued', 'awaiting_approval', 'input_required', 'running'].includes(props.selectedJob.status)
     && supports(selectedProvider, 'cancel');
+  const pendingConfirmation = props.selectedJob && props.pendingConfirmation?.jobId === props.selectedJob.id
+    ? props.pendingConfirmation
+    : null;
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -261,14 +302,31 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
           {props.selectedJob.status === 'awaiting_approval' ? (
             <div>
               <p>이 작업을 계속하려면 승인이 필요합니다.</p>
-              <button
-                className="primary"
-                disabled={selectedBusy || !supports(selectedProvider, 'approve')}
-                onClick={() => void props.onApprove(props.selectedJob!.id)}
-                type="button"
-              >
-                {actionLabel('승인', '승인 중…', props.busyAction === `approval:${props.selectedJob.id}`)}
-              </button>
+              {pendingConfirmation?.kind === 'approve' ? (
+                <div aria-label="작업 승인 확인" className="delete-confirmation" role="group">
+                  <span>실행하기 전에 승인 여부를 다시 확인합니다.</span>
+                  <button
+                    className="primary"
+                    disabled={selectedBusy || !supports(selectedProvider, 'approve')}
+                    onClick={() => void props.onApprove(props.selectedJob!.id)}
+                    type="button"
+                  >
+                    {actionLabel('승인 확인', '승인 중…', props.busyAction === `approval:${props.selectedJob.id}`)}
+                  </button>
+                  <button className="secondary" disabled={selectedBusy} onClick={() => props.onDismissConfirmation?.()} type="button">
+                    돌아가기
+                  </button>
+                </div>
+              ) : (
+                <button
+                  className="primary"
+                  disabled={selectedBusy || !supports(selectedProvider, 'approve')}
+                  onClick={() => props.onRequestConfirmation?.('approve', props.selectedJob!.id)}
+                  type="button"
+                >
+                  승인
+                </button>
+              )}
             </div>
           ) : null}
 
@@ -295,14 +353,31 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
 
           <div className="work-item-actions">
             {canCancel ? (
-              <button
-                className="secondary"
-                disabled={selectedBusy}
-                onClick={() => void props.onCancel(props.selectedJob!.id)}
-                type="button"
-              >
-                {actionLabel('작업 취소', '취소 중…', props.busyAction === `cancel:${props.selectedJob.id}`)}
-              </button>
+              pendingConfirmation?.kind === 'cancel' ? (
+                <div aria-label="작업 취소 확인" className="delete-confirmation" role="group">
+                  <span>작업 취소 요청을 보내기 전에 다시 확인합니다.</span>
+                  <button
+                    className="secondary"
+                    disabled={selectedBusy}
+                    onClick={() => void props.onCancel(props.selectedJob!.id)}
+                    type="button"
+                  >
+                    {actionLabel('취소 확인', '취소 중…', props.busyAction === `cancel:${props.selectedJob.id}`)}
+                  </button>
+                  <button className="secondary" disabled={selectedBusy} onClick={() => props.onDismissConfirmation?.()} type="button">
+                    돌아가기
+                  </button>
+                </div>
+              ) : (
+                <button
+                  className="secondary"
+                  disabled={selectedBusy}
+                  onClick={() => props.onRequestConfirmation?.('cancel', props.selectedJob!.id)}
+                  type="button"
+                >
+                  작업 취소
+                </button>
+              )
             ) : null}
             {props.selectedJob.status === 'failed' && supports(selectedProvider, 'retry') ? (
               <button
@@ -339,7 +414,9 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [validationError, setValidationError] = useState('');
+  const [pendingConfirmation, setPendingConfirmation] = useState<Readonly<{ kind: 'approve' | 'cancel'; jobId: string }> | null>(null);
   const busy = useMemo(() => createOrchestrationBusyController(), []);
+  const submissionKeys = useRef(createSubmissionIdempotencyController());
   const loadController = useRef<AbortController | null>(null);
 
   const updateJob = useCallback((nextJob: CoreOrchestrationJob) => {
@@ -388,18 +465,22 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
       reason?: string;
     }>,
     successMessage: string,
-  ) => {
-    if (busy.isBusy(slot)) return;
+  ): Promise<'success' | 'definitive-failure' | 'ambiguous-failure' | 'ignored'> => {
+    if (busy.isBusy(slot)) return 'ignored';
     setBusyAction(slot);
     setError('');
     setNotice('');
     try {
       const result = await busy.run(slot, operation);
-      if (!result) return;
+      if (!result) return 'ignored';
       updateJob(result.job);
       setNotice(orchestrationMutationNotice(result, successMessage));
+      return 'success';
     } catch (caught) {
       setError(errorMessage(caught));
+      return caught instanceof CoreOrchestrationClientError && !caught.retryable
+        ? 'definitive-failure'
+        : 'ambiguous-failure';
     } finally {
       setBusyAction((current) => current === slot ? '' : current);
     }
@@ -409,12 +490,19 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     const validation = validateOrchestrationSubmission(prompt, providerId, providers);
     setValidationError(validation);
     if (validation) return;
-    await runMutation('submit', () => client.submitJob({
-      idempotencyKey: nextIdempotencyKey('teams-tab-submit'),
+    const identity = {
       prompt: prompt.trim(),
       provider: providerId as CoreOrchestrationProvider,
       mode,
+    };
+    const idempotencyKey = submissionKeys.current.keyFor(identity);
+    const outcome = await runMutation('submit', () => client.submitJob({
+      idempotencyKey,
+      ...identity,
     }), '작업을 제출했습니다.');
+    if (outcome === 'success' || outcome === 'definitive-failure') {
+      submissionKeys.current.complete(identity, idempotencyKey);
+    }
   }, [client, mode, prompt, providerId, providers, runMutation]);
 
   const selectJob = useCallback(async (jobId: string) => {
@@ -436,10 +524,12 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
   }, [busy, client, updateJob]);
 
   const cancel = useCallback(async (jobId: string) => {
-    await runMutation(`cancel:${jobId}`, () => client.cancelJob(jobId), '취소 요청을 보냈습니다.');
+    const outcome = await runMutation(`cancel:${jobId}`, () => client.cancelJob(jobId), '취소 요청을 보냈습니다.');
+    if (outcome === 'success' || outcome === 'definitive-failure') setPendingConfirmation(null);
   }, [client, runMutation]);
   const approve = useCallback(async (jobId: string) => {
-    await runMutation(`approval:${jobId}`, () => client.approveJob(jobId), '작업을 승인했습니다.');
+    const outcome = await runMutation(`approval:${jobId}`, () => client.approveJob(jobId), '작업을 승인했습니다.');
+    if (outcome === 'success' || outcome === 'definitive-failure') setPendingConfirmation(null);
   }, [client, runMutation]);
   const provideInput = useCallback(async (jobId: string) => {
     if (!inputValue.trim()) {
@@ -462,6 +552,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     mobile={isMobile}
     mode={mode}
     notice={notice}
+    pendingConfirmation={pendingConfirmation}
     onApprove={approve}
     onCancel={cancel}
     onInputChange={(value) => { setInputValue(value); setValidationError(''); }}
@@ -469,6 +560,8 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     onPromptChange={(value) => { setPrompt(value); setValidationError(''); }}
     onProvideInput={provideInput}
     onProviderChange={(value) => { setProviderId(value); setValidationError(''); }}
+    onRequestConfirmation={(kind, jobId) => setPendingConfirmation({ kind, jobId })}
+    onDismissConfirmation={() => setPendingConfirmation(null)}
     onReload={load}
     onRetryTask={retryJob}
     onSelectTask={selectJob}
