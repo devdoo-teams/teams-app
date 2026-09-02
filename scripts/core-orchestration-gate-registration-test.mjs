@@ -21,6 +21,7 @@ const task4Tests = [
   'scripts/core-orchestration-chat-card-test.ts',
   'scripts/core-orchestration-teams-chat-wiring-test.ts',
   'scripts/core-orchestration-teams-chat-runtime-test.ts',
+  'scripts/core-orchestration-confirmation-chat-runtime-test.ts',
   'scripts/core-orchestration-confirmation-idempotency-test.tsx',
   'scripts/core-orchestration-runtime-composition-test.ts',
 ];
@@ -32,7 +33,11 @@ for (const script of task4Tests) {
     `Required MP-262 test file must exist: ${script}`,
   );
   const matches = invocations.filter(({ args }) => args.at(-1) === script);
-  const expectedKind = script === 'scripts/core-orchestration-teams-chat-runtime-test.ts' ? 'runtime' : 'source';
+  const expectedKind =
+    script === 'scripts/core-orchestration-teams-chat-runtime-test.ts' ||
+    script === 'scripts/core-orchestration-confirmation-chat-runtime-test.ts'
+      ? 'runtime'
+      : 'source';
   const expectedCwd = expectedKind === 'runtime' ? runtimeCwd : sourceCwd;
   assert.equal(
     matches.length,

@@ -45,6 +45,7 @@ const runtimeTests = [
   'scripts/teams-a2a-outbound-restart-regression-test.ts',
   'scripts/a2a-index-integration-test.mjs',
   'scripts/core-orchestration-teams-chat-runtime-test.ts',
+  'scripts/core-orchestration-confirmation-chat-runtime-test.ts',
 ];
 const tsTests = [
   'scripts/core-orchestration-service-test.ts',
