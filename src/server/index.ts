@@ -181,6 +181,8 @@ import {
 import {
   CoreOrchestrationService,
   createServerDerivedCoreScope,
+  type CoreInputResumeObservation,
+  type CoreInputResumePort,
 } from './core-orchestration-service.js';
 import { mountCoreOrchestrationRoutes } from './core-orchestration-route.js';
 import type { CoreProviderFact } from '../shared/core-orchestration.js';
@@ -2664,9 +2666,79 @@ await agentService.initialize();
 const coreProviderCapabilities = azureQueueDispatch
   ? unknownCliCapabilities()
   : await probeCliCapabilities().catch(() => unknownCliCapabilities());
+type MeasuredInputResumeRuntime = ProviderNeutralAgentRunner & Readonly<{
+  observeInputResume?: (
+    job: AgentJob,
+    scope: AgentJobScope,
+  ) => CoreInputResumeObservation | Promise<CoreInputResumeObservation>;
+  resumeInput?: (
+    job: AgentJob,
+    scope: AgentJobScope,
+    input: unknown,
+  ) => Promise<AgentJob>;
+}>;
+
+function measuredCoreRuntime(
+  provider: CliAgentProvider,
+): { runtime: MeasuredInputResumeRuntime; availability: 'available' } | undefined {
+  const availability = provider === 'copilot'
+    ? coreProviderCapabilities.ghcp.state
+    : coreProviderCapabilities.codex.state;
+  const runtime = providerRunners[provider] as MeasuredInputResumeRuntime | undefined;
+  return availability === 'available' && runtime
+    ? { runtime, availability }
+    : undefined;
+}
+
+function measuredCoreProviderCapabilities(provider: CliAgentProvider): string[] {
+  const measured = measuredCoreRuntime(provider);
+  if (!measured) return [];
+  const { runtime } = measured;
+  const capabilities: string[] = [];
+  if (typeof agentService.approve === 'function' && typeof runtime.run === 'function') capabilities.push('approve');
+  if (typeof agentService.cancelStrict === 'function' && typeof runtime.cancel === 'function') capabilities.push('cancel');
+  if (typeof runtime.observeInputResume === 'function' && typeof runtime.resumeInput === 'function') capabilities.push('input');
+  if (typeof agentService.retry === 'function' && typeof runtime.run === 'function') capabilities.push('retry');
+  if (typeof agentService.submit === 'function' && typeof runtime.run === 'function') capabilities.push('submit');
+  return capabilities;
+}
+
+function composeMeasuredInputResumePort(): CoreInputResumePort | undefined {
+  const providers = (Object.keys(providerRunners) as CliAgentProvider[])
+    .filter((provider) => measuredCoreProviderCapabilities(provider).includes('input'));
+  if (providers.length === 0) return undefined;
+  return {
+    async observe(job, scope) {
+      const provider = job.provider ?? agentProvider;
+      const measured = measuredCoreRuntime(provider);
+      if (!measured
+        || typeof measured.runtime.observeInputResume !== 'function'
+        || typeof measured.runtime.resumeInput !== 'function') {
+        return {
+          supported: false,
+          awaitingInput: false,
+          source: 'runtime-probe',
+          observedAt: new Date().toISOString(),
+          reason: 'provider-input-unsupported',
+        };
+      }
+      return measured.runtime.observeInputResume.call(measured.runtime, job, scope);
+    },
+    async resume(job, scope, input) {
+      const provider = job.provider ?? agentProvider;
+      const measured = measuredCoreRuntime(provider);
+      if (!measured || typeof measured.runtime.resumeInput !== 'function') {
+        throw new Error('Provider input resume is not available from a measured runtime.');
+      }
+      return measured.runtime.resumeInput.call(measured.runtime, job, scope, input);
+    },
+  };
+}
+
 const coreOrchestrationService = new CoreOrchestrationService({
   agentService,
   jobStore: agentJobStore,
+  inputResume: composeMeasuredInputResumePort(),
   observeProviderFacts: (): CoreProviderFact[] => [...new Set(Object.keys(providerRunners).concat(agentProvider))]
     .map((provider) => {
       const capability = provider === 'copilot'
@@ -2675,7 +2747,7 @@ const coreOrchestrationService = new CoreOrchestrationService({
       return {
         provider,
         availability: capability.state,
-        capabilities: ['submit', 'cancel', 'approve', 'retry'],
+        capabilities: measuredCoreProviderCapabilities(provider as CliAgentProvider),
         observedAt: new Date().toISOString(),
         source: 'runtime-probe',
       };
