@@ -2,7 +2,7 @@
 
 ## Goal
 
-Move the Teams Core runtime from the temporary Dev Tunnel architecture to a reproducible Azure canary without interrupting the existing service. GitHub remains the source/build ledger, Azure DevOps owns deployment approval and promotion, Azure Container Apps hosts Core, Cosmos DB and Storage Queue provide shared durable state, and one Linux VM hosts the first authenticated Codex worker.
+Use the Teams chat and personal tab as the user interface for a durable Azure-hosted agent platform without interrupting the existing service. Teams Core owns authenticated scope and orchestration; Codex workers and approved remote agents such as Hermes A2A, a Grok-backed agent, and concrete Buzz relay/ACP actions participate through explicit provider adapters. GitHub remains the source/build ledger, Azure DevOps owns deployment approval and promotion, Azure Container Apps hosts Core, Cosmos DB and Storage Queue provide shared durable state, and Linux workers execute local CLI agents.
 
 ## Global Constraints
 
@@ -12,11 +12,13 @@ Move the Teams Core runtime from the temporary Dev Tunnel architecture to a repr
 - GitHub builds and publishes immutable artifacts. Azure DevOps is the sole authority for Azure deployment and environment promotion.
 - The Azure runtime subscription is `0e58c3cb-474d-4e70-978a-4939c586f867`, region `koreacentral`, and the second subscription is not modified.
 - Free-first defaults: one scale-to-zero Container App canary, one Cosmos DB free-tier account when eligible, Storage Queue, Key Vault, Application Insights, and one `Standard_B2ats_v2` Linux worker VM.
-- The Container App must not execute Codex CLI child processes. It dispatches durable work to the VM through a queue-backed lease contract.
+- The Container App must not execute Codex, Hermes, Buzz, or other CLI child processes. It dispatches durable work to VM workers or calls explicitly registered HTTPS provider adapters.
 - File JSON remains a local compatibility backend. Azure mode must use explicit configuration and fail closed when required Azure resources are absent.
 - Preserve all accepted records during migration. Export, hash, import idempotently, reconcile counts and stable IDs, then retain a rollback bundle.
 - A deployment is not complete until commit, version, image digest, Teams ZIP SHA-256, public runtime identity, Azure revision, installed Teams version, desktop UI, and mobile evidence all identify the same release.
-- Core and optional providers remain separate. Grok is outside this release.
+- Core and optional providers remain separate. No optional provider is advertised as ready until startup preflight and one bounded live round trip prove its real identity, capability, receipt, cancellation/recovery behavior, and nonempty result.
+- Hermes uses its official A2A v1 endpoint as the preferred direct integration. Buzz relay/CLI/ACP, GitHub agent-tasks REST, and xAI/Grok are distinct transports and must not be mislabeled as native A2A.
+- GitHub's `@GitHub` Microsoft Teams integration is an out-of-band first-party workflow, not an embeddable TeamsApp backend API. Direct backend use, if enabled, uses the documented preview agent-tasks REST contract with user-to-server authentication.
 
 ## Task 1: Azure platform contract, Bicep, and pipeline ownership
 
@@ -44,32 +46,34 @@ Verification:
 - `npm run test:azure-release-input`
 - `npm run typecheck:core`
 
-## Task 2: Shared persistence abstraction and Cosmos DB backend
+## Task 2: Provider-neutral durable lifecycle and Hermes A2A adapter
+
+Files:
+- Create `src/server/provider-runtime-adapter.ts`
+- Create `src/server/provider-lifecycle-runner.ts`
+- Create `src/server/hermes-a2a-adapter.ts`
+- Create focused tests under `scripts/`
+- Update only the minimum A2A composition points required to register the adapter
+
+Requirements:
+1. Add contract tests first for preflight, durable submitting/accepted receipts, request-hash idempotency, delivery-unknown recovery, unknown-state quarantine, timeout, cancellation, input/auth-required states, and nonempty completion evidence.
+2. Preserve server-derived Teams tenant/requester/conversation scope and keep provider, credential principal, execution, context/session, runtime boundary, artifact, and audit identities distinct.
+3. Keep raw provider state beside canonical A2A state; never guess unknown states.
+4. Implement Hermes through its official A2A v1 Agent Card and Send/Get/Cancel contracts. Require configured HTTPS origin, expected peer identity, bearer-token reference, capability negotiation, task/context continuity, and artifact/result validation.
+5. The existing local Core/Codex path remains unchanged by default. Hermes registration is explicit and fail closed.
+6. Do not introduce native Buzz, GitHub, or Grok assumptions into this shared lifecycle.
+
+Verification:
+- focused adapter/lifecycle/Hermes tests
+- existing A2A remote client, adapter, roster, production collaboration, cancellation, and recovery suites
+- `npm run test:core`
+
+## Task 3: Shared Cosmos state, durable queue dispatch, and Linux Codex worker
 
 Files:
 - Create `src/server/storage/runtime-store.ts`
 - Create `src/server/storage/cosmos-runtime-store.ts`
 - Create `src/server/storage/runtime-store-factory.ts`
-- Create focused tests under `scripts/`
-- Update only the minimum server composition points required to select the backend
-- Update `package.json` and lockfile only for required official Azure SDK packages
-
-Requirements:
-1. Add contract tests first for scoped reads, idempotent writes, optimistic concurrency, rollback on persistence failure, and tenant/user isolation.
-2. Keep the file backend as the default compatibility backend.
-3. Select Cosmos only with explicit `TEAMS_STORAGE_BACKEND=azure-cosmos` plus required endpoint/database/container settings.
-4. Use managed identity via `DefaultAzureCredential`; do not accept a checked-in account key.
-5. Health reports the selected backend and degraded/unavailable state without exposing endpoints or credentials.
-6. Do not claim horizontal safety until every mutable store has moved to the shared abstraction; expose migration completeness in health.
-
-Verification:
-- focused runtime-store tests
-- `npm run test:atomic-stores`
-- `npm run test:core`
-
-## Task 3: Durable queue dispatch and Linux Codex worker
-
-Files:
 - Create `src/server/queue/agent-dispatch-queue.ts`
 - Create `src/server/queue/azure-agent-dispatch-queue.ts`
 - Create `src/worker/index.ts`
@@ -78,18 +82,62 @@ Files:
 - Update server composition and package scripts
 
 Requirements:
-1. Write failing contract tests for enqueue, lease, heartbeat, completion receipt, explicit error receipt, cancellation, visibility timeout recovery, and duplicate-delivery idempotency.
-2. ACA only enqueues jobs and observes durable receipts; it never spawns Codex.
-3. The VM worker uses managed identity for queue/state access and an owner-only `AGENT_CODEX_HOME`; authentication material is provisioned out of band and never copied into images or cloud-init.
-4. Every job has a stable task ID, lease owner, checkpoint, heartbeat, terminal result/error, and reconciliation path.
-5. A process exit without a non-empty terminal receipt is failure, never completion.
+1. Add storage contract tests first for scoped reads, idempotent writes, optimistic concurrency, rollback on persistence failure, and tenant/user isolation.
+2. Keep file JSON as the default compatibility backend. Select Cosmos only with explicit configuration and `DefaultAzureCredential`; never accept a checked-in account key.
+3. Move mutable stores behind the shared boundary incrementally and report migration completeness in health. Do not claim horizontal safety while any authoritative mutable store remains process-local.
+4. Write failing queue tests for enqueue, lease, heartbeat, checkpoint, completion receipt, explicit error receipt, cancellation, visibility-timeout recovery, and duplicate-delivery idempotency.
+5. ACA only enqueues local CLI jobs and observes durable receipts; it never spawns a CLI process.
+6. The VM worker uses managed identity for queue/state access and an owner-only `AGENT_CODEX_HOME`; authentication material is provisioned out of band and never copied into images or cloud-init.
+7. A process exit without a nonempty terminal receipt is failure, never completion.
 
 Verification:
 - focused queue/worker tests
 - existing A2A execution, cancellation, restart, telemetry, and isolation suites
 - `npm run test:core`
 
-## Task 4: Full-preservation migration, backup, and rollback
+## Task 4: Teams Core chat and tab orchestration surface
+
+Files:
+- Add a narrow authenticated Core orchestration HTTP facade
+- Add a React Teams personal-tab orchestration panel
+- Extend the Teams bot command manifest and Adaptive Cards
+- Add focused server and client tests
+
+Requirements:
+1. Tests first cover submit, get/list, cancel, approval/input-required, retry, duplicate submission, invalid input, unavailable provider, empty state, error state, and mobile fallback guidance.
+2. The server derives tenant/requester/conversation scope. Client fields cannot redirect scope.
+3. Chat and tab use the same orchestration application service and durable task identity.
+4. The tab is Core React/TeamsJS and must not depend on CopilotKit or MCP UI.
+5. Every registered provider exposes only measured capabilities and availability. No fixture-only provider is presented as live.
+6. Adaptive Card responses remain attachment-only and Teams 1.2 compatible.
+
+Verification:
+- focused Core orchestration API/UI tests
+- existing Teams chat regression, security scope, GenUI, tab route, and client suites
+- `npm run test:core`
+
+## Task 5: Optional Grok, Buzz, and GitHub provider adapters
+
+Files:
+- Create separate adapters and tests only for documented provider contracts
+- Extend explicit provider registry/configuration
+- Update optional build/test scripts
+
+Requirements:
+1. Grok remains an xAI-backed response/agent transport behind an optional feature flag and explicit credential reference. A model response alone is not a durable agent completion.
+2. Buzz support must target an approved concrete use case: allowlisted `buzz-cli` JSON action, signed relay event, or Buzz-hosted ACP session. Preserve signer, event, channel/thread, community, and relay receipt identities. Do not describe Buzz as A2A.
+3. GitHub cloud agent support uses the documented preview agent-tasks REST API with user-to-server auth, entitlement/repository preflight, polling, state translation, and durable result/artifact identity. Cancel/steer remain unsupported unless official endpoints exist.
+4. GitHub's separate `@GitHub` Teams app is linked as an out-of-band collaboration option and never counted as a TeamsApp child execution.
+5. Hermes HTTP/ACP/CLI are explicit fallback adapter kinds, never automatic downgrade paths from Hermes A2A.
+6. Each optional adapter fails closed when configuration or live preflight is missing and is excluded from default Core build/runtime.
+
+Verification:
+- focused optional adapter tests
+- `npm run test:optional`
+- `npm run build:optional`
+- provider-specific bounded live checks before any ready claim
+
+## Task 6: Full-preservation migration, integrated gates, and rollback
 
 Files:
 - Create `scripts/azure-state-export.mjs`
@@ -97,6 +145,8 @@ Files:
 - Create `scripts/azure-state-reconcile.mjs`
 - Create `scripts/azure-state-migration-test.mjs`
 - Create `docs/azure-state-migration-runbook.md`
+- Create or update Azure deployment/runbook documentation
+- Extend release gate tests and scripts only as required
 
 Requirements:
 1. Tests first cover malformed records, duplicate IDs, retries, partial failure, hash mismatch, tenant isolation, and repeatable import.
@@ -104,27 +154,14 @@ Requirements:
 3. Import is dry-run by default and requires an explicit apply flag.
 4. Reconciliation must prove counts, IDs, and content hashes before cutover.
 5. Rollback preserves the pre-import Azure snapshot and the immutable local export bundle.
+6. One non-mutating command validates Azure configuration, immutable handoff receipt, official Bicep build, migration readiness, Core build/tests, Teams package identity, provider readiness classification, and public canary identity.
+7. Promotion requires explicit Azure DevOps environment approval and leaves the current Dev Tunnel untouched until all gates pass.
+8. Jira mappings are required for every reproduced defect or release blocker.
 
 Verification:
 - `npm run test:azure-state-migration`
 - secret scan over migration fixture artifacts
 - existing store hardening suites
-
-## Task 5: Integrated release gate and operator documentation
-
-Files:
-- Create or update Azure deployment/runbook documentation
-- Extend release gate tests and scripts only as required
-- Update GitHub/Azure DevOps workflow contracts
-
-Requirements:
-1. One command must validate Azure configuration, immutable handoff receipt, Bicep build, migration readiness, Core build/tests, Teams package identity, and public canary identity.
-2. The command must not deploy or mutate Azure by default.
-3. Promotion requires an explicit Azure DevOps environment approval and must leave the current Dev Tunnel untouched until all gates pass.
-4. Record exact rollback commands and same-release evidence fields.
-5. Jira mappings are required for any reproduced defect or release blocker before release completion.
-
-Verification:
 - focused workflow tests
 - `npm run release:preflight`
 - `npm run build:core`
@@ -132,7 +169,7 @@ Verification:
 - `npm run validate:manifest`
 - `npm run test:package-determinism`
 
-## Task 6: Provision, deploy, and verify the Azure canary
+## Task 7: Provision, deploy, and verify the Azure canary
 
 Requirements:
 1. Install/authenticate the official Azure CLI without storing credentials in the repository.
@@ -140,7 +177,7 @@ Requirements:
 3. Provision with reviewed Bicep using a what-if first.
 4. Configure Azure DevOps service connection/environment approval and deploy the immutable GitHub artifact.
 5. Migrate state with export, dry-run, apply, and reconcile evidence.
-6. Verify ACA health/tab/assets, one live authenticated Codex worker round trip, cancellation/restart recovery, Teams registration/package identity, desktop UI matrix, and mobile evidence.
+6. Verify ACA health/tab/assets, one live authenticated Codex worker round trip, Hermes A2A and every enabled optional provider round trip, cancellation/restart recovery, Teams registration/package identity, desktop UI matrix, and mobile evidence.
 7. Only after every gate passes, switch the Teams endpoint and send the completion report in Teams.
 
 External mutations in this task require action-time confirmation where the browser or service requires it. If blocked, retain the existing service and report the exact gate.
