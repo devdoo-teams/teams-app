@@ -177,6 +177,39 @@ assert.throws(
   }, { phase: 'get', receipt: acceptedReceipt }),
   /continuity/i,
 );
+for (const omittedIdentity of [
+  {
+    providerSessionId: 'provider-session-1',
+    providerContextId: 'provider-context-1',
+  },
+  {
+    providerExecutionId: 'provider-execution-1',
+    providerContextId: 'provider-context-1',
+  },
+  {
+    providerExecutionId: 'provider-execution-1',
+    providerSessionId: 'provider-session-1',
+  },
+]) {
+  assert.throws(
+    () => validateProviderRuntimeObservation(adapter, {
+      rawState: 'DONE',
+      ...omittedIdentity,
+      result: 'must not complete without receipt identity continuity',
+    }, { phase: 'get', receipt: acceptedReceipt }),
+    /continuity/i,
+  );
+}
+
+const credentialUrlText = validateProviderRuntimeObservation(adapter, {
+  rawState: 'DONE',
+  providerExecutionId: 'provider-execution-1',
+  providerSessionId: 'provider-session-1',
+  providerContextId: 'provider-context-1',
+  result: 'See https://user:password@example.test/result?token=raw-secret#credential for details.',
+}, { phase: 'get', receipt: acceptedReceipt });
+assert.equal(credentialUrlText.result?.includes('password'), false);
+assert.equal(credentialUrlText.result?.includes('raw-secret'), false);
 assert.throws(
   () => validateProviderRuntimeObservation(adapter, {
     rawState: 'DONE',

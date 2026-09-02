@@ -101,7 +101,7 @@
     "test:a2a-parent-lifecycle": "tsx scripts/a2a-parent-lifecycle-test.ts",
     "test:a2a-independent-agent-identity": "tsx scripts/a2a-independent-agent-identity-test.ts",
     "test:a2a-durable-dispatch": "tsx scripts/a2a-durable-dispatch-test.ts",
-    "test:provider-lifecycle": "tsx scripts/provider-runtime-adapter-test.ts && tsx scripts/provider-lifecycle-runner-test.ts",
+    "test:provider-lifecycle": "tsx scripts/provider-runtime-adapter-test.ts && tsx scripts/provider-lifecycle-runner-test.ts && tsx scripts/hermes-a2a-adapter-test.ts && tsx scripts/hermes-a2a-production-agent-test.ts && tsx scripts/hermes-a2a-registration-test.ts",
     "test:a2a-admission-restart": "tsx scripts/a2a-admission-restart-test.ts",
     "test:a2a-deadline-cancellation": "tsx scripts/a2a-deadline-cancellation-test.ts",
     "test:a2a-submission-durability": "tsx scripts/a2a-submission-durability-test.ts",

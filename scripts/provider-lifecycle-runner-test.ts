@@ -7,6 +7,7 @@ import type { A2AScope } from '../src/server/a2a-contract.js';
 import { atomicWriteJson } from '../src/server/atomic-file.js';
 import {
   createProviderRuntimeAdapter,
+  type ProviderAcceptedReceipt,
   type ProviderRuntimeAdapter,
   type ProviderRuntimeIdentities,
   type ProviderRuntimeObservation,
@@ -692,6 +693,67 @@ async function testAllObservationsAreValidatedAndDurableFieldsAreSanitized(): Pr
   assert.notEqual(canceled.state, 'completed');
 }
 
+async function testFailedPollAndReconcileReleaseOwnedLease(): Promise<void> {
+  const pollStore = new MemoryLifecycleStore();
+  let pollFails = true;
+  let pollCalls = 0;
+  const pollRunner = createRunner(pollStore, {
+    submit: async () => ({ rawState: 'ACCEPTED', providerExecutionId: 'provider-lease-poll' }),
+    get: async () => {
+      pollCalls += 1;
+      if (pollFails) throw new Error('temporary poll failure');
+      return {
+        rawState: 'DONE',
+        providerExecutionId: 'provider-lease-poll',
+        result: 'poll recovered immediately',
+      };
+    },
+  });
+  await assert.rejects(() => pollRunner.run(input('poll-lease-release')), /temporary poll failure/);
+  pollFails = false;
+  const pollRecovered = await within(pollRunner.run({
+    ...input('poll-lease-release'),
+    timeoutMs: 100,
+  }), 300);
+  assert.equal(pollRecovered.state, 'completed');
+  assert.equal(pollRecovered.result, 'poll recovered immediately');
+  assert.equal(pollCalls, 2, 'retry must poll immediately instead of waiting for an abandoned lease');
+
+  const reconcileStore = new MemoryLifecycleStore();
+  let reconcileFails = true;
+  let reconcileCalls = 0;
+  const reconcileRunner = createRunner(reconcileStore, {
+    submit: async () => {
+      throw new Error('submit delivery unknown');
+    },
+    reconcile: async () => {
+      reconcileCalls += 1;
+      if (reconcileFails) throw new Error('temporary reconcile failure');
+      return {
+        rawState: 'DONE',
+        providerExecutionId: 'provider-lease-reconcile',
+        result: 'reconcile recovered immediately',
+      };
+    },
+  });
+  const unknown = await reconcileRunner.run(input('reconcile-lease-release'));
+  assert.equal(unknown.state, 'quarantined');
+  await reconcileRunner.recover({
+    scope,
+    idempotencyKey: input('reconcile-lease-release').idempotencyKey,
+    timeoutMs: 100,
+  });
+  reconcileFails = false;
+  const reconcileRecovered = await within(reconcileRunner.recover({
+    scope,
+    idempotencyKey: input('reconcile-lease-release').idempotencyKey,
+    timeoutMs: 100,
+  }), 300);
+  assert.equal(reconcileRecovered.state, 'completed');
+  assert.equal(reconcileRecovered.result, 'reconcile recovered immediately');
+  assert.equal(reconcileCalls, 2, 'retry must reconcile immediately after a failed receiptless recovery');
+}
+
 function input(suffix: string) {
   return {
     scope,
@@ -711,6 +773,11 @@ function accepted(): ProviderRuntimeObservation {
 type AdapterOverrides = Partial<Pick<ProviderRuntimeAdapter, 'preflight' | 'submit' | 'get' | 'cancel' | 'reconcile'>>;
 
 function provider(overrides: AdapterOverrides = {}): ProviderRuntimeAdapter {
+  const get = overrides.get;
+  const cancel = overrides.cancel;
+  const remaining = { ...overrides };
+  delete remaining.get;
+  delete remaining.cancel;
   return createProviderRuntimeAdapter({
     providerId: 'provider-a',
     classifyState(rawState) {
@@ -728,10 +795,32 @@ function provider(overrides: AdapterOverrides = {}): ProviderRuntimeAdapter {
     },
     preflight: async () => ({ ready: true, capabilities: ['tasks'] }),
     submit: async () => accepted(),
-    get: async () => ({ rawState: 'DONE', result: 'default result' }),
-    cancel: async () => ({ rawState: 'CANCELED' }),
-    ...overrides,
+    get: async (operation) => withReceiptContinuity(
+      await (get?.(operation) ?? Promise.resolve({ rawState: 'DONE', result: 'default result' })),
+      operation.receipt,
+    ),
+    cancel: async (operation) => withReceiptContinuity(
+      await (cancel?.(operation) ?? Promise.resolve({ rawState: 'CANCELED' })),
+      operation.receipt,
+    ),
+    ...remaining,
   });
+}
+
+function withReceiptContinuity(
+  observation: ProviderRuntimeObservation,
+  receipt: ProviderAcceptedReceipt,
+): ProviderRuntimeObservation {
+  return {
+    ...observation,
+    providerExecutionId: observation.providerExecutionId ?? receipt.providerExecutionId,
+    ...(observation.providerSessionId === undefined && receipt.providerSessionId !== undefined
+      ? { providerSessionId: receipt.providerSessionId }
+      : {}),
+    ...(observation.providerContextId === undefined && receipt.providerContextId !== undefined
+      ? { providerContextId: receipt.providerContextId }
+      : {}),
+  };
 }
 
 function createRunner(store: ProviderLifecycleStore, overrides: AdapterOverrides = {}): ProviderLifecycleRunner {
@@ -1010,6 +1099,7 @@ await testPersistedCancellationResumesCancelAfterRestart();
 await testCancelCasWinsOverLateCompletionAndReceiptQuarantineRecovers();
 await testConcurrentSameRequestWaitsForLeaseAndReloads();
 await testAllObservationsAreValidatedAndDurableFieldsAreSanitized();
+await testFailedPollAndReconcileReleaseOwnedLease();
 await testAcceptedCallbackPrecedesPolling();
 await testExplicitRecoveryAndCancellationUseDurableReceipt();
 await testFileStoreSurvivesRestartWithoutIdentityCollapse();

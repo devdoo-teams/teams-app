@@ -285,7 +285,7 @@ function assertReceiptContinuity(
     ['session', receipt.providerSessionId, observation.providerSessionId],
     ['context', receipt.providerContextId, observation.providerContextId],
   ] as const) {
-    if (actual !== undefined && expected !== undefined && actual !== expected) {
+    if (expected !== undefined && actual !== expected) {
       throw new Error(`Provider ${label} continuity validation failed.`);
     }
   }
@@ -324,10 +324,27 @@ function boundedArtifactText(value: string): string {
 }
 
 function redactCredentialFragments(value: string): string {
-  return value
+  return redactCredentialUrls(value)
     .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]{8,}={0,2}/giu, 'Bearer [REDACTED]')
     .replace(/\b((?:api[_-]?key|access[_-]?token|auth[_-]?token|password|secret|token)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/giu, '$1[REDACTED]')
     .replace(/\b(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{8,})\b/gu, '[REDACTED]');
+}
+
+function redactCredentialUrls(value: string): string {
+  return value.replace(/\bhttps?:\/\/[^\s<>"']+/giu, (candidate) => {
+    try {
+      const parsed = new URL(candidate);
+      const sensitiveQuery = [...parsed.searchParams.keys()].some((key) => (
+        /api.?key|auth|credential|password|secret|sig|token/iu.test(key)
+      ));
+      const sensitiveFragment = /api.?key|auth|credential|password|secret|sig|token/iu.test(parsed.hash);
+      return parsed.username || parsed.password || sensitiveQuery || sensitiveFragment
+        ? '[REDACTED_URL]'
+        : candidate;
+    } catch {
+      return candidate;
+    }
+  });
 }
 
 function validateArtifactUrl(value: string): string {

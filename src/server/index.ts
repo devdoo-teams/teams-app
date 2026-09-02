@@ -131,6 +131,8 @@ import {
   resolveA2ARemotePeerCredentials,
   type A2ARemotePeerCredential,
 } from './a2a-remote-roster.js';
+import { createConfiguredHermesA2AAgents } from './hermes-a2a-registration.js';
+import { FileProviderLifecycleStore } from './provider-lifecycle-runner.js';
 import { A2A_CAPABILITIES, A2A_ROLE_CATALOG } from './a2a-role-catalog.js';
 import { selectTeamsA2AChatRoles } from './a2a-collaboration-plan.js';
 import {
@@ -200,6 +202,9 @@ const agentAdmissionJournalPath = process.env.AGENT_ADMISSION_JOURNAL_PATH ?? pa
 const genUiActionStorePath = process.env.GENUI_ACTION_STORE_PATH ?? path.resolve(process.cwd(), 'data/genui-actions.json');
 const responseModeStorePath = process.env.RESPONSE_MODE_STORE_PATH ?? path.resolve(process.cwd(), 'data/response-modes.json');
 const providerMutationReplayStorePath = process.env.PROVIDER_MUTATION_REPLAY_STORE_PATH ?? path.resolve(process.cwd(), 'data/provider-mutation-replay.json');
+const providerLifecycleStorePath = process.env.PROVIDER_LIFECYCLE_STORE_PATH ?? path.resolve(process.cwd(), 'data/provider-lifecycle.json');
+const remoteA2ARoster = parseA2ARemotePeerRoster(process.env.TEAMS_A2A_REMOTE_AGENTS);
+const hermesA2ARoster = Object.freeze(remoteA2ARoster.filter((peer) => peer.kind === 'hermes'));
 const configuredAgentProvider = process.env.TEAMS_AGENT_CLI_PROVIDER?.trim() || 'codex';
 if (configuredAgentProvider !== 'codex' && configuredAgentProvider !== 'copilot') {
   throw new Error('TEAMS_AGENT_CLI_PROVIDER must be either codex or copilot.');
@@ -261,6 +266,9 @@ const agentJobStore = new AgentJobStore(
 );
 const a2aStore = new A2AStore(a2aStorePath);
 const a2aOutboundStore = new TeamsA2AOutboundStore(a2aOutboundStorePath);
+const providerLifecycleStore = hermesA2ARoster.length > 0
+  ? new FileProviderLifecycleStore(providerLifecycleStorePath)
+  : undefined;
 const codexRunner = new ProviderNeutralAgentRunner({ provider: agentProvider });
 const a2aAgentProviders = parseAgentProviders(
   process.env.TEAMS_A2A_AGENT_PROVIDERS,
@@ -722,6 +730,7 @@ storeProcessLease = await acquireStoreProcessLease([
   agentAdmissionJournalPath,
   genUiActionStorePath,
   responseModeStorePath,
+  ...(providerLifecycleStore ? [providerLifecycleStorePath] : []),
 ]);
 process.once('exit', () => storeProcessLease?.releaseSync());
 
@@ -732,6 +741,7 @@ await a2aStore.initialize();
 await a2aOutboundStore.initialize();
 await genUiActionStore.initialize();
 await responseModeStore.initialize();
+await providerLifecycleStore?.initialize();
 
 const coreResponseEngine = new DeterministicResponseEngine();
 const configuredResponseEngines = [coreResponseEngine, ...optionalResponseEngines];
@@ -1446,7 +1456,6 @@ const remoteA2ABearerToken = process.env.TEAMS_A2A_REMOTE_AGENT_BEARER_TOKEN?.tr
 if (Boolean(remoteA2AEndpoint) !== Boolean(remoteA2ABearerToken)) {
   throw new Error('TEAMS_A2A_REMOTE_AGENT_ENDPOINT and TEAMS_A2A_REMOTE_AGENT_BEARER_TOKEN must be configured together.');
 }
-const remoteA2ARoster = parseA2ARemotePeerRoster(process.env.TEAMS_A2A_REMOTE_AGENTS);
 if ((remoteA2AEndpoint || remoteA2ABearerToken) && remoteA2ARoster.length > 0) {
   throw new Error('Use either the legacy single A2A remote configuration or TEAMS_A2A_REMOTE_AGENTS, not both.');
 }
@@ -1464,7 +1473,7 @@ const configuredRemoteA2AAgent = remoteA2AEndpoint && remoteA2ABearerToken
   : undefined;
 const remoteA2ARosterCredentials: A2ARemotePeerCredential[] = [];
 const remoteA2ARosterFailures: A2AConfiguredRemoteAgentFailure[] = [];
-for (const peer of remoteA2ARoster) {
+for (const peer of remoteA2ARoster.filter((entry) => entry.kind !== 'hermes')) {
   try {
     const credential = resolveA2ARemotePeerCredentials([peer], process.env)[0];
     if (!credential) throw new Error('A2A remote peer credential was not resolved.');
@@ -1494,9 +1503,18 @@ const configuredRemoteA2ABatch = await createConfiguredA2ARemoteAgents(
     telemetry: a2aTelemetry,
   })),
 );
+const configuredHermesA2ABatch = providerLifecycleStore
+  ? await createConfiguredHermesA2AAgents({
+      peers: hermesA2ARoster,
+      store: providerLifecycleStore,
+      authorizationPolicyFor: createA2ARemoteAuthorizationPolicy,
+      environment: process.env,
+    })
+  : { agents: [], failures: [] };
 const a2aRemoteInitializationFailures: readonly A2AConfiguredRemoteAgentFailure[] = Object.freeze([
   ...remoteA2ARosterFailures,
   ...configuredRemoteA2ABatch.failures,
+  ...configuredHermesA2ABatch.failures,
 ]);
 const coreA2ARoles = Object.freeze(A2A_ROLE_CATALOG.map((role) => role.id));
 
@@ -1526,6 +1544,11 @@ function a2aProviderFacts(): A2AProviderFact[] {
     } : undefined,
   );
   facts.push(...configuredRemoteA2ABatch.agents.map((agent) => unverifiedRemoteA2AProviderFact({
+    provider: 'remote',
+    agentId: agent.agentId,
+    providerId: agent.providerId,
+  })));
+  facts.push(...configuredHermesA2ABatch.agents.map((agent) => unverifiedRemoteA2AProviderFact({
     provider: 'remote',
     agentId: agent.agentId,
     providerId: agent.providerId,
@@ -1571,6 +1594,7 @@ const a2aAgents = [
   }),
   ...(configuredRemoteA2AAgent ? [configuredRemoteA2AAgent] : []),
   ...configuredRemoteA2ABatch.agents,
+  ...configuredHermesA2ABatch.agents,
 ];
 a2aProductionRuntime = mountA2AProductionRuntime(http, {
   publicOrigin: a2aPublicOrigin,

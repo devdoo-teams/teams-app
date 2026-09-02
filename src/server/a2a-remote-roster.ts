@@ -22,6 +22,8 @@ const PEER_KEYS = Object.freeze([
   'executionBoundaryId',
   'roles',
   'capabilities',
+  'expectedPeerIdentity',
+  'credentialPrincipal',
 ] as const);
 const REQUIRED_PEER_KEYS = Object.freeze([
   'agentId',
@@ -62,6 +64,8 @@ export type A2ARemotePeerConfig = Readonly<{
   executionBoundaryId: string;
   roles: readonly string[];
   capabilities: readonly string[];
+  expectedPeerIdentity?: string;
+  credentialPrincipal?: string;
 }>;
 
 export type A2ARemotePeerCredential = Readonly<A2ARemotePeerConfig & {
@@ -184,6 +188,19 @@ function boundedList(value: unknown, index: number, field: 'roles' | 'capabiliti
   return Object.freeze(values);
 }
 
+function boundedPeerName(value: unknown, index: number): string {
+  if (
+    typeof value !== 'string'
+    || !value.trim()
+    || value !== value.trim()
+    || value.length > MAX_LIST_VALUE_LENGTH
+    || CONTROL_CHARACTERS.test(value)
+  ) {
+    failAt(index, 'expectedPeerIdentity', 'must be bounded text');
+  }
+  return value;
+}
+
 function normalizePeer(value: unknown, index: number): A2ARemotePeerConfig {
   if (!isRecord(value)) failAt(index, 'peer', 'must be an object');
   assertAllowedKeys(value, index);
@@ -191,16 +208,27 @@ function normalizePeer(value: unknown, index: number): A2ARemotePeerConfig {
     failAt(index, 'peer', 'is missing a required field');
   }
 
+  const kind = boundedKind(value.kind, index);
+  if (kind === 'hermes' && (!hasOwn(value, 'expectedPeerIdentity') || !hasOwn(value, 'credentialPrincipal'))) {
+    failAt(index, 'peer', 'is missing Hermes peer identity configuration');
+  }
+  if (kind !== 'hermes' && (hasOwn(value, 'expectedPeerIdentity') || hasOwn(value, 'credentialPrincipal'))) {
+    failAt(index, 'peer', 'contains Hermes-only identity configuration');
+  }
   const peer = {
     agentId: boundedIdentifier(value.agentId, index, 'agentId'),
     providerId: boundedIdentifier(value.providerId, index, 'providerId'),
-    kind: boundedKind(value.kind, index),
+    kind,
     endpoint: boundedEndpoint(value.endpoint, index),
     tokenEnv: boundedTokenEnv(value.tokenEnv, index),
     executionIdentity: boundedIdentifier(value.executionIdentity, index, 'executionIdentity'),
     executionBoundaryId: boundedIdentifier(value.executionBoundaryId, index, 'executionBoundaryId'),
     roles: boundedList(value.roles, index, 'roles'),
     capabilities: boundedList(value.capabilities, index, 'capabilities'),
+    ...(kind === 'hermes' ? {
+      expectedPeerIdentity: boundedPeerName(value.expectedPeerIdentity, index),
+      credentialPrincipal: boundedIdentifier(value.credentialPrincipal, index, 'credentialPrincipal'),
+    } : {}),
   } satisfies A2ARemotePeerConfig;
   return Object.freeze(peer);
 }

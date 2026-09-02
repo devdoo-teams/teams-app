@@ -19,6 +19,8 @@ type PeerInput = {
   executionBoundaryId: string;
   roles: string[];
   capabilities: string[];
+  expectedPeerIdentity?: string;
+  credentialPrincipal?: string;
 };
 
 function peer(overrides: Partial<PeerInput> = {}): PeerInput {
@@ -32,6 +34,8 @@ function peer(overrides: Partial<PeerInput> = {}): PeerInput {
     executionBoundaryId: 'hermes-boundary-research',
     roles: ['researcher'],
     capabilities: ['source.read', 'web_search', 'research'],
+    expectedPeerIdentity: 'Hermes Researcher',
+    credentialPrincipal: 'teamsapp-hermes-caller',
     ...overrides,
   };
 }
@@ -70,12 +74,16 @@ const validRoster = parse([
     executionBoundaryId: 'grok-boundary-review',
     roles: ['reviewer'],
     capabilities: ['source.read', 'review.report'],
+    expectedPeerIdentity: undefined,
+    credentialPrincipal: undefined,
   }),
 ]);
 
 assert.equal(validRoster.length, 2);
 assert.deepEqual(validRoster.map((entry) => entry.kind), ['hermes', 'grok-hermes']);
 assert.equal(validRoster[0]?.tokenEnv, 'HERMES_RESEARCH_TOKEN');
+assert.equal(validRoster[0]?.expectedPeerIdentity, 'Hermes Researcher');
+assert.equal(validRoster[0]?.credentialPrincipal, 'teamsapp-hermes-caller');
 assert.equal('bearerToken' in (validRoster[0] ?? {}), false, 'roster config must not contain a credential');
 assert.ok(Object.isFrozen(validRoster));
 assert.ok(Object.isFrozen(validRoster[0]));
@@ -173,6 +181,14 @@ assertSafeFailure(
 );
 assertSafeFailure(
   () => parseA2ARemotePeerRoster(JSON.stringify([{ ...peer(), unknown: 'field' }])),
+  [secretEndpoint],
+);
+assertSafeFailure(
+  () => parseA2ARemotePeerRoster(JSON.stringify([{ ...peer(), expectedPeerIdentity: undefined }])),
+  [secretEndpoint],
+);
+assertSafeFailure(
+  () => parseA2ARemotePeerRoster(JSON.stringify([{ ...peer(), credentialPrincipal: undefined }])),
   [secretEndpoint],
 );
 

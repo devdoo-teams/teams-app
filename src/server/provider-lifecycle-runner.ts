@@ -409,6 +409,7 @@ export class ProviderLifecycleRunner {
         );
       } catch (error) {
         if (controller.signal.aborted) return this.requestCancellation(current, operation, controller.signal.reason);
+        await this.releaseOwnedLease(current);
         throw error;
       }
       current = await this.applyObservation(current, observation, 'get');
@@ -491,7 +492,7 @@ export class ProviderLifecycleRunner {
   ): Promise<ProviderLifecycleRecord> {
     if (!this.options.adapter.reconcile) {
       return record.state === 'quarantined'
-        ? record
+        ? this.releaseOwnedLease(record)
         : this.quarantine(record, 'delivery-unknown', record.rawProviderState ?? 'DELIVERY_UNKNOWN');
     }
     let observation: ProviderRuntimeObservation;
@@ -501,7 +502,7 @@ export class ProviderLifecycleRunner {
         controller.signal,
       );
     } catch (error) {
-      if (record.state === 'quarantined') return record;
+      if (record.state === 'quarantined') return this.releaseOwnedLease(record);
       return this.quarantine(record, 'delivery-unknown', 'DELIVERY_UNKNOWN', safeError(error));
     }
     const reconciled = await this.applyObservation(record, observation, 'reconcile', onAccepted);
@@ -656,6 +657,24 @@ export class ProviderLifecycleRunner {
       ...(error ? { error } : {}),
       terminalAt: new Date(this.now()).toISOString(),
     });
+  }
+
+  private async releaseOwnedLease(record: ProviderLifecycleRecord): Promise<ProviderLifecycleRecord> {
+    const ownerId = record.lease?.ownerId;
+    if (!ownerId) return record;
+    let current = record;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const latest = await this.options.store.get(record.scope, record.idempotencyKey);
+      if (!latest) throw new Error('Provider lifecycle record disappeared while releasing its lease.');
+      if (latest.lease?.ownerId !== ownerId) return latest;
+      current = latest;
+      try {
+        return await this.options.store.update({ ...current, lease: undefined }, current.revision);
+      } catch (error) {
+        if (!(error instanceof ProviderLifecycleRevisionConflictError)) throw error;
+      }
+    }
+    throw new ProviderLifecycleRevisionConflictError();
   }
 
   private async persist(
