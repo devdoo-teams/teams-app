@@ -6,6 +6,11 @@ param registryServer string
 param appIdentityResourceId string
 param appIdentityClientId string
 param keyVaultUri string
+param cosmosEndpoint string
+param cosmosDatabase string
+param cosmosContainer string
+param agentDispatchQueueEndpoint string
+param agentDispatchPoisonQueueEndpoint string
 param revisionSuffix string
 param releaseSourceCommit string
 param releaseVersion string
@@ -83,11 +88,31 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             }
             {
               name: 'AZURE_COSMOS_ENDPOINT'
-              secretRef: 'azure-cosmos-endpoint'
+              value: cosmosEndpoint
+            }
+            {
+              name: 'AZURE_COSMOS_DATABASE'
+              value: cosmosDatabase
+            }
+            {
+              name: 'AZURE_COSMOS_CONTAINER'
+              value: cosmosContainer
+            }
+            {
+              name: 'TEAMS_STORAGE_BACKEND'
+              value: 'cosmos'
             }
             {
               name: 'AZURE_STORAGE_QUEUE_ENDPOINT'
-              secretRef: 'azure-storage-queue-endpoint'
+              value: agentDispatchQueueEndpoint
+            }
+            {
+              name: 'AZURE_STORAGE_POISON_QUEUE_ENDPOINT'
+              value: agentDispatchPoisonQueueEndpoint
+            }
+            {
+              name: 'TEAMS_AGENT_DISPATCH_MODE'
+              value: 'azure-queue'
             }
             {
               name: 'AZURE_STORAGE_FILE_ENDPOINT'

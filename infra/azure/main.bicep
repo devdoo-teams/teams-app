@@ -54,6 +54,9 @@ var acrName = take('${compactPrefix}${uniqueSuffix}', 50)
 var keyVaultName = take('${workloadName}-${uniqueSuffix}', 24)
 var storageName = take('${compactPrefix}${uniqueSuffix}', 24)
 var cosmosName = take('${workloadName}-cosmos-${uniqueSuffix}', 44)
+var cosmosDatabaseName = 'teamsapp'
+var cosmosContainerName = 'runtime-records'
+var agentDispatchQueueName = 'agent-dispatch'
 var appName = take('${workloadName}-canary-${uniqueSuffix}', 32)
 var environmentName = take('${workloadName}-env-${uniqueSuffix}', 40)
 var workerName = take('${workloadName}-worker-${uniqueSuffix}', 64)
@@ -95,6 +98,13 @@ module storage './modules/storage.bicep' = {
   }
 }
 
+resource agentDispatchPoisonQueue 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = {
+  name: '${storageName}/default/agent-dispatch-poison'
+  dependsOn: [
+    storage
+  ]
+}
+
 module cosmos './modules/cosmos.bicep' = {
   name: 'cosmos'
   params: {
@@ -103,6 +113,8 @@ module cosmos './modules/cosmos.bicep' = {
     enableFreeTier: enableCosmosFreeTier
     appIdentityPrincipalId: identities.outputs.appIdentityPrincipalId
     workerIdentityPrincipalId: identities.outputs.workerIdentityPrincipalId
+    databaseName: cosmosDatabaseName
+    containerName: cosmosContainerName
   }
 }
 
@@ -139,6 +151,11 @@ module containerApp './modules/container-app.bicep' = if (deployContainerApp) {
     appIdentityResourceId: identities.outputs.appIdentityResourceId
     appIdentityClientId: identities.outputs.appIdentityClientId
     keyVaultUri: keyVault.outputs.vaultUri
+    cosmosEndpoint: cosmos.outputs.endpoint
+    cosmosDatabase: cosmos.outputs.databaseName
+    cosmosContainer: cosmos.outputs.containerName
+    agentDispatchQueueEndpoint: '${storage.outputs.queueEndpoint}${agentDispatchQueueName}'
+    agentDispatchPoisonQueueEndpoint: '${storage.outputs.queueEndpoint}agent-dispatch-poison'
     revisionSuffix: take(releaseSourceCommit, 10)
     releaseSourceCommit: releaseSourceCommit
     releaseVersion: releaseVersion
@@ -163,6 +180,9 @@ output registryName string = acrName
 output registryLoginServer string = registry.outputs.loginServer
 output containerEnvironmentName string = environmentName
 output appIdentityClientId string = identities.outputs.appIdentityClientId
+output cosmosEndpoint string = cosmos.outputs.endpoint
+output cosmosDatabase string = cosmos.outputs.databaseName
+output cosmosContainer string = cosmos.outputs.containerName
 output containerAppName string = appName
 output containerAppFqdn string = deployContainerApp ? containerApp!.outputs.fqdn : ''
 output containerAppRevisionName string = deployContainerApp ? containerApp!.outputs.revisionName : ''

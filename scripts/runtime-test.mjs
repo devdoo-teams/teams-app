@@ -822,7 +822,11 @@ async function runLocalFlow(dataFile, jobDataFile, { optionalProviders = false }
     assert(health.body.outbound === 'local-outbox', 'local health reports the local outbox truthfully');
     assert(health.body.version === manifestVersion, 'health version comes from the Teams manifest');
     assert(!('agent' in health.body) && !('agentWorkspace' in health.body), 'health does not expose agent binary or workspace paths');
-    assert(health.body.storage === 'file-json-single-process', 'local runtime reports single-process file storage');
+    assert(health.body.storage?.backend === 'file-json-single-process', 'local runtime reports the compatibility file backend');
+    assert(health.body.storage?.migrated === 0 && health.body.storage?.total === 11, 'health reports that none of the 11 authoritative stores have migrated');
+    assert(health.body.storage?.horizontalSafe === false, 'health does not claim horizontal safety while authoritative stores remain local');
+    assert(Array.isArray(health.body.storage?.authoritativeStores) && health.body.storage.authoritativeStores.length === 11, 'health names every authoritative mutable store');
+    assert(health.body.dispatch?.mode === 'local' && health.body.dispatch?.localCli === true, 'default runtime keeps explicit local dispatch');
     assert(
       health.body.copilotKit === (optionalProviders ? 'enabled' : 'disabled'),
       `CopilotKit runtime is ${optionalProviders ? 'enabled only for the optional provider run' : 'disabled in the Core runtime'}`,

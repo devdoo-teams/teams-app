@@ -3,6 +3,8 @@ param accountName string
 param enableFreeTier bool
 param appIdentityPrincipalId string
 param workerIdentityPrincipalId string
+param databaseName string
+param containerName string
 
 var cosmosDataContributorRoleId = '00000000-0000-0000-0000-000000000002'
 
@@ -29,6 +31,33 @@ resource account 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
   }
 }
 
+resource database 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-05-15' = {
+  parent: account
+  name: databaseName
+  properties: {
+    resource: {
+      id: databaseName
+    }
+  }
+}
+
+resource runtimeContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
+  parent: database
+  name: containerName
+  properties: {
+    resource: {
+      id: containerName
+      partitionKey: {
+        paths: [
+          '/partitionKey'
+        ]
+        kind: 'Hash'
+        version: 2
+      }
+    }
+  }
+}
+
 resource appDataContributor 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-05-15' = {
   name: '${account.name}/${guid(account.id, appIdentityPrincipalId, cosmosDataContributorRoleId)}'
   properties: {
@@ -48,4 +77,6 @@ resource workerDataContributor 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAss
 }
 
 output endpoint string = account.properties.documentEndpoint
+output databaseName string = databaseName
+output containerName string = containerName
 output resourceId string = account.id

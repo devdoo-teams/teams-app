@@ -150,6 +150,23 @@ import {
 } from './mcp-auth-config.js';
 import { mountMcpAuthenticatedBoundary } from './mcp-authenticated-route.js';
 import { resolveAzureReleaseIdentity } from './azure-release-identity.js';
+import { createRuntimeStore } from './storage/runtime-store-factory.js';
+import {
+  RuntimeStoreConflictError,
+  type RuntimeScope,
+  type RuntimeStore,
+} from './storage/runtime-store.js';
+import type { AgentExecutionDispatcher, AgentExecutionObservation } from './agent-service.js';
+import {
+  createAgentDispatchSubmissionPort,
+  type AgentDispatchTask,
+} from './queue/agent-dispatch-queue.js';
+import {
+  AzureAgentDispatchQueue,
+  createProductionAzureQueueClient,
+  type AgentDispatchRecord,
+  type AgentDispatchStatePort,
+} from './azure-agent-dispatch-queue.js';
 
 /**
  * Same-UID process fixture for token-protected loopback integration tests.
@@ -171,6 +188,109 @@ class UnsafeLoopbackTestIsolationProvider extends AgentIsolationProvider {
       spawn: (command, args, options) => spawn(command, [...args], options as any),
     });
   }
+}
+
+const AZURE_DISPATCH_STATE_SCOPE: RuntimeScope = Object.freeze({
+  tenantId: 'teams-core-system',
+  requesterId: 'agent-dispatch',
+  conversationId: 'global',
+});
+
+function createUnmigratedRuntimeCompatibilityStore(): RuntimeStore {
+  const unavailable = async (): Promise<never> => {
+    throw new Error('Shared runtime storage is not active while TEAMS_STORAGE_BACKEND=file.');
+  };
+  return { read: unavailable, list: unavailable, write: unavailable };
+}
+
+function createDispatchStatePort(runtimeStore: RuntimeStore): AgentDispatchStatePort {
+  return {
+    async create(record) {
+      try {
+        await runtimeStore.write(AZURE_DISPATCH_STATE_SCOPE, {
+          id: record.taskId,
+          idempotencyKey: `dispatch-create:${record.requestHash}`,
+          value: record,
+        });
+        return 'created';
+      } catch (error) {
+        if (error instanceof RuntimeStoreConflictError) return 'exists';
+        throw error;
+      }
+    },
+    async get(taskId) {
+      const record = await runtimeStore.read<AgentDispatchRecord>(AZURE_DISPATCH_STATE_SCOPE, taskId);
+      return record?.value;
+    },
+    async compareAndSwap(taskId, expected, mutate) {
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        const current = await runtimeStore.read<AgentDispatchRecord>(AZURE_DISPATCH_STATE_SCOPE, taskId);
+        if (!current) throw new Error(`No durable dispatch record exists for ${taskId}.`);
+        if (
+          current.value.leaseOwner !== expected.leaseOwner
+          || current.value.leaseGeneration !== expected.leaseGeneration
+        ) return undefined;
+        const next = mutate(structuredClone(current.value));
+        const contentHash = crypto.createHash('sha256').update(JSON.stringify(next), 'utf8').digest('hex');
+        try {
+          const updated = await runtimeStore.write<AgentDispatchRecord>(AZURE_DISPATCH_STATE_SCOPE, {
+            id: taskId,
+            idempotencyKey: `dispatch-update:${contentHash}`,
+            expectedEtag: current.etag,
+            value: next,
+          });
+          return updated.value;
+        } catch (error) {
+          if (!(error instanceof RuntimeStoreConflictError)) throw error;
+          if (attempt === 3) return undefined;
+        }
+      }
+      return undefined;
+    },
+  };
+}
+
+function createQueueExecutionDispatcher(
+  queue: AzureAgentDispatchQueue,
+): AgentExecutionDispatcher {
+  const submission = createAgentDispatchSubmissionPort(queue);
+  return {
+    kind: 'azure-queue',
+    async dispatch(job) {
+      if (!job.tenantId) throw new Error('A server-derived tenant is required for durable dispatch.');
+      const task: AgentDispatchTask = {
+        schemaVersion: 1,
+        taskId: job.id,
+        idempotencyKey: `agent-job:${job.id}`,
+        tenantId: job.tenantId,
+        requesterId: job.requesterId,
+        conversationId: job.conversationId,
+        provider: job.provider ?? 'codex',
+        prompt: job.prompt,
+        createdAt: job.createdAt,
+      };
+      await submission.enqueue(task);
+    },
+    async observe(job): Promise<AgentExecutionObservation | undefined> {
+      const record = await submission.observe(job.id);
+      if (!record) return undefined;
+      if (record.status === 'leased') return { status: 'running' };
+      if (record.status === 'completed') {
+        return {
+          status: 'completed',
+          result: record.receipt?.result,
+          providerExecutionId: record.receipt?.providerExecutionId,
+        };
+      }
+      if (record.status === 'failed') return { status: 'failed', error: record.error?.message };
+      if (record.status === 'cancelled') return { status: 'cancelled' };
+      if (record.status === 'quarantined') return { status: 'quarantined', error: record.quarantineReason };
+      return { status: 'queued' };
+    },
+    async cancel(job, reason) {
+      await submission.requestCancellation(job.id, reason);
+    },
+  };
 }
 
 const port = Number(process.env.PORT ?? 3978);
@@ -211,6 +331,12 @@ if (configuredAgentProvider !== 'codex' && configuredAgentProvider !== 'copilot'
 }
 const agentProvider = configuredAgentProvider;
 const agentLabel = agentProvider === 'copilot' ? 'GitHub Copilot CLI' : 'Codex CLI';
+const storageBackend = process.env.TEAMS_STORAGE_BACKEND?.trim().toLowerCase() || 'file';
+const agentDispatchMode = process.env.TEAMS_AGENT_DISPATCH_MODE?.trim() || 'local';
+if (agentDispatchMode !== 'local' && agentDispatchMode !== 'azure-queue') {
+  throw new Error('TEAMS_AGENT_DISPATCH_MODE must be either local or azure-queue.');
+}
+const azureQueueDispatch = agentDispatchMode === 'azure-queue';
 const itemStore = new ItemStore(
   itemStorePath,
 );
@@ -269,15 +395,17 @@ const a2aOutboundStore = new TeamsA2AOutboundStore(a2aOutboundStorePath);
 const providerLifecycleStore = hermesA2ARoster.length > 0
   ? new FileProviderLifecycleStore(providerLifecycleStorePath)
   : undefined;
-const codexRunner = new ProviderNeutralAgentRunner({ provider: agentProvider });
+const codexRunner = azureQueueDispatch
+  ? undefined
+  : new ProviderNeutralAgentRunner({ provider: agentProvider });
 const a2aAgentProviders = parseAgentProviders(
   process.env.TEAMS_A2A_AGENT_PROVIDERS,
   agentProvider,
 );
 const providerRunners: Partial<Record<CliAgentProvider, ProviderNeutralAgentRunner>> = {
-  [agentProvider]: codexRunner,
+  ...(codexRunner ? { [agentProvider]: codexRunner } : {}),
 };
-for (const configuredAgent of a2aAgentProviders) {
+for (const configuredAgent of azureQueueDispatch ? [] : a2aAgentProviders) {
   if (!providerRunners[configuredAgent.provider]) {
     providerRunners[configuredAgent.provider] = new ProviderNeutralAgentRunner({ provider: configuredAgent.provider });
   }
@@ -311,7 +439,12 @@ const operatorAllowlist = parseOperatorAllowlist(
 const unsafeTestProcessIsolation = safeLocal
   && process.env.NODE_ENV === 'test'
   && process.env.TEAMS_TEST_PROCESS_ISOLATION === 'true';
-const agentExecutionPolicy = unsafeTestProcessIsolation
+const agentExecutionPolicy = azureQueueDispatch
+  ? new AgentExecutionPolicy(agentWorkspace, {
+      canMutateScope: (scope) => isOperator(scope),
+      canReadScope: (scope) => isOperator(scope),
+    })
+  : unsafeTestProcessIsolation
   ? new AgentExecutionPolicy(agentWorkspace, {
       isolationProvider: new UnsafeLoopbackTestIsolationProvider(),
       canMutateScope: (scope) => isOperator(scope),
@@ -367,7 +500,9 @@ async function runA2ANativePreflight(policy: AgentExecutionPolicy): Promise<A2AW
   }
 }
 
-const legacyExecutionReadiness = baseExecutionReadiness.state === 'configured' && isProduction
+const legacyExecutionReadiness = azureQueueDispatch
+  ? { state: 'unavailable' as const, reason: 'external-worker-dispatch' as const }
+  : baseExecutionReadiness.state === 'configured' && isProduction
   && (await runA2ANativePreflight(agentExecutionPolicy)).state === 'unavailable'
   ? { state: 'unavailable' as const, reason: 'isolation-unavailable' as const }
   : baseExecutionReadiness;
@@ -383,7 +518,7 @@ const a2aCodexOrdinals = Object.freeze([
 ]);
 const a2aCodexProfileByOrdinal = new Map<number, A2ACodexExecutionProfile>();
 const a2aCodexProfileErrors = new Map<number, string>();
-if (isProduction && a2aCodexOrdinals.length > 0) {
+if (!azureQueueDispatch && isProduction && a2aCodexOrdinals.length > 0) {
   const resolvedProfiles = await Promise.all(a2aCodexOrdinals.map(async (ordinal) => {
     try {
       const [profile] = await createA2ACodexExecutionProfiles({ ordinals: [ordinal] });
@@ -424,7 +559,9 @@ for (const configuredAgent of a2aAgentProviders) {
   let policy: AgentExecutionPolicy | undefined;
   let unavailableReason: string | undefined;
 
-  if (!isProduction && unsafeTestProcessIsolation) {
+  if (azureQueueDispatch) {
+    unavailableReason = 'external-worker-dispatch';
+  } else if (!isProduction && unsafeTestProcessIsolation) {
     policy = new AgentExecutionPolicy(agentWorkspace, {
       isolationProvider: new UnsafeLoopbackTestIsolationProvider(),
       canMutateScope: (scope) => isOperator(scope),
@@ -743,6 +880,20 @@ await genUiActionStore.initialize();
 await responseModeStore.initialize();
 await providerLifecycleStore?.initialize();
 
+const runtimeStore = await createRuntimeStore({
+  env: process.env,
+  fileStore: createUnmigratedRuntimeCompatibilityStore(),
+});
+let agentExecutionDispatcher: AgentExecutionDispatcher | undefined;
+if (azureQueueDispatch) {
+  if (storageBackend !== 'cosmos') {
+    throw new Error('TEAMS_AGENT_DISPATCH_MODE=azure-queue requires TEAMS_STORAGE_BACKEND=cosmos.');
+  }
+  const queueClient = createProductionAzureQueueClient({ env: process.env });
+  const queue = new AzureAgentDispatchQueue(queueClient, createDispatchStatePort(runtimeStore));
+  agentExecutionDispatcher = createQueueExecutionDispatcher(queue);
+}
+
 const coreResponseEngine = new DeterministicResponseEngine();
 const configuredResponseEngines = [coreResponseEngine, ...optionalResponseEngines];
 configureResponseEngineRouter({
@@ -1007,7 +1158,7 @@ function envelopeText(envelope: GenUiEnvelopeV1): string {
 }
 
 async function buildStatusEnvelope(): Promise<GenUiEnvelopeV1> {
-  const capabilities = await probeCliCapabilities();
+  const capabilities = azureQueueDispatch ? unknownCliCapabilities() : await probeCliCapabilities();
   return genUi.status({
     teamsSdk: Boolean(teamsApp),
     environment: isProduction ? 'production' : 'local',
@@ -1643,6 +1794,7 @@ http.use(express.json());
 http.get('/api/health', async (_request: any, response: any) => {
   let cliCapabilities: CliCapabilities;
   try {
+    if (azureQueueDispatch) throw new Error('CLI probing belongs to the external Linux worker.');
     cliCapabilities = await probeCliCapabilities();
   } catch {
     // A capability probe is diagnostic only. If the runner itself fails, keep
@@ -1664,7 +1816,30 @@ http.get('/api/health', async (_request: any, response: any) => {
     bot: teamsApp ? 'teams-sdk' : safeLocal ? 'local-handler' : 'not-configured',
     outbound: teamsApp ? (skipOutbound ? 'disabled' : 'teams-sdk') : safeLocal ? 'local-outbox' : 'not-configured',
     cliCapabilities,
-    storage: 'file-json-single-process',
+    storage: {
+      backend: storageBackend === 'cosmos' ? 'cosmos-configured' : 'file-json-single-process',
+      authoritativeStores: [
+        'ItemStore',
+        'WorkItemStore',
+        'CollaborationStore',
+        'AgentJobStore',
+        'A2AStore',
+        'TeamsA2AOutboundStore',
+        'AgentAdmissionController',
+        'GenUiActionStore',
+        'ResponseModeStore',
+        'ProviderLifecycleStore',
+        'ProviderMutationReplayStore',
+      ],
+      migrated: 0,
+      total: 11,
+      horizontalSafe: false,
+    },
+    dispatch: {
+      mode: agentDispatchMode,
+      executionBoundary: azureQueueDispatch ? 'external-linux-worker' : 'local-process',
+      localCli: !azureQueueDispatch,
+    },
     copilotKit: optionalRuntimeEnabled ? 'enabled' : 'disabled',
     copilotKitRuntime: optionalRuntimeEnabled ? '/api/copilotkit' : 'disabled',
     genAI: process.env.COPILOTKIT_DETERMINISTIC_MODE === 'true'
@@ -2413,6 +2588,7 @@ agentService = new AgentService(
     agentLabel,
     defaultProvider: agentProvider,
     providerRunners,
+    executionDispatcher: agentExecutionDispatcher,
   },
 );
 await agentService.initialize();
@@ -3017,7 +3193,7 @@ async function resolveGenUiAction(activity: any): Promise<GenUiEnvelopeV1> {
         ? genUi.cancelled(job)
         : genUi.error(`작업 ${payload.entityId}을 찾을 수 없습니다.`, `action-${payload.entityId}`);
     } else if (payload.action === 'refresh') {
-      const job = agentService.get(payload.entityId, scope);
+      const job = await agentService.observe(payload.entityId, scope);
       if (job?.status === 'awaiting_approval') {
         envelope = await genUi.approval(job);
       } else {
