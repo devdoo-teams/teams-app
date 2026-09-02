@@ -135,7 +135,6 @@ module keyVault './modules/key-vault.bicep' = {
     storageQueueEndpoint: storage.outputs.queueEndpoint
     storageFileEndpoint: storage.outputs.fileEndpoint
     appIdentityPrincipalId: identities.outputs.appIdentityPrincipalId
-    workerIdentityPrincipalId: identities.outputs.workerIdentityPrincipalId
   }
 }
 

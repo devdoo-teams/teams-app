@@ -181,6 +181,40 @@ try {
   assert.ok(workerArtifactReader, 'worker managed identity must receive blob reader access to only the artifact container');
   assert.match(String(workerArtifactReader.scope), /worker-artifacts/i);
 
+  const workerRoleAssignments = roleAssignments.filter((resource) => (
+    String(resource.properties?.principalId).includes('workerIdentityPrincipalId')
+  ));
+  assert.ok(
+    workerRoleAssignments.every((resource) => (
+      !String(resource.properties?.roleDefinitionId).includes('storageFileDataContributorRoleDefinitionId')
+      && !String(resource.properties?.roleDefinitionId).includes('0c867c2a-1d8c-454a-a3db-ab2ea1bdc8bb')
+    )),
+    'worker identity must not receive Azure Files contributor access when the worker runtime does not use Azure Files',
+  );
+  assert.ok(
+    workerRoleAssignments.every((resource) => (
+      !String(resource.properties?.roleDefinitionId).includes('keyVaultSecretsUserRoleDefinitionId')
+      && !String(resource.properties?.roleDefinitionId).includes('4633458b-17de-408a-b874-0445c86b69e6')
+    )),
+    'worker identity must not receive Key Vault secret-content access when bootstrap receives no Key Vault reference',
+  );
+
+  const cosmosRoleAssignments = resources.filter((resource) => (
+    resource.type === 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments'
+  ));
+  assert.equal(cosmosRoleAssignments.length, 2, 'both runtime identities must receive Cosmos data-plane access');
+  for (const assignment of cosmosRoleAssignments) {
+    assert.notEqual(assignment.properties?.scope, '/', 'Cosmos data-plane access must not cover the whole account');
+    const cosmosScope = String(assignment.properties?.scope);
+    assert.match(
+      cosmosScope,
+      /format\('\/dbs\/\{0\}\/colls\/\{1\}'/,
+      'Cosmos data-plane access must be scoped to the configured runtime jobs container',
+    );
+    assert.match(cosmosScope, /parameters\('databaseName'\)/);
+    assert.match(cosmosScope, /parameters\('containerName'\)/);
+  }
+
   const containerApp = findResource(resources, 'Microsoft.App/containerApps');
   const appContainer = containerApp.properties?.template?.containers?.find((container) => container.name === 'teams-core');
   const envNames = new Set((appContainer?.env ?? []).map((entry) => entry.name));

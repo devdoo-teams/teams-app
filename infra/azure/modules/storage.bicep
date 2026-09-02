@@ -5,7 +5,6 @@ param workerIdentityPrincipalId string
 
 var storageQueueDataMessageSenderRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'c6a89b2d-59bc-44d0-9896-0f6e12d7b80a')
 var storageBlobDataReaderRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')
-var storageFileDataContributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0c867c2a-1d8c-454a-a3db-ab2ea1bdc8bb')
 
 resource workerQueueLeaseRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' = {
   name: guid(subscription().id, resourceGroup().id, 'teamsapp-worker-queue-lease')
@@ -131,16 +130,6 @@ resource workerPoisonQueueSenderRole 'Microsoft.Authorization/roleAssignments@20
     principalId: workerIdentityPrincipalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: storageQueueDataMessageSenderRoleDefinitionId
-  }
-}
-
-resource workerFileRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(storageAccount.id, workerIdentityPrincipalId, storageFileDataContributorRoleDefinitionId)
-  scope: storageAccount
-  properties: {
-    principalId: workerIdentityPrincipalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: storageFileDataContributorRoleDefinitionId
   }
 }
 

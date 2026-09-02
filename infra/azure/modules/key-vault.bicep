@@ -4,7 +4,6 @@ param cosmosEndpoint string
 param storageQueueEndpoint string
 param storageFileEndpoint string
 param appIdentityPrincipalId string
-param workerIdentityPrincipalId string
 
 var keyVaultSecretsUserRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
 
@@ -53,16 +52,6 @@ resource appSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: vault
   properties: {
     principalId: appIdentityPrincipalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: keyVaultSecretsUserRoleDefinitionId
-  }
-}
-
-resource workerSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(vault.id, workerIdentityPrincipalId, keyVaultSecretsUserRoleDefinitionId)
-  scope: vault
-  properties: {
-    principalId: workerIdentityPrincipalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: keyVaultSecretsUserRoleDefinitionId
   }

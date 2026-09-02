@@ -73,7 +73,7 @@ resource appDataContributor 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssign
   properties: {
     principalId: appIdentityPrincipalId
     roleDefinitionId: '${account.id}/sqlRoleDefinitions/${cosmosDataContributorRoleId}'
-    scope: '/'
+    scope: '/dbs/${databaseName}/colls/${containerName}'
   }
 }
 
@@ -82,7 +82,7 @@ resource workerDataContributor 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAss
   properties: {
     principalId: workerIdentityPrincipalId
     roleDefinitionId: '${account.id}/sqlRoleDefinitions/${cosmosDataContributorRoleId}'
-    scope: '/'
+    scope: '/dbs/${databaseName}/colls/${containerName}'
   }
 }
 
