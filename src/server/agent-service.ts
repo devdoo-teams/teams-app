@@ -541,7 +541,6 @@ export class AgentService {
     if (status === 'running' && !job.startedAt) update.startedAt = new Date().toISOString();
     if (status === 'completed') {
       update.result = observation.result;
-      update.threadId = observation.providerExecutionId;
       update.finishedAt = new Date().toISOString();
     } else if (status === 'failed') {
       update.error = observation.error ?? (observation.status === 'quarantined'

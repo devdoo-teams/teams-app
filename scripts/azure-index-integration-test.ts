@@ -92,6 +92,7 @@ async function verifyQueueOnlyAgentService(): Promise<void> {
   const completed = await service.observe(job.id, scope);
   assert.equal(completed?.status, 'completed');
   assert.equal(completed?.result, 'durable worker result');
+  assert.equal(completed?.threadId, undefined, 'provider execution identity must not be relabeled as a CLI conversation thread');
 
   const cancellable = await service.submit({ prompt: 'cancel this task', mode: 'read-only', scope, notify: false });
   const cancelledJob = await service.cancelStrict(cancellable.id, scope, { notify: false });
