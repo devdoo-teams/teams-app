@@ -14,9 +14,11 @@ write_files:
       # Non-secret resource identity/configuration only.
       AZURE_CLIENT_ID=SET_BY_DEPLOYMENT
       AZURE_STORAGE_QUEUE_ENDPOINT=SET_BY_DEPLOYMENT
+      AZURE_STORAGE_POISON_QUEUE_ENDPOINT=SET_BY_DEPLOYMENT
       AGENT_CODEX_HOME=/var/lib/teamsapp/codex-home
       CODEX_BIN=/opt/teamsapp/bin/codex
       CODEX_BIN_SHA256=SET_BY_DEPLOYMENT
+      TEAMS_WORKER_COMPOSITION_MODULE=/opt/teamsapp/current/dist/worker/composition.js
   - path: /etc/systemd/system/teamsapp-worker.service
     owner: root:root
     permissions: '0644'
@@ -32,7 +34,7 @@ write_files:
       Group=teamsworker
       EnvironmentFile=/etc/teamsapp/worker.env
       WorkingDirectory=/opt/teamsapp/current
-      ExecStart=/usr/bin/node dist/worker/index.js
+      ExecStart=/usr/bin/npm run start:worker
       Restart=always
       RestartSec=5
       KillMode=control-group

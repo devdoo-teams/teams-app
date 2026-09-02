@@ -53,6 +53,9 @@ export type AgentDispatchRecord = {
   receipt?: AgentDispatchCompletionReceipt;
   error?: AgentDispatchErrorReceipt;
   quarantineReason?: string;
+  leaseOwner?: string;
+  leaseGeneration?: number;
+  leaseMessageId?: string;
 };
 
 export type AgentDispatchLease = Readonly<{
@@ -60,6 +63,8 @@ export type AgentDispatchLease = Readonly<{
   messageId: string;
   popReceipt: string;
   dequeueCount: number;
+  leaseOwner: string;
+  leaseGeneration: number;
 }>;
 
 export interface AgentDispatchQueue {

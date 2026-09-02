@@ -1,10 +1,18 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import type {
   AgentDispatchQueue,
   AgentDispatchTask,
 } from '../server/queue/agent-dispatch-queue.js';
+import {
+  AzureAgentDispatchQueue,
+  createProductionAzureQueueClient,
+  type AgentDispatchStatePort,
+  type ProductionAzureQueueClientOptions,
+} from '../server/azure-agent-dispatch-queue.js';
 
 export type WorkerExecutionResult = Readonly<{
   result: string;
@@ -27,17 +35,25 @@ export interface WorkerExecutionPort {
 export class AzureCodexWorker {
   private readonly visibilityTimeoutSeconds: number;
   private readonly heartbeatIntervalMs: number;
+  private readonly preflight: () => Promise<void>;
+  private preflightPromise: Promise<void> | undefined;
 
   constructor(
     private readonly queue: AgentDispatchQueue,
     private readonly executor: WorkerExecutionPort,
-    options: { visibilityTimeoutSeconds?: number; heartbeatIntervalMs?: number } = {},
+    options: {
+      visibilityTimeoutSeconds?: number;
+      heartbeatIntervalMs?: number;
+      preflight?: () => Promise<void>;
+    } = {},
   ) {
     this.visibilityTimeoutSeconds = options.visibilityTimeoutSeconds ?? 30;
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 10_000;
+    this.preflight = options.preflight ?? (async () => undefined);
   }
 
   async runOnce(): Promise<'idle' | 'completed' | 'failed' | 'cancelled' | 'duplicate'> {
+    await (this.preflightPromise ??= this.preflight());
     const initialLease = await this.queue.lease({ visibilityTimeoutSeconds: this.visibilityTimeoutSeconds });
     if (!initialLease) return 'idle';
     let lease = initialLease;
@@ -137,6 +153,87 @@ export class AzureCodexWorker {
   }
 }
 
+export type ProductionAzureCodexWorkerOptions = {
+  env: Record<string, string | undefined>;
+  state: AgentDispatchStatePort;
+  executor: WorkerExecutionPort;
+  createDefaultAzureCredential?: ProductionAzureQueueClientOptions['createDefaultAzureCredential'];
+  createQueueClient?: ProductionAzureQueueClientOptions['createQueueClient'];
+  platform?: NodeJS.Platform;
+};
+
+export function createProductionAzureCodexWorker(options: ProductionAzureCodexWorkerOptions): AzureCodexWorker {
+  const agentCodexHome = requiredEnvironment(options.env, 'AGENT_CODEX_HOME');
+  const codexBin = requiredEnvironment(options.env, 'CODEX_BIN');
+  const codexBinSha256 = requiredEnvironment(options.env, 'CODEX_BIN_SHA256');
+  const managedIdentityClientId = requiredEnvironment(options.env, 'AZURE_CLIENT_ID');
+  const visibilityTimeoutSeconds = positiveIntegerEnvironment(options.env, 'TEAMS_WORKER_VISIBILITY_TIMEOUT_SECONDS', 30);
+  const heartbeatIntervalMs = positiveIntegerEnvironment(options.env, 'TEAMS_WORKER_HEARTBEAT_INTERVAL_MS', 10_000);
+  if (heartbeatIntervalMs >= visibilityTimeoutSeconds * 1_000) {
+    throw new Error('TEAMS_WORKER_HEARTBEAT_INTERVAL_MS must be less than the visibility timeout');
+  }
+  const client = createProductionAzureQueueClient({
+    env: options.env,
+    createDefaultAzureCredential: options.createDefaultAzureCredential,
+    createQueueClient: options.createQueueClient,
+  });
+  const queue = new AzureAgentDispatchQueue(client, options.state);
+  return new AzureCodexWorker(queue, options.executor, {
+    visibilityTimeoutSeconds,
+    heartbeatIntervalMs,
+    preflight: () => preflightLinuxCodexWorker({
+      platform: options.platform,
+      agentCodexHome,
+      codexBin,
+      codexBinSha256,
+      managedIdentityClientId,
+    }),
+  });
+}
+
+export async function runAzureCodexWorkerLoop(
+  worker: Pick<AzureCodexWorker, 'runOnce'>,
+  options: { signal: AbortSignal; idleDelayMs?: number },
+): Promise<void> {
+  const idleDelayMs = options.idleDelayMs ?? 1_000;
+  if (!Number.isSafeInteger(idleDelayMs) || idleDelayMs < 1) throw new Error('worker idle delay must be a positive integer');
+  while (!options.signal.aborted) {
+    const result = await worker.runOnce();
+    if (result === 'idle' && !options.signal.aborted) await abortableDelay(idleDelayMs, options.signal);
+  }
+}
+
+export type ProductionWorkerComposition = Readonly<{
+  state: AgentDispatchStatePort;
+  executor: WorkerExecutionPort;
+}>;
+
+export async function startProductionAzureCodexWorker(options: {
+  env: Record<string, string | undefined>;
+  signal: AbortSignal;
+  loadComposition?: (absoluteModulePath: string) => Promise<ProductionWorkerComposition>;
+}): Promise<void> {
+  const modulePath = requiredEnvironment(options.env, 'TEAMS_WORKER_COMPOSITION_MODULE');
+  requireAbsolute(modulePath, 'TEAMS_WORKER_COMPOSITION_MODULE');
+  const loadComposition = options.loadComposition ?? (async (absolutePath) => {
+    const loaded = await import(pathToFileURL(absolutePath).href) as Partial<ProductionWorkerComposition>;
+    if (!loaded.state || !loaded.executor) {
+      throw new Error('worker composition module must export state and executor');
+    }
+    return { state: loaded.state, executor: loaded.executor };
+  });
+  const composition = await loadComposition(path.resolve(modulePath));
+  if (!composition?.state || !composition?.executor) {
+    throw new Error('worker composition module must provide state and executor');
+  }
+  const worker = createProductionAzureCodexWorker({
+    env: options.env,
+    state: composition.state,
+    executor: composition.executor,
+  });
+  await runAzureCodexWorkerLoop(worker, { signal: options.signal });
+}
+
 export async function preflightLinuxCodexWorker(input: {
   platform?: NodeJS.Platform;
   agentCodexHome: string;
@@ -169,10 +266,51 @@ function requireAbsolute(value: string, name: string): void {
   if (!value.startsWith('/') || value.includes('\0')) throw new Error(`${name} must be an absolute path`);
 }
 
+function requiredEnvironment(env: Record<string, string | undefined>, name: string): string {
+  const value = env[name]?.trim();
+  if (!value) throw new Error(`${name} is required for production worker configuration`);
+  return value;
+}
+
+function positiveIntegerEnvironment(
+  env: Record<string, string | undefined>,
+  name: string,
+  fallback: number,
+): number {
+  const raw = env[name]?.trim();
+  if (!raw) return fallback;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${name} must be a positive integer`);
+  return value;
+}
+
+function abortableDelay(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, delayMs);
+    function done(): void {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    }
+    signal.addEventListener('abort', done, { once: true });
+  });
+}
+
 function asWorkerError(cause: unknown): { code: string; message: string } {
   const error = cause as { code?: unknown; message?: unknown };
   return {
     code: typeof error?.code === 'string' && error.code.trim() ? error.code.trim() : 'WORKER_EXECUTION_FAILED',
     message: typeof error?.message === 'string' && error.message.trim() ? error.message.trim() : String(cause),
   };
+}
+
+if (process.argv.includes('--run')) {
+  const shutdown = new AbortController();
+  process.once('SIGINT', () => shutdown.abort());
+  process.once('SIGTERM', () => shutdown.abort());
+  void startProductionAzureCodexWorker({ env: process.env, signal: shutdown.signal }).catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
 }

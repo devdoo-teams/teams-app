@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 
 import {
+  createProductionAzureQueueClient,
   DispatchConflictError,
   type AgentDispatchRecord,
   type AgentDispatchStatePort,
   type AzureQueueClientPort,
   AzureAgentDispatchQueue,
-} from '../src/server/queue/azure-agent-dispatch-queue.js';
+} from '../src/server/azure-agent-dispatch-queue.js';
 import { createAgentDispatchSubmissionPort } from '../src/server/queue/agent-dispatch-queue.js';
 
 const clock = { now: () => new Date('2026-09-03T00:00:00.000Z') };
@@ -77,6 +78,83 @@ async function testPoisonAndUnknownAreQuarantined(): Promise<void> {
   assert.equal((await fixture.queue.observe('task-poison'))?.status, 'quarantined');
 }
 
+async function testCanonicalTaskIdentityAcrossEveryOperation(): Promise<void> {
+  const fixture = createFixture();
+  const created = await fixture.queue.enqueue(task('  task-canonical  '));
+  assert.equal(created.taskId, 'task-canonical');
+  assert.equal(created.task.taskId, 'task-canonical');
+  assert.equal(JSON.parse(fixture.client.sent[0]).taskId, 'task-canonical');
+  assert.equal((await fixture.queue.observe(' task-canonical '))?.taskId, 'task-canonical');
+  await fixture.queue.requestCancellation(' task-canonical ', 'operator');
+  assert.equal((await fixture.queue.observe('task-canonical'))?.cancellationRequested, true);
+}
+
+async function testDurableLeaseGenerationRejectsDuplicateAndStaleCompletion(): Promise<void> {
+  const fixture = createFixture();
+  await fixture.queue.enqueue(task('task-generation'));
+  const first = await fixture.queue.lease({ visibilityTimeoutSeconds: 1 });
+  assert.ok(first?.leaseOwner);
+  assert.equal(first?.leaseGeneration, 1);
+
+  fixture.client.inject(fixture.client.sent[0]);
+  assert.equal(
+    await fixture.queue.lease({ visibilityTimeoutSeconds: 1 }),
+    undefined,
+    'a second queue message must not acquire an active task lease',
+  );
+
+  fixture.client.expire(first!.messageId);
+  const recovered = await fixture.queue.lease({ visibilityTimeoutSeconds: 1 });
+  assert.equal(recovered?.leaseGeneration, 2);
+  assert.notEqual(recovered?.leaseOwner, first?.leaseOwner);
+  await assert.rejects(
+    fixture.queue.complete(first!, { result: 'stale', providerExecutionId: 'exec-stale' }),
+    /lease owner|generation|stale/i,
+  );
+  await fixture.queue.complete(recovered!, { result: 'fresh', providerExecutionId: 'exec-fresh' });
+  assert.equal((await fixture.queue.observe('task-generation'))?.receipt?.result, 'fresh');
+}
+
+async function testProductionQueueFactoryUsesManagedIdentityOnly(): Promise<void> {
+  const constructed: Array<{ endpoint: string; credential: object }> = [];
+  const sdkClient = {
+    async sendMessage() { return { messageId: 'message-id' }; },
+    async receiveMessages() { return { receivedMessageItems: [] }; },
+    async updateMessage() { return { popReceipt: 'next-receipt' }; },
+    async deleteMessage() {},
+  };
+  const credential = {};
+  const client = createProductionAzureQueueClient({
+    env: {
+      AZURE_STORAGE_QUEUE_ENDPOINT: 'https://storage.queue.core.windows.net/agent-dispatch',
+      AZURE_STORAGE_POISON_QUEUE_ENDPOINT: 'https://storage.queue.core.windows.net/agent-dispatch-poison',
+      AZURE_CLIENT_ID: '00000000-0000-4000-8000-000000000001',
+    },
+    createDefaultAzureCredential: (options) => {
+      assert.equal(options.managedIdentityClientId, '00000000-0000-4000-8000-000000000001');
+      return credential as never;
+    },
+    createQueueClient: (endpoint, actualCredential) => {
+      constructed.push({ endpoint, credential: actualCredential as object });
+      return sdkClient as never;
+    },
+  });
+  await client.sendMessage('payload');
+  assert.deepEqual(constructed.map(({ endpoint }) => endpoint), [
+    'https://storage.queue.core.windows.net/agent-dispatch',
+    'https://storage.queue.core.windows.net/agent-dispatch-poison',
+  ]);
+  assert.ok(constructed.every(({ credential: value }) => value === credential));
+
+  for (const env of [
+    { AZURE_STORAGE_QUEUE_ENDPOINT: 'https://storage.queue.core.windows.net/q?sig=secret', AZURE_STORAGE_POISON_QUEUE_ENDPOINT: 'https://storage.queue.core.windows.net/p' },
+    { AZURE_STORAGE_QUEUE_ENDPOINT: 'https://storage.queue.core.windows.net/q', AZURE_STORAGE_POISON_QUEUE_ENDPOINT: 'https://storage.queue.core.windows.net/p', AZURE_STORAGE_CONNECTION_STRING: 'secret' },
+    { AZURE_STORAGE_QUEUE_ENDPOINT: 'https://storage.queue.core.windows.net/q', AZURE_STORAGE_POISON_QUEUE_ENDPOINT: 'https://storage.queue.core.windows.net/p', AZURE_STORAGE_ACCOUNT_KEY: 'secret' },
+  ]) {
+    assert.throws(() => createProductionAzureQueueClient({ env }), /credential|connection|string|key|sas/i);
+  }
+}
+
 function task(taskId: string) {
   return {
     schemaVersion: 1 as const,
@@ -110,9 +188,14 @@ class MemoryState implements AgentDispatchStatePort {
     const value = this.records.get(taskId);
     return value && structuredClone(value);
   }
-  async update(taskId: string, mutate: (current: AgentDispatchRecord) => AgentDispatchRecord): Promise<AgentDispatchRecord> {
+  async compareAndSwap(
+    taskId: string,
+    expected: { leaseOwner?: string; leaseGeneration: number },
+    mutate: (current: AgentDispatchRecord) => AgentDispatchRecord,
+  ): Promise<AgentDispatchRecord | undefined> {
     const current = this.records.get(taskId);
     if (!current) throw new Error(`missing state ${taskId}`);
+    if (current.leaseOwner !== expected.leaseOwner || current.leaseGeneration !== expected.leaseGeneration) return undefined;
     const next = mutate(structuredClone(current));
     this.records.set(taskId, structuredClone(next));
     return structuredClone(next);
@@ -159,4 +242,7 @@ class MemoryQueueClient implements AzureQueueClientPort {
 await testEnqueueIsStableAndIdempotent();
 await testLeaseRenewCompleteErrorCancelAndRecovery();
 await testPoisonAndUnknownAreQuarantined();
+await testCanonicalTaskIdentityAcrossEveryOperation();
+await testDurableLeaseGenerationRejectsDuplicateAndStaleCompletion();
+await testProductionQueueFactoryUsesManagedIdentityOnly();
 console.log('azure-agent-dispatch-queue-test: PASS');

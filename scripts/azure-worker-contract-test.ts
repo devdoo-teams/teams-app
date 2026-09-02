@@ -4,15 +4,17 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { AzureAgentDispatchQueue } from '../src/server/queue/azure-agent-dispatch-queue.js';
+import { AzureAgentDispatchQueue } from '../src/server/azure-agent-dispatch-queue.js';
 import {
   AzureCodexWorker,
+  createProductionAzureCodexWorker,
   preflightLinuxCodexWorker,
+  runAzureCodexWorkerLoop,
   type WorkerExecutionHandle,
 } from '../src/worker/index.js';
 import { fileURLToPath } from 'node:url';
 
-import type { AgentDispatchRecord, AgentDispatchStatePort, AzureQueueClientPort } from '../src/server/queue/azure-agent-dispatch-queue.js';
+import type { AgentDispatchRecord, AgentDispatchStatePort, AzureQueueClientPort } from '../src/server/azure-agent-dispatch-queue.js';
 
 async function testWorkerCompletionDuplicateAndError(): Promise<void> {
   const fixture = createFixture();
@@ -95,6 +97,42 @@ async function testLinuxPreflightAndCloudInit(): Promise<void> {
   assert.doesNotMatch(cloudInit, /(client_secret|account[_-]?key|bearer\s+|auth\.json\s*:)/i);
 }
 
+async function testProductionPreflightRunsBeforeExecutorAndFailsClosed(): Promise<void> {
+  const fixture = createFixture();
+  await fixture.queue.enqueue(task('task-preflight'));
+  const order: string[] = [];
+  const worker = new AzureCodexWorker(fixture.queue, {
+    start: async () => {
+      order.push('execute');
+      return handle(Promise.resolve({ result: 'done', providerExecutionId: 'exec-preflight' }));
+    },
+  }, {
+    preflight: async () => { order.push('preflight'); },
+  });
+  assert.equal(await worker.runOnce(), 'completed');
+  assert.deepEqual(order, ['preflight', 'execute']);
+
+  assert.throws(() => createProductionAzureCodexWorker({
+    env: {},
+    state: new MemoryState(),
+    executor: { start: async () => handle(Promise.resolve({ result: 'x', providerExecutionId: 'y' })) },
+  }), /AZURE_STORAGE_QUEUE_ENDPOINT|production worker configuration/i);
+}
+
+async function testWorkerLoopPollsUntilAbort(): Promise<void> {
+  let calls = 0;
+  const abort = new AbortController();
+  const worker = {
+    runOnce: async () => {
+      calls += 1;
+      if (calls === 3) abort.abort();
+      return 'idle' as const;
+    },
+  };
+  await runAzureCodexWorkerLoop(worker, { signal: abort.signal, idleDelayMs: 1 });
+  assert.equal(calls, 3);
+}
+
 function task(taskId: string) {
   return { schemaVersion: 1 as const, taskId, idempotencyKey: `idem:${taskId}`, tenantId: 'tenant', requesterId: 'user', conversationId: 'conversation', provider: 'codex', prompt: 'work', createdAt: new Date().toISOString() };
 }
@@ -110,7 +148,7 @@ class MemoryState implements AgentDispatchStatePort {
   records = new Map<string, AgentDispatchRecord>();
   async create(record: AgentDispatchRecord) { if (this.records.has(record.taskId)) return 'exists' as const; this.records.set(record.taskId, structuredClone(record)); return 'created' as const; }
   async get(id: string) { const value = this.records.get(id); return value && structuredClone(value); }
-  async update(taskId: string, mutate: (current: AgentDispatchRecord) => AgentDispatchRecord) { const current = this.records.get(taskId); if (!current) throw new Error('missing state'); const next = mutate(structuredClone(current)); this.records.set(taskId, structuredClone(next)); return structuredClone(next); }
+  async compareAndSwap(taskId: string, expected: { leaseOwner?: string; leaseGeneration: number }, mutate: (current: AgentDispatchRecord) => AgentDispatchRecord) { const current = this.records.get(taskId); if (!current) throw new Error('missing state'); if (current.leaseOwner !== expected.leaseOwner || current.leaseGeneration !== expected.leaseGeneration) return undefined; const next = mutate(structuredClone(current)); this.records.set(taskId, structuredClone(next)); return structuredClone(next); }
 }
 class MemoryQueueClient implements AzureQueueClientPort {
   sent: string[] = []; messages: Array<{ id: string; text: string; receipt: string; count: number; visible: boolean }> = [];
@@ -126,4 +164,6 @@ class MemoryQueueClient implements AzureQueueClientPort {
 await testWorkerCompletionDuplicateAndError();
 await testCancellationCleansProcessTree();
 await testLinuxPreflightAndCloudInit();
+await testProductionPreflightRunsBeforeExecutorAndFailsClosed();
+await testWorkerLoopPollsUntilAbort();
 console.log('azure-worker-contract-test: PASS');
