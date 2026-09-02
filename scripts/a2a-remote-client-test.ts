@@ -71,12 +71,16 @@ await testAuthenticationFailureIsSafe();
 await testInvalidCardSecurityMetadata();
 await testPreferredInterfaceMayPrecedeOtherBindings();
 await testFirstSupportedJsonRpcInterfaceIsSelected();
+await testUnsupportedTrailingInterfaceDoesNotInvalidateSelectedInterface();
 await testNoSupportedInterfaceFailsBeforeTokenResolution();
 await testSelectedInterfaceTenantIsAppliedToEveryRequest();
 await testOptionalCapabilitiesDefaultFalseAndInvalidTypesFail();
+await testAgentCardModesAndSkillsFollowProtoJson();
 await testUnsupportedProtocolAndSsrf();
+await testIpv6LiteralAndRedirectSsrfAreBlockedBeforeFollow();
 await testTimeout();
 await testAbortSignalPropagatesToRpc();
+await testJsonRpcResponseIdMustMatchRequest();
 await testJsonRpcErrorSerialization();
 
 console.log('a2a-remote-client-test: PASS');
@@ -359,6 +363,37 @@ async function testFirstSupportedJsonRpcInterfaceIsSelected(): Promise<void> {
   assert.deepEqual(await client.getTask('task-1'), completedTask);
 }
 
+async function testUnsupportedTrailingInterfaceDoesNotInvalidateSelectedInterface(): Promise<void> {
+  calls.length = 0;
+  nextResponse = (url, init) => {
+    if (url.pathname === '/.well-known/agent-card.json') {
+      return jsonResponse({
+        ...validCard,
+        supportedInterfaces: [
+          validCard.supportedInterfaces[0],
+          {
+            url: 'wss://agent.example.test/a2a/custom',
+            protocolBinding: 'CUSTOM_WEBSOCKET',
+            protocolVersion: '2026-09',
+            officialExtension: { safelyIgnored: true },
+          },
+        ],
+      });
+    }
+    assert.equal(url.pathname, '/a2a/v1');
+    const request = JSON.parse(String(init.body)) as { id: string };
+    return jsonResponse({ jsonrpc: '2.0', id: request.id, result: completedTask });
+  };
+
+  const client = await createA2ARemoteClient('https://agent.example.test', {
+    fetch: mockFetch,
+    bearerTokenProvider: () => 'test-token',
+  });
+  assert.equal(client.selectedInterface.url, 'https://agent.example.test/a2a/v1');
+  assert.deepEqual(await client.getTask('task-1'), completedTask,
+    'a later unsupported custom binding must not invalidate the first supported interface');
+}
+
 async function testNoSupportedInterfaceFailsBeforeTokenResolution(): Promise<void> {
   let tokenReads = 0;
   nextResponse = (url) => url.pathname === '/.well-known/agent-card.json'
@@ -471,6 +506,40 @@ async function testOptionalCapabilitiesDefaultFalseAndInvalidTypesFail(): Promis
   }
 }
 
+async function testAgentCardModesAndSkillsFollowProtoJson(): Promise<void> {
+  const malformedCards = [
+    { ...validCard, defaultInputModes: ['text/plain', 7] },
+    { ...validCard, defaultOutputModes: [null] },
+    { ...validCard, skills: [{ name: 'missing required fields' }] },
+    { ...validCard, skills: [{ id: 7, name: 'n', description: 'd', tags: ['a'] }] },
+    { ...validCard, skills: [{ id: 'id', name: '', description: 'd', tags: ['a'] }] },
+    { ...validCard, skills: [{ id: 'id', name: 'n', description: 7, tags: ['a'] }] },
+    { ...validCard, skills: [{ id: 'id', name: 'n', description: 'd', tags: ['a', 7] }] },
+  ];
+  for (const malformedCard of malformedCards) {
+    nextResponse = (url) => url.pathname === '/.well-known/agent-card.json'
+      ? jsonResponse(malformedCard)
+      : jsonResponse({});
+    await expectRemoteError(
+      () => createA2ARemoteClient('https://agent.example.test', { fetch: mockFetch }),
+      'INVALID_AGENT_CARD',
+    );
+  }
+
+  nextResponse = (url) => url.pathname === '/.well-known/agent-card.json'
+    ? jsonResponse({
+      ...validCard,
+      officialFutureField: { enabled: true },
+      skills: [{
+        ...validCard.skills[0],
+        examples: ['A future official field must be accepted.'],
+      }],
+    })
+    : jsonResponse({});
+  const client = await createA2ARemoteClient('https://agent.example.test', { fetch: mockFetch });
+  assert.equal(client.card.skills[0].id, 'teams-core-tasks');
+}
+
 async function testUnsupportedProtocolAndSsrf(): Promise<void> {
   await expectRemoteError(
     () => createA2ARemoteClient('http://agent.example.test', { fetch: mockFetch }),
@@ -491,6 +560,40 @@ async function testUnsupportedProtocolAndSsrf(): Promise<void> {
     () => createA2ARemoteClient('https://agent.example.test', { fetch: mockFetch }),
     'SSRF_BLOCKED',
   );
+}
+
+async function testIpv6LiteralAndRedirectSsrfAreBlockedBeforeFollow(): Promise<void> {
+  for (const origin of [
+    'https://[::1]',
+    'https://[fc00::1]',
+    'https://[fd12:3456:789a::1]',
+    'https://[fe80::1]',
+  ]) {
+    calls.length = 0;
+    await expectRemoteError(
+      () => createA2ARemoteClient(origin, { fetch: mockFetch }),
+      'SSRF_BLOCKED',
+    );
+    assert.equal(calls.length, 0, `${origin} must be rejected before fetch`);
+  }
+
+  for (const location of [
+    'https://127.0.0.1/agent-card.json',
+    'https://[::1]/agent-card.json',
+    'https://[fd00::1]/agent-card.json',
+    'https://[fe80::1]/agent-card.json',
+  ]) {
+    calls.length = 0;
+    nextResponse = () => new Response(null, {
+      status: 302,
+      headers: { location },
+    });
+    await expectRemoteError(
+      () => createA2ARemoteClient('https://agent.example.test', { fetch: mockFetch }),
+      'SSRF_BLOCKED',
+    );
+    assert.equal(calls.length, 1, `private redirect ${location} must be rejected before follow`);
+  }
 }
 
 async function testTimeout(): Promise<void> {
@@ -548,6 +651,30 @@ async function testAbortSignalPropagatesToRpc(): Promise<void> {
     'aborting the parent signal must abort the in-flight remote request');
   assert.equal(observedSignal?.aborted, true,
     'the linked fetch signal must be aborted when the parent signal is canceled');
+}
+
+async function testJsonRpcResponseIdMustMatchRequest(): Promise<void> {
+  nextResponse = (url, init) => {
+    if (url.pathname === '/.well-known/agent-card.json') return jsonResponse(validCard);
+    const request = JSON.parse(String(init.body)) as { id: string };
+    return jsonResponse({
+      jsonrpc: '2.0',
+      id: `${request.id}-different`,
+      result: completedTask,
+    });
+  };
+  const client = await createA2ARemoteClient('https://agent.example.test', {
+    fetch: mockFetch,
+    bearerTokenProvider: () => 'test-token',
+  });
+  await expectRemoteError(() => client.getTask('task-1'), 'INVALID_RESPONSE');
+
+  nextResponse = (url, init) => {
+    if (url.pathname === '/.well-known/agent-card.json') return jsonResponse(validCard);
+    const request = JSON.parse(String(init.body)) as { id: string };
+    return jsonResponse({ jsonrpc: '2.0', id: 1, echoed: request.id, result: completedTask });
+  };
+  await expectRemoteError(() => client.getTask('task-1'), 'INVALID_RESPONSE');
 }
 
 async function testJsonRpcErrorSerialization(): Promise<void> {

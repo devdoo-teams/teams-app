@@ -1,9 +1,11 @@
 import crypto from 'node:crypto';
+import { isIP } from 'node:net';
 
 const PROTOCOL_VERSION = '1.0' as const;
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_TIMEOUT_MS = 60_000;
 const MAX_BODY_BYTES = 1_000_000;
+const MAX_REDIRECTS = 5;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 
 export type A2ARemoteAgentCard = Readonly<{
@@ -119,13 +121,33 @@ function validateBaseUrl(value: string): URL {
 }
 
 function assertPublicHost(url: URL): void {
-  const host = url.hostname.toLowerCase().replace(/\.$/, '');
+  const host = url.hostname.toLowerCase().replace(/\.$/, '').replace(/^\[|\]$/g, '');
   if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host === '0.0.0.0' || host === '::1') {
     fail('SSRF_BLOCKED');
   }
+  if (isIP(host) === 6) {
+    const words = ipv6Words(host);
+    const isUnspecified = words.every((word) => word === 0);
+    const isLoopback = words.slice(0, 7).every((word) => word === 0) && words[7] === 1;
+    const isUniqueLocal = (words[0] & 0xfe00) === 0xfc00;
+    const isLinkLocal = (words[0] & 0xffc0) === 0xfe80;
+    const isMappedIpv4 = words.slice(0, 5).every((word) => word === 0) && words[5] === 0xffff;
+    if (isUnspecified || isLoopback || isUniqueLocal || isLinkLocal) fail('SSRF_BLOCKED');
+    if (isMappedIpv4) {
+      assertPublicIpv4([
+        words[6] >>> 8,
+        words[6] & 0xff,
+        words[7] >>> 8,
+        words[7] & 0xff,
+      ]);
+    }
+    return;
+  }
   const ipv4 = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-  if (!ipv4) return;
-  const octets = ipv4.slice(1).map(Number);
+  if (ipv4) assertPublicIpv4(ipv4.slice(1).map(Number));
+}
+
+function assertPublicIpv4(octets: number[]): void {
   const [a, b] = octets;
   if (octets.some((entry) => entry < 0 || entry > 255)
     || a === 10
@@ -134,6 +156,20 @@ function assertPublicHost(url: URL): void {
     || a === 172 && b >= 16 && b <= 31
     || a === 192 && b === 168
     || a === 100 && b >= 64 && b <= 127) fail('SSRF_BLOCKED');
+}
+
+function ipv6Words(address: string): number[] {
+  let normalized = address;
+  const ipv4Tail = normalized.match(/(\d+\.\d+\.\d+\.\d+)$/)?.[1];
+  if (ipv4Tail) {
+    const octets = ipv4Tail.split('.').map(Number);
+    normalized = `${normalized.slice(0, -ipv4Tail.length)}${((octets[0] << 8) | octets[1]).toString(16)}:${((octets[2] << 8) | octets[3]).toString(16)}`;
+  }
+  const halves = normalized.split('::');
+  const left = halves[0] ? halves[0].split(':') : [];
+  const right = halves[1] ? halves[1].split(':') : [];
+  const zeroCount = halves.length === 2 ? 8 - left.length - right.length : 0;
+  return [...left, ...Array.from({ length: zeroCount }, () => '0'), ...right].map((word) => Number.parseInt(word || '0', 16));
 }
 
 function boundedTimeout(value: number | undefined): number {
@@ -237,18 +273,23 @@ function validateCard(value: unknown): A2ARemoteAgentCard {
       || typeof item.url !== 'string'
       || (item.tenant !== undefined && (typeof item.tenant !== 'string' || !item.tenant))
     ) fail('INVALID_AGENT_CARD');
-    const endpoint = validateBaseUrl(item.url);
     return Object.freeze({
-      url: endpoint.toString(),
+      url: item.url,
       protocolBinding: item.protocolBinding,
       protocolVersion: item.protocolVersion,
       ...(typeof item.tenant === 'string' ? { tenant: item.tenant } : {}),
     });
   });
-  const selectedInterface = supportedInterfaces.find((item) => (
+  const selectedInterfaceIndex = supportedInterfaces.findIndex((item) => (
     item.protocolBinding === 'JSONRPC' && item.protocolVersion === PROTOCOL_VERSION
   ));
-  if (!selectedInterface) fail('UNSUPPORTED_PROTOCOL');
+  if (selectedInterfaceIndex < 0) fail('UNSUPPORTED_PROTOCOL');
+  const selectedInterface = supportedInterfaces[selectedInterfaceIndex];
+  const selectedEndpoint = validateBaseUrl(selectedInterface.url);
+  supportedInterfaces[selectedInterfaceIndex] = Object.freeze({
+    ...selectedInterface,
+    url: selectedEndpoint.toString(),
+  });
   const rawSecuritySchemes = asCardRecord(card.securitySchemes);
   const securitySchemes = Object.freeze(Object.fromEntries(
     Object.entries(rawSecuritySchemes).map(([name, scheme]) => [name, validateSecurityScheme(scheme)]),
@@ -261,7 +302,29 @@ function validateCard(value: unknown): A2ARemoteAgentCard {
   const streaming = optionalCapabilityBoolean(capabilities.streaming);
   const pushNotifications = optionalCapabilityBoolean(capabilities.pushNotifications);
   const extendedAgentCard = optionalCapabilityBoolean(capabilities.extendedAgentCard);
-  if (!Array.isArray(card.defaultInputModes) || !Array.isArray(card.defaultOutputModes) || !Array.isArray(card.skills)) fail('INVALID_AGENT_CARD');
+  if (
+    !Array.isArray(card.defaultInputModes)
+    || card.defaultInputModes.some((mode) => typeof mode !== 'string')
+    || !Array.isArray(card.defaultOutputModes)
+    || card.defaultOutputModes.some((mode) => typeof mode !== 'string')
+    || !Array.isArray(card.skills)
+  ) fail('INVALID_AGENT_CARD');
+  const skills = card.skills.map((value) => {
+    const skill = asCardRecord(value);
+    if (
+      typeof skill.id !== 'string' || !skill.id.trim()
+      || typeof skill.name !== 'string' || !skill.name.trim()
+      || typeof skill.description !== 'string' || !skill.description.trim()
+      || !Array.isArray(skill.tags) || skill.tags.length === 0
+      || skill.tags.some((tag) => typeof tag !== 'string' || !tag.trim())
+    ) fail('INVALID_AGENT_CARD');
+    return Object.freeze({
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      tags: Object.freeze([...skill.tags] as string[]),
+    });
+  });
   return Object.freeze({
     name: card.name,
     description: card.description,
@@ -276,7 +339,7 @@ function validateCard(value: unknown): A2ARemoteAgentCard {
     securityRequirements: Object.freeze(securityRequirements),
     defaultInputModes: Object.freeze([...card.defaultInputModes] as string[]),
     defaultOutputModes: Object.freeze([...card.defaultOutputModes] as string[]),
-    skills: Object.freeze([...card.skills] as Record<string, unknown>[]),
+    skills: Object.freeze(skills),
   });
 }
 
@@ -347,10 +410,32 @@ async function fetchWithTimeout(
     controller.abort();
   }, timeoutMs);
   try {
-    const response = await fetcher(input, { ...init, signal: controller.signal });
-    if (timedOut) fail('TIMEOUT');
-    if (signal?.aborted) throw signal.reason ?? new Error('A2A remote operation was canceled.');
-    return response;
+    let current = requestUrl(input);
+    let currentInit: RequestInit = { ...init, redirect: 'manual', signal: controller.signal };
+    for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
+      validateFetchUrl(current);
+      const response = await fetcher(current, currentInit);
+      if (timedOut) fail('TIMEOUT');
+      if (signal?.aborted) throw signal.reason ?? new Error('A2A remote operation was canceled.');
+      if (response.url) validateFetchUrl(new URL(response.url));
+      if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+      if (redirects === MAX_REDIRECTS) fail('HTTP_ERROR');
+      const location = response.headers.get('location');
+      if (!location) fail('HTTP_ERROR');
+      const next = new URL(location, current);
+      validateFetchUrl(next);
+      const originChanged = next.origin !== current.origin;
+      const headers = new Headers(currentInit.headers);
+      if (originChanged) headers.delete('authorization');
+      if (response.status === 303 || ((response.status === 301 || response.status === 302) && currentInit.method === 'POST')) {
+        headers.delete('content-type');
+        currentInit = { ...currentInit, method: 'GET', body: undefined, headers };
+      } else {
+        currentInit = { ...currentInit, headers };
+      }
+      current = next;
+    }
+    return fail('HTTP_ERROR');
   } catch (error) {
     if (timedOut) fail('TIMEOUT');
     if (signal?.aborted) throw signal.reason ?? error;
@@ -360,6 +445,17 @@ async function fetchWithTimeout(
     clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);
   }
+}
+
+function requestUrl(input: RequestInfo | URL): URL {
+  if (input instanceof URL) return new URL(input.href);
+  if (typeof input === 'string') return new URL(input);
+  return new URL(input.url);
+}
+
+function validateFetchUrl(url: URL): void {
+  if (url.protocol !== 'https:' || url.username || url.password || url.hash) fail('UNSUPPORTED_PROTOCOL');
+  assertPublicHost(url);
 }
 
 export async function createA2ARemoteClient(baseUrl: string, options: ClientOptions = {}): Promise<A2ARemoteClient> {
@@ -398,12 +494,13 @@ export async function createA2ARemoteClient(baseUrl: string, options: ClientOpti
     requestOptions: A2ARemoteRequestOptions = {},
   ): Promise<T> {
     const headers = await authorizationHeaders();
+    const id = requestId();
     const response = await fetchWithTimeout(fetcher, endpoint, {
       method: 'POST',
       headers: { ...headers, accept: 'application/json', 'content-type': 'application/json', 'a2a-version': PROTOCOL_VERSION },
       body: JSON.stringify({
         jsonrpc: '2.0',
-        id: requestId(),
+        id,
         method,
         params: withSelectedTenant(params),
       }),
@@ -411,8 +508,9 @@ export async function createA2ARemoteClient(baseUrl: string, options: ClientOpti
     if (response.status === 401 || response.status === 403) fail('AUTHENTICATION_FAILED');
     if (!response.ok) fail('HTTP_ERROR');
     const body = asRecord(await readJson(response));
+    if (body.jsonrpc !== '2.0' || typeof body.id !== typeof id || body.id !== id) fail('INVALID_RESPONSE');
     if (body.error !== undefined) fail('JSON_RPC_ERROR');
-    if (body.jsonrpc !== '2.0' || body.result === undefined) fail('INVALID_RESPONSE');
+    if (body.result === undefined) fail('INVALID_RESPONSE');
     return body.result as T;
   }
 
