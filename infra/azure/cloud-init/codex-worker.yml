@@ -1,0 +1,55 @@
+#cloud-config
+# Auth material is provisioned out of band after the VM exists.
+# Never copy auth.json, tokens, account keys, connection strings, or device codes here.
+users:
+  - name: teamsworker
+    shell: /bin/bash
+    lock_passwd: true
+
+write_files:
+  - path: /etc/teamsapp/worker.env.example
+    owner: root:teamsworker
+    permissions: '0640'
+    content: |
+      # Non-secret resource identity/configuration only.
+      AZURE_CLIENT_ID=SET_BY_DEPLOYMENT
+      AZURE_STORAGE_QUEUE_ENDPOINT=SET_BY_DEPLOYMENT
+      AGENT_CODEX_HOME=/var/lib/teamsapp/codex-home
+      CODEX_BIN=/opt/teamsapp/bin/codex
+      CODEX_BIN_SHA256=SET_BY_DEPLOYMENT
+  - path: /etc/systemd/system/teamsapp-worker.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=TeamsApp durable Codex worker
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      User=teamsworker
+      Group=teamsworker
+      EnvironmentFile=/etc/teamsapp/worker.env
+      WorkingDirectory=/opt/teamsapp/current
+      ExecStart=/usr/bin/node dist/worker/index.js
+      Restart=always
+      RestartSec=5
+      KillMode=control-group
+      TimeoutStopSec=30
+      NoNewPrivileges=true
+      PrivateTmp=true
+      ProtectSystem=strict
+      ProtectHome=true
+      ReadWritePaths=/var/lib/teamsapp
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - [install, -d, -o, teamsworker, -g, teamsworker, -m, '0700', /var/lib/teamsapp/codex-home]
+  - [install, -d, -o, root, -g, teamsworker, -m, '0750', /etc/teamsapp]
+  - [install, -d, -o, root, -g, root, -m, '0755', /opt/teamsapp/bin]
+  - [systemctl, daemon-reload]
+  # The service is enabled only after the immutable app, verified CODEX_BIN,
+  # managed-identity settings, and out-of-band worker authentication are present.
