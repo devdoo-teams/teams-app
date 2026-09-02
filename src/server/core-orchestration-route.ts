@@ -41,6 +41,15 @@ export type CoreOrchestrationRouteOptions = Readonly<{
   resolveAuthenticatedScope: (request: Request, response: Response) => AgentJobScope | undefined;
 }>;
 
+export const CORE_ORCHESTRATION_API_BASE_PATH = '/api/core-orchestration' as const;
+
+export function mountCoreOrchestrationRoutes(
+  app: Pick<express.Application, 'use'>,
+  options: CoreOrchestrationRouteOptions,
+): void {
+  app.use(CORE_ORCHESTRATION_API_BASE_PATH, createCoreOrchestrationRouter(options));
+}
+
 class CoreOrchestrationUnauthorizedError extends Error {
   readonly code = 'CORE_ORCHESTRATION_AUTH_REQUIRED' as const;
 
@@ -72,7 +81,10 @@ export function createCoreOrchestrationRouter(options: CoreOrchestrationRouteOpt
 
   router.get('/jobs', asyncHandler(async (request, response) => {
     const jobs = options.service.list(scopeFor(options, request, response), listRequest(request));
-    response.set('Cache-Control', 'no-store').status(200).json({ jobs });
+    response.set('Cache-Control', 'no-store').status(200).json({
+      jobs,
+      providers: options.service.listProviderFacts(),
+    });
   }));
 
   router.get('/jobs/:jobId', asyncHandler(async (request, response) => {
@@ -99,7 +111,7 @@ export function createCoreOrchestrationRouter(options: CoreOrchestrationRouteOpt
       provideInputRequest(request, request.body),
     );
     if (!result) throw new CoreOrchestrationNotFoundError();
-    response.set('Cache-Control', 'no-store').status(result.status === 'unsupported' ? 501 : 200).json({ result });
+    response.set('Cache-Control', 'no-store').status(result.status === 'unsupported' ? 501 : 200).json(result);
   }));
 
   router.get('/providers', asyncHandler(async (request, response) => {

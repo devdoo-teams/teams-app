@@ -39,6 +39,7 @@ function task(
 }
 
 const requests: Array<{ path: string; method: string; body?: Record<string, unknown> }> = [];
+const apiBasePath = '/api/core-orchestration';
 const request = async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
   const path = String(input);
   requests.push({
@@ -46,11 +47,13 @@ const request = async (input: RequestInfo | URL, init: RequestInit = {}): Promis
     method: init.method ?? 'GET',
     body: typeof init.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : undefined,
   });
-  const json = path === '/api/orchestration/jobs' && !init.method
+  const json = path === `${apiBasePath}/jobs` && !init.method
     ? { jobs: [task('running')], providers: [provider] }
-    : path === '/api/orchestration/jobs/task-1' && !init.method
+    : path === `${apiBasePath}/jobs/task-1` && !init.method
       ? { job: task('input_required') }
-      : { job: task('running'), replayed: path === '/api/orchestration/jobs', requestHash: 'a'.repeat(64) };
+      : path === `${apiBasePath}/jobs/task-1/input`
+        ? { status: 'accepted', job: task('running') }
+        : { job: task('running'), replayed: path === `${apiBasePath}/jobs`, requestHash: 'a'.repeat(64) };
   return new Response(JSON.stringify(json), {
     status: 200,
     headers: { 'content-type': 'application/json' },
@@ -61,11 +64,11 @@ const client = createCoreOrchestrationClient(request);
 const listed = await client.listJobs();
 assert.equal(listed.jobs[0]?.id, 'task-1', 'list returns the durable task identity');
 assert.equal(listed.providers[0]?.availability, 'available', 'list returns measured provider availability');
-assert.deepEqual(requests.at(-1), { path: '/api/orchestration/jobs', method: 'GET', body: undefined });
+assert.deepEqual(requests.at(-1), { path: `${apiBasePath}/jobs`, method: 'GET', body: undefined });
 
 const detailed = await client.getJob('task-1');
 assert.equal(detailed.status, 'input_required', 'detail preserves the input-required state');
-assert.deepEqual(requests.at(-1), { path: '/api/orchestration/jobs/task-1', method: 'GET', body: undefined });
+assert.deepEqual(requests.at(-1), { path: `${apiBasePath}/jobs/task-1`, method: 'GET', body: undefined });
 
 const submitted = await client.submitJob({
   provider: 'codex',
@@ -75,7 +78,7 @@ const submitted = await client.submitJob({
 });
 assert.equal(submitted.replayed, true, 'duplicate submission is represented without inventing a second task');
 assert.deepEqual(requests.at(-1), {
-  path: '/api/orchestration/jobs',
+  path: `${apiBasePath}/jobs`,
   method: 'POST',
   body: {
     provider: 'codex',
@@ -87,28 +90,39 @@ assert.deepEqual(requests.at(-1), {
 
 await client.cancelJob('task-1');
 assert.deepEqual(requests.at(-1), {
-  path: '/api/orchestration/jobs/task-1/cancel',
+  path: `${apiBasePath}/jobs/task-1/cancel`,
   method: 'POST',
   body: {},
 });
 
 await client.approveJob('task-1');
 assert.deepEqual(requests.at(-1), {
-  path: '/api/orchestration/jobs/task-1/approve',
+  path: `${apiBasePath}/jobs/task-1/approve`,
   method: 'POST',
   body: {},
 });
 
-await client.provideInput('task-1', 'Use canary.');
+const provided = await client.provideInput('task-1', 'Use canary.');
+assert.equal(provided.status, 'accepted', 'provide-input consumes the shared result DTO directly');
+assert.equal(provided.job.id, 'task-1');
 assert.deepEqual(requests.at(-1), {
-  path: '/api/orchestration/jobs/task-1/input',
+  path: `${apiBasePath}/jobs/task-1/input`,
   method: 'POST',
   body: { input: 'Use canary.' },
 });
 
+const unsupportedClient = createCoreOrchestrationClient(async () => new Response(JSON.stringify({
+  status: 'unsupported',
+  job: task('input_required'),
+  reason: 'agent-service-does-not-support-input',
+}), { status: 501, headers: { 'content-type': 'application/json' } }));
+const unsupportedInput = await unsupportedClient.provideInput('task-1', 'continue');
+assert.equal(unsupportedInput.status, 'unsupported', 'a typed unsupported result remains consumable across HTTP 501');
+assert.equal(unsupportedInput.job.status, 'input_required');
+
 await client.retryJob('task-1');
 assert.deepEqual(requests.at(-1), {
-  path: '/api/orchestration/jobs/task-1/retry',
+  path: `${apiBasePath}/jobs/task-1/retry`,
   method: 'POST',
   body: {},
 });

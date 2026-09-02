@@ -16,6 +16,8 @@ export type CoreOrchestrationJobResult = {
   job: CoreOrchestrationJob;
 };
 
+export const CORE_ORCHESTRATION_API_BASE_PATH = '/api/core-orchestration' as const;
+
 type ErrorEnvelope = {
   error?: string | {
     code?: string;
@@ -76,6 +78,23 @@ async function expectResponse<T>(request: ApiOperationRequest, path: string, ini
   return body as T;
 }
 
+async function expectProvideInputResponse(
+  request: ApiOperationRequest,
+  path: string,
+  init: RequestInit,
+): Promise<CoreProvideInputResult> {
+  const response = await request(path, init);
+  const body = await readJson(response);
+  if (response.ok || (response.status === 501 && isUnsupportedInputResult(body))) {
+    return body as CoreProvideInputResult;
+  }
+  throw errorFromResponse(response, body);
+}
+
+function isUnsupportedInputResult(value: unknown): boolean {
+  return Boolean(value && typeof value === 'object' && (value as { status?: unknown }).status === 'unsupported');
+}
+
 function jsonPost(body: Record<string, unknown>, signal?: AbortSignal): RequestInit {
   return {
     method: 'POST',
@@ -86,7 +105,7 @@ function jsonPost(body: Record<string, unknown>, signal?: AbortSignal): RequestI
 }
 
 function jobPath(jobId: string, action = ''): string {
-  const base = `/api/orchestration/jobs/${encodeURIComponent(jobId)}`;
+  const base = `${CORE_ORCHESTRATION_API_BASE_PATH}/jobs/${encodeURIComponent(jobId)}`;
   return action ? `${base}/${action}` : base;
 }
 
@@ -95,7 +114,7 @@ export function createCoreOrchestrationClient(
 ): CoreOrchestrationClient {
   return {
     listJobs(signal) {
-      return expectResponse<CoreOrchestrationJobList>(request, '/api/orchestration/jobs', { signal });
+      return expectResponse<CoreOrchestrationJobList>(request, `${CORE_ORCHESTRATION_API_BASE_PATH}/jobs`, { signal });
     },
     async getJob(jobId, signal) {
       const response = await expectResponse<CoreOrchestrationJobResult>(request, jobPath(jobId), { signal });
@@ -104,7 +123,7 @@ export function createCoreOrchestrationClient(
     submitJob(input, signal) {
       return expectResponse<CoreSubmitResult>(
         request,
-        '/api/orchestration/jobs',
+        `${CORE_ORCHESTRATION_API_BASE_PATH}/jobs`,
         jsonPost({
           idempotencyKey: input.idempotencyKey,
           prompt: input.prompt,
@@ -120,7 +139,7 @@ export function createCoreOrchestrationClient(
       return expectResponse<CoreOrchestrationJobResult>(request, jobPath(jobId, 'approve'), jsonPost({}, signal));
     },
     provideInput(jobId, input, signal) {
-      return expectResponse<CoreProvideInputResult>(request, jobPath(jobId, 'input'), jsonPost({ input }, signal));
+      return expectProvideInputResponse(request, jobPath(jobId, 'input'), jsonPost({ input }, signal));
     },
     retryJob(jobId, signal) {
       return expectResponse<CoreOrchestrationJobResult>(request, jobPath(jobId, 'retry'), jsonPost({}, signal));

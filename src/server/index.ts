@@ -167,6 +167,9 @@ import {
   type AgentDispatchRecord,
   type AgentDispatchStatePort,
 } from './azure-agent-dispatch-queue.js';
+import { CoreOrchestrationService } from './core-orchestration-service.js';
+import { mountCoreOrchestrationRoutes } from './core-orchestration-route.js';
+import type { CoreProviderFact } from '../shared/core-orchestration.js';
 
 /**
  * Same-UID process fixture for token-protected loopback integration tests.
@@ -1042,6 +1045,25 @@ function restScope(request: any, response: any): { scope?: AgentJobScope; status
       tenantId,
       conversationId: deriveServerOwnedRestConversationId({ tenantId, requesterId }),
     },
+  };
+}
+
+function coreOrchestrationRestScope(_request: any, response: any): AgentJobScope | undefined {
+  const claims = asRecord(response.locals?.user) as UserClaims | undefined;
+  const requesterId = nonEmptyString(claims?.requesterId) ?? nonEmptyString(claims?.oid) ?? nonEmptyString(claims?.sub);
+  const tenantId = nonEmptyString(claims?.tid);
+  if (skipAuth && !claims) {
+    const local = localRestScope();
+    return {
+      ...local,
+      conversationId: deriveServerOwnedRestConversationId(local),
+    };
+  }
+  if (!requesterId || !tenantId) return undefined;
+  return {
+    requesterId,
+    tenantId,
+    conversationId: deriveServerOwnedRestConversationId({ tenantId, requesterId }),
   };
 }
 
@@ -2611,6 +2633,37 @@ agentService = new AgentService(
   },
 );
 await agentService.initialize();
+
+const coreProviderCapabilities = azureQueueDispatch
+  ? unknownCliCapabilities()
+  : await probeCliCapabilities().catch(() => unknownCliCapabilities());
+const coreOrchestrationService = new CoreOrchestrationService({
+  agentService,
+  jobStore: agentJobStore,
+  observeProviderFacts: (): CoreProviderFact[] => [...new Set(Object.keys(providerRunners).concat(agentProvider))]
+    .map((provider) => {
+      const capability = provider === 'copilot'
+        ? coreProviderCapabilities.ghcp
+        : coreProviderCapabilities.codex;
+      return {
+        provider,
+        availability: capability.state,
+        capabilities: ['submit', 'cancel', 'approve', 'retry'],
+        observedAt: new Date().toISOString(),
+        source: 'runtime-probe',
+      };
+    }),
+});
+mountCoreOrchestrationRoutes(http, {
+  service: coreOrchestrationService,
+  authenticate: createUserAuthMiddleware({
+    allowUnauthenticated: skipAuth,
+    validator: userAuthValidator,
+    configuredTenantId: configuredTenantId || undefined,
+    acceptedAudiences: acceptedUserAudiences,
+  }),
+  resolveAuthenticatedScope: coreOrchestrationRestScope,
+});
 
 // Each ready production A2A identity owns a distinct AgentService/runner
 // pair. The job store and admission controller remain shared so limits and

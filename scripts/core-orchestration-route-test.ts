@@ -188,6 +188,9 @@ try {
   const listed = await request('GET', '/jobs?limit=10', undefined, auth);
   assert.equal(listed.status, 200);
   assert.equal(JSON.parse(listed.body).jobs[0].id, first.job.id);
+  assert.deepEqual(JSON.parse(listed.body).providers[0], {
+    provider: 'codex', availability: 'unknown', capabilities: ['submit'], observedAt: now, source: 'runtime-probe',
+  }, 'the list wire DTO includes the same measured provider facts as the provider endpoint');
   assert.equal((await request('GET', '/jobs?limit=0', undefined, auth)).status, 400);
   assert.equal((await request('GET', '/jobs?limit=2&scope=attacker', undefined, auth)).status, 400);
 
@@ -210,7 +213,8 @@ try {
 
   const input = await request('POST', `/jobs/${first.job.id}/input`, { input: { answer: 'yes' } }, auth);
   assert.equal(input.status, 501);
-  assert.equal(JSON.parse(input.body).result.status, 'unsupported');
+  assert.equal(JSON.parse(input.body).status, 'unsupported', 'provide-input returns the shared result DTO without an extra envelope');
+  assert.equal(JSON.parse(input.body).job.id, first.job.id);
   assert.equal((await request('POST', `/jobs/${first.job.id}/input`, { input: 'x', scope: {} }, auth)).status, 400);
 
   const providers = await request('GET', '/providers', undefined, auth);
