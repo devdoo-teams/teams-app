@@ -119,6 +119,55 @@ class ConflictReadbackPort implements CosmosRuntimeContainerPort {
   }
 }
 
+class FakeClock {
+  elapsedMs = 0;
+  readonly delays: number[] = [];
+
+  readonly delay = async (milliseconds: number): Promise<void> => {
+    this.delays.push(milliseconds);
+    this.elapsedMs += milliseconds;
+  };
+}
+
+class DelayedVisibilityConflictPort implements CosmosRuntimeContainerPort {
+  private conflicted = false;
+
+  constructor(
+    private readonly operation: 'create' | 'replace',
+    private readonly statusCode: 409 | 412,
+    private readonly initial: CosmosPortResult | null,
+    private readonly winner: CosmosPortResult,
+    private readonly clock: FakeClock,
+    private readonly visibleAfterMs: number,
+  ) {}
+
+  async read(_id: string, _partitionKey: string): Promise<CosmosPortResult | null> {
+    if (!this.conflicted) return this.initial ? structuredClone(this.initial) : null;
+    return this.clock.elapsedMs >= this.visibleAfterMs ? structuredClone(this.winner) : null;
+  }
+
+  async create(_document: RuntimeRecordDocument): Promise<CosmosPortResult> {
+    assert.equal(this.operation, 'create');
+    this.conflicted = true;
+    throw Object.assign(new Error('write conflict'), { statusCode: this.statusCode });
+  }
+
+  async replace(
+    _id: string,
+    _partitionKey: string,
+    _document: RuntimeRecordDocument,
+    _ifMatch: string,
+  ): Promise<CosmosPortResult> {
+    assert.equal(this.operation, 'replace');
+    this.conflicted = true;
+    throw Object.assign(new Error('write conflict'), { statusCode: this.statusCode });
+  }
+
+  async queryPartition(_partitionKey: string, _limit: number): Promise<CosmosPortResult[]> {
+    return [];
+  }
+}
+
 function persistedDocument(options: {
   scope?: RuntimeScope;
   id?: string;
@@ -280,6 +329,64 @@ for (const [operation, statusCode] of [
     3,
     `${operation} ${statusCode} uses bounded read-back attempts`,
   );
+}
+
+for (const [operation, statusCode] of [
+  ['create', 409],
+  ['create', 412],
+  ['replace', 409],
+  ['replace', 412],
+] as const) {
+  const clock = new FakeClock();
+  const desiredValue = { state: 'visible-after-backoff', operation, statusCode };
+  const winner = persistedDocument({
+    idempotencyKey: `delayed-${operation}-${statusCode}`,
+    value: desiredValue,
+    etag: `\"delayed-winner-${operation}-${statusCode}\"`,
+  });
+  const initial = operation === 'replace'
+    ? persistedDocument({ idempotencyKey: 'previous-write', value: { state: 'previous' }, etag: '"previous"' })
+    : null;
+  const delayedPort = new DelayedVisibilityConflictPort(operation, statusCode, initial, winner, clock, 30);
+  const delayedStore = new CosmosRuntimeStore({
+    container: delayedPort,
+    conflictReadBackDelay: clock.delay,
+  });
+  const replay = await delayedStore.write(scopeA, {
+    id: 'race-task',
+    idempotencyKey: `delayed-${operation}-${statusCode}`,
+    ...(operation === 'replace' ? { expectedEtag: '"previous"' } : {}),
+    value: desiredValue,
+  });
+  assert.equal(replay.etag, winner.etag, `${operation} ${statusCode} waits for delayed winner visibility`);
+  assert.deepEqual(clock.delays, [10, 20], `${operation} ${statusCode} uses bounded increasing backoff delays`);
+  assert.equal(clock.elapsedMs, 30, `${operation} ${statusCode} advances time only between readbacks`);
+}
+
+{
+  const clock = new FakeClock();
+  const desiredValue = { state: 'not-visible-inside-window' };
+  const winner = persistedDocument({
+    idempotencyKey: 'outside-readback-window',
+    value: desiredValue,
+    etag: '"late-winner"',
+  });
+  const delayedPort = new DelayedVisibilityConflictPort('create', 409, null, winner, clock, 31);
+  const delayedStore = new CosmosRuntimeStore({
+    container: delayedPort,
+    conflictReadBackDelay: clock.delay,
+  });
+  await assert.rejects(
+    () => delayedStore.write(scopeA, {
+      id: 'race-task',
+      idempotencyKey: 'outside-readback-window',
+      value: desiredValue,
+    }),
+    RuntimeStoreConflictError,
+    'a winner outside the bounded readback window still fails closed',
+  );
+  assert.deepEqual(clock.delays, [10, 20], 'conflict readback never sleeps beyond the bounded backoff window');
+  assert.equal(clock.elapsedMs, 30, 'failed conflict readback has a 30 ms total delay ceiling');
 }
 
 for (const mismatch of ['scope', 'id', 'idempotencyKey', 'contentHash'] as const) {

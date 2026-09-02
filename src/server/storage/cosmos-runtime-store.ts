@@ -30,15 +30,23 @@ export interface CosmosRuntimeContainerPort {
   queryPartition(partitionKey: string, limit: number): Promise<CosmosPortResult[]>;
 }
 
-const MAX_CONFLICT_READ_BACK_ATTEMPTS = 3;
+const CONFLICT_READ_BACK_DELAYS_MS = [10, 20] as const;
+
+type ConflictReadBackDelay = (milliseconds: number) => Promise<void>;
 
 export class CosmosRuntimeStore implements RuntimeStore {
   private readonly container: CosmosRuntimeContainerPort;
   private readonly now: () => Date;
+  private readonly conflictReadBackDelay: ConflictReadBackDelay;
 
-  constructor(options: { container: CosmosRuntimeContainerPort; now?: () => Date }) {
+  constructor(options: {
+    container: CosmosRuntimeContainerPort;
+    now?: () => Date;
+    conflictReadBackDelay?: ConflictReadBackDelay;
+  }) {
     this.container = options.container;
     this.now = options.now ?? (() => new Date());
+    this.conflictReadBackDelay = options.conflictReadBackDelay ?? delay;
   }
 
   async read<T = unknown>(scope: RuntimeScope, id: string): Promise<RuntimeRecord<T> | null> {
@@ -131,21 +139,24 @@ export class CosmosRuntimeStore implements RuntimeStore {
     idempotencyKey: string,
     contentHash: string,
   ): Promise<RuntimeRecord<T> | null> {
-    for (let attempt = 0; attempt < MAX_CONFLICT_READ_BACK_ATTEMPTS; attempt += 1) {
+    for (let attempt = 0; attempt <= CONFLICT_READ_BACK_DELAYS_MS.length; attempt += 1) {
       const result = await this.container.read(id, partitionKey);
-      if (!result) continue;
-      const document = result.document;
-      if (
-        document.id === id &&
-        document.partitionKey === partitionKey &&
-        document.tenantId === scope.tenantId &&
-        document.requesterId === scope.requesterId &&
-        document.conversationId === scope.conversationId &&
-        document.idempotencyKey === idempotencyKey &&
-        document.contentHash === contentHash
-      ) {
-        return this.fromPortResult<T>(scope, result);
+      if (result) {
+        const document = result.document;
+        if (
+          document.id === id &&
+          document.partitionKey === partitionKey &&
+          document.tenantId === scope.tenantId &&
+          document.requesterId === scope.requesterId &&
+          document.conversationId === scope.conversationId &&
+          document.idempotencyKey === idempotencyKey &&
+          document.contentHash === contentHash
+        ) {
+          return this.fromPortResult<T>(scope, result);
+        }
       }
+      const delayMs = CONFLICT_READ_BACK_DELAYS_MS[attempt];
+      if (delayMs !== undefined) await this.conflictReadBackDelay(delayMs);
     }
     return null;
   }
@@ -197,4 +208,8 @@ export class CosmosRuntimeStore implements RuntimeStore {
 
 function hasStatusCode(error: unknown, statusCode: number): boolean {
   return Boolean(error && typeof error === 'object' && 'statusCode' in error && error.statusCode === statusCode);
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
