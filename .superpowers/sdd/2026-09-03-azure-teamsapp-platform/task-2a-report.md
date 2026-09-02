@@ -17,6 +17,9 @@ PASS — the provider-neutral lifecycle abstraction is implemented and focused v
 - Core source check: `npm run typecheck:core` after the implementation commit — exit 0; `PASS: core source compile check covered 22 Teams/CLI files`. The pre-commit invocation had been correctly stopped by the repository's clean-worktree protection with `EWORKTREEDIRTY`.
 - Orchestrator recovery: the implementation agent was shut down after repeated missing checkpoints. Its committed receipt was retained, incomplete post-commit edits were type-reconciled, and `npm run test:provider-lifecycle` then passed five consecutive runs before the follow-up commit.
 - Post-recovery strict check: `npx tsc --noEmit --strict --target ES2022 --module NodeNext --moduleResolution NodeNext --esModuleInterop --skipLibCheck --types node src/server/provider-runtime-adapter.ts src/server/provider-lifecycle-runner.ts scripts/provider-runtime-adapter-test.ts scripts/provider-lifecycle-runner-test.ts` — exit 0.
+- Independent review round 1 found seven defects; commit `3a0a309` closed the hard deadline, cancellation restart, concurrent lease/CAS, replay/reconcile, observation validation/redaction, and atomic local store gaps but re-review retained three concrete failures.
+- Final RED evidence: receipt-bound completion accepted omitted task/session/context identities; free-text credential URLs survived sanitization; failed poll/reconcile left an owned lease that blocked immediate retry.
+- Final GREEN evidence: both focused tests and the strict scoped TypeScript command passed after requiring identity presence, URL-aware credential redaction, owner-only lease release, and corrupt-store reopen rejection.
 
 ## COMPLETED
 
@@ -27,6 +30,8 @@ PASS — the provider-neutral lifecycle abstraction is implemented and focused v
 - Added fail-closed quarantine for delivery-unknown, unknown provider states, invalid provider responses, and empty completion evidence.
 - Kept input-required and auth-required nonterminal and recoverable.
 - Added bounded timeout and external cancellation with durable cancellation intent before provider cancellation.
+- Added owner-only lease release for failed polling and receiptless reconciliation, strict receipt task/session/context continuity, centralized credential-URL redaction, and complete local-store safety checks for provider state, receipts, artifacts, and metadata.
+- Added an atomic local file store with reopen, rollback, in-process CAS/concurrent writer, recovery scan, and corruption rejection coverage. Multi-replica shared durability remains explicitly assigned to the Cosmos implementation in Task 3.
 - Registered the two focused tests in the Core test runner and added `test:provider-lifecycle`.
 
 ## BLOCKER
