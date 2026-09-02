@@ -327,7 +327,7 @@ function redactCredentialFragments(value: string): string {
   return redactCredentialUrls(value)
     .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]{8,}={0,2}/giu, 'Bearer [REDACTED]')
     .replace(/\b((?:api[_-]?key|access[_-]?token|auth[_-]?token|password|secret|token)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/giu, '$1[REDACTED]')
-    .replace(/\b(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{8,})\b/gu, '[REDACTED]');
+    .replace(/\b(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{8,}|xai-[A-Za-z0-9_-]{8,})\b/gu, '[REDACTED]');
 }
 
 function redactCredentialUrls(value: string): string {

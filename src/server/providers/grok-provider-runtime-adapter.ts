@@ -14,6 +14,7 @@ const SAFE_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u;
 const DEFAULT_MAX_ATTEMPTS = 3;
 const MAX_ATTEMPTS = 5;
 const MAX_RETRY_DELAY_MS = 2_000;
+const RESPONSE_PAYLOAD_KEYS = new Set(['input']);
 
 export type GrokProviderPreflightPort = Readonly<{
   verify(input: Readonly<{
@@ -121,18 +122,21 @@ export function createGrokProviderRuntimeAdapter(options: Readonly<{
     },
     async submit(input) {
       const credential = credentialFor(input);
-      validateResponsePayload(input.payload);
-      const submitted = await execute(input.signal, () => options.execution.submit({
+      const payload = validateResponsePayload(input.payload);
+      // A Responses POST may have been accepted before a 5xx/network error is
+      // observed. xAI's public contract does not provide a durable POST
+      // idempotency guarantee for this adapter, so an ambiguous submit is
+      // surfaced to the lifecycle quarantine path instead of being replayed.
+      const submitted = await executeWithoutRetry(input.signal, () => options.execution.submit({
         model,
         credentialReference: credential.reference,
         principalId: credential.principalId,
         idempotencyKey: input.idempotencyKey,
         requestHash: input.requestHash,
-        payload: input.payload,
+        payload,
         signal: input.signal,
       }));
-      const responseId = requireResponseId(submitted.responseId);
-      return acceptedObservation(responseId, input.identities.context.id);
+      return submissionObservation(submitted, input.identities.context.id);
     },
     async get(input) {
       const credential = receiptCredentialFor(input);
@@ -184,6 +188,25 @@ function acceptedObservation(responseId: string, contextId: string): ProviderRun
     providerCursor: responseId,
     auditRefs: [`xai-response:${responseId}`],
   };
+}
+
+function submissionObservation(
+  snapshot: GrokProviderExecutionSnapshot,
+  contextId: string,
+): ProviderRuntimeObservation {
+  const status = normalizedStatus(snapshot.status);
+  const state = classifyGrokState(status);
+  if (state === 'accepted' || state === 'working') {
+    return acceptedObservation(requireResponseId(snapshot.responseId), contextId);
+  }
+  if (state === 'completed') {
+    const observation = snapshotObservation(snapshot, undefined, contextId);
+    if (classifyGrokState(observation.rawState) === 'completed') return observation;
+  }
+  const diagnostic = snapshot.error
+    ? redactProviderRuntimeText(snapshot.error, 500)
+    : `status=${status}`;
+  throw new Error(`Grok provider submission was not accepted: ${diagnostic || 'provider rejected the request'}`);
 }
 
 function snapshotObservation(
@@ -261,11 +284,16 @@ function requireResponseId(value: string): string {
   return value;
 }
 
-function validateResponsePayload(payload: Readonly<Record<string, unknown>>): void {
+function validateResponsePayload(payload: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+  const unsupported = Object.keys(payload).filter((key) => !RESPONSE_PAYLOAD_KEYS.has(key));
+  if (unsupported.length > 0) {
+    throw new TypeError('Grok Responses payload contains unsupported fields.');
+  }
   const input = payload.input;
   if (typeof input === 'string' ? !input.trim() : !Array.isArray(input) || input.length === 0) {
     throw new TypeError('Grok Responses payload requires non-empty input.');
   }
+  return Object.freeze({ input: typeof input === 'string' ? input.trim() : input });
 }
 
 function uniqueCapabilities(values: readonly string[]): readonly string[] {
@@ -313,6 +341,16 @@ async function withBoundedRetry<T>(
     }
   }
   throw projectedTransportError(lastError);
+}
+
+async function executeWithoutRetry<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
+  if (signal.aborted) throw abortReason(signal);
+  try {
+    return await operation();
+  } catch (error) {
+    if (signal.aborted) throw abortReason(signal);
+    throw projectedTransportError(error);
+  }
 }
 
 function isRetryable(error: unknown): boolean {

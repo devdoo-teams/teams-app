@@ -23,7 +23,7 @@ const preflight: GrokProviderPreflightPort = {
 
 const execution: GrokProviderExecutionPort = {
   async submit() {
-    return { responseId: 'resp-1', status: 'completed', result: 'synchronous body is not durable evidence', verified: false };
+    return { responseId: 'resp-1', status: 'failed', error: 'provider rejected the request', verified: false };
   },
   async retrieve() {
     return { responseId: 'resp-1', status: 'in_progress' };
@@ -62,14 +62,17 @@ assert.deepEqual(await adapter.preflight(input), {
   capabilities: ['responses'],
 });
 
-const accepted = await adapter.submit(input);
-assert.deepEqual(accepted, {
-  rawState: 'accepted',
-  providerExecutionId: 'resp-1',
-  providerContextId: 'context-1',
-  providerCursor: 'resp-1',
-  auditRefs: ['xai-response:resp-1'],
-});
+await assert.rejects(
+  adapter.submit(input),
+  /submission was not accepted/i,
+  'a failed xAI response must never become an accepted receipt even when it has a response ID',
+);
+
+await assert.rejects(
+  adapter.submit({ ...input, payload: { input: 'valid input', unexpected: true } }),
+  /unsupported.*payload|payload.*unsupported/i,
+  'the durable adapter must not forward unreviewed provider fields',
+);
 
 await assert.rejects(
   adapter.preflight({
@@ -165,22 +168,44 @@ assert.deepEqual(await unverifiedCompletion.get({ ...input, receipt }), {
 let retryCalls = 0;
 const retryAdapter = createGrokProviderRuntimeAdapter({
   model: 'grok-4.6',
+  preflight: {
+    async verify() {
+      retryCalls += 1;
+      if (retryCalls < 3) {
+        throw new GrokProviderTransportError(429, `Bearer ${'s'.repeat(96)}`, true);
+      }
+      return { ready: true, modelId: 'grok-4.6', reason: 'retry succeeded' };
+    },
+  },
+  maxAttempts: 3,
+  sleep: async () => undefined,
+  execution: {
+    ...durableExecution,
+  },
+});
+assert.equal((await retryAdapter.preflight(input)).ready, true);
+assert.equal(retryCalls, 3, 'retryable transport failures must stop at the configured bound');
+
+let ambiguousSubmitCalls = 0;
+const ambiguousSubmitAdapter = createGrokProviderRuntimeAdapter({
+  model: 'grok-4.6',
   preflight,
   maxAttempts: 3,
   sleep: async () => undefined,
   execution: {
     ...durableExecution,
     async submit() {
-      retryCalls += 1;
-      if (retryCalls < 3) {
-        throw new GrokProviderTransportError(429, `Bearer ${'s'.repeat(96)}`, true);
-      }
-      return { responseId: 'resp-retried', status: 'queued' };
+      ambiguousSubmitCalls += 1;
+      throw new GrokProviderTransportError(503, 'upstream timed out after accepting the request', true);
     },
   },
 });
-assert.equal((await retryAdapter.submit(input)).providerExecutionId, 'resp-retried');
-assert.equal(retryCalls, 3, 'retryable transport failures must stop at the configured bound');
+await assert.rejects(
+  ambiguousSubmitAdapter.submit(input),
+  /HTTP 503/,
+  'an ambiguous xAI POST failure must be surfaced instead of retried without a documented idempotency contract',
+);
+assert.equal(ambiguousSubmitCalls, 1, 'ambiguous submit failures must not be retried');
 
 let exhaustedCalls = 0;
 const exhaustedAdapter = createGrokProviderRuntimeAdapter({
@@ -192,7 +217,7 @@ const exhaustedAdapter = createGrokProviderRuntimeAdapter({
     ...durableExecution,
     async submit() {
       exhaustedCalls += 1;
-      throw new GrokProviderTransportError(503, `api_key=${'k'.repeat(96)}`, true);
+      throw new GrokProviderTransportError(503, `api_key=${'k'.repeat(96)} xai-${'x'.repeat(96)}`, true);
     },
   },
 });
@@ -200,9 +225,10 @@ await assert.rejects(exhaustedAdapter.submit(input), (error: unknown) => {
   assert.ok(error instanceof Error);
   assert.match(error.message, /HTTP 503/);
   assert.equal(error.message.includes('k'.repeat(32)), false, 'transport diagnostics must redact credentials');
+  assert.equal(error.message.includes('xai-' + 'x'.repeat(32)), false, 'xAI credentials must be redacted from diagnostics');
   return true;
 });
-assert.equal(exhaustedCalls, 2);
+assert.equal(exhaustedCalls, 1, 'submit must not be retried after an ambiguous transport failure');
 
 const cancelled = await durableAdapter.cancel({ ...input, receipt });
 assert.deepEqual(cancelled, {
