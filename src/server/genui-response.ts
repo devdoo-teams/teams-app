@@ -72,19 +72,42 @@ export type CoreOrchestrationTeamsActivity = Readonly<{
 
 export type CoreOrchestrationCardOptions = Readonly<{
   openTabUrl?: string;
+  confirmation?: Readonly<{
+    action: 'approve' | 'cancel';
+    token: string;
+    correlationId: string;
+  }>;
 }>;
 
 const CORE_CARD_TEXT_LIMIT = 400;
 
-function orchestrationPayload(action: string, jobId: string): Record<string, string> {
-  return { schemaVersion: '1', action, jobId };
+function orchestrationPayload(
+  action: string,
+  jobId: string,
+  confirmation?: CoreOrchestrationCardOptions['confirmation'],
+): Record<string, string> {
+  return {
+    schemaVersion: '1',
+    action,
+    jobId,
+    ...(confirmation ? {
+      confirmationToken: confirmation.token,
+      correlationId: confirmation.correlationId,
+    } : {}),
+  };
 }
 
-function orchestrationAction(type: string, title: string, jobId: string, style?: string): Record<string, unknown> {
+function orchestrationAction(
+  type: string,
+  title: string,
+  jobId: string,
+  style?: string,
+  confirmation?: CoreOrchestrationCardOptions['confirmation'],
+): Record<string, unknown> {
   return {
     type: 'Action.Submit',
     title,
-    data: orchestrationPayload(type, jobId),
+    data: orchestrationPayload(type, jobId, confirmation),
     ...(style ? { style } : {}),
   };
 }
@@ -218,6 +241,7 @@ export function createCoreOrchestrationConfirmationActivity(
         isApproval ? '승인 확인' : '취소 확인',
         job.id,
         isApproval ? 'positive' : 'destructive',
+        options?.confirmation?.action === action ? options.confirmation : undefined,
       ),
       orchestrationAction('orchestration.dismiss-confirmation', '돌아가기', job.id),
     ], options),

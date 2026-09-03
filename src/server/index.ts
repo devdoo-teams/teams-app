@@ -186,7 +186,7 @@ import {
   type CoreInputResumePort,
 } from './core-orchestration-service.js';
 import { mountCoreOrchestrationRoutes } from './core-orchestration-route.js';
-import type { CoreProviderFact } from '../shared/core-orchestration.js';
+import type { CoreOrchestrationJob, CoreProviderFact } from '../shared/core-orchestration.js';
 
 /**
  * Same-UID process fixture for token-protected loopback integration tests.
@@ -3777,6 +3777,8 @@ type CoreOrchestrationCardSubmission = Readonly<{
     | 'orchestration.provide-input';
   jobId: string;
   input?: string;
+  confirmationToken?: string;
+  correlationId?: string;
 }>;
 
 function coreOrchestrationCardValue(activity: any): Record<string, unknown> | undefined {
@@ -3797,10 +3799,18 @@ function isCoreOrchestrationCardSubmission(activity: any): activity is { value: 
     || typeof value.jobId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(value.jobId)) return false;
   const allowed = value.action === 'orchestration.provide-input'
     ? new Set(['schemaVersion', 'action', 'jobId', 'input'])
+    : value.action === 'orchestration.approve' || value.action === 'orchestration.cancel'
+      ? new Set(['schemaVersion', 'action', 'jobId', 'confirmationToken', 'correlationId'])
     : new Set(['schemaVersion', 'action', 'jobId']);
   if (Object.keys(value).some((key) => !allowed.has(key))) return false;
   if (value.action === 'orchestration.provide-input') {
     return typeof value.input === 'string' && value.input.trim().length > 0 && value.input.length <= 2_000;
+  }
+  if (value.action === 'orchestration.approve' || value.action === 'orchestration.cancel') {
+    return Boolean(
+      nonEmptyString(value.confirmationToken, 512)
+        && nonEmptyString(value.correlationId, MAX_AGENT_SCOPE_VALUE_LENGTH),
+    );
   }
   return true;
 }
@@ -3873,6 +3883,14 @@ async function resolveCoreOrchestrationCommand(
       ? createCoreOrchestrationJobActivity(job, coreOrchestrationCardOptions)
       : coreOrchestrationErrorActivity('요청한 작업을 찾을 수 없습니다.');
   }
+  if (command.kind === 'approve' || command.kind === 'cancel') {
+    const job = coreOrchestrationService.get(serverScope, { jobId: command.jobId });
+    if (!job) return coreOrchestrationErrorActivity('요청한 작업을 찾을 수 없습니다.');
+    if (!coreOrchestrationMutationAllowed(job.status, command.kind)) {
+      return coreOrchestrationErrorActivity(`현재 상태(${job.status})에서는 이 확인 요청을 진행할 수 없습니다.`);
+    }
+    return issueCoreOrchestrationConfirmation(job, command.kind, scope);
+  }
   const request = { jobId: command.jobId };
   if (command.kind === 'provide-input') {
     const result = await coreOrchestrationService.provideInput(serverScope, { ...request, input: command.input });
@@ -3886,6 +3904,35 @@ async function resolveCoreOrchestrationCommand(
   return job
     ? createCoreOrchestrationJobActivity(job, coreOrchestrationCardOptions)
     : coreOrchestrationErrorActivity('요청한 작업을 찾을 수 없습니다.');
+}
+
+function coreOrchestrationMutationAllowed(
+  status: CoreOrchestrationJob['status'],
+  action: 'approve' | 'cancel',
+): boolean {
+  return action === 'approve'
+    ? status === 'awaiting_approval'
+    : status === 'queued' || status === 'running' || status === 'awaiting_approval';
+}
+
+async function issueCoreOrchestrationConfirmation(
+  job: CoreOrchestrationJob,
+  action: 'approve' | 'cancel',
+  scope: AgentJobScope,
+): Promise<CoreOrchestrationTeamsActivity> {
+  const correlationId = crypto.randomUUID();
+  const token = await genUiActionStore.issue({
+    action,
+    entityId: job.id,
+    correlationId,
+    conversationId: scope.conversationId,
+    requesterId: scope.requesterId,
+    tenantId: scope.tenantId,
+  });
+  return createCoreOrchestrationConfirmationActivity(job, action, {
+    ...coreOrchestrationCardOptions,
+    confirmation: { action, token, correlationId },
+  });
 }
 
 async function handleCoreOrchestrationChatCommand(
@@ -3947,10 +3994,7 @@ async function handleCoreOrchestrationCardSubmission(activity: any, send: BotSen
         );
         return;
       }
-      await sendCoreOrchestrationActivity(
-        send,
-        createCoreOrchestrationConfirmationActivity(job, action, coreOrchestrationCardOptions),
-      );
+      await sendCoreOrchestrationActivity(send, await issueCoreOrchestrationConfirmation(job, action, scope));
       return;
     } catch (error) {
       const message = error instanceof AgentMutationAuthorizationError
@@ -3962,22 +4006,58 @@ async function handleCoreOrchestrationCardSubmission(activity: any, send: BotSen
   }
   if (value.action === 'orchestration.cancel' || value.action === 'orchestration.approve') {
     const scope = activityScope(activity);
-    if (scope) {
-      try {
-        const job = coreOrchestrationService.get(createServerDerivedCoreScope(scope), { jobId: String(value.jobId) });
-        const isCancelReplay = value.action === 'orchestration.cancel' && job?.status === 'cancelled';
-        const isApproveReplay = value.action === 'orchestration.approve'
-          && job !== undefined
-          && job.status !== 'awaiting_approval'
-          && job.status !== 'cancelled';
-        if (isCancelReplay || isApproveReplay) {
-          await sendCoreOrchestrationActivity(send, createCoreOrchestrationJobActivity(job, coreOrchestrationCardOptions));
-          return;
-        }
-      } catch {
-        // The normal authenticated mutation path below owns safe error rendering.
-      }
+    if (!scope) {
+      await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity('인증된 Teams 사용자·대화·테넌트 정보가 필요합니다.'));
+      return;
     }
+    const action = value.action === 'orchestration.approve' ? 'approve' : 'cancel';
+    const confirmationToken = nonEmptyString(value.confirmationToken, 512);
+    const correlationId = nonEmptyString(value.correlationId, MAX_AGENT_SCOPE_VALUE_LENGTH);
+    if (!confirmationToken || !correlationId) {
+      await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity('유효하지 않은 확인 카드 액션입니다.'));
+      return;
+    }
+    try {
+      const serverScope = createServerDerivedCoreScope(scope);
+      const job = coreOrchestrationService.get(serverScope, { jobId: String(value.jobId) });
+      if (!job) {
+        await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity('요청한 작업을 찾을 수 없습니다.'));
+        return;
+      }
+      if (!coreOrchestrationMutationAllowed(job.status, action)) {
+        await sendCoreOrchestrationActivity(
+          send,
+          coreOrchestrationErrorActivity(`현재 상태(${job.status})에서는 이 확인 요청을 진행할 수 없습니다.`),
+        );
+        return;
+      }
+      const consumed = await genUiActionStore.consume({
+        token: confirmationToken,
+        action,
+        entityId: job.id,
+        correlationId,
+        conversationId: scope.conversationId,
+        requesterId: scope.requesterId,
+        tenantId: scope.tenantId,
+      });
+      if (!consumed.ok) {
+        await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity(actionRejectionMessage(consumed.reason)));
+        return;
+      }
+      const updated = await coreOrchestrationService[action](serverScope, { jobId: job.id });
+      await sendCoreOrchestrationActivity(
+        send,
+        updated
+          ? createCoreOrchestrationJobActivity(updated, coreOrchestrationCardOptions)
+          : coreOrchestrationErrorActivity('요청한 작업을 찾을 수 없습니다.'),
+      );
+    } catch (error) {
+      const message = error instanceof AgentMutationAuthorizationError
+        ? '이 작업을 조회하거나 변경할 권한이 없습니다.'
+        : 'Core 에이전트 확인 요청을 처리하지 못했습니다.';
+      await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity(message));
+    }
+    return;
   }
   const kind = String(value.action).slice('orchestration.'.length);
   const command: CoreOrchestrationChatCommand = kind === 'provide-input'

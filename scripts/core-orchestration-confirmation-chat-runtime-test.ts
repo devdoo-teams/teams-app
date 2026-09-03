@@ -48,7 +48,8 @@ try {
 
   const cancelJob = await createAwaitingJob(baseUrl, '취소 확인 흐름');
   const confirmCancel = { schemaVersion: '1', action: 'orchestration.confirm-cancel', jobId: cancelJob };
-  assertConfirmationCard((await post(baseUrl, activity('', 'confirm-cancel', confirmCancel))).body, '작업 취소 확인');
+  const cancelConfirmationCard = assertConfirmationCard((await post(baseUrl, activity('', 'confirm-cancel', confirmCancel))).body, '작업 취소 확인');
+  const cancelPayload = confirmationPayload(cancelConfirmationCard, 'orchestration.cancel');
   await assertStatus(baseUrl, cancelJob, 'awaiting_approval', 'first cancel click must not mutate');
   assertConfirmationCard((await post(baseUrl, activity('', 'confirm-cancel-replay', confirmCancel))).body, '작업 취소 확인');
   await assertStatus(baseUrl, cancelJob, 'awaiting_approval', 'duplicate first cancel click must not mutate');
@@ -59,26 +60,40 @@ try {
   assertCard(dismissed.body, 'awaiting_approval');
   await assertStatus(baseUrl, cancelJob, 'awaiting_approval', 'dismiss must not mutate');
 
-  assertCard((await post(baseUrl, activity('', 'cancel-confirmed', {
+  const missingCancelToken = await post(baseUrl, activity('', 'cancel-without-token', {
     schemaVersion: '1', action: 'orchestration.cancel', jobId: cancelJob,
-  }))).body, 'cancelled');
+  }));
+  assertCard(missingCancelToken.body, '유효하지 않은');
+  await assertStatus(baseUrl, cancelJob, 'awaiting_approval', 'a forged cancel payload must not mutate');
+
+  const cancelResults = await Promise.all([
+    post(baseUrl, activity('', 'cancel-confirmed-1', cancelPayload)),
+    post(baseUrl, activity('', 'cancel-confirmed-2', cancelPayload)),
+  ]);
+  assert.equal(cancelResults.filter((result) => JSON.stringify(result.body).includes('cancelled')).length, 1, 'one concurrent cancel confirmation mutates');
+  assert.equal(cancelResults.filter((result) => JSON.stringify(result.body).includes('이미 처리된 카드 액션')).length, 1, 'the duplicate cancel confirmation is rejected');
   await assertStatus(baseUrl, cancelJob, 'cancelled', 'confirmed cancel must mutate');
-  assertCard((await post(baseUrl, activity('', 'cancel-confirmed-replay', {
-    schemaVersion: '1', action: 'orchestration.cancel', jobId: cancelJob,
-  }))).body, 'cancelled');
+  const cancelReplay = await post(baseUrl, activity('', 'cancel-confirmed-replay', cancelPayload));
+  assertCard(cancelReplay.body, '이미 처리된 카드 액션');
 
   const approveJob = await createAwaitingJob(baseUrl, '승인 확인 흐름');
-  assertConfirmationCard((await post(baseUrl, activity('', 'confirm-approve', {
-    schemaVersion: '1', action: 'orchestration.confirm-approve', jobId: approveJob,
-  }))).body, '작업 승인 확인');
+  const approveConfirmationCard = assertConfirmationCard(
+    (await post(baseUrl, activity('', 'confirm-approve', {
+      schemaVersion: '1', action: 'orchestration.confirm-approve', jobId: approveJob,
+    }))).body,
+    '작업 승인 확인',
+  );
+  const approvePayload = confirmationPayload(approveConfirmationCard, 'orchestration.approve');
   await assertStatus(baseUrl, approveJob, 'awaiting_approval', 'first approve click must not mutate');
-  assertCard((await post(baseUrl, activity('', 'approve-confirmed', {
+  const missingApproveToken = await post(baseUrl, activity('', 'approve-without-token', {
     schemaVersion: '1', action: 'orchestration.approve', jobId: approveJob,
-  }))).body, approveJob);
+  }));
+  assertCard(missingApproveToken.body, '유효하지 않은');
+  await assertStatus(baseUrl, approveJob, 'awaiting_approval', 'a forged approve payload must not mutate');
+  assertCard((await post(baseUrl, activity('', 'approve-confirmed', approvePayload))).body, approveJob);
   await assertNotStatus(baseUrl, approveJob, 'awaiting_approval', 'confirmed approve must mutate');
-  assertCard((await post(baseUrl, activity('', 'approve-confirmed-replay', {
-    schemaVersion: '1', action: 'orchestration.approve', jobId: approveJob,
-  }))).body, approveJob);
+  const approveReplay = await post(baseUrl, activity('', 'approve-confirmed-replay', approvePayload));
+  assertCard(approveReplay.body, '이미 처리된 카드 액션');
   await assertNotStatus(baseUrl, approveJob, 'awaiting_approval', 'replayed approve must not restart the mutation');
 
   const malformed = await post(baseUrl, activity('', 'malformed-confirm', {
@@ -130,12 +145,22 @@ function assertCard(body: any, expected: string): Record<string, any> {
   return card;
 }
 
-function assertConfirmationCard(body: any, title: string): void {
+function assertConfirmationCard(body: any, title: string): Record<string, any> {
   const card = assertCard(body, title);
   const actions = card.actions ?? [];
   assert.equal(actions.length, 2);
   assert.ok(actions.every((action: any) => action.type === 'Action.Submit'));
   assert.equal(actions[1]?.data?.action, 'orchestration.dismiss-confirmation');
+  return card;
+}
+
+function confirmationPayload(card: Record<string, any>, action: string): Record<string, string> {
+  const payload = card.actions?.find((candidate: any) => candidate.data?.action === action)?.data;
+  assert.equal(payload?.schemaVersion, '1');
+  assert.equal(payload?.action, action);
+  assert.equal(typeof payload?.confirmationToken, 'string');
+  assert.equal(typeof payload?.correlationId, 'string');
+  return payload;
 }
 
 async function assertStatus(baseUrl: string, jobId: string, status: string, message: string): Promise<void> {

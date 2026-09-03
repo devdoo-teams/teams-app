@@ -135,8 +135,17 @@ for (const element of longCard.body ?? []) {
   }
 }
 
-const confirmationCard = cardFrom(createCoreOrchestrationConfirmationActivity(job('awaiting_approval'), 'approve', { openTabUrl: tabUrl }));
+const confirmationCard = cardFrom(createCoreOrchestrationConfirmationActivity(job('awaiting_approval'), 'approve', {
+  openTabUrl: tabUrl,
+  confirmation: {
+    action: 'approve',
+    token: 'chat-card-confirmation-token',
+    correlationId: 'chat-card-confirmation-correlation',
+  },
+}));
 assert.equal(confirmationCard.actions?.[0]?.data?.action, 'orchestration.approve');
+assert.equal(confirmationCard.actions?.[0]?.data?.confirmationToken, 'chat-card-confirmation-token');
+assert.equal(confirmationCard.actions?.[0]?.data?.correlationId, 'chat-card-confirmation-correlation');
 assert.equal(confirmationCard.actions?.at(-1)?.type, 'Action.OpenUrl');
 assert.equal(confirmationCard.actions?.at(-1)?.url, tabUrl);
 

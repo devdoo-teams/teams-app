@@ -99,6 +99,26 @@ try {
     requesterId: 'requester-hardening-runtime',
     tenantId: 'tenant-hardening-runtime',
   })).ok, true);
+
+  const concurrentGrant = {
+    action: 'approve' as const,
+    entityId: 'task-hardening-concurrent',
+    correlationId: 'correlation-hardening-concurrent',
+    conversationId: 'conversation-hardening-concurrent',
+    requesterId: 'requester-hardening-concurrent',
+    tenantId: 'tenant-hardening-concurrent',
+  };
+  const concurrentToken = await validStore.issue(concurrentGrant);
+  const concurrentResults = await Promise.all([
+    validStore.consume({ ...concurrentGrant, token: concurrentToken }),
+    validStore.consume({ ...concurrentGrant, token: concurrentToken }),
+  ]);
+  assert.equal(concurrentResults.filter((result) => result.ok).length, 1, 'a grant can be consumed only once under concurrent requests');
+  assert.deepEqual(
+    concurrentResults.filter((result) => !result.ok).map((result) => result.reason),
+    ['consumed'],
+    'the losing concurrent consume observes the persisted single-use state',
+  );
   await assert.rejects(() => validStore.issue({
     action: 'approve',
     entityId: '',

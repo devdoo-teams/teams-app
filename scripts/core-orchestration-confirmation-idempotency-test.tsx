@@ -131,17 +131,42 @@ assert.deepEqual(
   'the first chat click emits only confirmation requests, never mutations',
 );
 
-const approveCard = createCoreOrchestrationConfirmationActivity(job('awaiting_approval'), 'approve');
+const confirmation = {
+  confirmation: {
+    action: 'approve' as const,
+    token: 'opaque-confirmation-token',
+    correlationId: 'confirmation-correlation-1',
+  },
+};
+const approveCard = createCoreOrchestrationConfirmationActivity(job('awaiting_approval'), 'approve', confirmation);
 assert.equal('text' in approveCard, false, 'confirmation remains attachment-only');
 assert.equal(approveCard.attachments[0].content.version, '1.2');
 assert.deepEqual(payloadActions(approveCard), [
-  { schemaVersion: '1', action: 'orchestration.approve', jobId: 'job-confirm-1' },
+  {
+    schemaVersion: '1',
+    action: 'orchestration.approve',
+    jobId: 'job-confirm-1',
+    confirmationToken: 'opaque-confirmation-token',
+    correlationId: 'confirmation-correlation-1',
+  },
   { schemaVersion: '1', action: 'orchestration.dismiss-confirmation', jobId: 'job-confirm-1' },
 ]);
 
-const cancelCard = createCoreOrchestrationConfirmationActivity(job('running'), 'cancel');
+const cancelCard = createCoreOrchestrationConfirmationActivity(job('running'), 'cancel', {
+  confirmation: {
+    action: 'cancel',
+    token: 'opaque-cancel-token',
+    correlationId: 'confirmation-correlation-2',
+  },
+});
 assert.deepEqual(payloadActions(cancelCard), [
-  { schemaVersion: '1', action: 'orchestration.cancel', jobId: 'job-confirm-1' },
+  {
+    schemaVersion: '1',
+    action: 'orchestration.cancel',
+    jobId: 'job-confirm-1',
+    confirmationToken: 'opaque-cancel-token',
+    correlationId: 'confirmation-correlation-2',
+  },
   { schemaVersion: '1', action: 'orchestration.dismiss-confirmation', jobId: 'job-confirm-1' },
 ]);
 

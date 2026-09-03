@@ -62,15 +62,19 @@ try {
 
   assertCard((await post(baseUrl, activity(baseUrl, `agent input ${jobId} 추가 입력`, 'input'))).body, '지원하지');
   assertCard((await post(baseUrl, activity(baseUrl, `agent retry ${jobId}`, 'retry'))).body, '처리하지 못');
-  assertCard((await post(baseUrl, activity(baseUrl, '', 'approve', {
+  const forgedApprove = await post(baseUrl, activity(baseUrl, '', 'approve', {
     schemaVersion: '1', action: 'orchestration.approve', jobId,
-  }))).body, jobId);
+  }));
+  assertCard(forgedApprove.body, '유효하지 않은');
+  assertCard((await post(baseUrl, activity(baseUrl, `agent status ${jobId}`, 'approve-status'))).body, 'awaiting_approval');
 
   const cancellable = await post(baseUrl, activity(baseUrl, 'agent write 취소할 작업', 'cancel-create'));
   const cancelId = jobIdFrom(assertCard(cancellable.body, 'awaiting_approval'));
-  assertCard((await post(baseUrl, activity(baseUrl, '', 'cancel', {
+  const forgedCancel = await post(baseUrl, activity(baseUrl, '', 'cancel', {
     schemaVersion: '1', action: 'orchestration.cancel', jobId: cancelId,
-  }))).body, 'cancelled');
+  }));
+  assertCard(forgedCancel.body, '유효하지 않은');
+  assertCard((await post(baseUrl, activity(baseUrl, `agent status ${cancelId}`, 'cancel-status'))).body, 'awaiting_approval');
   assertCard((await post(baseUrl, activity(baseUrl, '', 'bad-card', {
     schemaVersion: '1', action: 'orchestration.cancel', jobId: cancelId, tenantId: 'attacker',
   }))).body, '유효하지 않');
