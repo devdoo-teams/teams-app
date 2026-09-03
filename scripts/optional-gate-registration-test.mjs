@@ -24,7 +24,7 @@ function testTarget(command = '') {
   return match?.[1];
 }
 
-const providerFixturePattern = /^(?:grok-(?:response-engine|bot-runtime|provider-runtime-adapter)|github-agent-tasks-[A-Za-z0-9-]+|external-collaboration-boundary|optional-provider-build)-test\.(?:mjs|ts)$/u;
+const providerFixturePattern = /^(?:grok-(?:response-engine|bot-runtime|provider-runtime-adapter)|github-agent-tasks-[A-Za-z0-9-]+|external-collaboration-boundary|optional-provider-(?:build|registry))-test\.(?:mjs|ts)$/u;
 const requiredOptionalFixtures = fs.readdirSync(path.join(root, 'scripts'))
   .filter((file) => providerFixturePattern.test(file))
   .map((file) => `scripts/${file}`)
