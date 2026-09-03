@@ -26,6 +26,19 @@ assert.match(
   /mountCoreOrchestrationRoutes\(http,\s*\{/u,
   'production index must call the shared Express mount helper',
 );
+assert.doesNotMatch(
+  source,
+  /http\.use\(express\.json\(\)\)/u,
+  'production index must not place an unguarded global JSON parser before Core authentication',
+);
+const parserGuard = source.indexOf('const globalJsonParser = express.json();');
+const coreMount = source.indexOf('mountCoreOrchestrationRoutes(http,');
+assert.ok(parserGuard >= 0 && parserGuard < coreMount, 'the Core parser guard must be installed before the Core route mount');
+assert.match(
+  source.slice(parserGuard, coreMount),
+  /requestPath\.startsWith\('\/api\/core-orchestration\/'\)[\s\S]*?next\(\);/u,
+  'Core requests must bypass the process-wide parser and reach router-local auth first',
+);
 
 const job: CoreOrchestrationJob = {
   id: 'mounted-job',

@@ -751,6 +751,7 @@ const personalTabDeepLink = buildTeamsPersonalTabDeepLink({
   tabDomain: process.env.TAB_DOMAIN ?? '',
   tenantId: configuredTenantId || undefined,
 });
+const coreOrchestrationCardOptions = Object.freeze({ openTabUrl: personalTabDeepLink });
 const genUi = new GenUiResponseFactory(genUiActionStore, {
   openTabUrl: personalTabDeepLink,
   agentLabel,
@@ -1842,7 +1843,22 @@ a2aProductionRuntime = mountA2AProductionRuntime(http, {
   telemetry: a2aTelemetry,
 });
 
-http.use(express.json());
+const globalJsonParser = express.json();
+http.use((request: any, response: any, next: any) => {
+  const requestPath = typeof request.originalUrl === 'string'
+    ? request.originalUrl.split('?', 1)[0]
+    : typeof request.url === 'string'
+      ? request.url.split('?', 1)[0]
+      : '';
+  // Core orchestration owns an auth-first parser inside its router. Do not let
+  // the process-wide parser reject malformed JSON before the Teams identity
+  // middleware can establish the authenticated scope.
+  if (requestPath === '/api/core-orchestration' || requestPath.startsWith('/api/core-orchestration/')) {
+    next();
+    return;
+  }
+  globalJsonParser(request, response, next);
+});
 
 http.get('/api/health', async (_request: any, response: any) => {
   let cliCapabilities: CliCapabilities;
@@ -3789,7 +3805,11 @@ function isCoreOrchestrationCardSubmission(activity: any): activity is { value: 
   return true;
 }
 
-function coreOrchestrationErrorActivity(message: string): CoreOrchestrationTeamsActivity {
+function coreOrchestrationErrorActivity(
+  message: string,
+  options = coreOrchestrationCardOptions,
+): CoreOrchestrationTeamsActivity {
+  const openTabUrl = options.openTabUrl;
   return {
     type: 'message',
     attachmentLayout: 'list',
@@ -3802,8 +3822,9 @@ function coreOrchestrationErrorActivity(message: string): CoreOrchestrationTeams
         msteams: { width: 'Full' },
         body: [
           { type: 'TextBlock', text: 'Core 에이전트 작업', size: 'Large', weight: 'Bolder', wrap: true },
-          { type: 'TextBlock', text: message.slice(0, 2_000), wrap: true },
+          { type: 'TextBlock', text: message.slice(0, 400), wrap: true },
         ],
+        ...(openTabUrl ? { actions: [{ type: 'Action.OpenUrl', title: '업무 허브 탭 열기', url: openTabUrl }] } : {}),
       },
     }],
   };
@@ -3837,18 +3858,19 @@ async function resolveCoreOrchestrationCommand(
       prompt: command.prompt,
       mode: command.mode,
     });
-    return createCoreOrchestrationJobActivity(result.job);
+    return createCoreOrchestrationJobActivity(result.job, coreOrchestrationCardOptions);
   }
   if (command.kind === 'list') {
     return createCoreOrchestrationListActivity(
       coreOrchestrationService.list(serverScope, { limit: 20 }),
       coreOrchestrationService.listProviderFacts(),
+      coreOrchestrationCardOptions,
     );
   }
   if (command.kind === 'status') {
     const job = coreOrchestrationService.get(serverScope, { jobId: command.jobId });
     return job
-      ? createCoreOrchestrationJobActivity(job)
+      ? createCoreOrchestrationJobActivity(job, coreOrchestrationCardOptions)
       : coreOrchestrationErrorActivity('요청한 작업을 찾을 수 없습니다.');
   }
   const request = { jobId: command.jobId };
@@ -3858,11 +3880,11 @@ async function resolveCoreOrchestrationCommand(
     if (result.status === 'unsupported') {
       return coreOrchestrationErrorActivity('이 작업은 현재 추가 입력 재개를 지원하지 않습니다.');
     }
-    return createCoreOrchestrationJobActivity(result.job);
+    return createCoreOrchestrationJobActivity(result.job, coreOrchestrationCardOptions);
   }
   const job = await coreOrchestrationService[command.kind](serverScope, request);
   return job
-    ? createCoreOrchestrationJobActivity(job)
+    ? createCoreOrchestrationJobActivity(job, coreOrchestrationCardOptions)
     : coreOrchestrationErrorActivity('요청한 작업을 찾을 수 없습니다.');
 }
 
@@ -3911,7 +3933,7 @@ async function handleCoreOrchestrationCardSubmission(activity: any, send: BotSen
         return;
       }
       if (value.action === 'orchestration.dismiss-confirmation') {
-        await sendCoreOrchestrationActivity(send, createCoreOrchestrationJobActivity(job));
+        await sendCoreOrchestrationActivity(send, createCoreOrchestrationJobActivity(job, coreOrchestrationCardOptions));
         return;
       }
       const action = value.action === 'orchestration.confirm-approve' ? 'approve' : 'cancel';
@@ -3925,7 +3947,10 @@ async function handleCoreOrchestrationCardSubmission(activity: any, send: BotSen
         );
         return;
       }
-      await sendCoreOrchestrationActivity(send, createCoreOrchestrationConfirmationActivity(job, action));
+      await sendCoreOrchestrationActivity(
+        send,
+        createCoreOrchestrationConfirmationActivity(job, action, coreOrchestrationCardOptions),
+      );
       return;
     } catch (error) {
       const message = error instanceof AgentMutationAuthorizationError
@@ -3946,7 +3971,7 @@ async function handleCoreOrchestrationCardSubmission(activity: any, send: BotSen
           && job.status !== 'awaiting_approval'
           && job.status !== 'cancelled';
         if (isCancelReplay || isApproveReplay) {
-          await sendCoreOrchestrationActivity(send, createCoreOrchestrationJobActivity(job));
+          await sendCoreOrchestrationActivity(send, createCoreOrchestrationJobActivity(job, coreOrchestrationCardOptions));
           return;
         }
       } catch {

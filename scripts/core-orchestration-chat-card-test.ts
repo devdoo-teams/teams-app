@@ -6,6 +6,7 @@ import {
   parseCoreOrchestrationChatCommand,
 } from '../src/server/response-engine-deterministic.js';
 import {
+  createCoreOrchestrationConfirmationActivity,
   createCoreOrchestrationJobActivity,
   createCoreOrchestrationListActivity,
 } from '../src/server/genui-response.js';
@@ -87,6 +88,8 @@ function actionPayloads(card: AdaptiveCard): Array<Record<string, unknown>> {
   });
 }
 
+const tabUrl = 'https://teams.microsoft.com/l/entity/00000000-0000-4000-8000-000000000000/home?webUrl=https%3A%2F%2Fexample.contoso.com%2Ftabs%2Fhome%2F';
+
 for (const [status, expectedActions] of [
   ['queued', ['orchestration.confirm-cancel']],
   ['running', ['orchestration.confirm-cancel']],
@@ -95,16 +98,19 @@ for (const [status, expectedActions] of [
   ['completed', []],
   ['cancelled', []],
 ] as const) {
-  const card = cardFrom(createCoreOrchestrationJobActivity(job(status)));
+  const card = cardFrom(createCoreOrchestrationJobActivity(job(status), { openTabUrl: tabUrl }));
+  const commandPayloads = actionPayloads(card).filter((payload) => typeof payload.action === 'string');
   assert.deepEqual(
-    actionPayloads(card).map((payload) => payload.action),
+    commandPayloads.map((payload) => payload.action),
     expectedActions,
     `${status} exposes only valid lifecycle actions`,
   );
-  assert.ok(actionPayloads(card).every((payload) => payload.jobId === 'job-durable-42'));
+  assert.ok(commandPayloads.every((payload) => payload.jobId === 'job-durable-42'));
+  assert.equal(card.actions?.at(-1)?.type, 'Action.OpenUrl', `${status} exposes the 업무 허브 tab link`);
+  assert.equal(card.actions?.at(-1)?.url, tabUrl);
 }
 
-const inputCard = cardFrom(createCoreOrchestrationJobActivity(job('input_required')));
+const inputCard = cardFrom(createCoreOrchestrationJobActivity(job('input_required'), { openTabUrl: tabUrl }));
 const inputAction = inputCard.actions?.[0];
 assert.equal(inputAction?.type, 'Action.ShowCard');
 const inputForm = inputAction?.card as AdaptiveCard | undefined;
@@ -114,6 +120,25 @@ assert.deepEqual(inputForm?.actions?.[0]?.data, {
   action: 'orchestration.provide-input',
   jobId: 'job-durable-42',
 });
+assert.equal(inputCard.actions?.at(-1)?.type, 'Action.OpenUrl');
+assert.equal(inputCard.actions?.at(-1)?.url, tabUrl);
+
+const longJob = {
+  ...job('running'),
+  prompt: 'p'.repeat(2_000),
+  progress: ['d'.repeat(2_000)],
+};
+const longCard = cardFrom(createCoreOrchestrationJobActivity(longJob, { openTabUrl: tabUrl }));
+for (const element of longCard.body ?? []) {
+  if (element.type === 'TextBlock' && typeof element.text === 'string') {
+    assert.ok(element.text.length <= 400, 'chat card text stays a short summary');
+  }
+}
+
+const confirmationCard = cardFrom(createCoreOrchestrationConfirmationActivity(job('awaiting_approval'), 'approve', { openTabUrl: tabUrl }));
+assert.equal(confirmationCard.actions?.[0]?.data?.action, 'orchestration.approve');
+assert.equal(confirmationCard.actions?.at(-1)?.type, 'Action.OpenUrl');
+assert.equal(confirmationCard.actions?.at(-1)?.url, tabUrl);
 
 const providers: CoreProviderFact[] = [{
   provider: 'codex',
@@ -122,11 +147,13 @@ const providers: CoreProviderFact[] = [{
   observedAt: '2026-09-03T00:00:00.000Z',
   source: 'runtime-observation',
 }];
-const listActivity = createCoreOrchestrationListActivity([job('running')], providers);
+const listActivity = createCoreOrchestrationListActivity([job('running')], providers, { openTabUrl: tabUrl });
 const listCard = cardFrom(listActivity);
 assert.match(JSON.stringify(listCard), /job-durable-42/);
 assert.match(JSON.stringify(listCard), /unknown/);
 assert.doesNotMatch(JSON.stringify(listCard), /provider.*available/i, 'unknown providers are not promoted to live availability');
+assert.equal(listCard.actions?.at(-1)?.type, 'Action.OpenUrl');
+assert.equal(listCard.actions?.at(-1)?.url, tabUrl);
 
 const manifest = JSON.parse(await readFile(new URL('../appPackage/manifest.json', import.meta.url), 'utf8'));
 assert.equal(manifest.version, '1.0.100');

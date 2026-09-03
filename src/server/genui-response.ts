@@ -70,6 +70,12 @@ export type CoreOrchestrationTeamsActivity = Readonly<{
   }];
 }>;
 
+export type CoreOrchestrationCardOptions = Readonly<{
+  openTabUrl?: string;
+}>;
+
+const CORE_CARD_TEXT_LIMIT = 400;
+
 function orchestrationPayload(action: string, jobId: string): Record<string, string> {
   return { schemaVersion: '1', action, jobId };
 }
@@ -83,21 +89,36 @@ function orchestrationAction(type: string, title: string, jobId: string, style?:
   };
 }
 
-function orchestrationActions(job: CoreOrchestrationJob): readonly Record<string, unknown>[] {
+function tabAction(options?: CoreOrchestrationCardOptions): Record<string, unknown> | undefined {
+  const url = options?.openTabUrl?.trim();
+  if (!url || !isSafeGenUiUrl(url)) return undefined;
+  return { type: 'Action.OpenUrl', title: '업무 허브 탭 열기', url };
+}
+
+function withTabAction(
+  actions: readonly Record<string, unknown>[],
+  options?: CoreOrchestrationCardOptions,
+): readonly Record<string, unknown>[] {
+  const action = tabAction(options);
+  return action ? [...actions, action] : actions;
+}
+
+function orchestrationActions(
+  job: CoreOrchestrationJob,
+  options?: CoreOrchestrationCardOptions,
+): readonly Record<string, unknown>[] {
+  let actions: readonly Record<string, unknown>[];
   if (job.status === 'queued' || job.status === 'running') {
-    return [orchestrationAction('orchestration.confirm-cancel', '취소', job.id, 'destructive')];
-  }
-  if (job.status === 'awaiting_approval') {
-    return [
+    actions = [orchestrationAction('orchestration.confirm-cancel', '취소', job.id, 'destructive')];
+  } else if (job.status === 'awaiting_approval') {
+    actions = [
       orchestrationAction('orchestration.confirm-approve', '승인', job.id, 'positive'),
       orchestrationAction('orchestration.confirm-cancel', '취소', job.id, 'destructive'),
     ];
-  }
-  if (job.status === 'failed') {
-    return [orchestrationAction('orchestration.retry', '다시 시도', job.id)];
-  }
-  if (job.status === 'input_required') {
-    return [{
+  } else if (job.status === 'failed') {
+    actions = [orchestrationAction('orchestration.retry', '다시 시도', job.id)];
+  } else if (job.status === 'input_required') {
+    actions = [{
       type: 'Action.ShowCard',
       title: '추가 입력',
       card: {
@@ -118,8 +139,10 @@ function orchestrationActions(job: CoreOrchestrationJob): readonly Record<string
         }],
       },
     }];
+  } else {
+    actions = [];
   }
-  return [];
+  return withTabAction(actions, options);
 }
 
 function orchestrationActivity(card: CoreOrchestrationAdaptiveCard): CoreOrchestrationTeamsActivity {
@@ -134,8 +157,11 @@ function orchestrationActivity(card: CoreOrchestrationAdaptiveCard): CoreOrchest
 }
 
 /** Attachment-only Teams 1.2 rendering for a durable Core job identity. */
-export function createCoreOrchestrationJobActivity(job: CoreOrchestrationJob): CoreOrchestrationTeamsActivity {
-  const actions = orchestrationActions(job);
+export function createCoreOrchestrationJobActivity(
+  job: CoreOrchestrationJob,
+  options?: CoreOrchestrationCardOptions,
+): CoreOrchestrationTeamsActivity {
+  const actions = orchestrationActions(job, options);
   const detail = job.result ?? job.error ?? job.progress.at(-1) ?? '세부 진행 정보가 없습니다.';
   return orchestrationActivity({
     type: 'AdaptiveCard',
@@ -153,8 +179,8 @@ export function createCoreOrchestrationJobActivity(job: CoreOrchestrationJob): C
           { title: 'Provider', value: identifierText(job.provider, 40, '미지정') },
         ],
       },
-      { type: 'TextBlock', text: displayText(job.prompt, 2_000, '(작업 설명 없음)'), wrap: true },
-      { type: 'TextBlock', text: displayText(detail, 2_000, '세부 진행 정보가 없습니다.'), wrap: true, isSubtle: true },
+      { type: 'TextBlock', text: displayText(job.prompt, CORE_CARD_TEXT_LIMIT, '(작업 설명 없음)'), wrap: true },
+      { type: 'TextBlock', text: displayText(detail, CORE_CARD_TEXT_LIMIT, '세부 진행 정보가 없습니다.'), wrap: true, isSubtle: true },
     ],
     ...(actions.length > 0 ? { actions } : {}),
   });
@@ -167,6 +193,7 @@ export function createCoreOrchestrationJobActivity(job: CoreOrchestrationJob): C
 export function createCoreOrchestrationConfirmationActivity(
   job: CoreOrchestrationJob,
   action: 'approve' | 'cancel',
+  options?: CoreOrchestrationCardOptions,
 ): CoreOrchestrationTeamsActivity {
   const isApproval = action === 'approve';
   return orchestrationActivity({
@@ -185,7 +212,7 @@ export function createCoreOrchestrationConfirmationActivity(
       },
       { type: 'FactSet', facts: [{ title: '작업 ID', value: identifierText(job.id, 200, 'unknown-job') }] },
     ],
-    actions: [
+    actions: withTabAction([
       orchestrationAction(
         isApproval ? 'orchestration.approve' : 'orchestration.cancel',
         isApproval ? '승인 확인' : '취소 확인',
@@ -193,7 +220,7 @@ export function createCoreOrchestrationConfirmationActivity(
         isApproval ? 'positive' : 'destructive',
       ),
       orchestrationAction('orchestration.dismiss-confirmation', '돌아가기', job.id),
-    ],
+    ], options),
   });
 }
 
@@ -201,6 +228,7 @@ export function createCoreOrchestrationConfirmationActivity(
 export function createCoreOrchestrationListActivity(
   jobs: readonly CoreOrchestrationJob[],
   providers: readonly CoreProviderFact[],
+  options?: CoreOrchestrationCardOptions,
 ): CoreOrchestrationTeamsActivity {
   const jobItems = jobs.slice(0, 10).map((job) => ({
     type: 'TextBlock',
@@ -224,6 +252,7 @@ export function createCoreOrchestrationListActivity(
         ? [{ type: 'FactSet', facts: providerFacts }]
         : [{ type: 'TextBlock', text: '관찰된 provider 정보가 없습니다.', wrap: true }]),
     ],
+    ...(tabAction(options) ? { actions: [tabAction(options)!] } : {}),
   });
 }
 
