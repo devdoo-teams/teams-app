@@ -11,6 +11,8 @@ import {
 } from './fileprovider-git-clean.mjs';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 import { parseServerBuildMarker } from './server-build-marker.mjs';
+import { validateAzureReleaseInput } from './azure-release-input.mjs';
+import { readMigrationBundle, stableMigrationJson, validateMigrationBundle } from './azure-state-export.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const packagePath = path.join(root, 'appPackage', 'build', 'teams-sdk-mvp.zip');
@@ -28,6 +30,15 @@ const defaultTimeouts = {
 };
 
 const RELEASE_PROFILES = new Set(['core', 'optional']);
+const RELEASE_TARGETS = new Set(['local', 'azure']);
+
+export function resolveReleaseTarget(env = process.env) {
+  const target = String(env.TEAMS_RELEASE_TARGET ?? '').trim().toLowerCase() || 'local';
+  if (!RELEASE_TARGETS.has(target)) {
+    throw new Error('TEAMS_RELEASE_TARGET must be either local or azure.');
+  }
+  return target;
+}
 
 export function resolveReleaseProfile(env = process.env) {
   const configured = String(env.TEAMS_RELEASE_RUNTIME ?? '').trim().toLowerCase();
@@ -538,10 +549,370 @@ async function readExpectedServerBuildIdentity(expectedSourceCommit, expectedMod
   return assertServerBuildIdentity(marker, entryBytes, expectedSourceCommit, expectedMode);
 }
 
-export function createPreflightCommands(timeoutOverride, profile = 'core') {
+function azureGateError(message, code = 'AZURE_INTEGRATED_GATE_BLOCKED') {
+  const error = new Error(`Azure integrated preflight: ${message}`);
+  error.code = code;
+  error.releaseStatus = code === 'AZURE_LIVE_EVIDENCE_UNVERIFIED' ? 'UNVERIFIED' : 'BLOCKED';
+  return error;
+}
+
+function requireAzureConfiguration(env) {
+  const required = [
+    'AZURE_COSMOS_ENDPOINT',
+    'AZURE_COSMOS_DATABASE',
+    'AZURE_COSMOS_CONTAINER',
+    'AZURE_STORAGE_QUEUE_ENDPOINT',
+    'AZURE_CLIENT_ID',
+    'TEAMS_APP_ID',
+    'TAB_DOMAIN',
+    'CLIENT_ID',
+    'BOT_CLIENT_ID',
+    'APPLICATION_ID_URI',
+  ];
+  if (env.TEAMS_STORAGE_BACKEND !== 'cosmos') {
+    throw azureGateError('TEAMS_STORAGE_BACKEND must be cosmos.');
+  }
+  if (env.TEAMS_AGENT_DISPATCH_MODE !== 'azure-queue') {
+    throw azureGateError('TEAMS_AGENT_DISPATCH_MODE must be azure-queue.');
+  }
+  const configuration = {
+    TEAMS_STORAGE_BACKEND: env.TEAMS_STORAGE_BACKEND,
+    TEAMS_AGENT_DISPATCH_MODE: env.TEAMS_AGENT_DISPATCH_MODE,
+  };
+  for (const name of required) {
+    const value = env[name]?.trim();
+    if (!value) throw azureGateError(`${name} is required.`);
+    configuration[name] = value;
+  }
+  for (const [name, value] of Object.entries(env)) {
+    if (value?.trim() && /COSMOS.*(?:KEY|CONNECTION.?STRING)|(?:KEY|CONNECTION.?STRING).*COSMOS/iu.test(name)) {
+      throw azureGateError(`key-based Cosmos setting ${name} is forbidden.`);
+    }
+  }
+  for (const name of ['AZURE_COSMOS_ENDPOINT', 'AZURE_STORAGE_QUEUE_ENDPOINT']) {
+    let url;
+    try {
+      url = new URL(configuration[name]);
+    } catch {
+      throw azureGateError(`${name} must be an HTTPS URL.`);
+    }
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) {
+      throw azureGateError(`${name} must be a credential-free HTTPS URL.`);
+    }
+  }
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(configuration.AZURE_CLIENT_ID)) {
+    throw azureGateError('AZURE_CLIENT_ID must be a UUID.');
+  }
+  for (const name of ['TEAMS_APP_ID', 'CLIENT_ID', 'BOT_CLIENT_ID']) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(configuration[name])) {
+      throw azureGateError(`${name} must be a UUID.`);
+    }
+  }
+  if (!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/iu.test(configuration.TAB_DOMAIN)) {
+    throw azureGateError('TAB_DOMAIN must be a public hostname.');
+  }
+  if (configuration.APPLICATION_ID_URI !== `api://${configuration.TAB_DOMAIN}/botid-${configuration.BOT_CLIENT_ID}`) {
+    throw azureGateError('APPLICATION_ID_URI must match the Teams bot and tab identity contract.');
+  }
+  return configuration;
+}
+
+function assertLiveEvidence(receipt, expectedClass, label) {
+  if (receipt?.evidenceClass !== expectedClass) {
+    throw azureGateError(
+      `${label} is ${receipt?.evidenceClass ?? 'missing'} evidence, not ${expectedClass}.`,
+      'AZURE_LIVE_EVIDENCE_UNVERIFIED',
+    );
+  }
+}
+
+function assertReleaseIdentity(actual, expected, label) {
+  if (!actual || typeof actual !== 'object' || Array.isArray(actual)) {
+    throw azureGateError(`${label} release identity is missing.`);
+  }
+  const mappings = {
+    commit: 'commit',
+    version: 'version',
+    imageDigest: 'imageDigest',
+    teamsPackageSha256: 'teamsPackageSha256',
+    clientBundleSha256: 'clientBundleSha256',
+    serverBundleSha256: 'serverBundleSha256',
+  };
+  for (const [actualField, expectedField] of Object.entries(mappings)) {
+    if (actual[actualField] !== expected[expectedField]) {
+      throw azureGateError(`${label} release identity ${actualField} does not match the immutable handoff receipt.`);
+    }
+  }
+}
+
+export function validateAzureIntegratedEvidence({
+  env,
+  releaseReceipt: releaseReceiptInput,
+  handoffProvenance,
+  sourceCommit,
+  sourceManifest,
+  packageBytes,
+  packageManifest,
+  migrationBundle,
+  migrationReceipt,
+  approvalReceipt,
+  providerReceipt,
+  publicCanaryReceipt,
+  jiraReceipt,
+}) {
+  const configuration = requireAzureConfiguration(env ?? {});
+  let releaseReceipt;
+  try {
+    releaseReceipt = validateAzureReleaseInput(releaseReceiptInput);
+  } catch (error) {
+    throw azureGateError(error instanceof Error ? error.message : String(error));
+  }
+  if (sourceCommit !== releaseReceipt.commit) throw azureGateError('source commit does not match the handoff receipt.');
+  if (sourceManifest?.version !== releaseReceipt.version) throw azureGateError('source manifest version does not match the handoff receipt.');
+  if (
+    handoffProvenance?.schemaVersion !== 1
+    || handoffProvenance.repository !== 'devdoo-teams/teams-app'
+    || handoffProvenance.workflow !== 'devdoo-teams/teams-app/.github/workflows/publish-image.yml'
+    || handoffProvenance.commit !== releaseReceipt.commit
+    || handoffProvenance.attestationVerified !== true
+    || !Number.isSafeInteger(handoffProvenance.artifactId)
+    || !/^sha256:[0-9a-f]{64}$/u.test(handoffProvenance.artifactDigest ?? '')
+    || !Array.isArray(handoffProvenance.attestedSubjects)
+    || !handoffProvenance.attestedSubjects.includes('azure-release-receipt.json')
+    || !handoffProvenance.attestedSubjects.includes('teams-sdk-mvp.zip')
+    || !handoffProvenance.attestedSubjects.includes(`${releaseReceipt.image}@${releaseReceipt.imageDigest}`)
+  ) {
+    throw azureGateError('GitHub handoff provenance does not prove the attested immutable receipt, image, and Teams package.');
+  }
+  if (!(packageBytes instanceof Uint8Array) || packageBytes.byteLength === 0) {
+    throw azureGateError('Teams package bytes are missing.');
+  }
+  const packageDigest = crypto.createHash('sha256').update(packageBytes).digest('hex');
+  if (packageDigest !== releaseReceipt.teamsPackageSha256) {
+    throw azureGateError('Teams package SHA-256 does not match the immutable handoff receipt.');
+  }
+  try {
+    assertPackagedManifest(packageManifest, {
+      version: releaseReceipt.version,
+      appId: configuration.TEAMS_APP_ID,
+      tabDomain: configuration.TAB_DOMAIN,
+      clientId: configuration.CLIENT_ID,
+      botClientId: configuration.BOT_CLIENT_ID,
+      applicationIdUri: configuration.APPLICATION_ID_URI,
+    });
+  } catch (error) {
+    throw azureGateError(`Teams package identity is invalid: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  try {
+    validateMigrationBundle(migrationBundle);
+  } catch (error) {
+    throw azureGateError(error instanceof Error ? error.message : String(error));
+  }
+  assertLiveEvidence(migrationReceipt, 'live-azure', 'migration reconciliation');
+  if (
+    migrationReceipt.schemaVersion !== 1
+    || migrationReceipt.status !== 'PASS'
+    || migrationReceipt.bundleSha256 !== migrationBundle.manifest.bundleSha256
+    || stableMigrationJson(migrationReceipt.recordCounts) !== stableMigrationJson(migrationBundle.manifest.recordCounts)
+    || migrationReceipt.stableIdsSha256 !== migrationBundle.manifest.stableIdsSha256
+    || migrationReceipt.contentHashesSha256 !== migrationBundle.manifest.contentHashesSha256
+  ) {
+    throw azureGateError('migration reconciliation does not bind counts, stable IDs, and content hashes to the immutable bundle.');
+  }
+
+  if (
+    approvalReceipt?.schemaVersion !== 1
+    || approvalReceipt.approvalConfigured !== true
+    || !String(approvalReceipt.environmentId ?? '').trim()
+    || !String(approvalReceipt.environmentName ?? '').trim()
+    || !String(approvalReceipt.checkId ?? '').trim()
+    || !Number.isSafeInteger(approvalReceipt.approverCount)
+    || approvalReceipt.approverCount < 1
+  ) {
+    throw azureGateError('Azure DevOps environment approval receipt is missing or invalid.');
+  }
+
+  assertLiveEvidence(providerReceipt, 'live-azure', 'provider readiness');
+  assertReleaseIdentity(providerReceipt.releaseIdentity, releaseReceipt, 'provider readiness');
+  if (providerReceipt.schemaVersion !== 1 || !Array.isArray(providerReceipt.providers) || providerReceipt.providers.length < 1) {
+    throw azureGateError('provider readiness classification is missing.');
+  }
+  const providerIds = new Set();
+  for (const provider of providerReceipt.providers) {
+    if (!provider?.id || providerIds.has(provider.id)) throw azureGateError('provider readiness IDs must be non-empty and unique.');
+    providerIds.add(provider.id);
+    if (provider.enabled === true) {
+      if (
+        provider.state !== 'ready'
+        || provider.liveRoundTrip !== 'PASS'
+        || provider.cancellationRecovery !== 'PASS'
+        || !String(provider.receiptId ?? '').trim()
+        || !/^[0-9a-f]{64}$/u.test(provider.resultSha256 ?? '')
+      ) {
+        throw azureGateError(`enabled provider ${provider.id} lacks live readiness, recovery, receipt, or result evidence.`);
+      }
+    } else if (provider.enabled !== false || provider.state !== 'not-enabled') {
+      throw azureGateError(`provider ${provider.id} must be explicitly ready or explicitly not-enabled.`);
+    }
+  }
+  const expectedProviderIds = ['buzz', 'codex', 'github-agent-tasks', 'grok', 'hermes'];
+  if (stableMigrationJson([...providerIds].sort()) !== stableMigrationJson(expectedProviderIds)) {
+    throw azureGateError('provider readiness must classify codex, Hermes, Grok, Buzz, and GitHub agent-tasks explicitly.');
+  }
+  if (providerReceipt.providers.find((provider) => provider.id === 'codex')?.enabled !== true) {
+    throw azureGateError('the Azure worker-plane Codex provider must have live ready evidence.');
+  }
+
+  assertLiveEvidence(publicCanaryReceipt, 'live-azure', 'public canary');
+  assertReleaseIdentity(publicCanaryReceipt.releaseIdentity, releaseReceipt, 'public canary');
+  let healthUrl;
+  try {
+    healthUrl = new URL(publicCanaryReceipt.healthUrl);
+  } catch {
+    throw azureGateError('public canary health URL is invalid.');
+  }
+  if (
+    publicCanaryReceipt.schemaVersion !== 1
+    || publicCanaryReceipt.status !== 'PASS'
+    || !String(publicCanaryReceipt.revisionName ?? '').trim()
+    || healthUrl.protocol !== 'https:'
+    || healthUrl.pathname !== '/api/health'
+    || healthUrl.username
+    || healthUrl.password
+  ) {
+    throw azureGateError('public canary identity receipt is incomplete or unsafe.');
+  }
+
+  assertLiveEvidence(jiraReceipt, 'live-jira', 'Jira mapping');
+  if (jiraReceipt.schemaVersion !== 1 || !Array.isArray(jiraReceipt.findings)) {
+    throw azureGateError('Jira mapping receipt is malformed.');
+  }
+  for (const finding of jiraReceipt.findings) {
+    if (!['reproduced-defect', 'release-blocker', 'improvement'].includes(finding?.kind)) {
+      throw azureGateError('Jira mapping finding kind is invalid.');
+    }
+    if (
+      !String(finding.stableId ?? '').trim()
+      || !/^[A-Z][A-Z0-9]+-\d+$/u.test(finding.jiraKey ?? '')
+      || !String(finding.status ?? '').trim()
+    ) {
+      throw azureGateError(`Jira mapping is missing for finding ${finding?.stableId ?? '<unknown>'}.`);
+    }
+  }
+
+  return {
+    command: 'azure-integrated-evidence',
+    status: 'READY',
+    configuration,
+    releaseIdentity: {
+      commit: releaseReceipt.commit,
+      version: releaseReceipt.version,
+      imageDigest: releaseReceipt.imageDigest,
+      teamsPackageSha256: releaseReceipt.teamsPackageSha256,
+      clientBundleSha256: releaseReceipt.clientBundleSha256,
+      serverBundleSha256: releaseReceipt.serverBundleSha256,
+    },
+    evidence: [
+      { gate: 'github-handoff', status: 'PASS', evidenceClass: 'attested-github-artifact' },
+      { gate: 'azure-configuration', status: 'PASS', evidenceClass: 'configuration' },
+      { gate: 'migration-reconciliation', status: 'PASS', evidenceClass: migrationReceipt.evidenceClass },
+      { gate: 'azure-devops-approval', status: 'PASS', evidenceClass: 'live-azure-devops' },
+      { gate: 'provider-readiness', status: 'PASS', evidenceClass: providerReceipt.evidenceClass },
+      { gate: 'public-canary-identity', status: 'PASS', evidenceClass: publicCanaryReceipt.evidenceClass },
+      { gate: 'jira-mappings', status: 'PASS', evidenceClass: jiraReceipt.evidenceClass },
+    ],
+  };
+}
+
+async function readBoundedJson(filePath, label, maxBytes = 1024 * 1024) {
+  if (!filePath?.trim()) {
+    throw azureGateError(`${label} path is required.`, 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  try {
+    const resolved = path.resolve(filePath);
+    const stat = await fs.stat(resolved);
+    if (!stat.isFile() || stat.size === 0 || stat.size > maxBytes) {
+      throw azureGateError(`${label} must be a non-empty bounded JSON file.`);
+    }
+    return JSON.parse(await fs.readFile(resolved, 'utf8'));
+  } catch (error) {
+    if (error?.releaseStatus) throw error;
+    throw azureGateError(
+      `${label} could not be read and validated: ${error instanceof Error ? error.message : String(error)}`,
+      'AZURE_LIVE_EVIDENCE_UNVERIFIED',
+    );
+  }
+}
+
+async function readAndValidateAzureIntegratedEvidence({ env, sourceCommit }) {
+  const releaseReceipt = await readBoundedJson(env.AZURE_RELEASE_RECEIPT_PATH, 'release receipt');
+  const handoffProvenance = await readBoundedJson(env.AZURE_HANDOFF_PROVENANCE_PATH, 'handoff provenance');
+  const migrationBundlePath = env.AZURE_MIGRATION_BUNDLE_PATH;
+  if (!migrationBundlePath?.trim()) throw azureGateError('AZURE_MIGRATION_BUNDLE_PATH is required.');
+  let migrationBundle;
+  try {
+    migrationBundle = await readMigrationBundle(migrationBundlePath);
+  } catch (error) {
+    throw azureGateError(`migration bundle could not be read and validated: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const [migrationReceipt, approvalReceipt, providerReceipt, publicCanaryReceipt, jiraReceipt, sourceManifest] = await Promise.all([
+    readBoundedJson(env.AZURE_MIGRATION_RECONCILIATION_RECEIPT_PATH, 'migration reconciliation receipt'),
+    readBoundedJson(env.AZURE_APPROVAL_RECEIPT_PATH, 'Azure DevOps approval receipt'),
+    readBoundedJson(env.AZURE_PROVIDER_READINESS_RECEIPT_PATH, 'provider readiness receipt'),
+    readBoundedJson(env.AZURE_PUBLIC_CANARY_RECEIPT_PATH, 'public canary receipt'),
+    readBoundedJson(env.AZURE_JIRA_MAPPING_RECEIPT_PATH, 'Jira mapping receipt'),
+    readSourceManifest(sourceCommit, env),
+  ]);
+  const packageFile = env.AZURE_TEAMS_PACKAGE_PATH;
+  if (!packageFile?.trim()) throw azureGateError('AZURE_TEAMS_PACKAGE_PATH is required.');
+  let packageStat;
+  try {
+    packageStat = await fs.stat(path.resolve(packageFile));
+  } catch (error) {
+    throw azureGateError(
+      `Teams package could not be observed: ${error instanceof Error ? error.message : String(error)}`,
+      'AZURE_LIVE_EVIDENCE_UNVERIFIED',
+    );
+  }
+  if (!packageStat.isFile() || packageStat.size === 0 || packageStat.size > 1024 * 1024 * 1024) {
+    throw azureGateError('Teams package must be a non-empty file no larger than 1 GiB.');
+  }
+  const [packageBytes, packageManifestResult] = await Promise.all([
+    fs.readFile(path.resolve(packageFile)),
+    runCommand('unzip', ['-p', path.resolve(packageFile), 'manifest.json'], { timeoutMs: defaultTimeouts.package, env }),
+  ]);
+  return validateAzureIntegratedEvidence({
+    env,
+    releaseReceipt,
+    handoffProvenance,
+    sourceCommit,
+    sourceManifest,
+    packageBytes,
+    packageManifest: JSON.parse(packageManifestResult.stdout),
+    migrationBundle,
+    migrationReceipt,
+    approvalReceipt,
+    providerReceipt,
+    publicCanaryReceipt,
+    jiraReceipt,
+  });
+}
+
+export function createPreflightCommands(timeoutOverride, profile = 'core', target = 'local') {
   if (!RELEASE_PROFILES.has(profile)) {
     throw new Error('release profile must be either core or optional');
   }
+  if (!RELEASE_TARGETS.has(target)) {
+    throw new Error('release target must be either local or azure');
+  }
+  const azureChecks = target === 'azure'
+    ? [
+      ['azure-state-migration', 'test:azure-state-migration', timeoutOverride ?? defaultTimeouts.test],
+      ['manifest', 'validate:manifest', timeoutOverride ?? defaultTimeouts.deployment],
+      ['package-determinism', 'test:package-determinism', timeoutOverride ?? defaultTimeouts.package],
+    ]
+    : [];
   if (profile === 'optional') {
     // Keep the Core regression suite in the optional promotion gate, then
     // rebuild the server in optional mode last so the marker cannot be
@@ -553,6 +924,7 @@ export function createPreflightCommands(timeoutOverride, profile = 'core') {
       ['optional-test', 'test:optional', timeoutOverride ?? defaultTimeouts.test],
       ['optional-server-build', 'build:server', timeoutOverride ?? defaultTimeouts.build],
       ['deployment', 'check:deployment', timeoutOverride ?? defaultTimeouts.deployment],
+      ...azureChecks,
     ];
   }
   return [
@@ -562,12 +934,14 @@ export function createPreflightCommands(timeoutOverride, profile = 'core') {
     ['azure-core', 'test:azure-core', timeoutOverride ?? defaultTimeouts.test],
     ['core-test', 'test:core', timeoutOverride ?? defaultTimeouts.test],
     ['deployment', 'check:deployment', timeoutOverride ?? defaultTimeouts.deployment],
+    ...azureChecks,
   ];
 }
 
 async function runPreflight({ timeoutOverride, releaseSource } = {}) {
   const { env, sourceCommit } = releaseSource;
-  const commands = createPreflightCommands(timeoutOverride, releaseSource.profile);
+  const target = resolveReleaseTarget(env);
+  const commands = createPreflightCommands(timeoutOverride, releaseSource.profile, target);
   const evidence = [];
   for (const [label, script, timeoutMs] of commands) {
     const invocation = npmInvocation(['run', script]);
@@ -579,6 +953,9 @@ async function runPreflight({ timeoutOverride, releaseSource } = {}) {
       sourceCommit,
       output: `${result.stdout}\n${result.stderr}`.trim().slice(-2_000),
     });
+  }
+  if (target === 'azure') {
+    evidence.push(await readAndValidateAzureIntegratedEvidence({ env, sourceCommit }));
   }
   return { evidence, uiGates: ['DESKTOP_UNVERIFIED', 'MOBILE_UNVERIFIED'] };
 }
@@ -761,7 +1138,8 @@ function isMainModule() {
 }
 
 export function formatReleaseFailure(error, phase = 'all', env = process.env) {
-  const status = ['ETIMEDOUT', 'EPROCESSREAPTIMEOUT', 'ECOMMAND'].includes(error.code) ? 'BLOCKED' : 'FAILED';
+  const status = error.releaseStatus
+    ?? (['ETIMEDOUT', 'EPROCESSREAPTIMEOUT', 'ECOMMAND'].includes(error.code) ? 'BLOCKED' : 'FAILED');
   return {
     status,
     phase,
