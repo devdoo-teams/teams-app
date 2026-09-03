@@ -548,6 +548,7 @@ export function createPreflightCommands(timeoutOverride, profile = 'core') {
     // accidentally left at Core after a test/build helper runs.
     return [
       ['core-source-check', 'typecheck:core', timeoutOverride ?? defaultTimeouts.typecheck],
+      ['azure-core', 'test:azure-core', timeoutOverride ?? defaultTimeouts.test],
       ['core-test', 'test:core', timeoutOverride ?? defaultTimeouts.test],
       ['optional-test', 'test:optional', timeoutOverride ?? defaultTimeouts.test],
       ['optional-server-build', 'build:server', timeoutOverride ?? defaultTimeouts.build],
@@ -558,6 +559,7 @@ export function createPreflightCommands(timeoutOverride, profile = 'core') {
     ['core-source-check', 'typecheck:core', timeoutOverride ?? defaultTimeouts.typecheck],
     ['core-build', 'build:core', timeoutOverride ?? defaultTimeouts.build],
     ['server-build-determinism', 'test:server-build-determinism', timeoutOverride ?? defaultTimeouts.serverDeterminism],
+    ['azure-core', 'test:azure-core', timeoutOverride ?? defaultTimeouts.test],
     ['core-test', 'test:core', timeoutOverride ?? defaultTimeouts.test],
     ['deployment', 'check:deployment', timeoutOverride ?? defaultTimeouts.deployment],
   ];

@@ -166,6 +166,11 @@ stages:
                       test "$(git rev-parse HEAD)" = "$commit"
                       test -z "$(git status --porcelain=v1 --untracked-files=no)"
                       npm ci --ignore-scripts --no-audit --no-fund
+                      az bicep install
+                      bicep_config_dir="${AZURE_CONFIG_DIR:-$HOME/.azure}"
+                      export BICEP_BIN="${bicep_config_dir}/bin/bicep"
+                      test -x "$BICEP_BIN"
+                      npm run test:azure-core
                       npm run build:worker
 
                       worker_stage="$(Agent.TempDirectory)/worker-runtime"

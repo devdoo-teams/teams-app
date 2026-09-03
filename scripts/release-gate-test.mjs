@@ -63,6 +63,7 @@ assert.deepEqual(
     ['core-source-check', 'typecheck:core', 123],
     ['core-build', 'build:core', 123],
     ['server-build-determinism', 'test:server-build-determinism', 123],
+    ['azure-core', 'test:azure-core', 123],
     ['core-test', 'test:core', 123],
     ['deployment', 'check:deployment', 123],
   ],

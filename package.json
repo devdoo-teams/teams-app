@@ -38,6 +38,8 @@
     "test:azure-github-handoff": "node scripts/azure-github-handoff-test.mjs",
     "test:azure-approval-check": "node scripts/azure-approval-check-test.mjs",
     "test:azure-deployment-contract": "node scripts/azure-deployment-contract-test.mjs",
+    "test:azure-core": "node scripts/azure-core-test-runner.mjs",
+    "test:azure-core-runner": "node scripts/azure-core-test-runner-test.mjs",
     "test:azure-release-identity": "tsx scripts/azure-release-identity-test.ts",
     "test:azure-runtime-store": "tsx scripts/azure-runtime-store-test.ts",
     "test:azure-agent-dispatch-queue": "tsx scripts/azure-agent-dispatch-queue-test.ts",
