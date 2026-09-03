@@ -74,7 +74,7 @@ try {
   assert.equal(cancelResults.filter((result) => JSON.stringify(result.body).includes('이미 처리된 카드 액션')).length, 1, 'the duplicate cancel confirmation is rejected');
   await assertStatus(baseUrl, cancelJob, 'cancelled', 'confirmed cancel must mutate');
   const cancelReplay = await post(baseUrl, activity('', 'cancel-confirmed-replay', cancelPayload));
-  assertCard(cancelReplay.body, '이미 처리된 카드 액션');
+  assertCard(cancelReplay.body, '현재 상태\\(cancelled\\)');
 
   const approveJob = await createAwaitingJob(baseUrl, '승인 확인 흐름');
   const approveConfirmationCard = assertConfirmationCard(
@@ -93,7 +93,7 @@ try {
   assertCard((await post(baseUrl, activity('', 'approve-confirmed', approvePayload))).body, approveJob);
   await assertNotStatus(baseUrl, approveJob, 'awaiting_approval', 'confirmed approve must mutate');
   const approveReplay = await post(baseUrl, activity('', 'approve-confirmed-replay', approvePayload));
-  assertCard(approveReplay.body, '이미 처리된 카드 액션');
+  assertCard(approveReplay.body, '현재 상태\\(queued\\)');
   await assertNotStatus(baseUrl, approveJob, 'awaiting_approval', 'replayed approve must not restart the mutation');
 
   const malformed = await post(baseUrl, activity('', 'malformed-confirm', {
