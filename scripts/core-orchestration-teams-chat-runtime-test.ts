@@ -67,6 +67,10 @@ try {
   }));
   assertCard(forgedApprove.body, '유효하지 않은');
   assertCard((await post(baseUrl, activity(baseUrl, `agent status ${jobId}`, 'approve-status'))).body, 'awaiting_approval');
+  const textApproveCard = assertCard((await post(baseUrl, activity(baseUrl, `agent approve ${jobId}`, 'text-approve'))).body, '작업 승인 확인');
+  const textApprovePayload = confirmationPayload(textApproveCard, 'orchestration.approve');
+  assertCard((await post(baseUrl, activity(baseUrl, '', 'text-approve-confirmed', textApprovePayload))).body, jobId);
+  assertCard((await post(baseUrl, activity(baseUrl, `agent status ${jobId}`, 'text-approve-status'))).body, 'queued');
 
   const cancellable = await post(baseUrl, activity(baseUrl, 'agent write 취소할 작업', 'cancel-create'));
   const cancelId = jobIdFrom(assertCard(cancellable.body, 'awaiting_approval'));
@@ -119,6 +123,15 @@ function jobIdFrom(card: Record<string, any>): string {
     ?.find((fact: any) => fact.title === '작업 ID')?.value;
   assert.equal(typeof id, 'string');
   return id;
+}
+
+function confirmationPayload(card: Record<string, any>, action: string): Record<string, string> {
+  const payload = card.actions?.find((candidate: any) => candidate.data?.action === action)?.data;
+  assert.equal(payload?.schemaVersion, '1');
+  assert.equal(payload?.action, action);
+  assert.equal(typeof payload?.confirmationToken, 'string');
+  assert.equal(typeof payload?.correlationId, 'string');
+  return payload;
 }
 
 async function freePort(): Promise<number> {
