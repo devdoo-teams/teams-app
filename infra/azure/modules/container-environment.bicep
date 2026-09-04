@@ -7,7 +7,7 @@ resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   location: location
   properties: {
     appLogsConfiguration: {
-      destination: 'azure-monitor'
+      destination: 'log-analytics'
       logAnalyticsConfiguration: {
         customerId: reference(logAnalyticsWorkspaceId, '2023-09-01').customerId
         sharedKey: listKeys(logAnalyticsWorkspaceId, '2023-09-01').primarySharedKey

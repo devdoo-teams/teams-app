@@ -86,6 +86,22 @@ try {
     assert.ok(findResource(resources, type), `compiled platform graph must provision ${type}`);
   }
 
+  const containerEnvironment = findResource(resources, 'Microsoft.App/managedEnvironments');
+  const appLogsConfiguration = containerEnvironment.properties?.appLogsConfiguration;
+  assert.equal(
+    appLogsConfiguration?.destination,
+    'log-analytics',
+    'a managed environment with logAnalyticsConfiguration must use the log-analytics destination',
+  );
+  assert.ok(
+    appLogsConfiguration?.logAnalyticsConfiguration?.customerId,
+    'the Log Analytics destination must bind the provisioned workspace customer ID',
+  );
+  assert.ok(
+    appLogsConfiguration?.logAnalyticsConfiguration?.sharedKey,
+    'the Log Analytics destination must bind the provisioned workspace shared key',
+  );
+
   const acr = findResource(resources, 'Microsoft.ContainerRegistry/registries');
   assert.equal(acr.sku?.name, 'Basic', 'canary ACR must preserve the free-first Basic SKU');
   assert.notEqual(acr.properties?.policies?.quarantinePolicy?.status, 'enabled', 'Basic ACR must not quarantine images without a supported release flow');
