@@ -85,18 +85,37 @@ assert.equal(whatIfArgs.some((arg) => /password|secret|token|connectionstring/i.
 assert.equal(whatIfArgs.some((arg) => arg === 'create' || arg === 'register' || arg === 'delete'), false);
 
 const scope = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}`;
+const unresolvedRoleAssignment = `[extensionResourceId('${scope}/providers/Microsoft.ContainerRegistry/registries/teamsapp123', 'Microsoft.Authorization/roleAssignments', guid('${scope}/providers/Microsoft.ContainerRegistry/registries/teamsapp123', reference('${scope}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/teamsapp-app', '2023-01-31').principalId, '/subscriptions/${subscriptionId}/providers/Microsoft.Authorization/roleDefinitions/${'d'.repeat(36)}'))]`;
+const unresolvedCosmosAssignment = `[resourceId('${subscriptionId}', '${resourceGroup}', 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments', filter(split(reference('${scope}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/teamsapp-worker', '2023-01-31').principalId, '/'), lambda('x', not(empty(lambdaVariables('x')))))[0])]`;
 const whatIf = summarizeAzureWhatIf({
   status: 'Succeeded',
   changes: [
     { resourceId: `${scope}/providers/Microsoft.Storage/storageAccounts/teamsapp123`, changeType: 'Create' },
     { resourceId: `${scope}/providers/Microsoft.Authorization/roleAssignments/${'b'.repeat(32)}`, changeType: 'Unsupported' },
     { resourceId: `${scope}/providers/Microsoft.DocumentDB/databaseAccounts/teamsapp/sqlRoleAssignments/${'c'.repeat(32)}`, changeType: 'Unsupported' },
+    { resourceId: unresolvedRoleAssignment, changeType: 'Unsupported' },
+    { resourceId: unresolvedCosmosAssignment, changeType: 'Unsupported' },
   ],
 }, { subscriptionId, resourceGroup });
 assert.equal(whatIf.status, 'Succeeded');
-assert.deepEqual(whatIf.changeCounts, { Create: 1, Unsupported: 2 });
+assert.deepEqual(whatIf.changeCounts, { Create: 1, Unsupported: 4 });
 assert.equal(whatIf.manualReviewRequired, true);
 assert.equal(whatIf.destructiveChangeCount, 0);
+
+for (const unsafeExpression of [
+  unresolvedRoleAssignment.replaceAll(subscriptionId, '11111111-1111-1111-1111-111111111111'),
+  unresolvedRoleAssignment.replaceAll(resourceGroup, 'rg-not-approved'),
+  unresolvedRoleAssignment.replace('Microsoft.Authorization/roleAssignments', 'Microsoft.Authorization/policyAssignments'),
+  `[concat('${scope}/providers/Microsoft.Authorization/roleAssignments/', 'unsafe')]`,
+]) {
+  assert.throws(
+    () => summarizeAzureWhatIf({
+      status: 'Succeeded',
+      changes: [{ resourceId: unsafeExpression, changeType: 'Unsupported' }],
+    }, { subscriptionId, resourceGroup }),
+    /scope|allowlist|expression/i,
+  );
+}
 
 for (const changeType of ['Delete', 'Modify']) {
   assert.throws(

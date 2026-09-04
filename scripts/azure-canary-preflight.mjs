@@ -139,6 +139,77 @@ function resourceNamespace(resourceId) {
   return normalized(match?.[1]);
 }
 
+const allowedWhatIfExpressionFunctions = new Set([
+  'empty',
+  'extensionresourceid',
+  'filter',
+  'format',
+  'guid',
+  'lambda',
+  'lambdavariables',
+  'not',
+  'reference',
+  'resourceid',
+  'split',
+]);
+
+function validateExpressionReferences(expression, { subscriptionId, resourceGroup }) {
+  if (expression.includes('\n') || !expression.endsWith(')]')) fail('what-if resource expression is malformed');
+  const functions = [...expression.matchAll(/\b([A-Za-z][A-Za-z0-9]*)\s*\(/g)]
+    .map((match) => normalized(match[1]));
+  if (functions.length === 0 || functions.some((name) => !allowedWhatIfExpressionFunctions.has(name))) {
+    fail('what-if resource expression contains a function outside the allowlist');
+  }
+  if (!functions.includes('reference')) {
+    fail('what-if resource expression is not an unresolved reference expression');
+  }
+
+  const subscriptions = [...expression.matchAll(/\/subscriptions\/([^/'",)\]\s]+)/gi)]
+    .map((match) => normalized(match[1]));
+  if (subscriptions.length === 0 || subscriptions.some((value) => value !== normalized(subscriptionId))) {
+    fail('what-if resource expression is outside the approved subscription scope');
+  }
+  const resourceGroups = [...expression.matchAll(/\/resourceGroups\/([^/'",)\]\s]+)/gi)]
+    .map((match) => normalized(match[1]));
+  if (resourceGroups.length === 0 || resourceGroups.some((value) => value !== normalized(resourceGroup))) {
+    fail('what-if resource expression is outside the approved resource-group scope');
+  }
+}
+
+function unsupportedExpressionNamespace(resourceId, expected) {
+  const expression = String(resourceId).trim();
+  validateExpressionReferences(expression, expected);
+  const expectedScope = normalized(`/subscriptions/${expected.subscriptionId}/resourceGroups/${expected.resourceGroup}/`);
+
+  const extensionMatch = expression.match(/^\[extensionResourceId\(\s*'([^']+)'\s*,\s*'([^']+)'\s*,/i);
+  if (extensionMatch) {
+    const baseResourceId = normalized(extensionMatch[1]);
+    const extensionType = normalized(extensionMatch[2]);
+    if (!baseResourceId.startsWith(expectedScope)) fail('what-if extension resource expression is outside the approved scope');
+    const baseNamespace = resourceNamespace(baseResourceId);
+    if (!expectedResourceNamespaces.has(baseNamespace)) fail('what-if extension base namespace is outside the canary allowlist');
+    if (extensionType !== 'microsoft.authorization/roleassignments') {
+      fail('what-if extension resource expression type is outside the allowlist');
+    }
+    return 'microsoft.authorization';
+  }
+
+  const resourceMatch = expression.match(/^\[resourceId\(\s*'([^']+)'\s*,\s*'([^']+)'\s*,\s*'([^']+)'\s*,/i);
+  if (resourceMatch) {
+    const [, expressionSubscription, expressionResourceGroup, resourceType] = resourceMatch;
+    if (normalized(expressionSubscription) !== normalized(expected.subscriptionId)
+      || normalized(expressionResourceGroup) !== normalized(expected.resourceGroup)) {
+      fail('what-if resource expression is outside the approved scope');
+    }
+    if (normalized(resourceType) !== 'microsoft.documentdb/databaseaccounts/sqlroleassignments') {
+      fail('what-if resource expression type is outside the allowlist');
+    }
+    return 'microsoft.documentdb';
+  }
+
+  fail('what-if Unsupported resource expression shape is outside the allowlist');
+}
+
 export function summarizeAzureWhatIf(payload, { subscriptionId, resourceGroup }) {
   if (!payload || typeof payload !== 'object' || !Array.isArray(payload.changes)) fail('what-if response is malformed');
   if (payload.status !== 'Succeeded') fail(`what-if status must be Succeeded, got ${String(payload.status)}`);
@@ -152,12 +223,20 @@ export function summarizeAzureWhatIf(payload, { subscriptionId, resourceGroup })
   for (const change of payload.changes) {
     const resourceId = String(change?.resourceId ?? '');
     const changeType = String(change?.changeType ?? '');
-    if (!normalized(resourceId).startsWith(expectedScope)) fail(`resource is outside the approved scope: ${resourceId}`);
-    const namespace = resourceNamespace(resourceId);
+    const unresolvedExpression = resourceId.trim().startsWith('[');
+    if (unresolvedExpression && changeType !== 'Unsupported') {
+      fail(`what-if resource expressions are only accepted for Unsupported changes: ${resourceId}`);
+    }
+    if (!unresolvedExpression && !normalized(resourceId).startsWith(expectedScope)) {
+      fail(`resource is outside the approved scope: ${resourceId}`);
+    }
+    const namespace = unresolvedExpression
+      ? unsupportedExpressionNamespace(resourceId, { subscriptionId, resourceGroup })
+      : resourceNamespace(resourceId);
     if (!expectedResourceNamespaces.has(namespace)) fail(`resource namespace is outside the canary allowlist: ${namespace || resourceId}`);
     if (!allowedChangeTypes.has(changeType)) fail(`what-if contains disallowed ${changeType || 'unknown'} change for ${resourceId}`);
     if (changeType === 'Unsupported') {
-      if (!isAllowlistedUnsupported(resourceId)) fail(`Unsupported resource is outside the manual-review allowlist: ${resourceId}`);
+      if (!unresolvedExpression && !isAllowlistedUnsupported(resourceId)) fail(`Unsupported resource is outside the manual-review allowlist: ${resourceId}`);
       unsupportedResources.push(resourceId);
     }
     changeCounts[changeType] = (changeCounts[changeType] ?? 0) + 1;
