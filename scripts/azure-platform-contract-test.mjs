@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -6,6 +7,7 @@ import path from 'node:path';
 
 const root = path.resolve(import.meta.dirname, '..');
 const mainBicepPath = path.join(root, 'infra', 'azure', 'main.bicep');
+const workerVmBicepPath = path.join(root, 'infra', 'azure', 'modules', 'worker-vm.bicep');
 const canaryParametersPath = path.join(root, 'infra', 'azure', 'parameters', 'canary.bicepparam');
 const pipelinePath = path.join(root, 'azure-pipelines.yml');
 
@@ -58,10 +60,202 @@ function allSteps(stage) {
   return (stage?.jobs ?? []).flatMap((job) => job.steps ?? job.strategy?.runOnce?.deploy?.steps ?? []);
 }
 
+function sha256(filePath) {
+  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+function createWorkerBootstrapArchive(fixture, { unsafeType } = {}) {
+  const payload = path.join(fixture, 'payload');
+  fs.mkdirSync(payload, { recursive: true });
+  const installer = path.join(payload, 'install-worker-runtime.sh');
+  fs.writeFileSync(installer, `#!/usr/bin/env bash
+set -euo pipefail
+printf 'executed\n' > "$MP279_SENTINEL"
+printf '%s\n' "$0" > "$MP279_INSTALLER_PATH_LOG"
+printf '%s\n' "$TMPDIR" > "$MP279_TMPDIR_LOG"
+stage_dir=$(dirname "$0")
+if stat -c '%a' "$stage_dir" >/dev/null 2>&1; then
+  stat -c '%a' "$stage_dir" > "$MP279_STAGE_MODE_LOG"
+  stat -c '%a' "$0" > "$MP279_INSTALLER_MODE_LOG"
+else
+  stat -f '%Lp' "$stage_dir" > "$MP279_STAGE_MODE_LOG"
+  stat -f '%Lp' "$0" > "$MP279_INSTALLER_MODE_LOG"
+fi
+find "$stage_dir" -maxdepth 1 -name '*.tmp' -print > "$MP279_TMP_FILE_LOG"
+`, { mode: 0o500 });
+
+  const commit = 'a'.repeat(40);
+  const archive = path.join(fixture, `worker-runtime-${commit}.tar`);
+  const result = unsafeType
+    ? spawnSync('python3', ['-c', `
+import io
+import sys
+import tarfile
+
+archive_path, installer_path, unsafe_type = sys.argv[1:]
+with tarfile.open(archive_path, mode='w') as archive:
+    archive.add(installer_path, arcname='./install-worker-runtime.sh')
+    if unsafe_type == 'symlink':
+        member = tarfile.TarInfo('./unsafe-link')
+        member.type = tarfile.SYMTYPE
+        member.linkname = '/etc/passwd'
+        archive.addfile(member)
+    elif unsafe_type == 'hardlink':
+        member = tarfile.TarInfo('./unsafe-hardlink')
+        member.type = tarfile.LNKTYPE
+        member.linkname = './install-worker-runtime.sh'
+        archive.addfile(member)
+    elif unsafe_type == 'fifo':
+        member = tarfile.TarInfo('./unsafe-fifo')
+        member.type = tarfile.FIFOTYPE
+        archive.addfile(member)
+    elif unsafe_type == 'traversal':
+        payload = b'escape'
+        member = tarfile.TarInfo('../escape')
+        member.size = len(payload)
+        archive.addfile(member, io.BytesIO(payload))
+    elif unsafe_type == 'duplicate':
+        archive.add(installer_path, arcname='install-worker-runtime.sh')
+    else:
+        raise SystemExit(f'unknown unsafe fixture type: {unsafe_type}')
+`, archive, installer, unsafeType], { encoding: 'utf8', timeout: 10_000 })
+    : spawnSync('tar', ['-cf', archive, '-C', payload, '.'], { encoding: 'utf8', timeout: 10_000 });
+  assert.equal(result.status, 0, `worker bootstrap fixture archive must be created: ${result.stderr}`);
+  return { archive, commit, digest: sha256(archive) };
+}
+
+function splitArmArguments(source) {
+  const argumentsList = [];
+  let current = '';
+  let depth = 0;
+  let quoted = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "'") {
+      current += character;
+      if (quoted && source[index + 1] === "'") {
+        current += source[index + 1];
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+      continue;
+    }
+    if (!quoted && character === '(') depth += 1;
+    if (!quoted && character === ')') depth -= 1;
+    if (!quoted && depth === 0 && character === ',') {
+      argumentsList.push(current.trim());
+      current = '';
+      continue;
+    }
+    current += character;
+  }
+  assert.equal(quoted, false, 'compiled ARM command expression must contain balanced string literals');
+  assert.equal(depth, 0, 'compiled ARM command expression must contain balanced function calls');
+  argumentsList.push(current.trim());
+  return argumentsList;
+}
+
+function evaluateArmScalar(expression, template, parameters) {
+  const trimmed = expression.trim();
+  if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+    return trimmed.slice(1, -1).replaceAll("''", "'");
+  }
+  const call = trimmed.match(/^(base64|parameters|variables)\(([\s\S]*)\)$/);
+  assert.ok(call, `unsupported compiled ARM command expression: ${trimmed}`);
+  const [, functionName, inner] = call;
+  if (functionName === 'base64') {
+    return Buffer.from(String(evaluateArmScalar(inner, template, parameters)), 'utf8').toString('base64');
+  }
+  const name = evaluateArmScalar(inner, template, parameters);
+  if (functionName === 'parameters') {
+    assert.ok(Object.hasOwn(parameters, name), `missing compiled ARM parameter fixture: ${name}`);
+    return parameters[name];
+  }
+  assert.ok(Object.hasOwn(template.variables ?? {}, name), `missing compiled ARM variable: ${name}`);
+  return template.variables[name];
+}
+
+function renderCompiledCommand(template, expression, parameters) {
+  assert.ok(expression.startsWith('[format(') && expression.endsWith(')]'), 'worker extension command must compile to one ARM format expression');
+  const args = splitArmArguments(expression.slice('[format('.length, -2));
+  const format = evaluateArmScalar(args[0], template, parameters);
+  const values = args.slice(1).map((argument) => evaluateArmScalar(argument, template, parameters));
+  return format.replace(/\{(\d+)\}/g, (_match, rawIndex) => {
+    const index = Number(rawIndex);
+    assert.ok(index < values.length, `compiled ARM format placeholder is out of range: ${rawIndex}`);
+    return values[index];
+  });
+}
+
+function runCompiledWorkerExtension(template, extension, fixture, { commit, digest }) {
+  const bootstrapRoot = path.join(fixture, 'private-bootstrap');
+  const commandToExecute = String(extension?.properties?.protectedSettings?.commandToExecute ?? '');
+  const parameters = {
+    releaseSourceCommit: commit,
+    workerArtifactSha256: digest,
+    codexBinSha256: 'b'.repeat(64),
+    workerIdentityClientId: '11111111-1111-1111-1111-111111111111',
+    agentDispatchQueueEndpoint: 'https://example.queue.core.windows.net/agent-dispatch',
+    agentDispatchPoisonQueueEndpoint: 'https://example.queue.core.windows.net/agent-dispatch-poison',
+    cosmosEndpoint: 'https://example.documents.azure.com/',
+    cosmosDatabase: 'teamsapp',
+    cosmosContainer: 'runtime-records',
+  };
+  let command = renderCompiledCommand(template, commandToExecute, parameters);
+  const productionBootstrapRoot = Buffer.from('/var/lib/teamsapp/bootstrap', 'utf8').toString('base64');
+  const productionBootstrapArgumentIndex = command.lastIndexOf(` ${productionBootstrapRoot}`);
+  if (productionBootstrapArgumentIndex >= 0) {
+    const encodedFixtureRoot = Buffer.from(bootstrapRoot, 'utf8').toString('base64');
+    const rootStart = productionBootstrapArgumentIndex + 1;
+    command = `${command.slice(0, rootStart)}${encodedFixtureRoot}${command.slice(rootStart + productionBootstrapRoot.length)}`;
+  }
+  const commandBin = path.join(fixture, 'command-bin');
+  fs.mkdirSync(commandBin, { recursive: true });
+  fs.writeFileSync(path.join(commandBin, 'cloud-init'), '#!/usr/bin/env bash\nexit 0\n', { mode: 0o500 });
+  const logs = {
+    sentinel: path.join(fixture, 'installer-executed'),
+    installerPath: path.join(fixture, 'installer-path'),
+    tmpdir: path.join(fixture, 'tmpdir'),
+    stageMode: path.join(fixture, 'stage-mode'),
+    installerMode: path.join(fixture, 'installer-mode'),
+    tmpFiles: path.join(fixture, 'tmp-files'),
+  };
+  const legacyInstaller = '/tmp/install-worker-runtime.sh';
+  const executesLegacyInstaller = command.includes(legacyInstaller);
+  if (executesLegacyInstaller) {
+    assert.equal(fs.existsSync(legacyInstaller), false, `unsafe regression test cannot overwrite existing ${legacyInstaller}`);
+  }
+  let result;
+  try {
+    result = spawnSync('bash', ['-c', command], {
+      cwd: fixture,
+      encoding: 'utf8',
+      timeout: 10_000,
+      env: {
+        ...process.env,
+        PATH: `${commandBin}${path.delimiter}${process.env.PATH ?? ''}`,
+        TMPDIR: fixture,
+        MP279_SENTINEL: logs.sentinel,
+        MP279_INSTALLER_PATH_LOG: logs.installerPath,
+        MP279_TMPDIR_LOG: logs.tmpdir,
+        MP279_STAGE_MODE_LOG: logs.stageMode,
+        MP279_INSTALLER_MODE_LOG: logs.installerMode,
+        MP279_TMP_FILE_LOG: logs.tmpFiles,
+      },
+    });
+  } finally {
+    if (executesLegacyInstaller && fs.existsSync(legacyInstaller)) fs.rmSync(legacyInstaller);
+  }
+  assert.equal(result.error, undefined, `compiled worker extension command must finish within its bounded test timeout: ${result.error?.message}`);
+  return { bootstrapRoot, command, logs, result };
+}
+
 const bicep = resolveBicep();
 const outputDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'teamsapp-bicep-contract-'));
 try {
   const compiled = compileBicep(bicep, mainBicepPath, path.join(outputDirectory, 'main.json'));
+  const compiledWorkerVm = compileBicep(bicep, workerVmBicepPath, path.join(outputDirectory, 'worker-vm.json'));
   execFileSync(bicep, ['build-params', canaryParametersPath, '--outfile', path.join(outputDirectory, 'canary.json')], {
     cwd: root,
     encoding: 'utf8',
@@ -148,9 +342,69 @@ try {
   );
   assert.match(
     String(workerExtension.properties?.protectedSettings?.commandToExecute),
-    /install-worker-runtime\.sh.*workerArtifactSha256.*codexBinSha256|install-worker-runtime\.sh/i,
-    'extension must execute the fail-closed worker installer with immutable digest inputs',
+    /base64\(variables\('workerArchiveBootstrapScript'\)\).*base64\(parameters\('workerArtifactSha256'\)\).*base64\(parameters\('codexBinSha256'\)\)/,
+    'extension must execute the trusted bootstrap with encoded immutable digest inputs',
   );
+  assert.match(
+    String(workerExtension.properties?.protectedSettings?.commandToExecute),
+    /bash -o pipefail -c/,
+    'extension wrapper must fail closed if trusted bootstrap decoding fails',
+  );
+
+  const compiledWorkerResources = collectResources(compiledWorkerVm);
+  const compiledWorkerExtension = findResource(compiledWorkerResources, 'Microsoft.Compute/virtualMachines/extensions');
+  assert.equal(compiledWorkerVm.parameters?.codexBinSha256?.minLength, 64, 'worker module must require a complete Codex SHA-256 digest');
+  assert.equal(compiledWorkerVm.parameters?.codexBinSha256?.maxLength, 64, 'worker module must reject truncated Codex SHA-256 digests');
+
+  const mismatchFixture = fs.mkdtempSync(path.join(outputDirectory, 'mismatch-'));
+  const mismatchArchive = createWorkerBootstrapArchive(mismatchFixture);
+  const mismatch = runCompiledWorkerExtension(compiledWorkerVm, compiledWorkerExtension, mismatchFixture, {
+    ...mismatchArchive,
+    digest: 'f'.repeat(64),
+  });
+  assert.equal(fs.existsSync(mismatch.logs.sentinel), false, 'mismatched archive installer must never execute');
+  assert.notEqual(mismatch.result.status, 0, 'compiled worker extension must reject mismatched archive bytes before installer execution');
+  assert.match(mismatch.result.stderr, /archive SHA-256 mismatch/i);
+
+  const trustedBootstrap = compiledWorkerVm.variables?.workerArchiveBootstrapScript;
+  const currentBootstrap = typeof trustedBootstrap === 'string'
+    ? trustedBootstrap
+    : String(compiledWorkerExtension?.properties?.protectedSettings?.commandToExecute ?? '');
+  const trustedDigestIndex = currentBootstrap.indexOf('sha256sum');
+  const archiveExtractionIndex = currentBootstrap.search(/tar\s+[^\n]*(?:--extract|-x)/);
+  assert.ok(
+    trustedDigestIndex >= 0 && archiveExtractionIndex >= 0 && trustedDigestIndex < archiveExtractionIndex,
+    `compiled VM extension must verify archive bytes before any extraction or archive-provided execution (sha256sum=${trustedDigestIndex}, extraction=${archiveExtractionIndex})`,
+  );
+  assert.equal(typeof trustedBootstrap, 'string', 'compiled VM extension must carry a trusted archive bootstrap script');
+  assert.match(
+    String(compiledWorkerExtension?.properties?.protectedSettings?.commandToExecute),
+    /base64\(variables\('workerArchiveBootstrapScript'\)\)/,
+    'Custom Script extension must execute the trusted compiled bootstrap rather than an archive-provided script directly',
+  );
+
+  for (const unsafeType of ['symlink', 'hardlink', 'fifo', 'traversal', 'duplicate']) {
+    const unsafeFixture = fs.mkdtempSync(path.join(outputDirectory, `unsafe-${unsafeType}-`));
+    const unsafeArchive = createWorkerBootstrapArchive(unsafeFixture, { unsafeType });
+    const unsafe = runCompiledWorkerExtension(compiledWorkerVm, compiledWorkerExtension, unsafeFixture, unsafeArchive);
+    assert.notEqual(unsafe.result.status, 0, `trusted bootstrap must reject unsafe ${unsafeType} archive entries`);
+    assert.match(unsafe.result.stderr, /unsafe worker archive entry/i);
+    assert.equal(fs.existsSync(unsafe.logs.sentinel), false, `unsafe ${unsafeType} archive installer must never execute`);
+  }
+
+  const validFixture = fs.mkdtempSync(path.join(outputDirectory, 'valid-'));
+  const validArchive = createWorkerBootstrapArchive(validFixture);
+  const valid = runCompiledWorkerExtension(compiledWorkerVm, compiledWorkerExtension, validFixture, validArchive);
+  assert.equal(valid.result.status, 0, `trusted bootstrap must execute a verified safe installer:\n${valid.result.stderr}`);
+  assert.ok(fs.existsSync(valid.logs.sentinel), 'verified safe installer must execute');
+  const installerPath = fs.readFileSync(valid.logs.installerPath, 'utf8').trim();
+  const installerTmpdir = fs.readFileSync(valid.logs.tmpdir, 'utf8').trim();
+  assert.ok(installerPath.startsWith(`${valid.bootstrapRoot}${path.sep}`), 'installer must execute from the private bootstrap root');
+  assert.equal(installerTmpdir, path.dirname(installerPath), 'installer extraction must remain inside its private staging directory');
+  assert.equal(fs.readFileSync(valid.logs.stageMode, 'utf8').trim(), '700', 'private staging directory must be owner-only');
+  assert.equal(fs.readFileSync(valid.logs.installerMode, 'utf8').trim(), '500', 'verified installer must be owner-executable only');
+  assert.equal(fs.readFileSync(valid.logs.tmpFiles, 'utf8'), '', 'atomic promotion must leave no temporary file at execution time');
+  assert.deepEqual(fs.readdirSync(valid.bootstrapRoot), [], 'private staging directory must be removed after execution');
 
   const roleAssignments = resources.filter((resource) => resource.type === 'Microsoft.Authorization/roleAssignments');
   const roleDefinitions = resources.filter((resource) => resource.type === 'Microsoft.Authorization/roleDefinitions');
