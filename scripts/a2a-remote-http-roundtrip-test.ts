@@ -74,7 +74,14 @@ try {
 const mappedFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const requested = new URL(String(input));
   assert.equal(requested.hostname, 'agent-b.example.test', 'fixture fetch must target the declared remote identity');
-  return fetch(`http://127.0.0.1:${bPort}${requested.pathname}${requested.search}`, init);
+  const transportResponse = await fetch(`http://127.0.0.1:${bPort}${requested.pathname}${requested.search}`, init);
+  const logicalResponse = new Response(transportResponse.body, {
+    status: transportResponse.status,
+    statusText: transportResponse.statusText,
+    headers: transportResponse.headers,
+  });
+  Object.defineProperty(logicalResponse, 'url', { value: requested.toString() });
+  return logicalResponse;
 };
 
 const remoteClient = await createA2ARemoteClient('https://agent-b.example.test', {

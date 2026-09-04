@@ -76,7 +76,14 @@ try {
   const textApproveCard = assertCard((await post(baseUrl, activity(baseUrl, `agent approve ${jobId}`, 'text-approve'))).body, '작업 승인 확인');
   const textApprovePayload = confirmationPayload(textApproveCard, 'orchestration.approve');
   assertCard((await post(baseUrl, activity(baseUrl, '', 'text-approve-confirmed', textApprovePayload))).body, jobId);
-  assertCard((await post(baseUrl, activity(baseUrl, `agent status ${jobId}`, 'text-approve-status'))).body, 'queued');
+  const approvedStatusCard = assertCard(
+    (await post(baseUrl, activity(baseUrl, `agent status ${jobId}`, 'text-approve-status'))).body,
+    jobId,
+  );
+  assert.ok(
+    ['queued', 'running', 'completed'].includes(jobStatusFrom(approvedStatusCard)),
+    'confirmed approval must leave awaiting_approval and enter a successful dispatch lifecycle state',
+  );
 
   const cancellable = await post(baseUrl, activity(baseUrl, 'agent write 취소할 작업', 'cancel-create'));
   const cancelId = jobIdFrom(assertCard(cancellable.body, 'awaiting_approval'));
@@ -129,6 +136,13 @@ function jobIdFrom(card: Record<string, any>): string {
     ?.find((fact: any) => fact.title === '작업 ID')?.value;
   assert.equal(typeof id, 'string');
   return id;
+}
+
+function jobStatusFrom(card: Record<string, any>): string {
+  const status = card.body?.find((item: any) => item.type === 'FactSet')?.facts
+    ?.find((fact: any) => fact.title === '상태')?.value;
+  assert.equal(typeof status, 'string');
+  return status;
 }
 
 async function assertMeasuredProvider(baseUrl: string): Promise<void> {
