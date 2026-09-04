@@ -9,11 +9,14 @@ import { QueueClient } from '@azure/storage-queue';
 
 import {
   AGENT_DISPATCH_SCHEMA_VERSION,
+  AGENT_DISPATCH_LINUX_READ_ONLY_ISOLATION_REFERENCE,
+  AGENT_DISPATCH_WORKSPACE_REFERENCE,
   type AgentDispatchCheckpoint,
   type AgentDispatchCompletionReceipt,
   type AgentDispatchErrorReceipt,
   type AgentDispatchQueue,
   type AgentDispatchTask,
+  type AgentDispatchTaskReference,
   isTerminalDispatchStatus,
 } from './queue/agent-dispatch-queue.js';
 
@@ -49,17 +52,17 @@ export type AgentDispatchLease = Readonly<{
 
 export interface AgentDispatchStatePort {
   create(record: AgentDispatchRecord): Promise<'created' | 'exists'>;
-  get(taskId: string): Promise<AgentDispatchRecord | undefined>;
+  get(reference: AgentDispatchTaskReference): Promise<AgentDispatchRecord | undefined>;
   /** Atomically applies mutate only while owner and generation still match. */
   compareAndSwap(
-    taskId: string,
+    reference: AgentDispatchTaskReference,
     expected: { leaseOwner?: string; leaseGeneration: number },
     mutate: (current: AgentDispatchRecord) => AgentDispatchRecord,
   ): Promise<AgentDispatchRecord | undefined>;
   /** Performs a read-only dependency probe without creating durable state. */
-  probeDependency?(): Promise<{ reachable: true }>;
+  probeDependency?(reference: AgentDispatchTaskReference): Promise<{ reachable: true }>;
   /** Reads the latest durable worker observation without mutating shared state. */
-  readWorkerHeartbeat?(): Promise<{ observedAt: string; source: string } | undefined>;
+  readWorkerHeartbeat?(reference: AgentDispatchTaskReference): Promise<{ observedAt: string; source: string } | undefined>;
 }
 
 export interface AzureQueueClientPort {
@@ -149,6 +152,7 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
 
   async enqueue(input: AgentDispatchTask): Promise<AgentDispatchRecord> {
     const task = canonicalTask(input);
+    const reference = canonicalTaskReference(task);
     const requestHash = hashTask(task);
     const record: AgentDispatchRecord = {
       taskId: task.taskId,
@@ -163,7 +167,7 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
     };
     const created = await this.state.create(record);
     if (created === 'exists') {
-      const existing = await this.state.get(task.taskId);
+      const existing = await this.state.get(reference);
       if (!existing || existing.requestHash !== requestHash || existing.idempotencyKey !== task.idempotencyKey) {
         throw new DispatchConflictError(task.taskId);
       }
@@ -171,8 +175,8 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
     }
 
     await this.client.sendMessage(JSON.stringify(task));
-    const current = await this.requiredRecord(task.taskId);
-    const persisted = await this.state.compareAndSwap(task.taskId, leaseIdentity(current), (latest) => ({
+    const current = await this.requiredRecord(reference);
+    const persisted = await this.state.compareAndSwap(reference, leaseIdentity(current), (latest) => ({
       ...latest,
       enqueued: true,
       updatedAt: this.now(),
@@ -181,18 +185,26 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
     return sanitizeRecordForResponse(persisted);
   }
 
-  async observe(taskId: string): Promise<AgentDispatchRecord | undefined> {
-    const record = await this.state.get(canonicalAgentTaskId(taskId));
+  async observe(input: AgentDispatchTaskReference): Promise<AgentDispatchRecord | undefined> {
+    const reference = canonicalTaskReference(input);
+    const record = await this.state.get(reference);
+    if (record) assertRecordScope(record, reference);
     return record && sanitizeRecordForResponse(record);
   }
 
   async readHealth(options: {
+    taskReference?: AgentDispatchTaskReference;
     workerHeartbeat?: { observedAt: string; source: string };
     maximumHeartbeatAgeMs?: number;
   } = {}): Promise<AzureDispatchHealth> {
+    const reference = options.taskReference && canonicalTaskReference(options.taskReference);
     const [stateDependency, durableHeartbeat] = await Promise.all([
-      probeDependency(this.state.probeDependency?.bind(this.state)),
-      readWorkerHeartbeat(this.state.readWorkerHeartbeat?.bind(this.state)),
+      probeDependency(reference && this.state.probeDependency
+        ? () => this.state.probeDependency!(reference)
+        : undefined),
+      readWorkerHeartbeat(reference && this.state.readWorkerHeartbeat
+        ? () => this.state.readWorkerHeartbeat!(reference)
+        : undefined),
     ]);
     const maximumHeartbeatAgeMs = options.maximumHeartbeatAgeMs ?? 30_000;
     if (!Number.isSafeInteger(maximumHeartbeatAgeMs) || maximumHeartbeatAgeMs < 1 || maximumHeartbeatAgeMs > 300_000) {
@@ -234,7 +246,9 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
       await this.quarantineMessage(message, undefined, safeMessage(error));
       return undefined;
     }
-    const record = await this.state.get(task.taskId);
+    const reference = canonicalTaskReference(task);
+    const record = await this.state.get(reference);
+    if (record) assertRecordScope(record, reference);
     if (!record || record.requestHash !== hashTask(task)) {
       await this.quarantineMessage(message, undefined, 'unknown or mismatched durable dispatch record');
       return undefined;
@@ -265,7 +279,7 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
 
     const leaseOwner = crypto.randomUUID();
     const leaseGeneration = record.leaseGeneration + 1;
-    const claimed = await this.state.compareAndSwap(task.taskId, leaseIdentity(record), (current) => {
+    const claimed = await this.state.compareAndSwap(reference, leaseIdentity(record), (current) => {
       const currentExpired = !current.leaseExpiresAt || Date.parse(current.leaseExpiresAt) <= nowMs;
       const currentRedelivery = current.leaseMessageId === message.messageId && message.dequeueCount > current.dequeueCount;
       if (current.leaseOwner && !currentExpired && !currentRedelivery) {
@@ -299,7 +313,7 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
     if (!Number.isInteger(checkpoint.sequence) || checkpoint.sequence < 0) throw new TypeError('checkpoint sequence is invalid');
     const message = sanitizeDiagnostic(checkpoint.message, 'checkpoint message', DIAGNOSTIC_FIELD_LIMITS.checkpoint);
     const update = await this.client.updateMessage(lease.messageId, lease.popReceipt, undefined, visibilityTimeoutSeconds);
-    const persisted = await this.state.compareAndSwap(lease.task.taskId, leaseIdentity(lease), (record) => {
+    const persisted = await this.state.compareAndSwap(canonicalTaskReference(lease.task), leaseIdentity(lease), (record) => {
       assertOwned(record, lease);
       if (isTerminalDispatchStatus(record.status)) throw new DispatchLeaseConflictError(lease.task.taskId);
       return {
@@ -355,17 +369,18 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
     }));
   }
 
-  async requestCancellation(taskId: string, reason: string): Promise<void> {
-    const id = canonicalAgentTaskId(taskId);
+  async requestCancellation(input: AgentDispatchTaskReference, reason: string): Promise<void> {
+    const reference = canonicalTaskReference(input);
+    const id = reference.taskId;
     const cancellationReason = sanitizeDiagnostic(
       reason,
       'cancellation reason',
       DIAGNOSTIC_FIELD_LIMITS.cancellationReason,
     );
     for (let attempt = 0; attempt < 4; attempt += 1) {
-      const current = await this.requiredRecord(id);
+      const current = await this.requiredRecord(reference);
       if (isTerminalDispatchStatus(current.status)) return;
-      const updated = await this.state.compareAndSwap(id, leaseIdentity(current), (record) => ({
+      const updated = await this.state.compareAndSwap(reference, leaseIdentity(current), (record) => ({
         ...record,
         cancellationRequested: true,
         cancellationReason,
@@ -381,7 +396,7 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
     mutate: (record: AgentDispatchRecord) => AgentDispatchRecord,
   ): Promise<void> {
     validateLease(lease);
-    const persisted = await this.state.compareAndSwap(lease.task.taskId, leaseIdentity(lease), (record) => {
+    const persisted = await this.state.compareAndSwap(canonicalTaskReference(lease.task), leaseIdentity(lease), (record) => {
       assertOwned(record, lease);
       return {
         ...mutate(record),
@@ -393,9 +408,11 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
     await this.client.deleteMessage(lease.messageId, lease.popReceipt);
   }
 
-  private async requiredRecord(taskId: string): Promise<AgentDispatchRecord> {
-    const record = await this.state.get(canonicalAgentTaskId(taskId));
-    if (!record) throw new Error(`No durable dispatch record exists for ${taskId}.`);
+  private async requiredRecord(input: AgentDispatchTaskReference): Promise<AgentDispatchRecord> {
+    const reference = canonicalTaskReference(input);
+    const record = await this.state.get(reference);
+    if (!record) throw new Error(`No durable dispatch record exists for ${reference.taskId}.`);
+    assertRecordScope(record, reference);
     return record;
   }
 
@@ -418,7 +435,7 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
       messageSha256: crypto.createHash('sha256').update(message.messageText, 'utf8').digest('hex'),
     }));
     if (record) {
-      const updated = await this.state.compareAndSwap(record.taskId, leaseIdentity(record), (current) => ({
+      const updated = await this.state.compareAndSwap(canonicalTaskReference(record.task), leaseIdentity(record), (current) => ({
         ...current,
         status: 'quarantined',
         quarantineReason,
@@ -517,11 +534,65 @@ function canonicalTask(value: unknown): AgentDispatchTask {
     provider: requireText(task.provider, 'provider'),
     prompt: requireText(task.prompt, 'prompt'),
     createdAt: requireText(task.createdAt, 'createdAt'),
+    execution: canonicalExecution(task.execution),
   };
   if (Buffer.byteLength(JSON.stringify(normalized), 'utf8') > 48 * 1024) {
     throw new TypeError('dispatch task exceeds the bounded Queue Storage payload');
   }
   return Object.freeze(normalized);
+}
+
+export function canonicalTaskReference(value: unknown): AgentDispatchTaskReference {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('dispatch task reference must be an object');
+  const reference = value as Record<string, unknown>;
+  return Object.freeze({
+    taskId: canonicalAgentTaskId(reference.taskId),
+    tenantId: requireText(reference.tenantId, 'tenantId'),
+    requesterId: requireText(reference.requesterId, 'requesterId'),
+    conversationId: requireText(reference.conversationId, 'conversationId'),
+  });
+}
+
+function assertRecordScope(record: AgentDispatchRecord, reference: AgentDispatchTaskReference): void {
+  if (
+    record.taskId !== reference.taskId
+    || record.task.taskId !== reference.taskId
+    || record.task.tenantId !== reference.tenantId
+    || record.task.requesterId !== reference.requesterId
+    || record.task.conversationId !== reference.conversationId
+  ) {
+    throw new Error(`Durable dispatch record scope mismatch for ${reference.taskId}.`);
+  }
+}
+
+function canonicalExecution(value: unknown): AgentDispatchTask['execution'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('dispatch execution must be an object');
+  }
+  const execution = value as Record<string, unknown>;
+  if (execution.workspaceReference !== AGENT_DISPATCH_WORKSPACE_REFERENCE) {
+    throw new TypeError('dispatch workspace reference is invalid');
+  }
+  if (execution.mode === 'workspace-write') {
+    if (execution.isolationReference !== undefined) {
+      throw new TypeError('workspace-write dispatch must not carry a read-only isolation reference');
+    }
+    return Object.freeze({
+      mode: 'workspace-write',
+      workspaceReference: AGENT_DISPATCH_WORKSPACE_REFERENCE,
+    });
+  }
+  if (
+    execution.mode === 'read-only'
+    && execution.isolationReference === AGENT_DISPATCH_LINUX_READ_ONLY_ISOLATION_REFERENCE
+  ) {
+    return Object.freeze({
+      mode: 'read-only',
+      workspaceReference: AGENT_DISPATCH_WORKSPACE_REFERENCE,
+      isolationReference: AGENT_DISPATCH_LINUX_READ_ONLY_ISOLATION_REFERENCE,
+    });
+  }
+  throw new TypeError('dispatch execution mode or isolation reference is invalid');
 }
 
 function parseTask(messageText: string): AgentDispatchTask {
@@ -616,6 +687,7 @@ function sanitizeRecordForResponse(value: AgentDispatchRecord): AgentDispatchRec
       provider: value.task.provider,
       prompt: value.task.prompt,
       createdAt: value.task.createdAt,
+      execution: { ...value.task.execution },
     },
     enqueued: value.enqueued,
     dequeueCount: value.dequeueCount,

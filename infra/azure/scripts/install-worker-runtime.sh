@@ -100,7 +100,6 @@ CODEX_BIN=/opt/teamsapp/current/bin/codex
 CODEX_BIN_SHA256=$codex_sha256
 TEAMS_WORKER_COMPOSITION_MODULE=/opt/teamsapp/current/dist/worker/composition.js
 TEAMS_WORKER_WORKSPACE=/var/lib/teamsapp/workspace
-TEAMS_WORKER_EXECUTION_MODE=workspace-write
 EOF
 chmod 0600 "$env_tmp"
 mv -f "$env_tmp" "$env_dir/worker.env"

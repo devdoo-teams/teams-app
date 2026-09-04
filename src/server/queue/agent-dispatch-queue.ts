@@ -1,4 +1,18 @@
-export const AGENT_DISPATCH_SCHEMA_VERSION = 1 as const;
+export const AGENT_DISPATCH_SCHEMA_VERSION = 2 as const;
+export const AGENT_DISPATCH_WORKSPACE_REFERENCE = 'teams-core-worker-workspace' as const;
+export const AGENT_DISPATCH_LINUX_READ_ONLY_ISOLATION_REFERENCE = 'linux-read-only-required' as const;
+
+export type AgentDispatchExecution = Readonly<
+  | {
+      mode: 'workspace-write';
+      workspaceReference: typeof AGENT_DISPATCH_WORKSPACE_REFERENCE;
+    }
+  | {
+      mode: 'read-only';
+      workspaceReference: typeof AGENT_DISPATCH_WORKSPACE_REFERENCE;
+      isolationReference: typeof AGENT_DISPATCH_LINUX_READ_ONLY_ISOLATION_REFERENCE;
+    }
+>;
 
 export type AgentDispatchStatus =
   | 'queued'
@@ -18,7 +32,12 @@ export type AgentDispatchTask = Readonly<{
   provider: string;
   prompt: string;
   createdAt: string;
+  execution: AgentDispatchExecution;
 }>;
+
+export type AgentDispatchTaskReference = Readonly<
+  Pick<AgentDispatchTask, 'taskId' | 'tenantId' | 'requesterId' | 'conversationId'>
+>;
 
 export type AgentDispatchCheckpoint = Readonly<{
   sequence: number;
@@ -69,17 +88,66 @@ export type AgentDispatchLease = Readonly<{
 
 export interface AgentDispatchQueue {
   enqueue(task: AgentDispatchTask): Promise<AgentDispatchRecord>;
-  observe(taskId: string): Promise<AgentDispatchRecord | undefined>;
+  observe(reference: AgentDispatchTaskReference): Promise<AgentDispatchRecord | undefined>;
   lease(options: { visibilityTimeoutSeconds: number; maxDequeueCount?: number }): Promise<AgentDispatchLease | undefined>;
   heartbeat(lease: AgentDispatchLease, checkpoint: AgentDispatchCheckpoint, visibilityTimeoutSeconds: number): Promise<AgentDispatchLease>;
   complete(lease: AgentDispatchLease, receipt: AgentDispatchCompletionReceipt): Promise<void>;
   fail(lease: AgentDispatchLease, error: AgentDispatchErrorReceipt): Promise<void>;
   cancel(lease: AgentDispatchLease, reason: string): Promise<void>;
-  requestCancellation(taskId: string, reason: string): Promise<void>;
+  requestCancellation(reference: AgentDispatchTaskReference, reason: string): Promise<void>;
 }
 
 /** The Container App surface: it cannot lease work or execute child processes. */
 export type AgentDispatchSubmissionPort = Pick<AgentDispatchQueue, 'enqueue' | 'observe' | 'requestCancellation'>;
+
+export function createAgentDispatchTaskFromJob(job: Readonly<{
+  id: string;
+  tenantId?: string;
+  requesterId: string;
+  conversationId: string;
+  provider?: string;
+  prompt: string;
+  createdAt: string;
+  mode: 'read-only' | 'workspace-write';
+}>): AgentDispatchTask {
+  if (!job.tenantId) throw new Error('A server-derived tenant is required for durable dispatch.');
+  return Object.freeze({
+    schemaVersion: AGENT_DISPATCH_SCHEMA_VERSION,
+    taskId: job.id,
+    idempotencyKey: `agent-job:${job.id}`,
+    tenantId: job.tenantId,
+    requesterId: job.requesterId,
+    conversationId: job.conversationId,
+    provider: job.provider ?? 'codex',
+    prompt: job.prompt,
+    createdAt: job.createdAt,
+    execution: job.mode === 'read-only'
+      ? Object.freeze({
+          mode: 'read-only',
+          workspaceReference: AGENT_DISPATCH_WORKSPACE_REFERENCE,
+          isolationReference: AGENT_DISPATCH_LINUX_READ_ONLY_ISOLATION_REFERENCE,
+        })
+      : Object.freeze({
+          mode: 'workspace-write',
+          workspaceReference: AGENT_DISPATCH_WORKSPACE_REFERENCE,
+        }),
+  });
+}
+
+export function createAgentDispatchTaskReferenceFromJob(job: Readonly<{
+  id: string;
+  tenantId?: string;
+  requesterId: string;
+  conversationId: string;
+}>): AgentDispatchTaskReference {
+  if (!job.tenantId) throw new Error('A server-derived tenant is required for durable dispatch.');
+  return Object.freeze({
+    taskId: job.id,
+    tenantId: job.tenantId,
+    requesterId: job.requesterId,
+    conversationId: job.conversationId,
+  });
+}
 
 export function createAgentDispatchSubmissionPort(queue: AgentDispatchQueue): AgentDispatchSubmissionPort {
   return Object.freeze({

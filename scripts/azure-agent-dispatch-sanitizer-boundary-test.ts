@@ -6,6 +6,7 @@ import {
   type AzureQueueClientPort,
   AzureAgentDispatchQueue,
 } from '../src/server/azure-agent-dispatch-queue.js';
+import type { AgentDispatchTaskReference } from '../src/server/queue/agent-dispatch-queue.js';
 
 const safeIdentifiers = {
   taskId: 'task-safe-state-id',
@@ -29,7 +30,7 @@ const legacyRecord: AgentDispatchRecord = {
   ...safeIdentifiers,
   status: 'quarantined',
   task: {
-    schemaVersion: 1,
+    schemaVersion: 2,
     taskId: safeIdentifiers.taskId,
     idempotencyKey: safeIdentifiers.idempotencyKey,
     tenantId: 'tenant-safe-state-id',
@@ -38,6 +39,10 @@ const legacyRecord: AgentDispatchRecord = {
     provider: 'codex',
     prompt: 'safe prompt',
     createdAt: '2026-09-03T00:00:00.000Z',
+    execution: {
+      mode: 'workspace-write',
+      workspaceReference: 'teams-core-worker-workspace',
+    },
   },
   enqueued: true,
   dequeueCount: 1,
@@ -53,7 +58,7 @@ const legacyRecord: AgentDispatchRecord = {
 
 const state: AgentDispatchStatePort = {
   async create() { return 'exists'; },
-  async get(taskId) { return taskId === safeIdentifiers.taskId ? structuredClone(legacyRecord) : undefined; },
+  async get(reference: AgentDispatchTaskReference) { return reference.taskId === safeIdentifiers.taskId ? structuredClone(legacyRecord) : undefined; },
   async compareAndSwap() { throw new Error('not used'); },
 };
 const client: AzureQueueClientPort = {
@@ -64,7 +69,12 @@ const client: AzureQueueClientPort = {
   async sendPoisonMessage() { throw new Error('not used'); },
 };
 
-const observed = await new AzureAgentDispatchQueue(client, state).observe(safeIdentifiers.taskId);
+const observed = await new AzureAgentDispatchQueue(client, state).observe({
+  taskId: safeIdentifiers.taskId,
+  tenantId: legacyRecord.task.tenantId,
+  requesterId: legacyRecord.task.requesterId,
+  conversationId: legacyRecord.task.conversationId,
+});
 assert.ok(observed);
 
 for (const unsafeFragment of [

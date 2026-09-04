@@ -11,6 +11,10 @@ import {
 import { AgentAdmissionController } from '../src/server/agent-admission-controller.js';
 import { AgentJobStore } from '../src/server/agent-job-store.js';
 import { GitService } from '../src/server/git-service.js';
+import {
+  createAgentDispatchTaskFromJob,
+  type AgentDispatchTask,
+} from '../src/server/queue/agent-dispatch-queue.js';
 
 const root = path.resolve(import.meta.dirname, '..');
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'teamsapp-azure-index-'));
@@ -29,6 +33,7 @@ async function verifyQueueOnlyAgentService(): Promise<void> {
   let runnerCancels = 0;
   let workspacePreflights = 0;
   const dispatched: string[] = [];
+  const dispatchedTasks: AgentDispatchTask[] = [];
   const cancelled: string[] = [];
   const observations = new Map<string, Awaited<ReturnType<AgentExecutionDispatcher['observe']>>>();
 
@@ -36,6 +41,7 @@ async function verifyQueueOnlyAgentService(): Promise<void> {
     kind: 'azure-queue',
     async dispatch(job) {
       dispatched.push(job.id);
+      dispatchedTasks.push(createAgentDispatchTaskFromJob(job));
     },
     async observe(job) {
       return observations.get(job.id);
@@ -81,6 +87,11 @@ async function verifyQueueOnlyAgentService(): Promise<void> {
   const scope = { tenantId: 'tenant-a', requesterId: 'requester-a', conversationId: 'conversation-a' };
   const job = await service.submit({ prompt: 'queue this task', mode: 'read-only', scope, notify: false });
   assert.deepEqual(dispatched, [job.id], 'queue mode submits through the durable dispatcher');
+  assert.deepEqual(dispatchedTasks[0]?.execution, {
+    mode: 'read-only',
+    workspaceReference: 'teams-core-worker-workspace',
+    isolationReference: 'linux-read-only-required',
+  }, 'server dispatch preserves read-only mode and its required Linux isolation reference');
   assert.equal(runnerRuns, 0, 'queue mode never invokes the local CLI runner');
   assert.equal(workspacePreflights, 0, 'queue mode never performs local workspace/native preflight');
 
@@ -99,6 +110,14 @@ async function verifyQueueOnlyAgentService(): Promise<void> {
   assert.equal(cancelledJob?.status, 'cancelled');
   assert.deepEqual(cancelled, [cancellable.id], 'queue mode requests cancellation through the durable dispatcher');
   assert.equal(runnerCancels, 0, 'queue mode never signals a local CLI runner');
+
+  const writable = await service.submit({ prompt: 'approved write task', mode: 'workspace-write', scope, notify: false });
+  assert.equal(writable.status, 'awaiting_approval');
+  await service.approve(writable.id, scope);
+  assert.deepEqual(dispatchedTasks.at(-1)?.execution, {
+    mode: 'workspace-write',
+    workspaceReference: 'teams-core-worker-workspace',
+  }, 'approved workspace-write mode remains explicit across server dispatch');
   await service.close();
 }
 

@@ -6,6 +6,14 @@ import {
   type AgentDispatchStatePort,
   type AzureQueueClientPort,
 } from '../src/server/azure-agent-dispatch-queue.js';
+import type { AgentDispatchTaskReference } from '../src/server/queue/agent-dispatch-queue.js';
+
+const taskReference: AgentDispatchTaskReference = {
+  taskId: 'task-health',
+  tenantId: 'tenant-health',
+  requesterId: 'requester-health',
+  conversationId: 'conversation-health',
+};
 
 class ProbeState implements AgentDispatchStatePort {
   constructor(
@@ -13,7 +21,7 @@ class ProbeState implements AgentDispatchStatePort {
     private readonly dependencyError?: Error,
   ) {}
   async create(_record: AgentDispatchRecord) { return 'created' as const; }
-  async get(_taskId: string) { return undefined; }
+  async get(_reference: AgentDispatchTaskReference) { return undefined; }
   async compareAndSwap() { return undefined; }
   async probeDependency() {
     if (this.dependencyError) throw this.dependencyError;
@@ -39,7 +47,7 @@ const queue = new AzureAgentDispatchQueue(client, new ProbeState(), {
   clock: { now: () => new Date('2026-09-03T00:00:00.000Z') },
 });
 
-const withoutHeartbeat = await queue.readHealth();
+const withoutHeartbeat = await queue.readHealth({ taskReference });
 assert.equal(withoutHeartbeat.liveness.state, 'alive', 'health endpoint liveness is independent of dispatch readiness');
 assert.equal(withoutHeartbeat.configuration.state, 'configured', 'constructed Azure queue mode reports configuration only');
 assert.equal(withoutHeartbeat.dependencies.queue.state, 'unverified', 'configuration alone never claims Queue reachability');
@@ -56,6 +64,7 @@ const queueWithHeartbeat = new AzureAgentDispatchQueue(client, new ProbeState({
   clock: { now: () => new Date('2026-09-03T00:00:00.000Z') },
 });
 const withHeartbeat = await queueWithHeartbeat.readHealth({
+  taskReference,
   maximumHeartbeatAgeMs: 30_000,
 });
 assert.equal(withHeartbeat.workerHeartbeat.state, 'observed');
@@ -71,6 +80,7 @@ const queueWithStaleHeartbeat = new AzureAgentDispatchQueue(client, new ProbeSta
   clock: { now: () => new Date('2026-09-03T00:00:00.000Z') },
 });
 const staleHeartbeat = await queueWithStaleHeartbeat.readHealth({
+  taskReference,
   maximumHeartbeatAgeMs: 30_000,
 });
 assert.equal(staleHeartbeat.workerHeartbeat.state, 'stale');
@@ -84,7 +94,7 @@ const queueWithUnavailableState = new AzureAgentDispatchQueue(client, new ProbeS
 }, new Error('Cosmos unavailable')), {
   clock: { now: () => new Date('2026-09-03T00:00:00.000Z') },
 });
-const unavailableState = await queueWithUnavailableState.readHealth({ maximumHeartbeatAgeMs: 30_000 });
+const unavailableState = await queueWithUnavailableState.readHealth({ taskReference, maximumHeartbeatAgeMs: 30_000 });
 assert.equal(unavailableState.dependencies.state.state, 'unavailable');
 assert.equal(unavailableState.readiness.state, 'unavailable', 'fresh historical heartbeat cannot mask current state failure');
 assert.equal(forbiddenQueueMetadataProbes, 0, 'no health branch calls Queue metadata APIs');

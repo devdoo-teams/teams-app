@@ -56,7 +56,9 @@ try {
   const envPath = path.join(targetRoot, 'etc', 'teamsapp', 'worker.env');
   assert.equal(fs.statSync(envPath).mode & 0o777, 0o600, 'worker environment file must be owner-only');
   assert.doesNotMatch(fs.readFileSync(envPath, 'utf8'), /token|password|accountkey|sas=/i, 'worker environment must not embed secrets');
-  assert.match(fs.readFileSync(envPath, 'utf8'), /TEAMS_WORKER_EXECUTION_MODE=workspace-write/);
+  assert.match(fs.readFileSync(envPath, 'utf8'), /AGENT_CODEX_HOME=\/var\/lib\/teamsapp\/codex-home/);
+  assert.doesNotMatch(fs.readFileSync(envPath, 'utf8'), /TEAMS_WORKER_EXECUTION_MODE=/,
+    'bootstrap must not override the immutable per-task execution mode');
   assert.equal(fs.statSync(path.join(targetRoot, 'var', 'lib', 'teamsapp', 'workspace')).mode & 0o777, 0o700);
   assert.match(fs.readFileSync(systemctlLog, 'utf8'), /daemon-reload/);
   assert.match(fs.readFileSync(systemctlLog, 'utf8'), /enable --now teamsapp-worker\.service/);

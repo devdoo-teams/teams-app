@@ -57,7 +57,7 @@ export class AzureCodexWorker {
     const initialLease = await this.queue.lease({ visibilityTimeoutSeconds: this.visibilityTimeoutSeconds });
     if (!initialLease) return 'idle';
     let lease = initialLease;
-    const existing = await this.queue.observe(lease.task.taskId);
+    const existing = await this.queue.observe(lease.task);
     if (existing && (existing.status === 'completed' || existing.status === 'failed' || existing.status === 'cancelled' || existing.status === 'quarantined')) {
       return 'duplicate';
     }
@@ -97,7 +97,7 @@ export class AzureCodexWorker {
     const heartbeat = setInterval(() => {
       void (async () => {
         if (stopped) return;
-        const state = await this.queue.observe(lease.task.taskId);
+        const state = await this.queue.observe(lease.task);
         if (state?.cancellationRequested && !cancelDetected) {
           cancelDetected = true;
           abort.abort(state.cancellationReason ?? 'cancelled');

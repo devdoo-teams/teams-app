@@ -163,21 +163,18 @@ import { resolveAzureReleaseIdentity } from './azure-release-identity.js';
 import { createRuntimeStore } from './storage/runtime-store-factory.js';
 import { RuntimeStoreAgentJobLedger } from './storage/agent-job-durable-ledger.js';
 import {
-  RuntimeStoreConflictError,
-  type RuntimeScope,
   type RuntimeStore,
 } from './storage/runtime-store.js';
+import { createRuntimeStoreAgentDispatchStatePort } from './storage/agent-dispatch-state-port.js';
 import type { AgentExecutionDispatcher, AgentExecutionObservation } from './agent-service.js';
 import {
   createAgentDispatchSubmissionPort,
-  type AgentDispatchTask,
+  createAgentDispatchTaskFromJob,
+  createAgentDispatchTaskReferenceFromJob,
 } from './queue/agent-dispatch-queue.js';
 import {
   AzureAgentDispatchQueue,
   createProductionAzureQueueClient,
-  type AgentDispatchRecord,
-  type AgentDispatchStatePort,
-  latestDurableWorkerHeartbeat,
 } from './azure-agent-dispatch-queue.js';
 import {
   CoreOrchestrationService,
@@ -210,72 +207,11 @@ class UnsafeLoopbackTestIsolationProvider extends AgentIsolationProvider {
   }
 }
 
-const AZURE_DISPATCH_STATE_SCOPE: RuntimeScope = Object.freeze({
-  tenantId: 'teams-core-system',
-  requesterId: 'agent-dispatch',
-  conversationId: 'global',
-});
-
 function createUnmigratedRuntimeCompatibilityStore(): RuntimeStore {
   const unavailable = async (): Promise<never> => {
     throw new Error('Shared runtime storage is not active while TEAMS_STORAGE_BACKEND=file.');
   };
   return { read: unavailable, list: unavailable, write: unavailable };
-}
-
-function createDispatchStatePort(runtimeStore: RuntimeStore): AgentDispatchStatePort {
-  return {
-    async create(record) {
-      try {
-        await runtimeStore.write(AZURE_DISPATCH_STATE_SCOPE, {
-          id: record.taskId,
-          idempotencyKey: `dispatch-create:${record.requestHash}`,
-          value: record,
-        });
-        return 'created';
-      } catch (error) {
-        if (error instanceof RuntimeStoreConflictError) return 'exists';
-        throw error;
-      }
-    },
-    async get(taskId) {
-      const record = await runtimeStore.read<AgentDispatchRecord>(AZURE_DISPATCH_STATE_SCOPE, taskId);
-      return record?.value;
-    },
-    async compareAndSwap(taskId, expected, mutate) {
-      for (let attempt = 0; attempt < 4; attempt += 1) {
-        const current = await runtimeStore.read<AgentDispatchRecord>(AZURE_DISPATCH_STATE_SCOPE, taskId);
-        if (!current) throw new Error(`No durable dispatch record exists for ${taskId}.`);
-        if (
-          current.value.leaseOwner !== expected.leaseOwner
-          || current.value.leaseGeneration !== expected.leaseGeneration
-        ) return undefined;
-        const next = mutate(structuredClone(current.value));
-        const contentHash = crypto.createHash('sha256').update(JSON.stringify(next), 'utf8').digest('hex');
-        try {
-          const updated = await runtimeStore.write<AgentDispatchRecord>(AZURE_DISPATCH_STATE_SCOPE, {
-            id: taskId,
-            idempotencyKey: `dispatch-update:${contentHash}`,
-            expectedEtag: current.etag,
-            value: next,
-          });
-          return updated.value;
-        } catch (error) {
-          if (!(error instanceof RuntimeStoreConflictError)) throw error;
-          if (attempt === 3) return undefined;
-        }
-      }
-      return undefined;
-    },
-    async probeDependency() {
-      await runtimeStore.read<AgentDispatchRecord>(AZURE_DISPATCH_STATE_SCOPE, 'teams-worker-health-probe');
-      return { reachable: true };
-    },
-    async readWorkerHeartbeat() {
-      const records = await runtimeStore.list<AgentDispatchRecord>(AZURE_DISPATCH_STATE_SCOPE, { limit: 100 });
-      return latestDurableWorkerHeartbeat(records.map(({ value }) => value));
-    },
-  };
 }
 
 function createQueueExecutionDispatcher(
@@ -285,22 +221,10 @@ function createQueueExecutionDispatcher(
   return {
     kind: 'azure-queue',
     async dispatch(job) {
-      if (!job.tenantId) throw new Error('A server-derived tenant is required for durable dispatch.');
-      const task: AgentDispatchTask = {
-        schemaVersion: 1,
-        taskId: job.id,
-        idempotencyKey: `agent-job:${job.id}`,
-        tenantId: job.tenantId,
-        requesterId: job.requesterId,
-        conversationId: job.conversationId,
-        provider: job.provider ?? 'codex',
-        prompt: job.prompt,
-        createdAt: job.createdAt,
-      };
-      await submission.enqueue(task);
+      await submission.enqueue(createAgentDispatchTaskFromJob(job));
     },
     async observe(job): Promise<AgentExecutionObservation | undefined> {
-      const record = await submission.observe(job.id);
+      const record = await submission.observe(createAgentDispatchTaskReferenceFromJob(job));
       if (!record) return undefined;
       if (record.status === 'leased') return { status: 'running' };
       if (record.status === 'completed') {
@@ -316,7 +240,7 @@ function createQueueExecutionDispatcher(
       return { status: 'queued' };
     },
     async cancel(job, reason) {
-      await submission.requestCancellation(job.id, reason);
+      await submission.requestCancellation(createAgentDispatchTaskReferenceFromJob(job), reason);
     },
   };
 }
@@ -924,7 +848,7 @@ if (azureQueueDispatch) {
     throw new Error('TEAMS_AGENT_DISPATCH_MODE=azure-queue requires TEAMS_STORAGE_BACKEND=cosmos.');
   }
   const queueClient = createProductionAzureQueueClient({ env: process.env });
-  const queue = new AzureAgentDispatchQueue(queueClient, createDispatchStatePort(runtimeStore));
+  const queue = new AzureAgentDispatchQueue(queueClient, createRuntimeStoreAgentDispatchStatePort(runtimeStore));
   azureAgentDispatchQueue = queue;
   agentExecutionDispatcher = createQueueExecutionDispatcher(queue);
 }
@@ -1872,7 +1796,11 @@ http.get('/api/health', async (_request: any, response: any) => {
     cliCapabilities = unknownCliCapabilities();
   }
   const dispatchHealth = azureQueueDispatch && azureAgentDispatchQueue
-    ? await azureAgentDispatchQueue.readHealth()
+    ? await azureAgentDispatchQueue.readHealth({
+        taskReference: agentService.listLocalOnly(1)
+          .filter((job) => Boolean(job.tenantId))
+          .map(createAgentDispatchTaskReferenceFromJob)[0],
+      })
     : {
         liveness: { state: 'alive' as const },
         configuration: { state: 'configured' as const },

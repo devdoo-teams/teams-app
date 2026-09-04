@@ -26,7 +26,6 @@ write_files:
       CODEX_BIN_SHA256=SET_BY_DEPLOYMENT
       TEAMS_WORKER_COMPOSITION_MODULE=/opt/teamsapp/current/dist/worker/composition.js
       TEAMS_WORKER_WORKSPACE=/var/lib/teamsapp/workspace
-      TEAMS_WORKER_EXECUTION_MODE=workspace-write
   - path: /etc/systemd/system/teamsapp-worker.service
     owner: root:root
     permissions: '0644'

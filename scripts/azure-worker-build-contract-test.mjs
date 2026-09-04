@@ -19,6 +19,8 @@ try {
   const compositionPath = path.join(output, 'composition.js');
   assert.ok(fs.statSync(indexPath).isFile(), 'worker entrypoint must be packaged');
   assert.ok(fs.statSync(compositionPath).isFile(), 'worker composition must be packaged');
+  const agentCodexHome = path.join(output, 'codex-home');
+  fs.mkdirSync(agentCodexHome, { mode: 0o700 });
 
   const start = spawnSync(process.execPath, [indexPath, '--run'], {
     cwd: root,
@@ -48,7 +50,7 @@ try {
       AZURE_COSMOS_DATABASE: 'teamsapp',
       AZURE_COSMOS_CONTAINER: 'runtime-records',
       TEAMS_WORKER_WORKSPACE: root,
-      TEAMS_WORKER_EXECUTION_MODE: 'workspace-write',
+      AGENT_CODEX_HOME: agentCodexHome,
       CODEX_BIN: '/usr/bin/false',
     },
   });

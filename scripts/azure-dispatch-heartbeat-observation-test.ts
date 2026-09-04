@@ -16,7 +16,7 @@ function record(input: {
     requestHash: `hash:${input.taskId}`,
     status: input.status,
     task: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       taskId: input.taskId,
       idempotencyKey: `idem:${input.taskId}`,
       tenantId: 'tenant-a',
@@ -25,6 +25,10 @@ function record(input: {
       provider: 'codex',
       prompt: 'bounded work',
       createdAt: '2026-09-02T23:00:00.000Z',
+      execution: {
+        mode: 'workspace-write',
+        workspaceReference: 'teams-core-worker-workspace',
+      },
     },
     enqueued: true,
     dequeueCount: 1,

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawn as spawnChild } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -14,7 +15,11 @@ import {
 } from '../src/worker/index.js';
 import { fileURLToPath } from 'node:url';
 
+import { CodexRunner } from '../src/server/codex-runner.js';
+import type { AgentIsolationSpawnOptions } from '../src/server/agent-execution-policy.js';
+import { createWorkerExecutor } from '../src/worker/executor.js';
 import type { AgentDispatchRecord, AgentDispatchStatePort, AzureQueueClientPort } from '../src/server/azure-agent-dispatch-queue.js';
+import type { AgentDispatchTaskReference } from '../src/server/queue/agent-dispatch-queue.js';
 
 async function testWorkerCompletionDuplicateAndError(): Promise<void> {
   const fixture = createFixture();
@@ -27,7 +32,7 @@ async function testWorkerCompletionDuplicateAndError(): Promise<void> {
     },
   }, { visibilityTimeoutSeconds: 30, heartbeatIntervalMs: 5 });
   assert.equal(await worker.runOnce(), 'completed');
-  assert.equal((await fixture.queue.observe('task-success'))?.receipt?.result, 'worker result');
+  assert.equal((await fixture.queue.observe(reference(task('task-success'))))?.receipt?.result, 'worker result');
 
   fixture.client.inject(fixture.client.sent[0]);
   assert.equal(await worker.runOnce(), 'duplicate');
@@ -38,7 +43,7 @@ async function testWorkerCompletionDuplicateAndError(): Promise<void> {
     start: async () => handle(Promise.reject(Object.assign(new Error('runner failed'), { code: 'RUNNER_FAILED' }))),
   }, { visibilityTimeoutSeconds: 30, heartbeatIntervalMs: 5 });
   assert.equal(await failing.runOnce(), 'failed');
-  assert.equal((await fixture.queue.observe('task-failure'))?.error?.code, 'RUNNER_FAILED');
+  assert.equal((await fixture.queue.observe(reference(task('task-failure'))))?.error?.code, 'RUNNER_FAILED');
 }
 
 async function testCancellationCleansProcessTree(): Promise<void> {
@@ -51,7 +56,7 @@ async function testCancellationCleansProcessTree(): Promise<void> {
   const worker = new AzureCodexWorker(fixture.queue, {
     start: async (_task, context) => {
       setTimeout(async () => {
-        await fixture.queue.requestCancellation('task-cancel', 'operator');
+        await fixture.queue.requestCancellation(reference(task('task-cancel')), 'operator');
         await context.checkpoint('still-working');
       }, 2);
       return {
@@ -64,7 +69,7 @@ async function testCancellationCleansProcessTree(): Promise<void> {
   assert.equal(await worker.runOnce(), 'cancelled');
   assert.equal(terminated, 1);
   assert.equal(cleaned, 1);
-  assert.equal((await fixture.queue.observe('task-cancel'))?.status, 'cancelled');
+  assert.equal((await fixture.queue.observe(reference(task('task-cancel'))))?.status, 'cancelled');
 }
 
 async function testLinuxPreflightAndCloudInit(): Promise<void> {
@@ -119,6 +124,106 @@ async function testProductionPreflightRunsBeforeExecutorAndFailsClosed(): Promis
   }), /AZURE_STORAGE_QUEUE_ENDPOINT|production worker configuration/i);
 }
 
+async function testWorkerCompositionPreservesModeAndPrivateCodexHome(): Promise<void> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-azure-worker-composition-'));
+  const workspace = path.join(root, 'workspace');
+  const agentCodexHome = path.join(root, 'codex-home');
+  const executable = path.join(root, 'codex-fixture');
+  const spawnCalls: Array<{ args: readonly string[]; options: AgentIsolationSpawnOptions }> = [];
+  const previousCredential = process.env.UNRELATED_CREDENTIAL;
+  try {
+    await fs.mkdir(workspace, { mode: 0o700 });
+    await fs.mkdir(agentCodexHome, { mode: 0o700 });
+    await fs.writeFile(executable, [
+      '#!/bin/sh',
+      "printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"11111111-1111-4111-8111-111111111111\"}'",
+      "printf '%s\\n' '{\"type\":\"turn.started\"}'",
+      "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"fixture result\"}}'",
+      "printf '%s\\n' '{\"type\":\"turn.completed\"}'",
+    ].join('\n'), { mode: 0o700 });
+    process.env.UNRELATED_CREDENTIAL = 'must-not-reach-child';
+    const runner = new CodexRunner({
+      command: { executable },
+      spawn: (command, args, options) => {
+        spawnCalls.push({ args: [...args], options: { ...options, env: { ...options.env } } });
+        return spawnChild(command, [...args], options as never);
+      },
+    });
+    const executor = createWorkerExecutor({
+      env: {
+        TEAMS_WORKER_WORKSPACE: workspace,
+        AGENT_CODEX_HOME: agentCodexHome,
+      },
+      runner,
+    });
+    const context = { signal: new AbortController().signal, checkpoint: async () => undefined };
+    const writeHandle = await executor.start(task('task-mode-write'), context);
+    assert.equal((await writeHandle.result).result, 'fixture result');
+    assert.equal(spawnCalls.length, 1);
+    assert.ok(spawnCalls[0].args.includes('--sandbox'));
+    assert.ok(spawnCalls[0].args.includes('workspace-write'));
+    assert.equal(spawnCalls[0].options.env.CODEX_HOME, agentCodexHome);
+    assert.equal(spawnCalls[0].options.env.UNRELATED_CREDENTIAL, undefined);
+
+    await assert.rejects(
+      executor.start({
+        ...task('task-mode-read'),
+        execution: {
+          mode: 'read-only',
+          workspaceReference: 'teams-core-worker-workspace',
+          isolationReference: 'linux-read-only-required',
+        },
+      }, context),
+      /read-only.*isolation.*unavailable/i,
+    );
+    assert.equal(spawnCalls.length, 1, 'unsupported Linux read-only mode fails before any child spawn');
+  } finally {
+    if (previousCredential === undefined) delete process.env.UNRELATED_CREDENTIAL;
+    else process.env.UNRELATED_CREDENTIAL = previousCredential;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}
+
+async function testUnsupportedReadOnlyPersistsExplicitFailureWithoutRunnerInvocation(): Promise<void> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-azure-read-only-failure-'));
+  try {
+    const workspace = path.join(root, 'workspace');
+    const agentCodexHome = path.join(root, 'codex-home');
+    await fs.mkdir(workspace, { mode: 0o700 });
+    await fs.mkdir(agentCodexHome, { mode: 0o700 });
+    let runnerInvocations = 0;
+    const executor = createWorkerExecutor({
+      env: { TEAMS_WORKER_WORKSPACE: workspace, AGENT_CODEX_HOME: agentCodexHome },
+      runner: {
+        async run() {
+          runnerInvocations += 1;
+          throw new Error('read-only must never reach the runner');
+        },
+        cancel: () => false,
+      },
+    });
+    const fixture = createFixture();
+    const readOnlyTask = {
+      ...task('task-read-only-unavailable'),
+      execution: {
+        mode: 'read-only' as const,
+        workspaceReference: 'teams-core-worker-workspace' as const,
+        isolationReference: 'linux-read-only-required' as const,
+      },
+    };
+    await fixture.queue.enqueue(readOnlyTask);
+    const worker = new AzureCodexWorker(fixture.queue, executor);
+    assert.equal(await worker.runOnce(), 'failed');
+    const failed = await fixture.queue.observe(reference(readOnlyTask));
+    assert.equal(failed?.status, 'failed');
+    assert.equal(failed?.error?.code, 'UNAVAILABLE');
+    assert.match(failed?.error?.message ?? '', /read-only.*isolation.*unavailable/i);
+    assert.equal(runnerInvocations, 0);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}
+
 async function testWorkerLoopPollsUntilAbort(): Promise<void> {
   let calls = 0;
   const abort = new AbortController();
@@ -134,10 +239,32 @@ async function testWorkerLoopPollsUntilAbort(): Promise<void> {
 }
 
 function task(taskId: string) {
-  return { schemaVersion: 1 as const, taskId, idempotencyKey: `idem:${taskId}`, tenantId: 'tenant', requesterId: 'user', conversationId: 'conversation', provider: 'codex', prompt: 'work', createdAt: new Date().toISOString() };
+  return {
+    schemaVersion: 2 as const,
+    taskId,
+    idempotencyKey: `idem:${taskId}`,
+    tenantId: 'tenant',
+    requesterId: 'user',
+    conversationId: 'conversation',
+    provider: 'codex',
+    prompt: 'work',
+    createdAt: new Date().toISOString(),
+    execution: {
+      mode: 'workspace-write' as const,
+      workspaceReference: 'teams-core-worker-workspace' as const,
+    },
+  };
 }
 function handle(result: Promise<{ result: string; providerExecutionId: string }>): WorkerExecutionHandle {
   return { result, terminateProcessTree: async () => {}, cleanupProcessTree: async () => {} };
+}
+function reference(value: ReturnType<typeof task>): AgentDispatchTaskReference {
+  return {
+    taskId: value.taskId,
+    tenantId: value.tenantId,
+    requesterId: value.requesterId,
+    conversationId: value.conversationId,
+  };
 }
 function createFixture() {
   const client = new MemoryQueueClient();
@@ -146,9 +273,10 @@ function createFixture() {
 }
 class MemoryState implements AgentDispatchStatePort {
   records = new Map<string, AgentDispatchRecord>();
-  async create(record: AgentDispatchRecord) { if (this.records.has(record.taskId)) return 'exists' as const; this.records.set(record.taskId, structuredClone(record)); return 'created' as const; }
-  async get(id: string) { const value = this.records.get(id); return value && structuredClone(value); }
-  async compareAndSwap(taskId: string, expected: { leaseOwner?: string; leaseGeneration: number }, mutate: (current: AgentDispatchRecord) => AgentDispatchRecord) { const current = this.records.get(taskId); if (!current) throw new Error('missing state'); if (current.leaseOwner !== expected.leaseOwner || current.leaseGeneration !== expected.leaseGeneration) return undefined; const next = mutate(structuredClone(current)); this.records.set(taskId, structuredClone(next)); return structuredClone(next); }
+  async create(record: AgentDispatchRecord) { const key = this.key(record.task); if (this.records.has(key)) return 'exists' as const; this.records.set(key, structuredClone(record)); return 'created' as const; }
+  async get(taskReference: AgentDispatchTaskReference) { const value = this.records.get(this.key(taskReference)); return value && structuredClone(value); }
+  async compareAndSwap(taskReference: AgentDispatchTaskReference, expected: { leaseOwner?: string; leaseGeneration: number }, mutate: (current: AgentDispatchRecord) => AgentDispatchRecord) { const key = this.key(taskReference); const current = this.records.get(key); if (!current) throw new Error('missing state'); if (current.leaseOwner !== expected.leaseOwner || current.leaseGeneration !== expected.leaseGeneration) return undefined; const next = mutate(structuredClone(current)); this.records.set(key, structuredClone(next)); return structuredClone(next); }
+  private key(taskReference: AgentDispatchTaskReference) { return JSON.stringify([taskReference.tenantId, taskReference.requesterId, taskReference.conversationId, taskReference.taskId]); }
 }
 class MemoryQueueClient implements AzureQueueClientPort {
   sent: string[] = []; messages: Array<{ id: string; text: string; receipt: string; count: number; visible: boolean }> = [];
@@ -165,5 +293,7 @@ await testWorkerCompletionDuplicateAndError();
 await testCancellationCleansProcessTree();
 await testLinuxPreflightAndCloudInit();
 await testProductionPreflightRunsBeforeExecutorAndFailsClosed();
+await testWorkerCompositionPreservesModeAndPrivateCodexHome();
+await testUnsupportedReadOnlyPersistsExplicitFailureWithoutRunnerInvocation();
 await testWorkerLoopPollsUntilAbort();
 console.log('azure-worker-contract-test: PASS');

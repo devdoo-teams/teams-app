@@ -6,6 +6,7 @@ import {
   type AzureQueueClientPort,
   AzureAgentDispatchQueue,
 } from '../src/server/azure-agent-dispatch-queue.js';
+import type { AgentDispatchTaskReference } from '../src/server/queue/agent-dispatch-queue.js';
 
 const now = '2026-09-03T00:00:00.000Z';
 const taskId = 'task-adversarial-diagnostics';
@@ -24,7 +25,7 @@ const unsafeValues = [
 const unsafeDiagnostic = `${unsafeValues.join(' | ')} | ${'한'.repeat(5_000)}`;
 
 const dispatchTask = {
-  schemaVersion: 1 as const,
+  schemaVersion: 2 as const,
   taskId,
   idempotencyKey: `idem:${taskId}`,
   tenantId: 'tenant-safe-id',
@@ -33,7 +34,20 @@ const dispatchTask = {
   provider: 'codex',
   prompt: 'safe prompt',
   createdAt: now,
+  execution: {
+    mode: 'workspace-write' as const,
+    workspaceReference: 'teams-core-worker-workspace' as const,
+  },
 };
+
+function reference(value: typeof dispatchTask): AgentDispatchTaskReference {
+  return {
+    taskId: value.taskId,
+    tenantId: value.tenantId,
+    requesterId: value.requesterId,
+    conversationId: value.conversationId,
+  };
+}
 
 class MemoryState implements AgentDispatchStatePort {
   readonly records = new Map<string, AgentDispatchRecord>();
@@ -44,22 +58,22 @@ class MemoryState implements AgentDispatchStatePort {
     return 'created';
   }
 
-  async get(id: string): Promise<AgentDispatchRecord | undefined> {
-    const record = this.records.get(id);
+  async get(taskReference: AgentDispatchTaskReference): Promise<AgentDispatchRecord | undefined> {
+    const record = this.records.get(taskReference.taskId);
     return record && structuredClone(record);
   }
 
   async compareAndSwap(
-    id: string,
+    taskReference: AgentDispatchTaskReference,
     expected: { leaseOwner?: string; leaseGeneration: number },
     mutate: (current: AgentDispatchRecord) => AgentDispatchRecord,
   ): Promise<AgentDispatchRecord | undefined> {
-    const current = this.records.get(id);
+    const current = this.records.get(taskReference.taskId);
     if (!current || current.leaseOwner !== expected.leaseOwner || current.leaseGeneration !== expected.leaseGeneration) {
       return undefined;
     }
     const next = mutate(structuredClone(current));
-    this.records.set(id, structuredClone(next));
+    this.records.set(taskReference.taskId, structuredClone(next));
     return structuredClone(next);
   }
 }
@@ -148,7 +162,7 @@ assertNoUnsafeFragments(persistedFailure, 'failure persistence boundary');
 
 const cancelledTask = { ...dispatchTask, taskId: 'task-adversarial-cancellation', idempotencyKey: 'idem:task-adversarial-cancellation' };
 await queue.enqueue(cancelledTask);
-await queue.requestCancellation(cancelledTask.taskId, unsafeDiagnostic);
+await queue.requestCancellation(reference(cancelledTask), unsafeDiagnostic);
 const persistedCancellation = state.records.get(cancelledTask.taskId);
 assert.ok(persistedCancellation);
 assertNoUnsafeFragments(persistedCancellation, 'cancellation persistence boundary');
@@ -168,7 +182,7 @@ legacyWithExtras.diagnosticDump = 'ExactUnknownDiagnosticSecret123';
 if (legacyWithExtras.checkpoint) legacyWithExtras.checkpoint.rawSecret = 'ExactNestedDiagnosticSecret123';
 state.records.set(taskId, legacy);
 
-const observed = await queue.observe(taskId);
+const observed = await queue.observe(reference(dispatchTask));
 assert.ok(observed);
 assertNoUnsafeFragments(observed, 'old-record response boundary');
 assert.equal(JSON.stringify(observed).includes('ExactUnknownDiagnosticSecret123'), false, 'response allowlist drops unknown top-level diagnostics');
