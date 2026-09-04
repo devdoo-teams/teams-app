@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import type {
   AgentDispatchQueue,
   AgentDispatchTask,
+  ServerOwnedLegacyDispatchMigration,
 } from '../server/queue/agent-dispatch-queue.js';
 import {
   AzureAgentDispatchQueue,
@@ -156,6 +157,7 @@ export class AzureCodexWorker {
 export type ProductionAzureCodexWorkerOptions = {
   env: Record<string, string | undefined>;
   state: AgentDispatchStatePort;
+  legacyMigration: ServerOwnedLegacyDispatchMigration;
   executor: WorkerExecutionPort;
   createDefaultAzureCredential?: ProductionAzureQueueClientOptions['createDefaultAzureCredential'];
   createQueueClient?: ProductionAzureQueueClientOptions['createQueueClient'];
@@ -177,7 +179,9 @@ export function createProductionAzureCodexWorker(options: ProductionAzureCodexWo
     createDefaultAzureCredential: options.createDefaultAzureCredential,
     createQueueClient: options.createQueueClient,
   });
-  const queue = new AzureAgentDispatchQueue(client, options.state);
+  const queue = new AzureAgentDispatchQueue(client, options.state, {
+    legacyMigration: options.legacyMigration,
+  });
   return new AzureCodexWorker(queue, options.executor, {
     visibilityTimeoutSeconds,
     heartbeatIntervalMs,
@@ -205,6 +209,7 @@ export async function runAzureCodexWorkerLoop(
 
 export type ProductionWorkerComposition = Readonly<{
   state: AgentDispatchStatePort;
+  legacyMigration: ServerOwnedLegacyDispatchMigration;
   executor: WorkerExecutionPort;
 }>;
 
@@ -217,18 +222,19 @@ export async function startProductionAzureCodexWorker(options: {
   requireAbsolute(modulePath, 'TEAMS_WORKER_COMPOSITION_MODULE');
   const loadComposition = options.loadComposition ?? (async (absolutePath) => {
     const loaded = await import(pathToFileURL(absolutePath).href) as Partial<ProductionWorkerComposition>;
-    if (!loaded.state || !loaded.executor) {
-      throw new Error('worker composition module must export state and executor');
+    if (!loaded.state || !loaded.legacyMigration || !loaded.executor) {
+      throw new Error('worker composition module must export state, legacyMigration, and executor');
     }
-    return { state: loaded.state, executor: loaded.executor };
+    return { state: loaded.state, legacyMigration: loaded.legacyMigration, executor: loaded.executor };
   });
   const composition = await loadComposition(path.resolve(modulePath));
-  if (!composition?.state || !composition?.executor) {
-    throw new Error('worker composition module must provide state and executor');
+  if (!composition?.state || !composition?.legacyMigration || !composition?.executor) {
+    throw new Error('worker composition module must provide state, legacyMigration, and executor');
   }
   const worker = createProductionAzureCodexWorker({
     env: options.env,
     state: composition.state,
+    legacyMigration: composition.legacyMigration,
     executor: composition.executor,
   });
   await runAzureCodexWorkerLoop(worker, { signal: options.signal });

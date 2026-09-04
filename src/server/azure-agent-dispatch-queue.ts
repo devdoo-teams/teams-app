@@ -10,14 +10,17 @@ import { QueueClient } from '@azure/storage-queue';
 
 import {
   AGENT_DISPATCH_SCHEMA_VERSION,
-  AGENT_DISPATCH_LINUX_READ_ONLY_ISOLATION_REFERENCE,
-  AGENT_DISPATCH_WORKSPACE_REFERENCE,
   type AgentDispatchCheckpoint,
   type AgentDispatchCompletionReceipt,
   type AgentDispatchErrorReceipt,
   type AgentDispatchQueue,
   type AgentDispatchTask,
   type AgentDispatchTaskReference,
+  type LegacyAgentDispatchRecord,
+  type LegacyAgentDispatchTask,
+  type ServerOwnedLegacyDispatchMigration,
+  canonicalAgentDispatchExecution,
+  hashLegacyAgentDispatchTask,
   isTerminalDispatchStatus,
 } from './queue/agent-dispatch-queue.js';
 
@@ -54,6 +57,8 @@ export type AgentDispatchLease = Readonly<{
 export interface AgentDispatchStatePort {
   create(record: AgentDispatchRecord): Promise<'created' | 'exists'>;
   get(reference: AgentDispatchTaskReference): Promise<AgentDispatchRecord | undefined>;
+  /** Reads an accepted v1 record from the explicitly configured legacy/global partition. */
+  getLegacy?(reference: AgentDispatchTaskReference): Promise<LegacyAgentDispatchRecord | undefined>;
   /**
    * Atomically applies mutate only while owner and generation still match.
    * Implementations must use applyAgentDispatchRecordMutation so immutable
@@ -162,6 +167,15 @@ export class DispatchInvalidStateError extends Error {
   }
 }
 
+export class LegacyDispatchMigrationUnavailableError extends Error {
+  readonly code = 'AGENT_DISPATCH_LEGACY_MIGRATION_UNAVAILABLE' as const;
+
+  constructor(taskId: string) {
+    super(`Legacy dispatch task ${taskId} is retained until its server-owned migration state is available.`);
+    this.name = 'LegacyDispatchMigrationUnavailableError';
+  }
+}
+
 export function assertCanonicalAgentDispatchRecord(record: AgentDispatchRecord): void {
   try {
     const task = canonicalTask(record.task);
@@ -203,10 +217,13 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
   constructor(
     private readonly client: AzureQueueClientPort,
     private readonly state: AgentDispatchStatePort,
-    options: { clock?: Clock } = {},
+    options: { clock?: Clock; legacyMigration?: ServerOwnedLegacyDispatchMigration } = {},
   ) {
     this.clock = options.clock ?? { now: () => new Date() };
+    this.legacyMigration = options.legacyMigration;
   }
+
+  private readonly legacyMigration?: ServerOwnedLegacyDispatchMigration;
 
   async enqueue(input: AgentDispatchTask): Promise<AgentDispatchRecord> {
     const task = canonicalTask(input);
@@ -299,8 +316,12 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
 
     let task: AgentDispatchTask;
     try {
-      task = parseTask(message.messageText);
+      task = await this.parseDispatchMessage(message.messageText);
     } catch (error) {
+      if (error instanceof LegacyDispatchMigrationUnavailableError) {
+        await this.deferMessage(message);
+        return undefined;
+      }
       await this.quarantineMessage(message, undefined, safeMessage(error));
       return undefined;
     }
@@ -472,6 +493,91 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
     if (!record) throw new Error(`No durable dispatch record exists for ${reference.taskId}.`);
     assertRecordScope(record, reference);
     return record;
+  }
+
+  private async parseDispatchMessage(messageText: string): Promise<AgentDispatchTask> {
+    let value: unknown;
+    try {
+      value = JSON.parse(messageText);
+    } catch {
+      throw new Error('dispatch message is not valid JSON');
+    }
+    if (isLegacyDispatchTask(value)) return this.migrateLegacyTask(value);
+    return canonicalTask(value);
+  }
+
+  private async migrateLegacyTask(legacyTask: LegacyAgentDispatchTask): Promise<AgentDispatchTask> {
+    if (!this.legacyMigration) {
+      throw new LegacyDispatchMigrationUnavailableError(legacyTask.taskId);
+    }
+    const legacyReference = canonicalTaskReference({
+      taskId: legacyTask.taskId,
+      tenantId: legacyTask.tenantId,
+      requesterId: legacyTask.requesterId,
+      conversationId: legacyTask.conversationId,
+    });
+    const legacyRequestHash = hashLegacyAgentDispatchTask(legacyTask);
+    let legacyRecord: LegacyAgentDispatchRecord | undefined;
+    try {
+      legacyRecord = this.state.getLegacy
+        ? await this.state.getLegacy(legacyReference)
+        : undefined;
+    } catch {
+      throw new LegacyDispatchMigrationUnavailableError(legacyTask.taskId);
+    }
+    if (legacyRecord && !isMatchingLegacyRecord(legacyRecord, legacyTask, legacyRequestHash)) {
+      throw new Error('legacy dispatch record is missing or hash-bound state does not match the accepted message');
+    }
+    let execution: AgentDispatchTask['execution'] | undefined;
+    try {
+      execution = await this.legacyMigration.resolveExecution(legacyTask, legacyRequestHash);
+    } catch {
+      throw new LegacyDispatchMigrationUnavailableError(legacyTask.taskId);
+    }
+    if (!execution) throw new LegacyDispatchMigrationUnavailableError(legacyTask.taskId);
+    const task = canonicalTask({
+      ...legacyTask,
+      schemaVersion: AGENT_DISPATCH_SCHEMA_VERSION,
+      execution: canonicalAgentDispatchExecution(execution),
+    });
+    const reference = canonicalTaskReference(task);
+    let current: AgentDispatchRecord | undefined;
+    try {
+      current = await this.state.get(reference);
+    } catch {
+      throw new LegacyDispatchMigrationUnavailableError(legacyTask.taskId);
+    }
+    if (!current) {
+      if (!legacyRecord) throw new LegacyDispatchMigrationUnavailableError(legacyTask.taskId);
+      const migrated = migrateLegacyRecord(legacyRecord, task);
+      let created: 'created' | 'exists';
+      try {
+        created = await this.state.create(migrated);
+      } catch {
+        throw new LegacyDispatchMigrationUnavailableError(legacyTask.taskId);
+      }
+      if (created === 'created') {
+        current = migrated;
+      } else {
+        try {
+          current = await this.state.get(reference);
+        } catch {
+          throw new LegacyDispatchMigrationUnavailableError(legacyTask.taskId);
+        }
+      }
+    }
+    if (!current) throw new LegacyDispatchMigrationUnavailableError(legacyTask.taskId);
+    assertRecordScope(current, reference);
+    if (current.requestHash !== hashTask(task) || current.idempotencyKey !== task.idempotencyKey) {
+      throw new Error('migrated dispatch record does not match the immutable v1 request identity');
+    }
+    return task;
+  }
+
+  private async deferMessage(
+    message: { messageId: string; popReceipt: string },
+  ): Promise<void> {
+    await this.client.updateMessage(message.messageId, message.popReceipt, undefined, 1);
   }
 
   private async quarantineMessage(
@@ -655,42 +761,63 @@ function safeTaskIdForError(value: unknown): string {
 }
 
 function canonicalExecution(value: unknown): AgentDispatchTask['execution'] {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new TypeError('dispatch execution must be an object');
-  }
-  const execution = value as Record<string, unknown>;
-  if (execution.workspaceReference !== AGENT_DISPATCH_WORKSPACE_REFERENCE) {
-    throw new TypeError('dispatch workspace reference is invalid');
-  }
-  if (execution.mode === 'workspace-write') {
-    if (execution.isolationReference !== undefined) {
-      throw new TypeError('workspace-write dispatch must not carry a read-only isolation reference');
-    }
-    return Object.freeze({
-      mode: 'workspace-write',
-      workspaceReference: AGENT_DISPATCH_WORKSPACE_REFERENCE,
-    });
-  }
-  if (
-    execution.mode === 'read-only'
-    && execution.isolationReference === AGENT_DISPATCH_LINUX_READ_ONLY_ISOLATION_REFERENCE
-  ) {
-    return Object.freeze({
-      mode: 'read-only',
-      workspaceReference: AGENT_DISPATCH_WORKSPACE_REFERENCE,
-      isolationReference: AGENT_DISPATCH_LINUX_READ_ONLY_ISOLATION_REFERENCE,
-    });
-  }
-  throw new TypeError('dispatch execution mode or isolation reference is invalid');
+  return canonicalAgentDispatchExecution(value);
 }
 
-function parseTask(messageText: string): AgentDispatchTask {
+function isLegacyDispatchTask(value: unknown): value is LegacyAgentDispatchTask {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value)
+    && (value as Record<string, unknown>).schemaVersion === 1);
+}
+
+function isMatchingLegacyRecord(
+  record: LegacyAgentDispatchRecord,
+  task: LegacyAgentDispatchTask,
+  requestHash: string,
+): boolean {
   try {
-    return canonicalTask(JSON.parse(messageText));
-  } catch (error) {
-    if (error instanceof SyntaxError) throw new Error('dispatch message is not valid JSON');
-    throw error;
+    if (
+      !isDeepStrictEqual(record.task, task)
+      || record.taskId !== task.taskId
+      || record.idempotencyKey !== task.idempotencyKey
+      || record.requestHash !== requestHash
+      || !['queued', 'leased', 'completed', 'failed', 'cancelled', 'quarantined'].includes(record.status)
+      || typeof record.enqueued !== 'boolean'
+      || !Number.isSafeInteger(record.dequeueCount)
+      || record.dequeueCount < 0
+      || typeof record.updatedAt !== 'string'
+      || (record.leaseGeneration !== undefined
+        && (!Number.isSafeInteger(record.leaseGeneration) || record.leaseGeneration < 0))
+    ) return false;
+    return hashLegacyAgentDispatchTask(task) === requestHash;
+  } catch {
+    return false;
   }
+}
+
+function migrateLegacyRecord(
+  legacy: LegacyAgentDispatchRecord,
+  task: AgentDispatchTask,
+): AgentDispatchRecord {
+  return {
+    taskId: task.taskId,
+    idempotencyKey: task.idempotencyKey,
+    requestHash: hashTask(task),
+    status: legacy.status,
+    task,
+    enqueued: legacy.enqueued,
+    dequeueCount: legacy.dequeueCount,
+    updatedAt: legacy.updatedAt,
+    leaseOwner: legacy.leaseOwner,
+    leaseGeneration: legacy.leaseGeneration ?? 0,
+    leaseMessageId: legacy.leaseMessageId,
+    leaseExpiresAt: legacy.leaseExpiresAt,
+    cancellationRequested: legacy.cancellationRequested,
+    cancellationReason: legacy.cancellationReason,
+    checkpoint: legacy.checkpoint,
+    receipt: legacy.receipt,
+    error: legacy.error,
+    quarantineReason: legacy.quarantineReason,
+  };
 }
 
 function hashTask(task: AgentDispatchTask): string {

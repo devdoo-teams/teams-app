@@ -8,7 +8,7 @@ import {
   type RuntimeStore,
 } from './runtime-store.js';
 
-const AGENT_JOB_LEDGER_SCOPE: RuntimeScope = Object.freeze({
+export const AGENT_JOB_LEDGER_SCOPE: RuntimeScope = Object.freeze({
   tenantId: 'teams-core-system',
   requesterId: 'agent-job-ledger',
   conversationId: 'global',

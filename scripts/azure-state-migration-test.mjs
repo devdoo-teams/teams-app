@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   AGENT_JOB_LEDGER_SCOPE,
@@ -25,8 +27,11 @@ import {
 } from './azure-state-import.mjs';
 import { reconcileMigration } from './azure-state-reconcile.mjs';
 import {
+  createLocalDurableAzureChallengeStore,
+  createLocalProtectedAzureOperationalVerifier,
   createLocalSignedAzureEvidenceVerifier,
   createPreflightCommands,
+  createProtectedAzureOperationalEvidenceVerifier,
   resolveReleaseTarget,
   validateAzureIntegratedEvidence,
 } from './release-gate.mjs';
@@ -34,6 +39,20 @@ import {
 const sourceCommit = '0123456789abcdef0123456789abcdef01234567';
 const exportedAt = '2026-09-03T01:02:03.000Z';
 const azureAccountKeyFixture = 'o0DPYVAbjXPGDUBFay7YLycJB7NdF+SMFn5E6tdRSnFP0d7Ioknw1cC6Yh9PDHg0EzIotFsejgUEQg1jvFwAPg==';
+const azureAccountKeyClassOmissionFixtures = [
+  {
+    label: 'without digits',
+    value: 'khsTuNMFGrCVUfofSBePgVcpWTcPSbcrkjotqPUxcdiVybebIJYbCdu/YbuVajaJwhsTMxYfEDgZEjkXknWFiA==',
+  },
+  {
+    label: 'without lowercase letters',
+    value: 'ZMHM3ED0/2HULYZADY7OVEFUDUXKP8LWFMHYTS98JMLUN23+ROLOVSHID6P676TKR+DSF8JQNU3AXKHYZM/QHA==',
+  },
+  {
+    label: 'without uppercase letters',
+    value: '+zm92h6bm7+1gtu7y3kxorcb+1cn8fal2f8ru9o7axkbqnw/cx4lg3yxktolerebg50x+vs9mbyhejwlkn63mg==',
+  },
+];
 const jobs = [
   {
     id: 'task-one',
@@ -268,6 +287,33 @@ assert.throws(
   /sensitive|secret|credential|account.?key/i,
   'safe metadata names must not exempt credential-shaped values',
 );
+for (const { label, value } of azureAccountKeyClassOmissionFixtures) {
+  assert.equal(Buffer.from(value, 'base64').byteLength, 64, `${label} fixture must decode to 64 bytes`);
+  assert.equal(Buffer.from(value, 'base64').toString('base64'), value, `${label} fixture must be canonical Base64`);
+  assert.throws(
+    () => createAgentJobExportBundle({
+      jobs: [{ ...jobs[0], metadata: { observations: [{ payload: value }] } }],
+      sourceCommit,
+      exportedAt,
+    }),
+    /sensitive|secret|credential|account.?key/i,
+    `a canonical Azure account-key-shaped value ${label} must be rejected under a neutral nested key`,
+  );
+}
+for (const { label, value } of azureAccountKeyClassOmissionFixtures) {
+  const snapshotDocument = structuredClone(bundle.records[0].document);
+  snapshotDocument.value.metadata = { observations: [{ payload: value }] };
+  snapshotDocument.contentHash = sha256(stableMigrationJson(snapshotDocument.value));
+  assert.throws(
+    () => createRuntimeSnapshotBundle({
+      documents: [snapshotDocument],
+      sourceCommit,
+      exportedAt,
+    }),
+    /sensitive|secret|credential|account.?key/i,
+    `Azure snapshot export must reject a canonical account-key-shaped value ${label} under a neutral key`,
+  );
+}
 
 const constructedAzureTarget = await createAzureMigrationTarget({
   AZURE_COSMOS_ENDPOINT: 'https://fixture.documents.azure.com:443/',
@@ -361,6 +407,18 @@ try {
     /sensitive|secret|credential|account.?key/i,
     'a full receipt envelope must reject a neutral-key Azure account-key shape nested in arrays',
   );
+  for (const { label, value } of azureAccountKeyClassOmissionFixtures) {
+    await assert.rejects(
+      persistSecretReceipt({
+        status: 'IN_PROGRESS',
+        operationId: crypto.randomUUID(),
+        requestSha256: 'a'.repeat(64),
+        checkpoints: [{ observations: [{ payload: value }] }],
+      }),
+      /sensitive|secret|credential|account.?key/i,
+      `mutation receipts must reject a canonical account-key-shaped value ${label}`,
+    );
+  }
   await fs.chmod(`${secretReceiptPath}.ledger`, 0o500);
   await assert.rejects(
     writeMigrationBundle(bundlePath, bundle),
@@ -615,6 +673,18 @@ try {
   assert.equal(reconciled.bundleSha256, bundle.manifest.bundleSha256);
   assert.equal(reconciled.recordCounts.total, 2);
   assert.deepEqual(reconciled.stableIds, bundle.manifest.stableIds);
+
+  for (const { label, value } of azureAccountKeyClassOmissionFixtures) {
+    const reconciliationSecretTarget = new MemoryMigrationTarget([...retryTarget.documents.values()]);
+    const secretDocument = reconciliationSecretTarget.documents.get('task-one');
+    secretDocument.value.metadata = { observations: [{ payload: value }] };
+    secretDocument.contentHash = sha256(stableMigrationJson(secretDocument.value));
+    await assert.rejects(
+      reconcileMigration({ bundle: diskBundle, target: reconciliationSecretTarget }),
+      /sensitive|secret|credential|account.?key/i,
+      `reconciliation must scan target envelopes for a canonical account-key-shaped value ${label}`,
+    );
+  }
 
   const mismatchTarget = new MemoryMigrationTarget([...retryTarget.documents.values()]);
   mismatchTarget.documents.get('task-one').contentHash = 'f'.repeat(64);
@@ -1066,6 +1136,94 @@ try {
     (error) => error?.code === 'AZURE_LIVE_EVIDENCE_UNVERIFIED' && /replay|consumed|challenge/i.test(error.message),
     'a consumed signed release challenge must not be replayed through the protected verifier interface',
   );
+  const operationalChallengePath = path.join(tempRoot, 'operational-challenge-consumed');
+  const createOperationalVerifier = () => createLocalProtectedAzureOperationalVerifier({
+    expectedConfiguration: azureConfiguration,
+    trustedPublicKeys: JSON.parse(trustedAttestationConfiguration),
+    expectedChallenge,
+    challengeStore: createLocalDurableAzureChallengeStore(operationalChallengePath),
+  });
+  const operationalResult = createOperationalVerifier().verify(signedIntegratedEvidence);
+  assert.equal(operationalResult.status, 'PROTECTED_OPERATIONAL_VERIFIER_CONTRACT_PASS');
+  assert.equal(operationalResult.evidenceClass, 'protected-operational-verifier-contract');
+  assert.notEqual(operationalResult.status, 'READY', 'the local protected fixture must never masquerade as production readiness');
+  assert.throws(
+    () => createOperationalVerifier().verify(signedIntegratedEvidence),
+    (error) => error?.code === 'AZURE_LIVE_EVIDENCE_UNVERIFIED' && /replay|consumed|challenge/i.test(error.message),
+    'the durable protected challenge must reject the same release evidence after verifier recreation/restart',
+  );
+  assert.throws(
+    () => createProtectedAzureOperationalEvidenceVerifier({
+      kind: 'protected-operational-verifier',
+      getPolicy: () => ({
+        configuration: azureConfiguration,
+        trustedPublicKeys: JSON.parse(trustedAttestationConfiguration),
+        expectedChallenge,
+      }),
+      consumeChallenge: () => true,
+    }),
+    (error) => error?.code === 'AZURE_LIVE_EVIDENCE_UNVERIFIED' && /protected|caller|deployment/i.test(error.message),
+    'a caller-created lookalike provider must not cross the operational verifier boundary',
+  );
+  const operationalReplayFixturePath = path.join(tempRoot, 'operational-replay-fixture.json');
+  await fs.writeFile(
+    operationalReplayFixturePath,
+    `${JSON.stringify({
+      expectedConfiguration: azureConfiguration,
+      trustedPublicKeys: JSON.parse(trustedAttestationConfiguration),
+      expectedChallenge,
+      evidence: { ...signedIntegratedEvidence, packageBytes: [...packageBytes] },
+    })}\n`,
+    { flag: 'wx', mode: 0o400 },
+  );
+  const releaseGateModuleUrl = new URL('./release-gate.mjs', import.meta.url).href;
+  const restartProbe = spawnSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `import fs from 'node:fs/promises';
+import { createLocalDurableAzureChallengeStore, createLocalProtectedAzureOperationalVerifier } from ${JSON.stringify(releaseGateModuleUrl)};
+const [fixturePath, markerPath] = process.argv.slice(1);
+const fixture = JSON.parse(await fs.readFile(fixturePath, 'utf8'));
+const verifier = createLocalProtectedAzureOperationalVerifier({
+  expectedConfiguration: fixture.expectedConfiguration,
+  trustedPublicKeys: fixture.trustedPublicKeys,
+  expectedChallenge: fixture.expectedChallenge,
+  challengeStore: createLocalDurableAzureChallengeStore(markerPath),
+});
+const evidence = { ...fixture.evidence, packageBytes: Uint8Array.from(fixture.evidence.packageBytes) };
+try {
+  verifier.verify(evidence);
+  console.error('same challenge was accepted after process restart');
+  process.exitCode = 1;
+} catch (error) {
+  if (error?.code === 'AZURE_LIVE_EVIDENCE_UNVERIFIED' && /replay|consumed|challenge/i.test(error.message)) {
+    process.exit(0);
+  }
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+}`,
+      operationalReplayFixturePath,
+      operationalChallengePath,
+    ],
+    {
+      cwd: path.dirname(fileURLToPath(import.meta.url)),
+      env: { PATH: process.env.PATH ?? '' },
+      encoding: 'utf8',
+      timeout: 30_000,
+    },
+  );
+  assert.equal(
+    restartProbe.error,
+    undefined,
+    `protected verifier restart probe failed to spawn: ${restartProbe.error?.message ?? 'unknown error'}`,
+  );
+  assert.equal(
+    restartProbe.status,
+    0,
+    `same-challenge replay after process restart was not rejected: ${restartProbe.stdout}\n${restartProbe.stderr}`,
+  );
   const mutableConfiguration = structuredClone(azureConfiguration);
   const mutableTrust = JSON.parse(trustedAttestationConfiguration);
   const mutableChallenge = structuredClone(expectedChallenge);
@@ -1111,6 +1269,19 @@ try {
     /sensitive|secret|credential|account.?key/i,
     'a full preflight envelope must reject a neutral-key Azure account-key shape nested in arrays',
   );
+  for (const { label, value } of azureAccountKeyClassOmissionFixtures) {
+    assert.throws(
+      () => validateAzureIntegratedEvidence({
+        ...integratedEvidence,
+        providerReceipt: {
+          ...providerReceipt,
+          diagnostics: [{ observations: [{ payload: value }] }],
+        },
+      }),
+      /sensitive|secret|credential|account.?key/i,
+      `preflight must reject a canonical account-key-shaped value ${label}`,
+    );
+  }
   const preflightBundleSecret = cloneBundle(diskBundle);
   preflightBundleSecret.records[0].document.extra = { sessionTokens: ['opaque-preflight-secret'] };
   assert.throws(

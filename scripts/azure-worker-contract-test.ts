@@ -125,6 +125,7 @@ async function testProductionPreflightRunsBeforeExecutorAndFailsClosed(): Promis
   assert.throws(() => createProductionAzureCodexWorker({
     env: {},
     state: new MemoryState(),
+    legacyMigration: { resolveExecution: async () => undefined },
     executor: { start: async () => handle(Promise.resolve({ result: 'x', providerExecutionId: 'y' })) },
   }), /AZURE_STORAGE_QUEUE_ENDPOINT|production worker configuration/i);
 }

@@ -11,9 +11,21 @@ import {
   AzureAgentDispatchQueue,
 } from '../src/server/azure-agent-dispatch-queue.js';
 import { AzureAgentDispatchQueue as LegacyPathAzureAgentDispatchQueue } from '../src/server/queue/azure-agent-dispatch-queue.js';
-import { createAgentDispatchSubmissionPort } from '../src/server/queue/agent-dispatch-queue.js';
+import {
+  createAgentDispatchSubmissionPort,
+  createServerOwnedLegacyDispatchMigration,
+  hashLegacyAgentDispatchTask,
+  type AgentDispatchExecution,
+  type LegacyAgentDispatchRecord,
+  type LegacyAgentDispatchTask,
+} from '../src/server/queue/agent-dispatch-queue.js';
 import type { AgentDispatchTaskReference } from '../src/server/queue/agent-dispatch-queue.js';
-import { createRuntimeStoreAgentDispatchStatePort } from '../src/server/storage/agent-dispatch-state-port.js';
+import {
+  createRuntimeStoreAgentDispatchStatePort,
+  createRuntimeStoreLegacyDispatchMigration,
+  LEGACY_AGENT_DISPATCH_GLOBAL_SCOPE,
+} from '../src/server/storage/agent-dispatch-state-port.js';
+import { AGENT_JOB_LEDGER_SCOPE } from '../src/server/storage/agent-job-durable-ledger.js';
 import {
   RuntimeStoreConflictError,
   type RuntimeRecord,
@@ -409,6 +421,150 @@ async function testDurableLeaseGenerationRejectsDuplicateAndStaleCompletion(): P
   assert.equal((await fixture.queue.observe(reference(task('task-generation'))))?.receipt?.result, 'fresh');
 }
 
+async function testV1DispatchMigrationPreservesStateAcrossLifecycleAndRestart(): Promise<void> {
+  const readOnlyExecution: AgentDispatchExecution = {
+    mode: 'read-only',
+    workspaceReference: 'teams-core-worker-workspace',
+    isolationReference: 'linux-read-only-required',
+  };
+  const migrationFor = (legacyTask: LegacyAgentDispatchTask) => createServerOwnedLegacyDispatchMigration([
+    { task: legacyTask, execution: readOnlyExecution },
+  ]);
+
+  const queuedTask = legacyTask('v1-queued');
+  const queuedFixture = createLegacyFixture(queuedTask, legacyRecord(queuedTask, 'queued'), migrationFor(queuedTask));
+  queuedFixture.client.inject(JSON.stringify(queuedTask));
+  const queuedLease = await queuedFixture.queue.lease({ visibilityTimeoutSeconds: 30 });
+  assert.equal(queuedLease?.task.schemaVersion, 2, 'queued v1 messages migrate to the current schema before execution');
+  assert.deepEqual(queuedLease?.task.execution, readOnlyExecution, 'legacy execution is derived from server-owned state');
+  assert.equal((await queuedFixture.state.get(reference(queuedLease!.task)))?.status, 'leased');
+  assert.equal(queuedFixture.state.legacyRecords.size, 1, 'the old global/legacy record is preserved during migration');
+  await queuedFixture.queue.complete(queuedLease!, { result: 'migrated result', providerExecutionId: 'v1-exec' });
+  assert.equal((await queuedFixture.queue.observe(legacyReference(queuedTask)))?.status, 'completed');
+
+  const leasedTask = legacyTask('v1-leased');
+  const leasedFixture = createLegacyFixture(
+    leasedTask,
+    legacyRecord(leasedTask, 'leased', {
+      leaseOwner: 'old-worker',
+      leaseGeneration: 4,
+      leaseExpiresAt: '2026-09-02T00:00:00.000Z',
+    }),
+    migrationFor(leasedTask),
+  );
+  leasedFixture.client.inject(JSON.stringify(leasedTask));
+  const reclaimed = await leasedFixture.queue.lease({ visibilityTimeoutSeconds: 30 });
+  assert.equal(reclaimed?.task.taskId, leasedTask.taskId, 'an expired legacy lease remains recoverable');
+  assert.equal(reclaimed?.leaseGeneration, 5, 'lease generation continues from migrated state');
+
+  const cancellationTask = legacyTask('v1-cancellation');
+  const cancellationFixture = createLegacyFixture(
+    cancellationTask,
+    legacyRecord(cancellationTask, 'queued', {
+      cancellationRequested: true,
+      cancellationReason: 'operator requested cancellation',
+    }),
+    migrationFor(cancellationTask),
+  );
+  cancellationFixture.client.inject(JSON.stringify(cancellationTask));
+  const cancellationLease = await cancellationFixture.queue.lease({ visibilityTimeoutSeconds: 30 });
+  const cancellationRecord = await cancellationFixture.state.get(reference(cancellationLease!.task));
+  assert.equal(cancellationRecord?.cancellationRequested, true, 'cancellation intent survives v1 migration');
+  await cancellationFixture.queue.cancel(cancellationLease!, 'operator requested cancellation');
+  assert.equal((await cancellationFixture.queue.observe(legacyReference(cancellationTask)))?.status, 'cancelled');
+
+  const terminalTask = legacyTask('v1-terminal');
+  const terminalFixture = createLegacyFixture(
+    terminalTask,
+    legacyRecord(terminalTask, 'completed', {
+      receipt: { result: 'already complete', providerExecutionId: 'old-exec' },
+    }),
+    migrationFor(terminalTask),
+  );
+  terminalFixture.client.inject(JSON.stringify(terminalTask));
+  const terminalLease = await terminalFixture.queue.lease({ visibilityTimeoutSeconds: 30 });
+  assert.equal(terminalLease?.task.schemaVersion, 2, 'terminal v1 messages are decoded before duplicate handling');
+  assert.equal(terminalFixture.client.poison.length, 0, 'terminal legacy messages are not poisoned');
+  assert.equal(terminalFixture.client.messageCount, 0, 'terminal legacy duplicates are consumed exactly once');
+  assert.equal((await terminalFixture.state.get(legacyReference(terminalTask)))?.status, 'completed');
+
+  const duplicateTask = legacyTask('v1-duplicate');
+  const duplicateFixture = createLegacyFixture(
+    duplicateTask,
+    legacyRecord(duplicateTask, 'queued'),
+    migrationFor(duplicateTask),
+  );
+  duplicateFixture.client.inject(JSON.stringify(duplicateTask));
+  const firstLease = await duplicateFixture.queue.lease({ visibilityTimeoutSeconds: 30 });
+  assert.ok(firstLease);
+  duplicateFixture.client.inject(JSON.stringify(duplicateTask));
+  const restartedQueue = new AzureAgentDispatchQueue(
+    duplicateFixture.client,
+    duplicateFixture.state,
+    { clock, legacyMigration: migrationFor(duplicateTask) },
+  );
+  assert.equal(await restartedQueue.lease({ visibilityTimeoutSeconds: 30 }), undefined, 'an active duplicate is discarded after queue recreation');
+  assert.equal(duplicateFixture.client.poison.length, 0, 'active v1 duplicates are not treated as poison');
+  await duplicateFixture.queue.complete(firstLease!, { result: 'done', providerExecutionId: 'duplicate-exec' });
+  duplicateFixture.client.inject(JSON.stringify(duplicateTask));
+  const postRestartQueue = new AzureAgentDispatchQueue(
+    duplicateFixture.client,
+    duplicateFixture.state,
+    { clock, legacyMigration: migrationFor(duplicateTask) },
+  );
+  const terminalDuplicate = await postRestartQueue.lease({ visibilityTimeoutSeconds: 30 });
+  assert.equal(terminalDuplicate?.task.taskId, duplicateTask.taskId, 'a terminal v1 duplicate remains recoverable after restart');
+  assert.equal(duplicateFixture.client.poison.length, 0);
+
+  const mismatchedTask = legacyTask('v1-hash-bound');
+  const mismatchedFixture = createLegacyFixture(
+    mismatchedTask,
+    legacyRecord(mismatchedTask, 'queued'),
+    migrationFor(mismatchedTask),
+  );
+  mismatchedFixture.client.inject(JSON.stringify({ ...mismatchedTask, prompt: 'forged legacy prompt' }));
+  assert.equal(await mismatchedFixture.queue.lease({ visibilityTimeoutSeconds: 30 }), undefined, 'legacy migration is bound to the immutable v1 request hash');
+  assert.equal(mismatchedFixture.client.poison.length, 1, 'a hash mismatch is quarantined instead of migrated');
+
+  const noMigrationTask = legacyTask('v1-no-default-write');
+  const noMigrationFixture = createLegacyFixture(noMigrationTask, legacyRecord(noMigrationTask, 'queued'));
+  noMigrationFixture.client.inject(JSON.stringify(noMigrationTask));
+  assert.equal(await noMigrationFixture.queue.lease({ visibilityTimeoutSeconds: 30 }), undefined, 'missing migration capability does not guess an execution mode');
+  assert.equal(noMigrationFixture.client.poison.length, 0, 'accepted v1 work is deferred while migration state is unavailable');
+  assert.equal(noMigrationFixture.client.messageCount, 1, 'deferred v1 work is not deleted');
+  assert.equal(noMigrationFixture.state.records.size, 0, 'legacy read-only work is never silently defaulted into a new write record');
+}
+
+async function testRuntimeStoreReadsHistoricalGlobalPartitionAndDerivesModeFromJobLedger(): Promise<void> {
+  const runtimeStore = new MemoryRuntimeStore();
+  const oldTask = legacyTask('v1-global-partition');
+  const oldRecord = legacyRecord(oldTask, 'queued');
+  runtimeStore.seed(LEGACY_AGENT_DISPATCH_GLOBAL_SCOPE, oldTask.taskId, oldRecord);
+  runtimeStore.seed(AGENT_JOB_LEDGER_SCOPE, oldTask.taskId, {
+    id: oldTask.taskId,
+    prompt: oldTask.prompt,
+    mode: 'read-only',
+    status: 'queued',
+    tenantId: oldTask.tenantId,
+    requesterId: oldTask.requesterId,
+    conversationId: oldTask.conversationId,
+    provider: oldTask.provider,
+  });
+
+  const state = createRuntimeStoreAgentDispatchStatePort(runtimeStore);
+  assert.deepEqual(await state.getLegacy!(legacyReference(oldTask)), oldRecord, 'the old global partition remains readable during migration');
+  const migration = createRuntimeStoreLegacyDispatchMigration(runtimeStore);
+  assert.deepEqual(
+    await migration.resolveExecution(oldTask, hashLegacyAgentDispatchTask(oldTask)),
+    {
+      mode: 'read-only',
+      workspaceReference: 'teams-core-worker-workspace',
+      isolationReference: 'linux-read-only-required',
+    },
+    'legacy execution is derived from the immutable server-owned AgentJob ledger',
+  );
+}
+
 async function testProductionQueueFactoryUsesManagedIdentityOnly(): Promise<void> {
   const constructed: Array<{ endpoint: string; credential: object }> = [];
   const sdkClient = {
@@ -488,6 +644,66 @@ function reference(value: ReturnType<typeof task>): AgentDispatchTaskReference {
   };
 }
 
+function legacyTask(taskId: string, options: {
+  tenantId?: string;
+  requesterId?: string;
+  conversationId?: string;
+} = {}): LegacyAgentDispatchTask {
+  return {
+    schemaVersion: 1,
+    taskId,
+    idempotencyKey: `legacy-idem:${taskId}`,
+    tenantId: options.tenantId ?? 'tenant-a',
+    requesterId: options.requesterId ?? 'user-a',
+    conversationId: options.conversationId ?? 'conversation-a',
+    provider: 'codex',
+    prompt: 'preserve accepted legacy work',
+    createdAt: clock.now().toISOString(),
+  };
+}
+
+function legacyReference(value: LegacyAgentDispatchTask): AgentDispatchTaskReference {
+  return {
+    taskId: value.taskId,
+    tenantId: value.tenantId,
+    requesterId: value.requesterId,
+    conversationId: value.conversationId,
+  };
+}
+
+function legacyRecord(
+  legacyTaskValue: LegacyAgentDispatchTask,
+  status: LegacyAgentDispatchRecord['status'],
+  fields: Partial<LegacyAgentDispatchRecord> = {},
+): LegacyAgentDispatchRecord {
+  return {
+    taskId: legacyTaskValue.taskId,
+    idempotencyKey: legacyTaskValue.idempotencyKey,
+    requestHash: hashLegacyAgentDispatchTask(legacyTaskValue),
+    status,
+    task: legacyTaskValue,
+    enqueued: true,
+    dequeueCount: 0,
+    updatedAt: clock.now().toISOString(),
+    ...fields,
+  };
+}
+
+function createLegacyFixture(
+  legacyTaskValue: LegacyAgentDispatchTask,
+  record: LegacyAgentDispatchRecord,
+  legacyMigration = createServerOwnedLegacyDispatchMigration([]),
+): { queue: AzureAgentDispatchQueue; client: MemoryQueueClient; state: MemoryState } {
+  const client = new MemoryQueueClient();
+  const state = new MemoryState();
+  state.putLegacy(record);
+  return {
+    client,
+    state,
+    queue: new AzureAgentDispatchQueue(client, state, { clock, legacyMigration }),
+  };
+}
+
 function createFixture(): { queue: AzureAgentDispatchQueue; client: MemoryQueueClient; state: MemoryState } {
   const client = new MemoryQueueClient();
   const state = new MemoryState();
@@ -500,6 +716,7 @@ function createFixture(): { queue: AzureAgentDispatchQueue; client: MemoryQueueC
 
 class MemoryState implements AgentDispatchStatePort {
   readonly records = new Map<string, AgentDispatchRecord>();
+  readonly legacyRecords = new Map<string, LegacyAgentDispatchRecord>();
   async create(record: AgentDispatchRecord): Promise<'created' | 'exists'> {
     const key = this.key(reference(record.task as ReturnType<typeof task>));
     if (this.records.has(key)) return 'exists';
@@ -508,6 +725,10 @@ class MemoryState implements AgentDispatchStatePort {
   }
   async get(taskReference: AgentDispatchTaskReference): Promise<AgentDispatchRecord | undefined> {
     const value = this.records.get(this.key(taskReference));
+    return value && structuredClone(value);
+  }
+  async getLegacy(taskReference: AgentDispatchTaskReference): Promise<LegacyAgentDispatchRecord | undefined> {
+    const value = this.legacyRecords.get(this.key(taskReference));
     return value && structuredClone(value);
   }
   async compareAndSwap(
@@ -528,6 +749,9 @@ class MemoryState implements AgentDispatchStatePort {
   }
   put(record: AgentDispatchRecord): void {
     this.records.set(this.key(reference(record.task as ReturnType<typeof task>)), record);
+  }
+  putLegacy(record: LegacyAgentDispatchRecord): void {
+    this.legacyRecords.set(this.key(legacyReference(record.task)), structuredClone(record));
   }
   private key(taskReference: AgentDispatchTaskReference): string {
     return JSON.stringify([
@@ -617,6 +841,18 @@ class MemoryRuntimeStore implements RuntimeStore {
     return structuredClone(record);
   }
 
+  seed<T>(scope: RuntimeScope, id: string, value: T): void {
+    const timestamp = clock.now().toISOString();
+    this.records.set(this.key(scope, id), {
+      id,
+      value: structuredClone(value),
+      etag: `seed-etag-${++this.revision}`,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      idempotencyKey: `seed:${id}`,
+    });
+  }
+
   private key(scope: RuntimeScope, id: string): string {
     return `${JSON.stringify(scope)}\0${id}`;
   }
@@ -633,5 +869,7 @@ await testMismatchedMessageCannotQuarantineLegitimateRecord();
 await testDiagnosticFieldsAreRedactedAndBoundedAtPersistenceAndResponseBoundaries();
 await testCanonicalTaskIdentityAcrossEveryOperation();
 await testDurableLeaseGenerationRejectsDuplicateAndStaleCompletion();
+await testV1DispatchMigrationPreservesStateAcrossLifecycleAndRestart();
+await testRuntimeStoreReadsHistoricalGlobalPartitionAndDerivesModeFromJobLedger();
 await testProductionQueueFactoryUsesManagedIdentityOnly();
 console.log('azure-agent-dispatch-queue-test: PASS');

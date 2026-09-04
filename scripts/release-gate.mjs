@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -728,6 +729,28 @@ function assertCanonicalAttestationTimestamp(value, label) {
 }
 
 const protectedAzureVerifierCapabilities = new WeakMap();
+const protectedAzureOperationalVerifierProviders = new WeakSet();
+
+/**
+ * @typedef {Readonly<{
+ *   configuration: Readonly<Record<string, string>>;
+ *   trustedPublicKeys: Readonly<Record<string, unknown>>;
+ *   expectedChallenge: Readonly<{releaseRunId: string; challengeId: string; nonce: string; attempt: number}>;
+ * }>} AzureOperationalVerifierPolicy
+ */
+
+/**
+ * Deployment-owned operational verifier capability. The evidence caller only
+ * supplies evidence to verify(); policy and replay state stay behind this
+ * boundary. Implementations must be registered by a protected deployment
+ * adapter, never reconstructed from evidence or ordinary environment input.
+ *
+ * @typedef {Readonly<{
+ *   kind: 'protected-operational-verifier';
+ *   getPolicy: () => AzureOperationalVerifierPolicy;
+ *   consumeChallenge: (challengeKey: string) => boolean;
+ * }>} AzureOperationalEvidenceVerifierProvider
+ */
 
 function immutableJsonClone(value) {
   const clone = JSON.parse(stableMigrationJson(value));
@@ -755,6 +778,110 @@ function requireExpectedReleaseChallenge(expectedChallenge) {
   return immutableJsonClone(expectedChallenge);
 }
 
+function releaseChallengeKey(challenge) {
+  return crypto
+    .createHash('sha256')
+    .update(stableMigrationJson({
+      releaseRunId: challenge.releaseRunId,
+      challengeId: challenge.challengeId,
+      nonce: challenge.nonce,
+      attempt: challenge.attempt,
+    }), 'utf8')
+    .digest('hex');
+}
+
+/**
+ * Deterministic local-only durable replay fixture. Each consumed challenge is
+ * represented by an atomically-created marker file, so a new verifier object
+ * or a new Node process observes the same consumed state. No Azure is touched.
+ */
+export function createLocalDurableAzureChallengeStore(markerPath) {
+  if (typeof markerPath !== 'string' || !path.isAbsolute(markerPath)) {
+    throw new TypeError('local protected challenge marker path must be an absolute path');
+  }
+  const resolvedMarkerPath = path.resolve(markerPath);
+  return Object.freeze({
+    consume(challengeKey) {
+      if (!/^[0-9a-f]{64}$/u.test(challengeKey ?? '')) {
+        throw new TypeError('protected challenge key must be a SHA-256 digest');
+      }
+      fsSync.mkdirSync(path.dirname(resolvedMarkerPath), { recursive: true, mode: 0o700 });
+      const consumedPath = `${resolvedMarkerPath}.${challengeKey}.consumed`;
+      try {
+        const descriptor = fsSync.openSync(consumedPath, 'wx', 0o400);
+        fsSync.closeSync(descriptor);
+        return true;
+      } catch (error) {
+        if (error?.code === 'EEXIST') return false;
+        throw error;
+      }
+    },
+  });
+}
+
+/**
+ * Creates the repository's deterministic protected fixture. This is not a
+ * production provider: it is deliberately the only provider registered here,
+ * while a real deployment must supply its own protected adapter and durable
+ * challenge store outside the evidence-caller process.
+ */
+export function createLocalProtectedAzureOperationalVerifier({
+  expectedConfiguration,
+  trustedPublicKeys,
+  expectedChallenge,
+  challengeStore,
+}) {
+  if (!challengeStore || typeof challengeStore.consume !== 'function') {
+    throw new TypeError('local protected verifier requires a durable challenge store');
+  }
+  const policy = immutableJsonClone({
+    configuration: requireAzureConfiguration(immutableJsonClone(expectedConfiguration)),
+    trustedPublicKeys,
+    expectedChallenge: requireExpectedReleaseChallenge(expectedChallenge),
+  });
+  const provider = Object.freeze({
+    kind: 'protected-operational-verifier',
+    getPolicy: () => policy,
+    consumeChallenge: (challengeKey) => challengeStore.consume(challengeKey),
+  });
+  protectedAzureOperationalVerifierProviders.add(provider);
+  return createProtectedAzureOperationalEvidenceVerifier(provider);
+}
+
+/**
+ * Adapter boundary for a deployment-owned operational verifier. The provider
+ * must be registered by that boundary before use; ordinary evidence objects,
+ * env variables, and caller-created lookalikes cannot become a capability.
+ */
+export function createProtectedAzureOperationalEvidenceVerifier(provider) {
+  if (!provider || !protectedAzureOperationalVerifierProviders.has(provider)) {
+    throw azureGateError(
+      'A protected deployment-owned Azure operational verifier provider is required; caller-created capabilities are rejected.',
+      'AZURE_LIVE_EVIDENCE_UNVERIFIED',
+    );
+  }
+  const providerPolicy = provider.getPolicy();
+  const policy = immutableJsonClone({
+    configuration: requireAzureConfiguration(providerPolicy.configuration),
+    trustedPublicKeys: providerPolicy.trustedPublicKeys,
+    expectedChallenge: requireExpectedReleaseChallenge(providerPolicy.expectedChallenge),
+  });
+  const capability = Object.freeze(Object.create(null));
+  protectedAzureVerifierCapabilities.set(capability, {
+    evidenceClass: 'protected-operational-verifier-contract',
+    resultStatus: 'PROTECTED_OPERATIONAL_VERIFIER_CONTRACT_PASS',
+    configuration: policy.configuration,
+    trustedPublicKeys: policy.trustedPublicKeys,
+    expectedChallenge: policy.expectedChallenge,
+    consumeChallenge: (challengeKey) => provider.consumeChallenge(challengeKey),
+  });
+  return Object.freeze({
+    verify(evidence) {
+      return validateAzureIntegratedEvidenceWithCapability(evidence, capability);
+    },
+  });
+}
+
 export function createLocalSignedAzureEvidenceVerifier({
   expectedConfiguration,
   trustedPublicKeys,
@@ -769,6 +896,12 @@ export function createLocalSignedAzureEvidenceVerifier({
     expectedChallenge: requireExpectedReleaseChallenge(expectedChallenge),
     now: now === undefined ? undefined : Number(now),
     consumed: false,
+    resultStatus: 'LOCAL_SIGNED_VERIFIER_CONTRACT_PASS',
+    consumeChallenge: () => {
+      if (protectedAzureVerifierCapabilities.get(capability).consumed) return false;
+      protectedAzureVerifierCapabilities.get(capability).consumed = true;
+      return true;
+    },
   });
   return Object.freeze({
     verify(evidence) {
@@ -1159,10 +1292,12 @@ function validateAzureIntegratedEvidenceWithCapability({
     jiraReceipt,
     now: verifierState.now,
   });
-  verifierState.consumed = true;
+  if (!verifierState.consumeChallenge(releaseChallengeKey(verifierState.expectedChallenge))) {
+    throw azureGateError('The protected release challenge was already consumed; replay is rejected.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
   return {
     phase: 'azure-integrated-evidence',
-    status: 'LOCAL_SIGNED_VERIFIER_CONTRACT_PASS',
+    status: verifierState.resultStatus ?? 'LOCAL_SIGNED_VERIFIER_CONTRACT_PASS',
     evidenceClass: verifierState.evidenceClass,
     attestation,
   };

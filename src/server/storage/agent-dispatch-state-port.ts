@@ -5,6 +5,8 @@ import {
   type RuntimeScope,
   type RuntimeStore,
 } from './runtime-store.js';
+import { AGENT_JOB_LEDGER_SCOPE } from './agent-job-durable-ledger.js';
+import type { AgentJob } from '../agent-job-store.js';
 import {
   applyAgentDispatchRecordMutation,
   assertCanonicalAgentDispatchRecord,
@@ -12,9 +14,28 @@ import {
   type AgentDispatchRecord,
   type AgentDispatchStatePort,
 } from '../azure-agent-dispatch-queue.js';
-import type { AgentDispatchTaskReference } from '../queue/agent-dispatch-queue.js';
+import {
+  AGENT_DISPATCH_LINUX_READ_ONLY_ISOLATION_REFERENCE,
+  AGENT_DISPATCH_WORKSPACE_REFERENCE,
+  hashLegacyAgentDispatchTask,
+  type AgentDispatchExecution,
+  type AgentDispatchTaskReference,
+  type LegacyAgentDispatchRecord,
+  type ServerOwnedLegacyDispatchMigration,
+} from '../queue/agent-dispatch-queue.js';
 
-export function createRuntimeStoreAgentDispatchStatePort(runtimeStore: RuntimeStore): AgentDispatchStatePort {
+/** Historical pre-scope partition used by the v1 queue implementation. */
+export const LEGACY_AGENT_DISPATCH_GLOBAL_SCOPE: RuntimeScope = Object.freeze({
+  tenantId: 'teams-core-system',
+  requesterId: 'agent-dispatch',
+  conversationId: 'global',
+});
+
+export function createRuntimeStoreAgentDispatchStatePort(
+  runtimeStore: RuntimeStore,
+  options: { legacyScope?: RuntimeScope } = {},
+): AgentDispatchStatePort {
+  const legacyScope = options.legacyScope ?? LEGACY_AGENT_DISPATCH_GLOBAL_SCOPE;
   return {
     async create(record) {
       assertCanonicalAgentDispatchRecord(record);
@@ -37,6 +58,10 @@ export function createRuntimeStoreAgentDispatchStatePort(runtimeStore: RuntimeSt
       assertCanonicalAgentDispatchRecord(record.value);
       assertRecordScope(record.value, reference);
       return record.value;
+    },
+    async getLegacy(reference) {
+      const record = await runtimeStore.read<LegacyAgentDispatchRecord>(legacyScope, reference.taskId);
+      return record ? structuredClone(record.value) : undefined;
     },
     async compareAndSwap(reference, expected, mutate) {
       const scope = scopeFor(reference);
@@ -84,6 +109,35 @@ export function createRuntimeStoreAgentDispatchStatePort(runtimeStore: RuntimeSt
   };
 }
 
+/**
+ * Derives the missing v2 execution contract from the durable AgentJob ledger,
+ * which is server-owned and separate from the v1 Queue Storage message. It
+ * never infers write access from a legacy message; a missing/mismatched job
+ * leaves the message deferred until the immutable source is available.
+ */
+export function createRuntimeStoreLegacyDispatchMigration(
+  runtimeStore: RuntimeStore,
+): ServerOwnedLegacyDispatchMigration {
+  return Object.freeze({
+    async resolveExecution(task, requestHash): Promise<AgentDispatchExecution | undefined> {
+      if (!/^[0-9a-f]{64}$/u.test(requestHash) || hashLegacyAgentDispatchTask(task) !== requestHash) return undefined;
+      const record = await runtimeStore.read<AgentJob>(AGENT_JOB_LEDGER_SCOPE, task.taskId);
+      const job = record?.value;
+      if (!job || !isMatchingServerOwnedJob(job, task)) return undefined;
+      return job.mode === 'read-only'
+        ? Object.freeze({
+            mode: 'read-only',
+            workspaceReference: AGENT_DISPATCH_WORKSPACE_REFERENCE,
+            isolationReference: AGENT_DISPATCH_LINUX_READ_ONLY_ISOLATION_REFERENCE,
+          })
+        : Object.freeze({
+            mode: 'workspace-write',
+            workspaceReference: AGENT_DISPATCH_WORKSPACE_REFERENCE,
+          });
+    },
+  });
+}
+
 function scopeFor(reference: AgentDispatchTaskReference): RuntimeScope {
   return {
     tenantId: reference.tenantId,
@@ -117,4 +171,17 @@ function assertRecordScope(
   ) {
     throw new Error(`Durable dispatch record scope mismatch for ${reference.taskId}.`);
   }
+}
+
+function isMatchingServerOwnedJob(
+  job: AgentJob,
+  task: LegacyAgentDispatchRecord['task'],
+): boolean {
+  return job.id === task.taskId
+    && job.prompt === task.prompt
+    && job.tenantId === task.tenantId
+    && job.requesterId === task.requesterId
+    && job.conversationId === task.conversationId
+    && (job.provider ?? 'codex') === task.provider
+    && (job.mode === 'read-only' || job.mode === 'workspace-write');
 }

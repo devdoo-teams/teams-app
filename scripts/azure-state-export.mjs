@@ -183,9 +183,6 @@ function isAzureAccountKeyShape(value) {
   if (
     candidate.length !== 88
     || !/^[A-Za-z0-9+/]{86}==$/u.test(candidate)
-    || !/[a-z]/u.test(candidate)
-    || !/[A-Z]/u.test(candidate)
-    || !/[0-9]/u.test(candidate)
   ) return false;
   let bytes;
   try {

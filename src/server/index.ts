@@ -165,7 +165,10 @@ import { RuntimeStoreAgentJobLedger } from './storage/agent-job-durable-ledger.j
 import {
   type RuntimeStore,
 } from './storage/runtime-store.js';
-import { createRuntimeStoreAgentDispatchStatePort } from './storage/agent-dispatch-state-port.js';
+import {
+  createRuntimeStoreAgentDispatchStatePort,
+  createRuntimeStoreLegacyDispatchMigration,
+} from './storage/agent-dispatch-state-port.js';
 import type { AgentExecutionDispatcher, AgentExecutionObservation } from './agent-service.js';
 import {
   createAgentDispatchSubmissionPort,
@@ -848,7 +851,11 @@ if (azureQueueDispatch) {
     throw new Error('TEAMS_AGENT_DISPATCH_MODE=azure-queue requires TEAMS_STORAGE_BACKEND=cosmos.');
   }
   const queueClient = createProductionAzureQueueClient({ env: process.env });
-  const queue = new AzureAgentDispatchQueue(queueClient, createRuntimeStoreAgentDispatchStatePort(runtimeStore));
+  const queue = new AzureAgentDispatchQueue(
+    queueClient,
+    createRuntimeStoreAgentDispatchStatePort(runtimeStore),
+    { legacyMigration: createRuntimeStoreLegacyDispatchMigration(runtimeStore) },
+  );
   azureAgentDispatchQueue = queue;
   agentExecutionDispatcher = createQueueExecutionDispatcher(queue);
 }
