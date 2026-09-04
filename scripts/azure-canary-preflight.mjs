@@ -210,6 +210,26 @@ function unsupportedExpressionNamespace(resourceId, expected) {
   fail('what-if Unsupported resource expression shape is outside the allowlist');
 }
 
+function validatedUnsupportedReason(value) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string') fail('Unsupported reason must be a string when provided');
+  const reason = value.trim();
+  if (reason.length === 0) return null;
+  if (Buffer.byteLength(reason, 'utf8') > 4096) fail('Unsupported reason exceeds the 4 KiB limit');
+  const containsForbiddenControl = [...reason].some((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint <= 8
+      || codePoint === 11
+      || codePoint === 12
+      || (codePoint >= 14 && codePoint <= 31)
+      || (codePoint >= 127 && codePoint <= 159);
+  });
+  if (containsForbiddenControl) {
+    fail('Unsupported reason contains a forbidden control character');
+  }
+  return reason;
+}
+
 export function summarizeAzureWhatIf(payload, { subscriptionId, resourceGroup }) {
   if (!payload || typeof payload !== 'object' || !Array.isArray(payload.changes)) fail('what-if response is malformed');
   if (payload.status !== 'Succeeded') fail(`what-if status must be Succeeded, got ${String(payload.status)}`);
@@ -219,6 +239,7 @@ export function summarizeAzureWhatIf(payload, { subscriptionId, resourceGroup })
   const allowedChangeTypes = new Set(['Create', 'NoChange', 'Ignore', 'Unsupported']);
   const changeCounts = {};
   const unsupportedResources = [];
+  const unsupportedChanges = [];
 
   for (const change of payload.changes) {
     const resourceId = String(change?.resourceId ?? '');
@@ -238,6 +259,10 @@ export function summarizeAzureWhatIf(payload, { subscriptionId, resourceGroup })
     if (changeType === 'Unsupported') {
       if (!unresolvedExpression && !isAllowlistedUnsupported(resourceId)) fail(`Unsupported resource is outside the manual-review allowlist: ${resourceId}`);
       unsupportedResources.push(resourceId);
+      unsupportedChanges.push({
+        resourceId,
+        unsupportedReason: validatedUnsupportedReason(change?.unsupportedReason),
+      });
     }
     changeCounts[changeType] = (changeCounts[changeType] ?? 0) + 1;
   }
@@ -246,6 +271,8 @@ export function summarizeAzureWhatIf(payload, { subscriptionId, resourceGroup })
     status: payload.status,
     changeCounts,
     unsupportedResources,
+    unsupportedChanges,
+    missingUnsupportedReasonCount: unsupportedChanges.filter(({ unsupportedReason }) => unsupportedReason === null).length,
     manualReviewRequired: unsupportedResources.length > 0,
     destructiveChangeCount: 0,
   };

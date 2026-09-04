@@ -91,7 +91,11 @@ const whatIf = summarizeAzureWhatIf({
   status: 'Succeeded',
   changes: [
     { resourceId: `${scope}/providers/Microsoft.Storage/storageAccounts/teamsapp123`, changeType: 'Create' },
-    { resourceId: `${scope}/providers/Microsoft.Authorization/roleAssignments/${'b'.repeat(32)}`, changeType: 'Unsupported' },
+    {
+      resourceId: `${scope}/providers/Microsoft.Authorization/roleAssignments/${'b'.repeat(32)}`,
+      changeType: 'Unsupported',
+      unsupportedReason: 'The resource type is not supported by What-If.',
+    },
     { resourceId: `${scope}/providers/Microsoft.DocumentDB/databaseAccounts/teamsapp/sqlRoleAssignments/${'c'.repeat(32)}`, changeType: 'Unsupported' },
     { resourceId: unresolvedRoleAssignment, changeType: 'Unsupported' },
     { resourceId: unresolvedCosmosAssignment, changeType: 'Unsupported' },
@@ -99,8 +103,35 @@ const whatIf = summarizeAzureWhatIf({
 }, { subscriptionId, resourceGroup });
 assert.equal(whatIf.status, 'Succeeded');
 assert.deepEqual(whatIf.changeCounts, { Create: 1, Unsupported: 4 });
+assert.deepEqual(whatIf.unsupportedChanges, [
+  {
+    resourceId: `${scope}/providers/Microsoft.Authorization/roleAssignments/${'b'.repeat(32)}`,
+    unsupportedReason: 'The resource type is not supported by What-If.',
+  },
+  {
+    resourceId: `${scope}/providers/Microsoft.DocumentDB/databaseAccounts/teamsapp/sqlRoleAssignments/${'c'.repeat(32)}`,
+    unsupportedReason: null,
+  },
+  { resourceId: unresolvedRoleAssignment, unsupportedReason: null },
+  { resourceId: unresolvedCosmosAssignment, unsupportedReason: null },
+]);
+assert.equal(whatIf.missingUnsupportedReasonCount, 3);
 assert.equal(whatIf.manualReviewRequired, true);
 assert.equal(whatIf.destructiveChangeCount, 0);
+
+for (const unsupportedReason of [{ message: 'not a string' }, 'x'.repeat(4097), 'unsafe\u001bterminal']) {
+  assert.throws(
+    () => summarizeAzureWhatIf({
+      status: 'Succeeded',
+      changes: [{
+        resourceId: `${scope}/providers/Microsoft.Authorization/roleAssignments/${'b'.repeat(32)}`,
+        changeType: 'Unsupported',
+        unsupportedReason,
+      }],
+    }, { subscriptionId, resourceGroup }),
+    /Unsupported reason.*(?:string|limit|control)/i,
+  );
+}
 
 for (const unsafeExpression of [
   unresolvedRoleAssignment.replaceAll(subscriptionId, '11111111-1111-1111-1111-111111111111'),
@@ -186,7 +217,11 @@ try {
         status: 'Succeeded',
         changes: [
           { resourceId: `${scope}/providers/Microsoft.Storage/storageAccounts/teamsapp123`, changeType: 'Create' },
-          { resourceId: `${scope}/providers/Microsoft.Authorization/roleAssignments/${'b'.repeat(32)}`, changeType: 'Unsupported' },
+          {
+            resourceId: `${scope}/providers/Microsoft.Authorization/roleAssignments/${'b'.repeat(32)}`,
+            changeType: 'Unsupported',
+            unsupportedReason: 'The resource type is not supported by What-If.',
+          },
         ],
       }),
       stderr: '',
@@ -208,6 +243,11 @@ try {
   assert.equal(receipt.source.commit, commit);
   assert.equal(receipt.source.version, version);
   assert.equal(receipt.whatIf.changeCounts.Create, 1);
+  assert.deepEqual(receipt.whatIf.unsupportedChanges, [{
+    resourceId: `${scope}/providers/Microsoft.Authorization/roleAssignments/${'b'.repeat(32)}`,
+    unsupportedReason: 'The resource type is not supported by What-If.',
+  }]);
+  assert.equal(receipt.whatIf.missingUnsupportedReasonCount, 0);
   assert.equal(receipt.whatIf.destructiveChangeCount, 0);
   assert.equal(receipt.checkedAt, '2026-09-05T00:00:00.000Z');
   assert.deepEqual(
