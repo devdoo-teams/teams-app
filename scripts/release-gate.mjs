@@ -12,7 +12,12 @@ import {
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 import { parseServerBuildMarker } from './server-build-marker.mjs';
 import { validateAzureReleaseInput } from './azure-release-input.mjs';
-import { readMigrationBundle, stableMigrationJson, validateMigrationBundle } from './azure-state-export.mjs';
+import {
+  assertNoSensitiveMaterial,
+  readMigrationBundle,
+  stableMigrationJson,
+  validateMigrationBundle,
+} from './azure-state-export.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const packagePath = path.join(root, 'appPackage', 'build', 'teams-sdk-mvp.zip');
@@ -568,6 +573,8 @@ function requireAzureConfiguration(env) {
     'CLIENT_ID',
     'BOT_CLIENT_ID',
     'APPLICATION_ID_URI',
+    'AZURE_DEVOPS_ENVIRONMENT_ID',
+    'AZURE_DEVOPS_ENVIRONMENT_NAME',
   ];
   if (env.TEAMS_STORAGE_BACKEND !== 'cosmos') {
     throw azureGateError('TEAMS_STORAGE_BACKEND must be cosmos.');
@@ -617,15 +624,6 @@ function requireAzureConfiguration(env) {
   return configuration;
 }
 
-function assertLiveEvidence(receipt, expectedClass, label) {
-  if (receipt?.evidenceClass !== expectedClass) {
-    throw azureGateError(
-      `${label} is ${receipt?.evidenceClass ?? 'missing'} evidence, not ${expectedClass}.`,
-      'AZURE_LIVE_EVIDENCE_UNVERIFIED',
-    );
-  }
-}
-
 function assertReleaseIdentity(actual, expected, label) {
   if (!actual || typeof actual !== 'object' || Array.isArray(actual)) {
     throw azureGateError(`${label} release identity is missing.`);
@@ -661,6 +659,23 @@ export function validateAzureIntegratedEvidence({
   jiraReceipt,
 }) {
   const configuration = requireAzureConfiguration(env ?? {});
+  for (const [label, evidence] of Object.entries({
+    releaseReceipt: releaseReceiptInput,
+    handoffProvenance,
+    sourceManifest,
+    packageManifest,
+    migrationReceipt,
+    approvalReceipt,
+    providerReceipt,
+    publicCanaryReceipt,
+    jiraReceipt,
+  })) {
+    try {
+      assertNoSensitiveMaterial(evidence, `preflight.${label}`);
+    } catch (error) {
+      throw azureGateError(error instanceof Error ? error.message : String(error));
+    }
+  }
   let releaseReceipt;
   try {
     releaseReceipt = validateAzureReleaseInput(releaseReceiptInput);
@@ -709,7 +724,15 @@ export function validateAzureIntegratedEvidence({
   } catch (error) {
     throw azureGateError(error instanceof Error ? error.message : String(error));
   }
-  assertLiveEvidence(migrationReceipt, 'live-azure', 'migration reconciliation');
+  if (
+    migrationBundle.manifest.source.commit !== sourceCommit
+    || migrationBundle.manifest.source.commit !== releaseReceipt.commit
+  ) {
+    throw azureGateError('migration bundle source commit does not match the release handoff source commit.');
+  }
+  if (migrationReceipt?.sourceCommit !== sourceCommit || migrationReceipt?.sourceCommit !== releaseReceipt.commit) {
+    throw azureGateError('migration reconciliation source commit does not match the release handoff source commit.');
+  }
   if (
     migrationReceipt.schemaVersion !== 1
     || migrationReceipt.status !== 'PASS'
@@ -732,8 +755,14 @@ export function validateAzureIntegratedEvidence({
   ) {
     throw azureGateError('Azure DevOps environment approval receipt is missing or invalid.');
   }
+  if (
+    approvalReceipt.environmentId !== configuration.AZURE_DEVOPS_ENVIRONMENT_ID
+    || approvalReceipt.environmentName !== configuration.AZURE_DEVOPS_ENVIRONMENT_NAME
+  ) {
+    throw azureGateError('Azure DevOps approval environment does not match the configured promotion environment.');
+  }
+  assertReleaseIdentity(approvalReceipt.releaseIdentity, releaseReceipt, 'Azure DevOps approval');
 
-  assertLiveEvidence(providerReceipt, 'live-azure', 'provider readiness');
   assertReleaseIdentity(providerReceipt.releaseIdentity, releaseReceipt, 'provider readiness');
   if (providerReceipt.schemaVersion !== 1 || !Array.isArray(providerReceipt.providers) || providerReceipt.providers.length < 1) {
     throw azureGateError('provider readiness classification is missing.');
@@ -764,7 +793,6 @@ export function validateAzureIntegratedEvidence({
     throw azureGateError('the Azure worker-plane Codex provider must have live ready evidence.');
   }
 
-  assertLiveEvidence(publicCanaryReceipt, 'live-azure', 'public canary');
   assertReleaseIdentity(publicCanaryReceipt.releaseIdentity, releaseReceipt, 'public canary');
   let healthUrl;
   try {
@@ -784,7 +812,6 @@ export function validateAzureIntegratedEvidence({
     throw azureGateError('public canary identity receipt is incomplete or unsafe.');
   }
 
-  assertLiveEvidence(jiraReceipt, 'live-jira', 'Jira mapping');
   if (jiraReceipt.schemaVersion !== 1 || !Array.isArray(jiraReceipt.findings)) {
     throw azureGateError('Jira mapping receipt is malformed.');
   }
@@ -801,28 +828,10 @@ export function validateAzureIntegratedEvidence({
     }
   }
 
-  return {
-    command: 'azure-integrated-evidence',
-    status: 'READY',
-    configuration,
-    releaseIdentity: {
-      commit: releaseReceipt.commit,
-      version: releaseReceipt.version,
-      imageDigest: releaseReceipt.imageDigest,
-      teamsPackageSha256: releaseReceipt.teamsPackageSha256,
-      clientBundleSha256: releaseReceipt.clientBundleSha256,
-      serverBundleSha256: releaseReceipt.serverBundleSha256,
-    },
-    evidence: [
-      { gate: 'github-handoff', status: 'PASS', evidenceClass: 'attested-github-artifact' },
-      { gate: 'azure-configuration', status: 'PASS', evidenceClass: 'configuration' },
-      { gate: 'migration-reconciliation', status: 'PASS', evidenceClass: migrationReceipt.evidenceClass },
-      { gate: 'azure-devops-approval', status: 'PASS', evidenceClass: 'live-azure-devops' },
-      { gate: 'provider-readiness', status: 'PASS', evidenceClass: providerReceipt.evidenceClass },
-      { gate: 'public-canary-identity', status: 'PASS', evidenceClass: publicCanaryReceipt.evidenceClass },
-      { gate: 'jira-mappings', status: 'PASS', evidenceClass: jiraReceipt.evidenceClass },
-    ],
-  };
+  throw azureGateError(
+    'unsigned local JSON evidence is classified as fixture/local-contract and cannot establish live Azure, provider, canary, approval, or Jira state; an authenticated producer verifier is required.',
+    'AZURE_LIVE_EVIDENCE_UNVERIFIED',
+  );
 }
 
 async function readBoundedJson(filePath, label, maxBytes = 1024 * 1024) {

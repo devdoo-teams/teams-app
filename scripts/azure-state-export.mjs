@@ -15,8 +15,23 @@ const RECORD_SCHEMA = 'teamsapp.runtime-record-export.v1';
 const COMMIT_PATTERN = /^[0-9a-f]{40}$/u;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const MAX_BUNDLE_BYTES = 256 * 1024 * 1024;
-const SENSITIVE_KEY = /^(?:accessToken|refreshToken|apiKey|clientSecret|password|authorization|authJson|connectionString|credential|deviceCode|bearerToken|privateKey)$/iu;
-const SENSITIVE_VALUE = /(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\bBearer\s+[A-Za-z0-9._~+/=-]{12,}|\b(?:sk|xai)-[A-Za-z0-9_-]{16,}|\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})/u;
+const SAFE_CREDENTIAL_METADATA_SUFFIXES = new Set([
+  'budget', 'configured', 'count', 'enabled', 'expired', 'expires', 'expiry', 'id', 'name', 'policy',
+  'present', 'ref', 'reference', 'scheme', 'state', 'status', 'type', 'version',
+]);
+const SENSITIVE_VALUE_PATTERNS = [
+  /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/iu,
+  /-----BEGIN PGP PRIVATE KEY BLOCK-----/iu,
+  /PuTTY-User-Key-File-[0-9]+:/iu,
+  /\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{12,}/iu,
+  /\b(?:sk|xai)-[A-Za-z0-9_-]{16,}/u,
+  /\b(?:ghp|github_pat|glpat)_[A-Za-z0-9_-]{16,}/u,
+  /\bya29\.[A-Za-z0-9_-]{16,}/u,
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/u,
+  /\b(?:AccountKey|SharedAccessKey|SharedAccessSignature)\s*=\s*[^;\s]{8,}/iu,
+  /(?:^|[?&;])sig=[^&;\s]{8,}(?:[&;]|$)/iu,
+  /(?:^|[?&;,\s{])["']?(?:access[\s_-]*token|refresh[\s_-]*token|bearer[\s_-]*token|client[\s_-]*secret|account[\s_-]*key|shared[\s_-]*access[\s_-]*(?:key|signature)|authorization|password|secret|token)["']?\s*[:=]\s*["']?[^"'&;,\s}]{8,}/iu,
+];
 const AGENT_TEXT_CONTROL_CHARACTERS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u;
 
 export function stableMigrationJson(value) {
@@ -85,9 +100,30 @@ function assertTimestamp(value, field) {
   }
 }
 
-function assertNoSensitiveMaterial(value, location = 'record', seen = new Set()) {
+function keyWords(key) {
+  return String(key)
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/u)
+    .filter(Boolean);
+}
+
+function isSensitiveCredentialKey(key) {
+  const words = keyWords(key);
+  const normalized = words.join('');
+  if (SAFE_CREDENTIAL_METADATA_SUFFIXES.has(words.at(-1))) return false;
+  if (
+    /(?:connectionstring|accountkey|accesskey|sharedaccesskey|sharedaccesssignature|privatekey|clientsecret|apikey|devicecode|authjson)/u.test(normalized)
+  ) return true;
+  return words.some((word) => ['authorization', 'credential', 'password', 'secret', 'token'].includes(word));
+}
+
+export function assertNoSensitiveMaterial(value, location = 'record', seen = new Set()) {
   if (typeof value === 'string') {
-    if (SENSITIVE_VALUE.test(value)) throw new Error(`Sensitive credential material detected at ${location}.`);
+    if (SENSITIVE_VALUE_PATTERNS.some((pattern) => pattern.test(value))) {
+      throw new Error(`Sensitive credential material detected at ${location}.`);
+    }
     return;
   }
   if (value === null || typeof value === 'number' || typeof value === 'boolean') return;
@@ -98,7 +134,7 @@ function assertNoSensitiveMaterial(value, location = 'record', seen = new Set())
     value.forEach((entry, index) => assertNoSensitiveMaterial(entry, `${location}[${index}]`, seen));
   } else {
     for (const [key, entry] of Object.entries(value)) {
-      if (SENSITIVE_KEY.test(key)) throw new Error(`Sensitive credential field detected at ${location}.${key}.`);
+      if (isSensitiveCredentialKey(key)) throw new Error(`Sensitive credential field detected at ${location}.${key}.`);
       assertNoSensitiveMaterial(entry, `${location}.${key}`, seen);
     }
   }

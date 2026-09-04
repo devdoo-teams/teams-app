@@ -7,10 +7,10 @@ This runbook covers the Task 6 migration gate only. It does not provision Azure,
 The migration scripts distinguish these classes:
 
 - `local-contract` and `local-fixture` prove only local parsing, hashing, retry, rollback, and gate behavior.
-- `live-azure` proves a read or write against the explicitly configured Cosmos target using Microsoft Entra credentials supplied outside the repository.
-- `attested-github-artifact`, `live-azure-devops`, and `live-jira` identify separate handoff, approval, and issue-tracking observations.
+- A `DefaultAzureCredential`-backed Cosmos client still emits `evidenceClass=local-contract` until an authenticated producer verifier exists. Its unsigned diagnostic receipt binds the credential-free endpoint, database, container, bundle hash, and source commit, but cannot authorize promotion.
+- `attested-github-artifact`, Azure DevOps approval, provider, canary, and Jira claims require an authenticated producer query or a producer-signed/attested receipt verifier before they can become promotion evidence.
 
-No local fixture, successful unit test, or Bicep build is live Azure, public-runtime, Teams, provider, or Jira evidence. Missing live inputs must remain `UNVERIFIED` or `BLOCKED`.
+No caller-supplied `evidenceClass`, unsigned local JSON file, local fixture, successful unit test, or Bicep build is live Azure, public-runtime, Teams, provider, approval, or Jira evidence. The current local JSON join therefore ends `AZURE_LIVE_EVIDENCE_UNVERIFIED`; it cannot return `READY` until an authenticated producer verifier is implemented and release/environment-bound.
 
 ## Bundle contract
 
@@ -40,7 +40,7 @@ Import defaults to dry-run. Without Azure configuration it validates the bundle 
 npm run azure:state-import -- --bundle /absolute/path/to/immutable-agent-job-export
 ```
 
-Apply requires both `--apply` and a new `--snapshot-output` path. Before the first create, the importer reads the complete AgentJob ledger partition and writes an immutable pre-import Azure snapshot. Transient 408/429/5xx writes use bounded retries. Permanent failures produce `PARTIAL` with stable IDs and require another idempotent import followed by reconciliation; partial success is never cutover evidence.
+Apply requires `--apply`, a new `--snapshot-output` path, and a new `--receipt` path. Before the first create, the importer reads the complete AgentJob ledger partition and writes an immutable pre-import Azure snapshot. It then creates `<receipt>.ledger/` and atomically appends immutable intent/outcome checkpoints around every record mutation. The final requested receipt is written only as an immutable terminal `APPLIED` or `PARTIAL` record. Transient 408/429/5xx writes use bounded retries. Permanent failures produce a durable `PARTIAL` receipt with completed/failed stable IDs and require another idempotent import followed by reconciliation; partial success is never cutover evidence.
 
 ```bash
 npm run azure:state-import -- \
@@ -62,7 +62,7 @@ npm run azure:state-reconcile -- \
   --receipt /absolute/path/to/live-azure-reconciliation.json
 ```
 
-Only a `status=PASS`, `evidenceClass=live-azure` receipt bound to the exact immutable bundle can satisfy the Azure migration gate.
+A reconciliation receipt includes the exact bundle/source commit and observed hashes. The unsigned local receipt alone cannot satisfy the Azure migration gate even when it came from an authenticated observation; a later authenticated producer verifier must bind that observation to the same release handoff.
 
 ## Rollback
 
@@ -82,7 +82,7 @@ npm run azure:state-import -- \
   --receipt /absolute/path/to/rollback-receipt.json
 ```
 
-Rollback restores the exact application document envelopes captured before import and removes records absent from that snapshot. Reconcile the rollback snapshot afterward. Do not switch or stop the current Dev Tunnel as part of migration or rollback.
+Rollback restores the exact application document envelopes captured before import and removes records absent from that snapshot. It uses the same immutable per-record receipt ledger and returns durable `PARTIAL` evidence rather than throwing away progress when a target mutation fails. Reconcile the rollback snapshot afterward. Do not switch or stop the current Dev Tunnel as part of migration or rollback.
 
 ## Integrated non-mutating preflight
 
@@ -100,13 +100,15 @@ Azure mode requires paths to these already-created immutable inputs:
 - `AZURE_PUBLIC_CANARY_RECEIPT_PATH`
 - `AZURE_JIRA_MAPPING_RECEIPT_PATH`
 
+Approval structure is additionally bound to `AZURE_DEVOPS_ENVIRONMENT_ID`, `AZURE_DEVOPS_ENVIRONMENT_NAME`, and the exact release identity. This structural match is not proof that approval occurred; unsigned local approval JSON remains unverified.
+
 Then run:
 
 ```bash
 TEAMS_RELEASE_TARGET=azure npm run release:preflight
 ```
 
-The evidence join fails closed unless all inputs bind the same handoff commit/version/image/package/client/server identity, the Teams package hash and manifest match, enabled providers have a live nonempty result plus cancellation/recovery evidence, the canary receipt is live Azure evidence, approval has an explicit approver, and every recorded defect/blocker/improvement has a Jira mapping. It performs no provisioning, deployment, endpoint switch, portal operation, Jira write, or secret lookup.
+The evidence join validates that all inputs bind the same handoff commit/version/image/package/client/server identity, the migration bundle and reconciliation source commits match the handoff, the Teams package hash and manifest match, enabled providers contain a nonempty result plus cancellation/recovery structure, approval names the exact configured environment and release, and every recorded defect/blocker/improvement has a Jira mapping. It recursively rejects credential-bearing fields and values. Because these inputs are unsigned local JSON, the join then fails closed as `AZURE_LIVE_EVIDENCE_UNVERIFIED`; it performs no provisioning, deployment, endpoint switch, portal operation, Jira write, or secret lookup.
 
 ## Promotion rule
 

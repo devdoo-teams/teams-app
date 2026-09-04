@@ -14,7 +14,11 @@ import {
   writeMigrationBundle,
 } from './azure-state-export.mjs';
 import {
+  classifyMigrationTarget,
+  createAzureMigrationTarget,
+  createImmutableReceiptLedger,
   importMigrationBundle,
+  parseAzureStateImportArguments,
   rollbackMigrationSnapshot,
 } from './azure-state-import.mjs';
 import { reconcileMigration } from './azure-state-reconcile.mjs';
@@ -89,6 +93,7 @@ class MemoryMigrationTarget {
 
   async delete(id, partitionKey) {
     this.calls.push({ operation: 'delete', id, partitionKey });
+    this.maybeFail(id);
     this.documents.delete(id);
   }
 
@@ -153,6 +158,76 @@ assert.throws(
   /sensitive|secret|credential/i,
   'sensitive fields must fail closed instead of being copied or redacted',
 );
+for (const [field, value] of [
+  ['azureCosmosConnectionString', 'DefaultEndpointsProtocol=https;AccountName=fixture;AccountKey=ZmFrZS1hY2NvdW50LWtleQ==;EndpointSuffix=core.windows.net'],
+  ['storage_sas_token', 'sv=2024-11-04&ss=b&srt=sco&sp=rwdlac&se=2030-01-01T00:00:00Z&sig=ZmFrZS1zaWduYXR1cmU'],
+  ['account-key', 'ZmFrZS1hY2NvdW50LWtleS1tYXRlcmlhbA=='],
+  ['refresh_token', 'opaque-refresh-material'],
+  ['sessionToken', 'opaque-session-material'],
+  ['databasePassword', 'opaque-password-material'],
+  ['proxyAuthorization', 'Basic Zml4dHVyZTpjcmVkZW50aWFs'],
+  ['signingPrivateKey', '-----BEGIN OPENSSH PRIVATE KEY-----\nfixture\n-----END OPENSSH PRIVATE KEY-----'],
+]) {
+  assert.throws(
+    () => createAgentJobExportBundle({ jobs: [{ ...jobs[0], metadata: { [field]: value } }], sourceCommit, exportedAt }),
+    /sensitive|secret|credential/i,
+    `normalized recursive secret detection must reject ${field}`,
+  );
+}
+for (const value of [
+  'DefaultEndpointsProtocol=https;AccountName=fixture;AccountKey=ZmFrZS1hY2NvdW50LWtleQ==;EndpointSuffix=core.windows.net',
+  'https://fixture.blob.core.windows.net/c?sv=2024-11-04&sp=rw&se=2030-01-01T00:00:00Z&sig=ZmFrZS1zaWduYXR1cmU',
+  'Server=tcp:fixture.database.windows.net;User ID=app;Password=fixture-db-password;Encrypt=true',
+  '{"access_token":"fixture-access-token-material"}',
+  'client_secret=fixture-client-secret-material',
+  'PuTTY-User-Key-File-3: ssh-rsa',
+]) {
+  assert.throws(
+    () => createAgentJobExportBundle({ jobs: [{ ...jobs[0], metadata: { note: value } }], sourceCommit, exportedAt }),
+    /sensitive|secret|credential/i,
+    'credential-shaped values must be rejected even under an ordinary field name',
+  );
+}
+assert.doesNotThrow(
+  () => createAgentJobExportBundle({
+    jobs: [{
+      ...jobs[0],
+      metadata: {
+        tokenCount: 42,
+        secretReference: 'key-vault://teamsapp/provider-token',
+        authorizationStatus: 'required',
+        connectionStatus: 'healthy',
+        passwordPolicy: 'minimum-length-16',
+        tokenBudget: 4096,
+        secretRotationPolicy: 'quarterly',
+        authorizationScheme: 'managed-identity',
+        secretaryName: 'ordinary-domain-value',
+      },
+    }],
+    sourceCommit,
+    exportedAt,
+  }),
+  'ordinary non-secret metadata and credential references must remain exportable',
+);
+
+const constructedAzureTarget = await createAzureMigrationTarget({
+  AZURE_COSMOS_ENDPOINT: 'https://fixture.documents.azure.com:443/',
+  AZURE_COSMOS_DATABASE: 'teamsapp',
+  AZURE_COSMOS_CONTAINER: 'runtime-state',
+});
+assert.deepEqual(
+  classifyMigrationTarget(constructedAzureTarget),
+  {
+    evidenceClass: 'local-contract',
+    targetObservation: 'AZURE_DEFAULT_CREDENTIAL_CLIENT_UNATTESTED',
+    targetBinding: {
+      endpoint: 'https://fixture.documents.azure.com:443/',
+      database: 'teamsapp',
+      container: 'runtime-state',
+    },
+  },
+  'an Azure client without producer attestation must remain local-contract and bind its exact target',
+);
 
 const crossTenantParent = [
   jobs[0],
@@ -178,6 +253,26 @@ try {
   await writeMigrationBundle(bundlePath, bundle);
   const diskBundle = await readMigrationBundle(bundlePath);
   assert.deepEqual(diskBundle, bundle, 'an immutable disk bundle must round-trip exactly');
+  const occupiedReceiptPath = path.join(tempRoot, 'occupied-receipt.json');
+  await fs.writeFile(occupiedReceiptPath, '{}\n', { flag: 'wx', mode: 0o400 });
+  await assert.rejects(
+    createImmutableReceiptLedger(occupiedReceiptPath),
+    /exist|immutable|receipt/i,
+    'a mutating operation must reject an occupied terminal receipt path before creating its ledger',
+  );
+  await assert.rejects(
+    fs.stat(`${occupiedReceiptPath}.ledger`),
+    { code: 'ENOENT' },
+    'receipt preflight failure must not leave an orphan operation ledger',
+  );
+  const secretReceiptPath = path.join(tempRoot, 'secret-receipt.json');
+  const persistSecretReceipt = await createImmutableReceiptLedger(secretReceiptPath);
+  await assert.rejects(
+    persistSecretReceipt({ status: 'PARTIAL', final: true, nested: { bearer_token: 'opaque-secret-material' } }),
+    /sensitive|secret|credential/i,
+    'durable receipt ledgers must reject recursively nested secret material',
+  );
+  await fs.chmod(`${secretReceiptPath}.ledger`, 0o500);
   await assert.rejects(
     writeMigrationBundle(bundlePath, bundle),
     /exist|immutable|non-empty/i,
@@ -189,9 +284,12 @@ try {
     bundle: diskBundle,
     target: dryRunTarget,
     apply: false,
-    evidenceClass: 'local-fixture',
+    evidenceClass: 'live-azure',
   });
   assert.equal(dryRun.status, 'DRY_RUN');
+  assert.equal(dryRun.evidenceClass, 'local-contract', 'a caller cannot relabel an in-memory target as live Azure');
+  assert.equal(dryRun.targetObservation, 'LOCAL_FIXTURE');
+  assert.equal(dryRun.sourceCommit, sourceCommit);
   assert.equal(dryRun.plannedCreates, 2);
   assert.equal(dryRunTarget.calls.some(({ operation }) => operation !== 'list'), false);
 
@@ -199,6 +297,32 @@ try {
   retryTarget.fail('task-one', 2, 503);
   const delays = [];
   let snapshot;
+  await assert.rejects(
+    importMigrationBundle({
+      bundle: diskBundle,
+      target: retryTarget,
+      apply: true,
+      writeSnapshot: async () => {},
+    }),
+    /durable|receipt|ledger/i,
+    'mutating import must refuse to start without a durable receipt writer',
+  );
+  assert.equal(retryTarget.calls.some(({ operation }) => operation === 'create'), false);
+  const fakeWriterTarget = new MemoryMigrationTarget();
+  await assert.rejects(
+    importMigrationBundle({
+      bundle: diskBundle,
+      target: fakeWriterTarget,
+      apply: true,
+      writeSnapshot: async () => {},
+      persistReceipt: async () => {},
+    }),
+    /durable|immutable|receipt.*writer/i,
+    'an arbitrary callback must not impersonate the immutable receipt ledger writer',
+  );
+  assert.equal(fakeWriterTarget.calls.some(({ operation }) => operation === 'create'), false);
+  const importReceiptPath = path.join(tempRoot, 'import-receipt.json');
+  const persistImportReceipt = await createImmutableReceiptLedger(importReceiptPath);
   const applied = await importMigrationBundle({
     bundle: diskBundle,
     target: retryTarget,
@@ -207,18 +331,21 @@ try {
     maxAttempts: 3,
     delay: async (milliseconds) => delays.push(milliseconds),
     writeSnapshot: async (nextSnapshot) => { snapshot = nextSnapshot; },
+    persistReceipt: persistImportReceipt,
   });
   assert.equal(applied.status, 'APPLIED');
   assert.equal(applied.created, 2);
   assert.deepEqual(delays, [100, 200], 'transient writes must use bounded retries');
   assert.equal(snapshot.manifest.recordCounts.total, 0, 'the pre-import target snapshot must precede all writes');
 
+  const repeatReceiptPath = path.join(tempRoot, 'repeat-import-receipt.json');
   const repeat = await importMigrationBundle({
     bundle: diskBundle,
     target: retryTarget,
     apply: true,
     evidenceClass: 'local-fixture',
     writeSnapshot: async () => {},
+    persistReceipt: await createImmutableReceiptLedger(repeatReceiptPath),
   });
   assert.equal(repeat.status, 'APPLIED');
   assert.equal(repeat.created, 0);
@@ -226,6 +353,8 @@ try {
 
   const partialTarget = new MemoryMigrationTarget();
   partialTarget.fail('task-two', 3, 503);
+  const partialReceiptPath = path.join(tempRoot, 'partial-import-receipt.json');
+  const partialPersistReceipt = await createImmutableReceiptLedger(partialReceiptPath);
   const partial = await importMigrationBundle({
     bundle: diskBundle,
     target: partialTarget,
@@ -234,19 +363,35 @@ try {
     maxAttempts: 3,
     delay: async () => {},
     writeSnapshot: async () => {},
+    persistReceipt: partialPersistReceipt,
   });
   assert.equal(partial.status, 'PARTIAL');
   assert.deepEqual(partial.failedIds, ['agent-job/task-two']);
   assert.equal(partialTarget.documents.has('task-one'), true);
   assert.equal(partialTarget.documents.has('task-two'), false);
+  const partialDurableReceipt = JSON.parse(await fs.readFile(partialReceiptPath, 'utf8'));
+  assert.equal(partialDurableReceipt.status, 'PARTIAL');
+  assert.deepEqual(partialDurableReceipt.completedIds, ['agent-job/task-one']);
+  assert.deepEqual(partialDurableReceipt.failedIds, ['agent-job/task-two']);
+  const partialLedgerEntries = await fs.readdir(`${partialReceiptPath}.ledger`);
+  assert.ok(partialLedgerEntries.length >= 6, 'each mutation intent and outcome must have an immutable checkpoint');
+  const partialLedgerReceipts = await Promise.all(partialLedgerEntries.map(async (entry) => (
+    JSON.parse(await fs.readFile(path.join(`${partialReceiptPath}.ledger`, entry), 'utf8'))
+  )));
+  assert.equal(
+    partialLedgerReceipts.some((receipt) => receipt.inFlight?.stableId === 'agent-job/task-two'),
+    true,
+    'the durable ledger must record intent before each record mutation',
+  );
 
   const reconciled = await reconcileMigration({
     bundle: diskBundle,
     target: retryTarget,
-    evidenceClass: 'local-fixture',
+    evidenceClass: 'live-azure',
     checkedAt: '2026-09-03T02:00:00.000Z',
   });
   assert.equal(reconciled.status, 'PASS');
+  assert.equal(reconciled.evidenceClass, 'local-contract', 'a caller cannot relabel fixture reconciliation as live Azure');
   assert.equal(reconciled.bundleSha256, bundle.manifest.bundleSha256);
   assert.equal(reconciled.recordCounts.total, 2);
   assert.deepEqual(reconciled.stableIds, bundle.manifest.stableIds);
@@ -274,20 +419,56 @@ try {
     sourceCommit,
     exportedAt,
   });
+  await assert.rejects(
+    rollbackMigrationSnapshot({ snapshot: rollbackSnapshot, target: rollbackTarget, apply: true }),
+    /durable|receipt|ledger/i,
+    'rollback must refuse to mutate without durable evidence',
+  );
+  assert.deepEqual([...rollbackTarget.documents.keys()], ['task-one', 'task-two']);
+  const rollbackReceiptPath = path.join(tempRoot, 'rollback-receipt.json');
   const rollback = await rollbackMigrationSnapshot({
     snapshot: rollbackSnapshot,
     target: rollbackTarget,
     apply: true,
     evidenceClass: 'local-fixture',
+    persistReceipt: await createImmutableReceiptLedger(rollbackReceiptPath),
   });
   assert.equal(rollback.status, 'ROLLED_BACK');
   assert.deepEqual([...rollbackTarget.documents.keys()], ['task-one']);
   assert.equal(rollbackTarget.documents.get('task-one').value.result, 'pre-import value');
   assert.equal(rollbackTarget.documents.get('task-one').idempotencyKey, 'pre-import-envelope-key');
   assert.equal(rollbackTarget.documents.get('task-one').updatedAt, '2026-09-01T00:00:30.000Z');
+  assert.equal(JSON.parse(await fs.readFile(rollbackReceiptPath, 'utf8')).status, 'ROLLED_BACK');
+
+  const partialRollbackTarget = new MemoryMigrationTarget([...retryTarget.documents.values()]);
+  partialRollbackTarget.fail('task-two', 3, 503);
+  const partialRollbackReceiptPath = path.join(tempRoot, 'partial-rollback-receipt.json');
+  const partialRollback = await rollbackMigrationSnapshot({
+    snapshot: rollbackSnapshot,
+    target: partialRollbackTarget,
+    apply: true,
+    maxAttempts: 3,
+    delay: async () => {},
+    persistReceipt: await createImmutableReceiptLedger(partialRollbackReceiptPath),
+  });
+  assert.equal(partialRollback.status, 'PARTIAL');
+  assert.deepEqual(partialRollback.failedIds, ['agent-job/task-two']);
+  const partialRollbackDurableReceipt = JSON.parse(await fs.readFile(partialRollbackReceiptPath, 'utf8'));
+  assert.deepEqual(partialRollbackDurableReceipt.failedIds, ['agent-job/task-two']);
+  assert.equal(partialRollbackDurableReceipt.reconciliationRequired, true);
 
   assert.equal(resolveReleaseTarget({}), 'local');
   assert.equal(resolveReleaseTarget({ TEAMS_RELEASE_TARGET: 'azure' }), 'azure');
+  assert.throws(
+    () => parseAzureStateImportArguments(['--bundle', bundlePath, '--apply', '--snapshot-output', `${bundlePath}-snapshot`]),
+    /--receipt|immutable.*ledger/i,
+    'the CLI must reject import apply without an immutable receipt ledger path before target creation',
+  );
+  assert.throws(
+    () => parseAzureStateImportArguments(['--rollback-snapshot', bundlePath, '--apply']),
+    /--receipt|immutable.*ledger/i,
+    'the CLI must reject rollback apply without an immutable receipt ledger path before target creation',
+  );
   const localCommands = createPreflightCommands(undefined, 'core', 'local');
   const azureCommands = createPreflightCommands(undefined, 'core', 'azure');
   assert.equal(localCommands.some(([, script]) => script === 'test:azure-state-migration'), false);
@@ -355,6 +536,7 @@ try {
     environmentName: 'teamsapp-canary',
     checkId: 7,
     approverCount: 1,
+    releaseIdentity: liveIdentity,
   };
   const providerReceipt = {
     schemaVersion: 1,
@@ -395,21 +577,24 @@ try {
   releaseReceipt.teamsPackageSha256 = sha256(packageBytes);
   liveIdentity.teamsPackageSha256 = releaseReceipt.teamsPackageSha256;
 
-  const integrated = validateAzureIntegratedEvidence({
-    env: {
-      TEAMS_STORAGE_BACKEND: 'cosmos',
-      TEAMS_AGENT_DISPATCH_MODE: 'azure-queue',
-      AZURE_COSMOS_ENDPOINT: 'https://teamsapp.documents.azure.com:443/',
-      AZURE_COSMOS_DATABASE: 'teamsapp',
-      AZURE_COSMOS_CONTAINER: 'runtime-state',
-      AZURE_STORAGE_QUEUE_ENDPOINT: 'https://teamsapp.queue.core.windows.net/agent-dispatch',
-      AZURE_CLIENT_ID: '11111111-1111-4111-8111-111111111111',
-      TEAMS_APP_ID: '22222222-2222-4222-8222-222222222222',
-      TAB_DOMAIN: 'teamsapp.example.azurecontainerapps.io',
-      CLIENT_ID: '33333333-3333-4333-8333-333333333333',
-      BOT_CLIENT_ID: '44444444-4444-4444-8444-444444444444',
-      APPLICATION_ID_URI: 'api://teamsapp.example.azurecontainerapps.io/botid-44444444-4444-4444-8444-444444444444',
-    },
+  const azureConfiguration = {
+    TEAMS_STORAGE_BACKEND: 'cosmos',
+    TEAMS_AGENT_DISPATCH_MODE: 'azure-queue',
+    AZURE_COSMOS_ENDPOINT: 'https://teamsapp.documents.azure.com:443/',
+    AZURE_COSMOS_DATABASE: 'teamsapp',
+    AZURE_COSMOS_CONTAINER: 'runtime-state',
+    AZURE_STORAGE_QUEUE_ENDPOINT: 'https://teamsapp.queue.core.windows.net/agent-dispatch',
+    AZURE_CLIENT_ID: '11111111-1111-4111-8111-111111111111',
+    TEAMS_APP_ID: '22222222-2222-4222-8222-222222222222',
+    TAB_DOMAIN: 'teamsapp.example.azurecontainerapps.io',
+    CLIENT_ID: '33333333-3333-4333-8333-333333333333',
+    BOT_CLIENT_ID: '44444444-4444-4444-8444-444444444444',
+    APPLICATION_ID_URI: 'api://teamsapp.example.azurecontainerapps.io/botid-44444444-4444-4444-8444-444444444444',
+    AZURE_DEVOPS_ENVIRONMENT_ID: '42',
+    AZURE_DEVOPS_ENVIRONMENT_NAME: 'teamsapp-canary',
+  };
+  const integratedEvidence = {
+    env: azureConfiguration,
     releaseReceipt,
     handoffProvenance,
     sourceCommit,
@@ -422,13 +607,82 @@ try {
     providerReceipt,
     publicCanaryReceipt,
     jiraReceipt,
-  });
-  assert.equal(integrated.status, 'READY');
-  assert.equal(integrated.evidence.every(({ evidenceClass }) => evidenceClass !== 'local-fixture'), true);
+  };
+
+  assert.throws(
+    () => validateAzureIntegratedEvidence(integratedEvidence),
+    (error) => error?.code === 'AZURE_LIVE_EVIDENCE_UNVERIFIED' && /unsigned|local|provenance/i.test(error.message),
+    'unsigned local JSON must not self-declare live Azure, provider, canary, approval, or Jira evidence',
+  );
 
   assert.throws(
     () => validateAzureIntegratedEvidence({
-      env: integrated.configuration,
+      ...integratedEvidence,
+      providerReceipt: {
+        ...providerReceipt,
+        diagnostics: { nested: { refresh_token: 'must-not-enter-preflight-evidence' } },
+      },
+    }),
+    /sensitive|secret|credential/i,
+    'preflight receipts must use the same recursive secret guard as migration artifacts',
+  );
+
+  const otherCommit = '89abcdef0123456789abcdef0123456789abcdef';
+  const otherBundle = createAgentJobExportBundle({ jobs, sourceCommit: otherCommit, exportedAt });
+  const otherTarget = new MemoryMigrationTarget(otherBundle.records.map((record) => record.document));
+  const otherReconciliation = await reconcileMigration({
+    bundle: otherBundle,
+    target: otherTarget,
+    evidenceClass: 'live-azure',
+    checkedAt: '2026-09-03T02:30:00.000Z',
+  });
+  assert.throws(
+    () => validateAzureIntegratedEvidence({
+      ...integratedEvidence,
+      migrationBundle: otherBundle,
+      migrationReceipt: otherReconciliation,
+    }),
+    /migration.*source.*commit|source.*commit.*migration/i,
+    'a valid migration bundle and receipt from another source commit must not satisfy this release handoff',
+  );
+  assert.throws(
+    () => validateAzureIntegratedEvidence({
+      ...integratedEvidence,
+      migrationReceipt: { ...migrationReceipt, sourceCommit: otherCommit },
+    }),
+    /migration.*source.*commit|source.*commit.*migration/i,
+    'a reconciliation receipt from another source commit must not satisfy this release handoff',
+  );
+  const bundleWithoutSourceCommit = cloneBundle(diskBundle);
+  delete bundleWithoutSourceCommit.manifest.source.commit;
+  assert.throws(
+    () => validateAzureIntegratedEvidence({
+      ...integratedEvidence,
+      migrationBundle: bundleWithoutSourceCommit,
+    }),
+    /source commit|Git OID|commit/i,
+    'a migration bundle without manifest.source.commit must fail closed',
+  );
+  assert.throws(
+    () => validateAzureIntegratedEvidence({
+      ...integratedEvidence,
+      migrationReceipt: { ...migrationReceipt, sourceCommit: undefined },
+    }),
+    /migration.*source.*commit|source.*commit.*migration/i,
+    'a reconciliation receipt without sourceCommit must fail closed',
+  );
+  assert.throws(
+    () => validateAzureIntegratedEvidence({
+      ...integratedEvidence,
+      approvalReceipt: { ...approvalReceipt, environmentName: 'different-environment' },
+    }),
+    /approval.*environment|environment.*approval/i,
+    'approval evidence must bind the exact configured Azure DevOps environment and release identity',
+  );
+
+  assert.throws(
+    () => validateAzureIntegratedEvidence({
+      env: azureConfiguration,
       releaseReceipt,
       handoffProvenance,
       sourceCommit,
@@ -451,7 +705,7 @@ try {
 
   assert.throws(
     () => validateAzureIntegratedEvidence({
-      env: integrated.configuration,
+      env: azureConfiguration,
       releaseReceipt,
       handoffProvenance,
       sourceCommit,
@@ -471,7 +725,7 @@ try {
 
   assert.throws(
     () => validateAzureIntegratedEvidence({
-      env: integrated.configuration,
+      env: azureConfiguration,
       releaseReceipt,
       handoffProvenance,
       sourceCommit,
@@ -494,7 +748,7 @@ try {
 
   assert.throws(
     () => validateAzureIntegratedEvidence({
-      env: integrated.configuration,
+      env: azureConfiguration,
       releaseReceipt,
       handoffProvenance,
       sourceCommit,
@@ -515,5 +769,11 @@ try {
   console.log('azure-state-migration-test: PASS');
 } finally {
   await fs.chmod(path.join(tempRoot, 'immutable-export'), 0o755).catch(() => {});
+  const entries = await fs.readdir(tempRoot, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (entry.isDirectory() && entry.name.endsWith('.ledger')) {
+      await fs.chmod(path.join(tempRoot, entry.name), 0o700).catch(() => {});
+    }
+  }
   await fs.rm(tempRoot, { recursive: true, force: true });
 }

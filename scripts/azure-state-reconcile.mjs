@@ -9,7 +9,7 @@ import {
   stableMigrationJson,
   validateMigrationBundle,
 } from './azure-state-export.mjs';
-import { createAzureMigrationTarget } from './azure-state-import.mjs';
+import { classifyMigrationTarget, createAzureMigrationTarget } from './azure-state-import.mjs';
 
 function stableId(document) {
   return `agent-job/${document.id}`;
@@ -18,11 +18,11 @@ function stableId(document) {
 export async function reconcileMigration({
   bundle,
   target,
-  evidenceClass = 'local-contract',
   checkedAt = new Date().toISOString(),
 }) {
   validateMigrationBundle(bundle);
   if (!target) throw new Error('Migration reconciliation requires an observed target.');
+  const provenance = classifyMigrationTarget(target);
   const partitionKey = bundle.records[0]?.document.partitionKey ?? AGENT_JOB_LEDGER_PARTITION_KEY;
   const documents = await target.list(partitionKey);
   const byId = new Map();
@@ -69,7 +69,7 @@ export async function reconcileMigration({
   return {
     schemaVersion: 1,
     status: 'PASS',
-    evidenceClass,
+    ...provenance,
     checkedAt,
     bundleSha256: bundle.manifest.bundleSha256,
     sourceCommit: bundle.manifest.source.commit,
@@ -102,7 +102,7 @@ async function main() {
   const options = parseArguments(process.argv.slice(2));
   const bundle = await readMigrationBundle(options.bundle);
   const target = await createAzureMigrationTarget();
-  const receipt = await reconcileMigration({ bundle, target, evidenceClass: 'live-azure' });
+  const receipt = await reconcileMigration({ bundle, target });
   await fs.writeFile(path.resolve(options.receipt), `${JSON.stringify(receipt, null, 2)}\n`, { flag: 'wx', mode: 0o400 });
   console.log(JSON.stringify(receipt, null, 2));
 }
