@@ -17,7 +17,9 @@ import {
   classifyMigrationTarget,
   createAzureMigrationTarget,
   createImmutableReceiptLedger,
+  createImmutableSnapshotWriter,
   importMigrationBundle,
+  inspectImmutableReceiptLedger,
   parseAzureStateImportArguments,
   rollbackMigrationSnapshot,
 } from './azure-state-import.mjs';
@@ -113,6 +115,13 @@ function sha256(bytes) {
   return crypto.createHash('sha256').update(bytes).digest('hex');
 }
 
+function signAggregateAttestation(payload, privateKey) {
+  return {
+    ...payload,
+    signature: crypto.sign(null, Buffer.from(stableMigrationJson(payload)), privateKey).toString('base64url'),
+  };
+}
+
 const bundle = createAgentJobExportBundle({ jobs, sourceCommit, exportedAt });
 assert.equal(bundle.manifest.schemaVersion, 'teamsapp.azure-state-export.v1');
 assert.equal(bundle.manifest.source.commit, sourceCommit);
@@ -174,6 +183,22 @@ for (const [field, value] of [
     `normalized recursive secret detection must reject ${field}`,
   );
 }
+for (const field of ['tokens', 'credentials', 'passwords', 'sessionTokens', 'apiKeys', 'accountKeys']) {
+  assert.throws(
+    () => createAgentJobExportBundle({ jobs: [{ ...jobs[0], metadata: { [field]: ['opaque-sensitive-material'] } }], sourceCommit, exportedAt }),
+    /sensitive|secret|credential/i,
+    `plural credential key morphology must reject ${field}`,
+  );
+}
+assert.throws(
+  () => createAgentJobExportBundle({
+    jobs: [{ ...jobs[0], metadata: { observations: [{ state: 'ok' }, { credentials: 'opaque-sensitive-material' }] } }],
+    sourceCommit,
+    exportedAt,
+  }),
+  /sensitive|secret|credential/i,
+  'secret scanning must descend through nested arrays and objects',
+);
 for (const value of [
   'DefaultEndpointsProtocol=https;AccountName=fixture;AccountKey=ZmFrZS1hY2NvdW50LWtleQ==;EndpointSuffix=core.windows.net',
   'https://fixture.blob.core.windows.net/c?sv=2024-11-04&sp=rw&se=2030-01-01T00:00:00Z&sig=ZmFrZS1zaWduYXR1cmU',
@@ -194,8 +219,12 @@ assert.doesNotThrow(
       ...jobs[0],
       metadata: {
         tokenCount: 42,
+        tokenReference: 'key-vault://teamsapp/provider-token',
+        tokenExpiresAt: '2026-09-04T12:00:00.000Z',
         secretReference: 'key-vault://teamsapp/provider-token',
+        secretUri: 'key-vault://teamsapp/provider-token',
         authorizationStatus: 'required',
+        authorizationUrl: 'https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize',
         connectionStatus: 'healthy',
         passwordPolicy: 'minimum-length-16',
         tokenBudget: 4096,
@@ -247,6 +276,21 @@ assert.throws(
   'record content hash mismatches must be rejected',
 );
 
+const recordEnvelopeSecret = cloneBundle(bundle);
+recordEnvelopeSecret.records[0].audit = { credentials: 'opaque-record-envelope-secret' };
+assert.throws(
+  () => validateMigrationBundle(recordEnvelopeSecret),
+  /sensitive|secret|credential/i,
+  'credential material in an accepted record envelope must be scanned before digest validation',
+);
+const documentEnvelopeSecret = cloneBundle(bundle);
+documentEnvelopeSecret.records[0].document.importMetadata = { apiKeys: ['opaque-document-envelope-secret'] };
+assert.throws(
+  () => validateMigrationBundle(documentEnvelopeSecret),
+  /sensitive|secret|credential/i,
+  'credential material in an accepted runtime document envelope must be scanned before import',
+);
+
 const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'teamsapp-azure-migration-test-'));
 try {
   const bundlePath = path.join(tempRoot, 'immutable-export');
@@ -271,6 +315,11 @@ try {
     persistSecretReceipt({ status: 'PARTIAL', final: true, nested: { bearer_token: 'opaque-secret-material' } }),
     /sensitive|secret|credential/i,
     'durable receipt ledgers must reject recursively nested secret material',
+  );
+  await assert.rejects(
+    persistSecretReceipt({ status: 'IN_PROGRESS', operationId: crypto.randomUUID(), requestSha256: 'a'.repeat(64), credentials: ['opaque-secret-material'] }),
+    /sensitive|secret|credential/i,
+    'mutation receipts must reject plural credential fields before persistence',
   );
   await fs.chmod(`${secretReceiptPath}.ledger`, 0o500);
   await assert.rejects(
@@ -321,7 +370,44 @@ try {
     'an arbitrary callback must not impersonate the immutable receipt ledger writer',
   );
   assert.equal(fakeWriterTarget.calls.some(({ operation }) => operation === 'create'), false);
+  const copiedBrandSourcePath = path.join(tempRoot, 'copied-brand-source.json');
+  const copiedBrandSource = await createImmutableReceiptLedger(copiedBrandSourcePath);
+  const copiedBrandWriter = async () => {};
+  for (const symbol of Object.getOwnPropertySymbols(copiedBrandSource)) {
+    Object.defineProperty(copiedBrandWriter, symbol, {
+      value: copiedBrandSource[symbol],
+    });
+  }
+  const copiedBrandTarget = new MemoryMigrationTarget();
+  await assert.rejects(
+    importMigrationBundle({
+      bundle: diskBundle,
+      target: copiedBrandTarget,
+      apply: true,
+      writeSnapshot: async () => {},
+      persistReceipt: copiedBrandWriter,
+    }),
+    /durable|immutable|receipt.*writer/i,
+    'copying discoverable writer symbols must not forge a durable receipt capability',
+  );
+  assert.equal(copiedBrandTarget.calls.some(({ operation }) => operation === 'create'), false);
+
+  const noOpSnapshotReceiptPath = path.join(tempRoot, 'no-op-snapshot-receipt.json');
+  const noOpSnapshotTarget = new MemoryMigrationTarget();
+  await assert.rejects(
+    importMigrationBundle({
+      bundle: diskBundle,
+      target: noOpSnapshotTarget,
+      apply: true,
+      writeSnapshot: async () => {},
+      persistReceipt: await createImmutableReceiptLedger(noOpSnapshotReceiptPath),
+    }),
+    /immutable|snapshot.*writer/i,
+    'a no-op snapshot callback must fail before any target mutation',
+  );
+  assert.equal(noOpSnapshotTarget.calls.some(({ operation }) => operation === 'create'), false);
   const importReceiptPath = path.join(tempRoot, 'import-receipt.json');
+  const importSnapshotPath = path.join(tempRoot, 'import-snapshot');
   const persistImportReceipt = await createImmutableReceiptLedger(importReceiptPath);
   const applied = await importMigrationBundle({
     bundle: diskBundle,
@@ -330,21 +416,23 @@ try {
     evidenceClass: 'local-fixture',
     maxAttempts: 3,
     delay: async (milliseconds) => delays.push(milliseconds),
-    writeSnapshot: async (nextSnapshot) => { snapshot = nextSnapshot; },
+    writeSnapshot: createImmutableSnapshotWriter(importSnapshotPath),
     persistReceipt: persistImportReceipt,
   });
+  snapshot = await readMigrationBundle(importSnapshotPath);
   assert.equal(applied.status, 'APPLIED');
   assert.equal(applied.created, 2);
   assert.deepEqual(delays, [100, 200], 'transient writes must use bounded retries');
   assert.equal(snapshot.manifest.recordCounts.total, 0, 'the pre-import target snapshot must precede all writes');
 
   const repeatReceiptPath = path.join(tempRoot, 'repeat-import-receipt.json');
+  const repeatSnapshotPath = path.join(tempRoot, 'repeat-import-snapshot');
   const repeat = await importMigrationBundle({
     bundle: diskBundle,
     target: retryTarget,
     apply: true,
     evidenceClass: 'local-fixture',
-    writeSnapshot: async () => {},
+    writeSnapshot: createImmutableSnapshotWriter(repeatSnapshotPath),
     persistReceipt: await createImmutableReceiptLedger(repeatReceiptPath),
   });
   assert.equal(repeat.status, 'APPLIED');
@@ -354,6 +442,7 @@ try {
   const partialTarget = new MemoryMigrationTarget();
   partialTarget.fail('task-two', 3, 503);
   const partialReceiptPath = path.join(tempRoot, 'partial-import-receipt.json');
+  const partialSnapshotPath = path.join(tempRoot, 'partial-import-snapshot');
   const partialPersistReceipt = await createImmutableReceiptLedger(partialReceiptPath);
   const partial = await importMigrationBundle({
     bundle: diskBundle,
@@ -362,7 +451,7 @@ try {
     evidenceClass: 'local-fixture',
     maxAttempts: 3,
     delay: async () => {},
-    writeSnapshot: async () => {},
+    writeSnapshot: createImmutableSnapshotWriter(partialSnapshotPath),
     persistReceipt: partialPersistReceipt,
   });
   assert.equal(partial.status, 'PARTIAL');
@@ -383,6 +472,97 @@ try {
     true,
     'the durable ledger must record intent before each record mutation',
   );
+  const sealedPartialInspection = await inspectImmutableReceiptLedger(partialReceiptPath);
+  assert.equal(sealedPartialInspection.status, 'PARTIAL', 'a valid terminal receipt must seal the hash-chained ledger');
+  assert.equal(sealedPartialInspection.lastReceipt.final, true);
+  const tamperedLedgerEntryPath = path.join(`${partialReceiptPath}.ledger`, partialLedgerEntries[0]);
+  const tamperedLedgerEntry = JSON.parse(await fs.readFile(tamperedLedgerEntryPath, 'utf8'));
+  tamperedLedgerEntry.status = 'APPLIED';
+  await fs.chmod(`${partialReceiptPath}.ledger`, 0o700);
+  await fs.chmod(tamperedLedgerEntryPath, 0o600);
+  await fs.writeFile(tamperedLedgerEntryPath, `${JSON.stringify(tamperedLedgerEntry, null, 2)}\n`);
+  await assert.rejects(
+    inspectImmutableReceiptLedger(partialReceiptPath),
+    /integrity|hash|tamper/i,
+    'receipt ledger hash-chain inspection must reject modified checkpoints',
+  );
+
+  const failedOutcomeReceiptPath = path.join(tempRoot, 'failed-outcome-receipt.json');
+  const failedOutcomeLedgerPath = `${failedOutcomeReceiptPath}.ledger`;
+  const failedOutcomeSnapshotPath = path.join(tempRoot, 'failed-outcome-snapshot');
+  const failedOutcomeTarget = new MemoryMigrationTarget();
+  const originalFailedOutcomeCreate = failedOutcomeTarget.create.bind(failedOutcomeTarget);
+  failedOutcomeTarget.create = async (document) => {
+    await originalFailedOutcomeCreate(document);
+    await fs.chmod(failedOutcomeLedgerPath, 0o500);
+  };
+  let failedOutcomeError;
+  try {
+    await importMigrationBundle({
+      bundle: diskBundle,
+      target: failedOutcomeTarget,
+      apply: true,
+      writeSnapshot: createImmutableSnapshotWriter(failedOutcomeSnapshotPath),
+      persistReceipt: await createImmutableReceiptLedger(failedOutcomeReceiptPath),
+    });
+  } catch (error) {
+    failedOutcomeError = error;
+  }
+  assert.equal(
+    failedOutcomeError?.code,
+    'MIGRATION_RECOVERY_REQUIRED',
+    'a receipt failure after a target mutation must report recovery-required, not terminal PARTIAL',
+  );
+  assert.equal(failedOutcomeTarget.documents.has('task-one'), true, 'the recovery contract must acknowledge the possibly committed mutation');
+  await fs.chmod(failedOutcomeLedgerPath, 0o700);
+  const failedOutcomeEntries = (await fs.readdir(failedOutcomeLedgerPath)).sort();
+  const failedOutcomeIntent = JSON.parse(await fs.readFile(path.join(failedOutcomeLedgerPath, failedOutcomeEntries.at(-1)), 'utf8'));
+  assert.equal(failedOutcomeIntent.status, 'IN_PROGRESS');
+  assert.equal(failedOutcomeIntent.inFlight?.stableId, 'agent-job/task-one');
+  assert.match(failedOutcomeIntent.operationId ?? '', /^[0-9a-f-]{36}$/u);
+  assert.match(failedOutcomeIntent.requestSha256 ?? '', /^[0-9a-f]{64}$/u);
+  assert.equal(failedOutcomeIntent.final, undefined, 'an unpersisted terminal state must never be claimed in the durable ledger');
+  await assert.rejects(
+    createImmutableReceiptLedger(failedOutcomeReceiptPath),
+    (error) => error?.code === 'MIGRATION_RECOVERY_REQUIRED' && /incomplete|recovery|reconcile/i.test(error.message),
+    'an existing incomplete ledger must fail closed with an explicit recovery-required classification',
+  );
+
+  const failedTerminalReceiptPath = path.join(tempRoot, 'failed-terminal-receipt.json');
+  const failedTerminalLedgerPath = `${failedTerminalReceiptPath}.ledger`;
+  const failedTerminalTarget = new MemoryMigrationTarget();
+  let failedTerminalAttempts = 0;
+  failedTerminalTarget.create = async (document) => {
+    failedTerminalTarget.calls.push({ operation: 'create', id: document.id });
+    if (document.id === 'task-two') {
+      failedTerminalAttempts += 1;
+      if (failedTerminalAttempts === 3) {
+        await fs.writeFile(failedTerminalReceiptPath, '{}\n', { flag: 'wx', mode: 0o400 });
+      }
+      throw Object.assign(new Error('fixture terminal failure'), { statusCode: 503 });
+    }
+    failedTerminalTarget.documents.set(document.id, structuredClone(document));
+  };
+  let failedTerminalError;
+  try {
+    await importMigrationBundle({
+      bundle: diskBundle,
+      target: failedTerminalTarget,
+      apply: true,
+      maxAttempts: 3,
+      delay: async () => {},
+      writeSnapshot: createImmutableSnapshotWriter(path.join(tempRoot, 'failed-terminal-snapshot')),
+      persistReceipt: await createImmutableReceiptLedger(failedTerminalReceiptPath),
+    });
+  } catch (error) {
+    failedTerminalError = error;
+  }
+  assert.equal(failedTerminalError?.code, 'MIGRATION_RECOVERY_REQUIRED');
+  const failedTerminalEntries = (await fs.readdir(failedTerminalLedgerPath)).sort();
+  const failedTerminalLast = JSON.parse(await fs.readFile(path.join(failedTerminalLedgerPath, failedTerminalEntries.at(-1)), 'utf8'));
+  assert.equal(failedTerminalLast.status, 'IN_PROGRESS', 'failed terminal persistence must leave a durable nonterminal recovery state');
+  assert.notEqual(failedTerminalLast.final, true, 'the ledger must not claim terminal PARTIAL when the terminal receipt was not persisted');
+  assert.equal(failedTerminalLast.terminalIntent?.status, 'PARTIAL');
 
   const reconciled = await reconcileMigration({
     bundle: diskBundle,
@@ -608,6 +788,181 @@ try {
     publicCanaryReceipt,
     jiraReceipt,
   };
+  const producerMigrationReceipt = structuredClone(migrationReceipt);
+  delete producerMigrationReceipt.evidenceClass;
+  delete producerMigrationReceipt.targetObservation;
+  delete producerMigrationReceipt.targetBinding;
+  const producerProviderReceipt = structuredClone(providerReceipt);
+  delete producerProviderReceipt.evidenceClass;
+  const producerPublicCanaryReceipt = {
+    ...publicCanaryReceipt,
+    revisionName: 'teamsapp--canary-abc123',
+  };
+  delete producerPublicCanaryReceipt.evidenceClass;
+  const producerJiraReceipt = structuredClone(jiraReceipt);
+  delete producerJiraReceipt.evidenceClass;
+
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const attestationKeyId = 'ado-release-producer-2026-09';
+  const attestationIssuer = 'https://dev.azure.com/devdoo';
+  const attestationSubject = 'devdoo-teams/teams-app/azure-release';
+  const attestationAudience = 'teamsapp-azure-release-gate';
+  const attestationPayload = {
+    schemaVersion: 'teamsapp.azure-release-aggregate-attestation.v1',
+    algorithm: 'Ed25519',
+    keyId: attestationKeyId,
+    producer: 'azure-devops-release-pipeline',
+    issuer: attestationIssuer,
+    subject: attestationSubject,
+    audience: attestationAudience,
+    environment: {
+      id: azureConfiguration.AZURE_DEVOPS_ENVIRONMENT_ID,
+      name: azureConfiguration.AZURE_DEVOPS_ENVIRONMENT_NAME,
+    },
+    resource: {
+      cosmosEndpoint: azureConfiguration.AZURE_COSMOS_ENDPOINT,
+      cosmosDatabase: azureConfiguration.AZURE_COSMOS_DATABASE,
+      cosmosContainer: azureConfiguration.AZURE_COSMOS_CONTAINER,
+      storageQueueEndpoint: azureConfiguration.AZURE_STORAGE_QUEUE_ENDPOINT,
+      azureClientId: azureConfiguration.AZURE_CLIENT_ID,
+      teamsAppId: azureConfiguration.TEAMS_APP_ID,
+      tabDomain: azureConfiguration.TAB_DOMAIN,
+    },
+    issuedAt: new Date(Date.now() - 60_000).toISOString(),
+    expiresAt: new Date(Date.now() + 300_000).toISOString(),
+    nonce: 'release-run-20260904-0001',
+    releaseIdentity: {
+      commit: releaseReceipt.commit,
+      version: releaseReceipt.version,
+      image: releaseReceipt.image,
+      imageDigest: releaseReceipt.imageDigest,
+      teamsPackageSha256: releaseReceipt.teamsPackageSha256,
+      clientBundleSha256: releaseReceipt.clientBundleSha256,
+      serverBundleSha256: releaseReceipt.serverBundleSha256,
+    },
+    evidenceHashes: {
+      releaseReceipt: sha256(stableMigrationJson(releaseReceipt)),
+      handoffProvenance: sha256(stableMigrationJson(handoffProvenance)),
+      migrationBundle: sha256(stableMigrationJson(diskBundle)),
+      migrationReceipt: sha256(stableMigrationJson(producerMigrationReceipt)),
+      approvalReceipt: sha256(stableMigrationJson(approvalReceipt)),
+      providerReceipt: sha256(stableMigrationJson(producerProviderReceipt)),
+      publicCanaryReceipt: sha256(stableMigrationJson(producerPublicCanaryReceipt)),
+      jiraReceipt: sha256(stableMigrationJson(producerJiraReceipt)),
+    },
+  };
+  const trustedAttestationConfiguration = JSON.stringify({
+    [attestationKeyId]: {
+      publicKeyPem: publicKey.export({ type: 'spki', format: 'pem' }),
+      issuer: attestationIssuer,
+      subject: attestationSubject,
+      audience: attestationAudience,
+    },
+  });
+  const signedIntegratedEvidence = {
+    ...integratedEvidence,
+    env: {
+      ...azureConfiguration,
+      AZURE_RELEASE_ATTESTATION_TRUSTED_PUBLIC_KEYS: trustedAttestationConfiguration,
+    },
+    migrationReceipt: producerMigrationReceipt,
+    providerReceipt: producerProviderReceipt,
+    publicCanaryReceipt: producerPublicCanaryReceipt,
+    jiraReceipt: producerJiraReceipt,
+    aggregateAttestation: signAggregateAttestation(attestationPayload, privateKey),
+  };
+
+  assert.equal(
+    validateAzureIntegratedEvidence(signedIntegratedEvidence).status,
+    'READY',
+    'an exact-bound Ed25519 aggregate from an allowlisted producer must clear the signed verifier contract',
+  );
+
+  const assertAttestationRejected = (aggregateAttestation, pattern, message) => assert.throws(
+    () => validateAzureIntegratedEvidence({ ...signedIntegratedEvidence, aggregateAttestation }),
+    (error) => error?.code === 'AZURE_LIVE_EVIDENCE_UNVERIFIED' && pattern.test(error.message),
+    message,
+  );
+  const resign = (changes) => signAggregateAttestation({ ...attestationPayload, ...changes }, privateKey);
+  assertAttestationRejected(
+    { ...attestationPayload },
+    /unsigned|signature/i,
+    'unsigned aggregate JSON must never satisfy the producer-attestation boundary',
+  );
+  assertAttestationRejected(
+    signAggregateAttestation({ ...attestationPayload, keyId: 'unknown-producer-key' }, privateKey),
+    /key|allowlist|trusted/i,
+    'an attestation from a non-allowlisted key must be rejected',
+  );
+  assertAttestationRejected(resign({ issuer: 'https://dev.azure.com/forged' }), /issuer/i, 'a wrong issuer must be rejected');
+  assertAttestationRejected(resign({ subject: 'another/release' }), /subject/i, 'a wrong subject must be rejected');
+  assertAttestationRejected(resign({ audience: 'another-release-gate' }), /audience/i, 'a wrong audience must be rejected');
+  assertAttestationRejected(
+    resign({ environment: { ...attestationPayload.environment, id: '99' } }),
+    /environment/i,
+    'a wrong Azure DevOps environment binding must be rejected',
+  );
+  assertAttestationRejected(
+    resign({ resource: { ...attestationPayload.resource, cosmosContainer: 'wrong-container' } }),
+    /resource|target/i,
+    'a wrong Azure target binding must be rejected',
+  );
+  assertAttestationRejected(
+    resign({ releaseIdentity: { ...attestationPayload.releaseIdentity, version: '9.9.9' } }),
+    /release|version|identity/i,
+    'a wrong release identity must be rejected',
+  );
+  assertAttestationRejected(
+    resign({ expiresAt: new Date(Date.now() - 1_000).toISOString() }),
+    /expired|expiry/i,
+    'an expired producer attestation must be rejected',
+  );
+  assertAttestationRejected(
+    resign({ producer: 'fixture' }),
+    /fixture|producer|provenance/i,
+    'fixture provenance must remain fixture and never satisfy the live producer contract',
+  );
+  const localFixtureMigrationReceipt = {
+    ...producerMigrationReceipt,
+    evidenceClass: 'local-contract',
+  };
+  const localFixturePayload = {
+    ...attestationPayload,
+    evidenceHashes: {
+      ...attestationPayload.evidenceHashes,
+      migrationReceipt: sha256(stableMigrationJson(localFixtureMigrationReceipt)),
+    },
+  };
+  assert.throws(
+    () => validateAzureIntegratedEvidence({
+      ...signedIntegratedEvidence,
+      migrationReceipt: localFixtureMigrationReceipt,
+      aggregateAttestation: signAggregateAttestation(localFixturePayload, privateKey),
+    }),
+    (error) => error?.code === 'AZURE_LIVE_EVIDENCE_UNVERIFIED' && /fixture|local-contract|provenance/i.test(error.message),
+    'a valid signature must not promote explicitly local fixture evidence',
+  );
+  assertAttestationRejected(
+    {
+      ...signedIntegratedEvidence.aggregateAttestation,
+      signature: `${signedIntegratedEvidence.aggregateAttestation.signature.startsWith('A') ? 'B' : 'A'}${signedIntegratedEvidence.aggregateAttestation.signature.slice(1)}`,
+    },
+    /signature|verification/i,
+    'a forged Ed25519 signature must be rejected',
+  );
+  assert.throws(
+    () => validateAzureIntegratedEvidence({
+      ...signedIntegratedEvidence,
+      providerReceipt: {
+        ...producerProviderReceipt,
+        providers: producerProviderReceipt.providers.map((provider) => (
+          provider.id === 'codex' ? { ...provider, receiptId: 'tampered-receipt' } : provider
+        )),
+      },
+    }),
+    (error) => error?.code === 'AZURE_LIVE_EVIDENCE_UNVERIFIED' && /hash|provider|evidence/i.test(error.message),
+    'tampering with signed provider evidence must invalidate the aggregate evidence binding',
+  );
 
   assert.throws(
     () => validateAzureIntegratedEvidence(integratedEvidence),
@@ -625,6 +980,13 @@ try {
     }),
     /sensitive|secret|credential/i,
     'preflight receipts must use the same recursive secret guard as migration artifacts',
+  );
+  const preflightBundleSecret = cloneBundle(diskBundle);
+  preflightBundleSecret.records[0].document.extra = { sessionTokens: ['opaque-preflight-secret'] };
+  assert.throws(
+    () => validateAzureIntegratedEvidence({ ...integratedEvidence, migrationBundle: preflightBundleSecret }),
+    /sensitive|secret|credential/i,
+    'preflight must scan the complete migration bundle envelope before structural validation',
   );
 
   const otherCommit = '89abcdef0123456789abcdef0123456789abcdef';
@@ -771,7 +1133,7 @@ try {
   await fs.chmod(path.join(tempRoot, 'immutable-export'), 0o755).catch(() => {});
   const entries = await fs.readdir(tempRoot, { withFileTypes: true }).catch(() => []);
   for (const entry of entries) {
-    if (entry.isDirectory() && entry.name.endsWith('.ledger')) {
+    if (entry.isDirectory()) {
       await fs.chmod(path.join(tempRoot, entry.name), 0o700).catch(() => {});
     }
   }

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   AGENT_JOB_LEDGER_PARTITION_KEY,
+  assertNoSensitiveMaterial,
   migrationSha256,
   readMigrationBundle,
   stableMigrationJson,
@@ -27,6 +28,7 @@ export async function reconcileMigration({
   const documents = await target.list(partitionKey);
   const byId = new Map();
   for (const document of documents) {
+    assertNoSensitiveMaterial(document, 'migration reconciliation target document');
     if (!document || typeof document !== 'object' || typeof document.id !== 'string') {
       throw new Error('Migration target returned a malformed record during reconciliation.');
     }
@@ -66,7 +68,7 @@ export async function reconcileMigration({
   if (contentHashesSha256 !== bundle.manifest.contentHashesSha256) {
     throw new Error('Migration reconciliation aggregate content hash mismatch.');
   }
-  return {
+  const receipt = {
     schemaVersion: 1,
     status: 'PASS',
     ...provenance,
@@ -78,6 +80,8 @@ export async function reconcileMigration({
     stableIdsSha256: bundle.manifest.stableIdsSha256,
     contentHashesSha256,
   };
+  assertNoSensitiveMaterial(receipt, 'migration reconciliation receipt');
+  return receipt;
 }
 
 function recordStableId(record) {
@@ -103,6 +107,7 @@ async function main() {
   const bundle = await readMigrationBundle(options.bundle);
   const target = await createAzureMigrationTarget();
   const receipt = await reconcileMigration({ bundle, target });
+  assertNoSensitiveMaterial(receipt, 'migration reconciliation receipt');
   await fs.writeFile(path.resolve(options.receipt), `${JSON.stringify(receipt, null, 2)}\n`, { flag: 'wx', mode: 0o400 });
   console.log(JSON.stringify(receipt, null, 2));
 }

@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +8,7 @@ import {
   AGENT_JOB_LEDGER_PARTITION_KEY,
   assertNoSensitiveMaterial,
   createRuntimeSnapshotBundle,
+  migrationSha256,
   readMigrationBundle,
   stableMigrationJson,
   validateMigrationBundle,
@@ -16,7 +18,8 @@ import {
 const TRANSIENT_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
 const DEFAULT_RETRY_DELAYS_MS = [100, 200];
 const AUTHENTICATED_AZURE_TARGET = Symbol('authenticated-azure-migration-target');
-const DURABLE_RECEIPT_WRITER = Symbol('durable-immutable-receipt-writer');
+const DURABLE_RECEIPT_WRITERS = new WeakSet();
+const IMMUTABLE_SNAPSHOT_WRITERS = new WeakSet();
 
 export function classifyMigrationTarget(target) {
   const targetBinding = target?.[AUTHENTICATED_AZURE_TARGET];
@@ -101,11 +104,37 @@ function targetStableId(id) {
   return `agent-job/${id}`;
 }
 
-async function persistMutationProgress(persistReceipt, receipt) {
-  if (typeof persistReceipt !== 'function' || persistReceipt[DURABLE_RECEIPT_WRITER] !== true) {
+function migrationPersistenceError(message, code, receipt, cause) {
+  const error = new Error(message, { cause });
+  error.code = code;
+  error.operationId = receipt?.operationId;
+  error.requestSha256 = receipt?.requestSha256;
+  error.recoveryRequired = code === 'MIGRATION_RECOVERY_REQUIRED';
+  return error;
+}
+
+async function persistMutationProgress(persistReceipt, receipt, { mutationMayHaveCommitted = false } = {}) {
+  if (typeof persistReceipt !== 'function' || !DURABLE_RECEIPT_WRITERS.has(persistReceipt)) {
     throw new Error('A durable immutable receipt ledger writer is required for every mutating invocation.');
   }
-  await persistReceipt(structuredClone(receipt));
+  try {
+    await persistReceipt(structuredClone(receipt));
+  } catch (cause) {
+    if (mutationMayHaveCommitted) {
+      throw migrationPersistenceError(
+        `Migration receipt persistence failed after a target mutation may have committed; operation ${receipt.operationId} requires ledger inspection and reconciliation before retry.`,
+        'MIGRATION_RECOVERY_REQUIRED',
+        receipt,
+        cause,
+      );
+    }
+    throw migrationPersistenceError(
+      `Migration receipt persistence failed before the next target mutation for operation ${receipt.operationId}.`,
+      'MIGRATION_RECEIPT_PERSIST_FAILED',
+      receipt,
+      cause,
+    );
+  }
 }
 
 function mutationFailureCode(error) {
@@ -140,6 +169,13 @@ export async function importMigrationBundle({
     };
   }
 
+  if (apply && (typeof persistReceipt !== 'function' || !DURABLE_RECEIPT_WRITERS.has(persistReceipt))) {
+    throw new Error('Apply requires a durable immutable receipt ledger writer.');
+  }
+  if (apply && (typeof writeSnapshot !== 'function' || !IMMUTABLE_SNAPSHOT_WRITERS.has(writeSnapshot))) {
+    throw new Error('Apply requires a repository-created immutable pre-import Azure snapshot writer.');
+  }
+
   const currentDocuments = await target.list(bundle.records[0]?.document.partitionKey ?? expectedPartitionKey(bundle));
   const plan = migrationPlan(bundle, currentDocuments);
   if (plan.conflicts.length > 0) {
@@ -157,13 +193,6 @@ export async function importMigrationBundle({
       conflicts: [],
     };
   }
-  if (typeof writeSnapshot !== 'function') {
-    throw new Error('Apply requires an immutable pre-import Azure snapshot writer.');
-  }
-  if (typeof persistReceipt !== 'function' || persistReceipt[DURABLE_RECEIPT_WRITER] !== true) {
-    throw new Error('Apply requires a durable immutable receipt ledger writer.');
-  }
-
   const snapshot = createRuntimeSnapshotBundle({
     documents: currentDocuments,
     sourceCommit: bundle.manifest.source.commit,
@@ -172,6 +201,7 @@ export async function importMigrationBundle({
 
   const receipt = {
     schemaVersion: 1,
+    operationId: crypto.randomUUID(),
     operation: 'IMPORT',
     status: 'IN_PROGRESS',
     ...provenance,
@@ -185,6 +215,14 @@ export async function importMigrationBundle({
     inFlight: null,
     reconciliationRequired: true,
   };
+  receipt.requestSha256 = migrationSha256(stableMigrationJson({
+    operation: receipt.operation,
+    sourceCommit: receipt.sourceCommit,
+    bundleSha256: receipt.bundleSha256,
+    snapshotBundleSha256: receipt.snapshotBundleSha256,
+    plannedCreates: plan.creates.map(recordStableId),
+    unchanged: plan.unchanged.map(recordStableId),
+  }));
   await persistMutationProgress(persistReceipt, receipt);
   for (const record of plan.creates) {
     const stableId = recordStableId(record);
@@ -200,13 +238,13 @@ export async function importMigrationBundle({
       receipt.status = 'PARTIAL';
     }
     receipt.inFlight = null;
-    await persistMutationProgress(persistReceipt, receipt);
+    await persistMutationProgress(persistReceipt, receipt, { mutationMayHaveCommitted: true });
   }
   receipt.status = receipt.failedIds.length === 0 ? 'APPLIED' : 'PARTIAL';
   receipt.created = receipt.completedIds.length;
   receipt.unchanged = plan.unchanged.length;
   receipt.final = true;
-  await persistMutationProgress(persistReceipt, receipt);
+  await persistMutationProgress(persistReceipt, receipt, { mutationMayHaveCommitted: plan.creates.length > 0 });
   return structuredClone(receipt);
 }
 
@@ -220,6 +258,9 @@ export async function rollbackMigrationSnapshot({
 }) {
   validateMigrationBundle(snapshot);
   if (!target) throw new Error('Rollback requires an Azure migration target.');
+  if (apply && (typeof persistReceipt !== 'function' || !DURABLE_RECEIPT_WRITERS.has(persistReceipt))) {
+    throw new Error('Rollback apply requires a durable immutable receipt ledger writer.');
+  }
   const provenance = classifyMigrationTarget(target);
   const partitionKey = snapshot.records[0]?.document.partitionKey ?? expectedPartitionKey(snapshot);
   const currentDocuments = await target.list(partitionKey);
@@ -246,12 +287,9 @@ export async function rollbackMigrationSnapshot({
       plannedReplaces: replaces.length,
     };
   }
-  if (typeof persistReceipt !== 'function' || persistReceipt[DURABLE_RECEIPT_WRITER] !== true) {
-    throw new Error('Rollback apply requires a durable immutable receipt ledger writer.');
-  }
-
   const receipt = {
     schemaVersion: 1,
+    operationId: crypto.randomUUID(),
     operation: 'ROLLBACK',
     status: 'IN_PROGRESS',
     ...provenance,
@@ -264,6 +302,14 @@ export async function rollbackMigrationSnapshot({
     inFlight: null,
     reconciliationRequired: true,
   };
+  receipt.requestSha256 = migrationSha256(stableMigrationJson({
+    operation: receipt.operation,
+    sourceCommit: receipt.sourceCommit,
+    snapshotBundleSha256: receipt.snapshotBundleSha256,
+    deletes,
+    creates: creates.map(recordStableId),
+    replaces: replaces.map(recordStableId),
+  }));
   await persistMutationProgress(persistReceipt, receipt);
   const operations = [
     ...deletes.map((id) => ({ action: 'delete', stableId: targetStableId(id), run: () => target.delete(id, partitionKey) })),
@@ -296,14 +342,14 @@ export async function rollbackMigrationSnapshot({
       receipt.status = 'PARTIAL';
     }
     receipt.inFlight = null;
-    await persistMutationProgress(persistReceipt, receipt);
+    await persistMutationProgress(persistReceipt, receipt, { mutationMayHaveCommitted: true });
   }
   receipt.status = receipt.failedIds.length === 0 ? 'ROLLED_BACK' : 'PARTIAL';
   receipt.deleted = receipt.progress.filter(({ action, status }) => action === 'delete' && status === 'COMPLETED').length;
   receipt.created = receipt.progress.filter(({ action, status }) => action === 'create' && status === 'COMPLETED').length;
   receipt.replaced = receipt.progress.filter(({ action, status }) => action === 'replace' && status === 'COMPLETED').length;
   receipt.final = true;
-  await persistMutationProgress(persistReceipt, receipt);
+  await persistMutationProgress(persistReceipt, receipt, { mutationMayHaveCommitted: operations.length > 0 });
   return structuredClone(receipt);
 }
 
@@ -418,23 +464,154 @@ export async function createImmutableReceiptLedger(receiptPath) {
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error;
   }
-  await fs.mkdir(ledgerDirectory, { recursive: false, mode: 0o700 });
+  try {
+    await fs.mkdir(ledgerDirectory, { recursive: false, mode: 0o700 });
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
+    const inspection = await inspectImmutableReceiptLedger(receiptPath);
+    if (inspection.lastReceipt) {
+      throw migrationPersistenceError(
+        `Immutable receipt ledger is incomplete for operation ${inspection.lastReceipt.operationId ?? '<unknown>'}; inspect the ledger and reconcile the target before retry.`,
+        'MIGRATION_RECOVERY_REQUIRED',
+        inspection.lastReceipt,
+        error,
+      );
+    }
+    throw new Error(`Immutable receipt ledger already exists: ${ledgerDirectory}.`);
+  }
   let sequence = 0;
   let sealed = false;
+  let previousEntrySha256 = null;
+  let operationId;
+  let requestSha256;
+  const appendLedgerReceipt = async (receipt) => {
+    const persistedReceipt = structuredClone(receipt);
+    persistedReceipt.ledgerIntegrity = {
+      sequence,
+      previousEntrySha256,
+    };
+    persistedReceipt.ledgerIntegrity.entrySha256 = migrationSha256(stableMigrationJson(persistedReceipt));
+    const entry = `${String(sequence).padStart(6, '0')}.json`;
+    await writeAtomicImmutableJson(path.join(ledgerDirectory, entry), persistedReceipt);
+    previousEntrySha256 = persistedReceipt.ledgerIntegrity.entrySha256;
+    sequence += 1;
+    return persistedReceipt;
+  };
   const persistReceipt = async (receipt) => {
     if (sealed) throw new Error(`Immutable receipt ledger is already sealed: ${ledgerDirectory}.`);
     assertNoSensitiveMaterial(receipt, 'migration receipt');
-    const entry = `${String(sequence).padStart(6, '0')}.json`;
-    await writeAtomicImmutableJson(path.join(ledgerDirectory, entry), receipt);
-    sequence += 1;
+    if (!/^[0-9a-f-]{36}$/u.test(receipt?.operationId ?? '') || !/^[0-9a-f]{64}$/u.test(receipt?.requestSha256 ?? '')) {
+      throw new Error('Migration receipt must bind a UUID operationId and SHA-256 requestSha256.');
+    }
+    operationId ??= receipt.operationId;
+    requestSha256 ??= receipt.requestSha256;
+    if (receipt.operationId !== operationId || receipt.requestSha256 !== requestSha256) {
+      throw new Error('Migration receipt ledger operationId or requestSha256 changed during the operation.');
+    }
     if (receipt?.final === true && ['APPLIED', 'PARTIAL', 'ROLLED_BACK'].includes(receipt?.status)) {
-      await writeAtomicImmutableJson(resolvedReceipt, receipt);
+      const sealingReceipt = structuredClone(receipt);
+      const terminalStatus = sealingReceipt.status;
+      sealingReceipt.status = 'IN_PROGRESS';
+      delete sealingReceipt.final;
+      sealingReceipt.terminalIntent = {
+        status: terminalStatus,
+        completedIds: [...(receipt.completedIds ?? [])],
+        failedIds: [...(receipt.failedIds ?? [])],
+      };
+      await appendLedgerReceipt(sealingReceipt);
+      const terminalReceipt = structuredClone(receipt);
+      terminalReceipt.ledgerIntegrity = {
+        sequence,
+        previousEntrySha256,
+        terminal: true,
+      };
+      terminalReceipt.ledgerIntegrity.entrySha256 = migrationSha256(stableMigrationJson(terminalReceipt));
+      await writeAtomicImmutableJson(resolvedReceipt, terminalReceipt);
       sealed = true;
       await fs.chmod(ledgerDirectory, 0o500);
+      return;
     }
+    await appendLedgerReceipt(receipt);
   };
-  Object.defineProperty(persistReceipt, DURABLE_RECEIPT_WRITER, { value: true });
+  DURABLE_RECEIPT_WRITERS.add(persistReceipt);
   return persistReceipt;
+}
+
+export async function inspectImmutableReceiptLedger(receiptPath) {
+  if (!receiptPath?.trim()) throw new Error('A non-empty immutable receipt path is required.');
+  const resolvedReceipt = path.resolve(receiptPath);
+  const ledgerDirectory = `${resolvedReceipt}.ledger`;
+  const entries = (await fs.readdir(ledgerDirectory))
+    .filter((entry) => /^\d{6}\.json$/u.test(entry))
+    .sort();
+  let previousEntrySha256 = null;
+  let lastReceipt = null;
+  for (const [sequence, entry] of entries.entries()) {
+    const receipt = JSON.parse(await fs.readFile(path.join(ledgerDirectory, entry), 'utf8'));
+    assertNoSensitiveMaterial(receipt, `migration receipt ledger ${entry}`);
+    const integrity = receipt.ledgerIntegrity;
+    const claimedEntrySha256 = integrity?.entrySha256;
+    if (
+      integrity?.sequence !== sequence
+      || integrity.previousEntrySha256 !== previousEntrySha256
+      || !/^[0-9a-f]{64}$/u.test(claimedEntrySha256 ?? '')
+    ) {
+      throw new Error(`Migration receipt ledger integrity metadata is invalid at ${entry}.`);
+    }
+    const unhashed = structuredClone(receipt);
+    delete unhashed.ledgerIntegrity.entrySha256;
+    if (migrationSha256(stableMigrationJson(unhashed)) !== claimedEntrySha256) {
+      throw new Error(`Migration receipt ledger hash mismatch at ${entry}.`);
+    }
+    previousEntrySha256 = claimedEntrySha256;
+    lastReceipt = receipt;
+  }
+  let terminalReceipt;
+  try {
+    terminalReceipt = JSON.parse(await fs.readFile(resolvedReceipt, 'utf8'));
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  if (terminalReceipt) {
+    assertNoSensitiveMaterial(terminalReceipt, 'migration terminal receipt');
+    const integrity = terminalReceipt.ledgerIntegrity;
+    const claimedEntrySha256 = integrity?.entrySha256;
+    if (
+      terminalReceipt.final !== true
+      || !['APPLIED', 'PARTIAL', 'ROLLED_BACK'].includes(terminalReceipt.status)
+      || integrity?.terminal !== true
+      || integrity.sequence !== entries.length
+      || integrity.previousEntrySha256 !== previousEntrySha256
+      || terminalReceipt.operationId !== lastReceipt?.operationId
+      || terminalReceipt.requestSha256 !== lastReceipt?.requestSha256
+      || !/^[0-9a-f]{64}$/u.test(claimedEntrySha256 ?? '')
+    ) {
+      throw new Error('Migration terminal receipt does not validly seal its immutable ledger.');
+    }
+    const unhashed = structuredClone(terminalReceipt);
+    delete unhashed.ledgerIntegrity.entrySha256;
+    if (migrationSha256(stableMigrationJson(unhashed)) !== claimedEntrySha256) {
+      throw new Error('Migration terminal receipt hash does not validly seal its immutable ledger.');
+    }
+    return {
+      status: terminalReceipt.status,
+      entries: entries.length,
+      lastReceipt: terminalReceipt,
+    };
+  }
+  return {
+    status: 'RECOVERY_REQUIRED',
+    entries: entries.length,
+    lastReceipt,
+  };
+}
+
+export function createImmutableSnapshotWriter(outputDirectory) {
+  if (!outputDirectory?.trim()) throw new Error('A non-empty immutable snapshot output directory is required.');
+  const resolved = path.resolve(outputDirectory);
+  const writeSnapshot = async (snapshot) => writeMigrationBundle(resolved, snapshot);
+  IMMUTABLE_SNAPSHOT_WRITERS.add(writeSnapshot);
+  return writeSnapshot;
 }
 
 async function writeReceipt(receiptPath, receipt) {
@@ -473,6 +650,9 @@ async function main() {
   const bundle = await readMigrationBundle(options.bundle);
   const target = options.apply || process.env.AZURE_COSMOS_ENDPOINT ? await createAzureMigrationTarget() : undefined;
   const persistReceipt = options.apply ? await createImmutableReceiptLedger(options.receipt) : undefined;
+  const writeSnapshot = options.apply && !options.rollback
+    ? createImmutableSnapshotWriter(options.snapshotOutput)
+    : undefined;
   const result = options.rollback
     ? await rollbackMigrationSnapshot({ snapshot: bundle, target, apply: options.apply, persistReceipt })
     : await importMigrationBundle({
@@ -480,9 +660,7 @@ async function main() {
       target,
       apply: options.apply,
       persistReceipt,
-      writeSnapshot: options.apply
-        ? (snapshot) => writeMigrationBundle(options.snapshotOutput, snapshot)
-        : undefined,
+      writeSnapshot,
     });
   if (!options.apply) await writeReceipt(options.receipt, result);
   console.log(JSON.stringify(result, null, 2));
@@ -491,7 +669,13 @@ async function main() {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   main().catch((error) => {
-    console.error(JSON.stringify({ status: 'BLOCKED', blocker: error instanceof Error ? error.message : String(error) }, null, 2));
+    console.error(JSON.stringify({
+      status: error?.recoveryRequired ? 'RECOVERY_REQUIRED' : 'BLOCKED',
+      code: error?.code,
+      operationId: error?.operationId,
+      requestSha256: error?.requestSha256,
+      blocker: error instanceof Error ? error.message : String(error),
+    }, null, 2));
     process.exitCode = 1;
   });
 }

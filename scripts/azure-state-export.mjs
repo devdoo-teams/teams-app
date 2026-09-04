@@ -15,9 +15,39 @@ const RECORD_SCHEMA = 'teamsapp.runtime-record-export.v1';
 const COMMIT_PATTERN = /^[0-9a-f]{40}$/u;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const MAX_BUNDLE_BYTES = 256 * 1024 * 1024;
-const SAFE_CREDENTIAL_METADATA_SUFFIXES = new Set([
-  'budget', 'configured', 'count', 'enabled', 'expired', 'expires', 'expiry', 'id', 'name', 'policy',
-  'present', 'ref', 'reference', 'scheme', 'state', 'status', 'type', 'version',
+const SAFE_CREDENTIAL_METADATA_KEYS = new Set([
+  'accountkeyreference',
+  'apikeyreference',
+  'authorizationscheme',
+  'authorizationstatus',
+  'authorizationurl',
+  'connectionstatus',
+  'credentialpolicyname',
+  'credentialreference',
+  'credentialstatus',
+  'passwordpolicy',
+  'passwordpolicyname',
+  'secretpolicyname',
+  'secretreference',
+  'secretrotationpolicy',
+  'secreturi',
+  'tokenbudget',
+  'tokenconfigured',
+  'tokencount',
+  'tokenenabled',
+  'tokenexpiresat',
+  'tokenid',
+  'tokenname',
+  'tokenpolicy',
+  'tokenpolicyname',
+  'tokenpresent',
+  'tokenref',
+  'tokenreference',
+  'tokenscheme',
+  'tokenstate',
+  'tokenstatus',
+  'tokentype',
+  'tokenversion',
 ]);
 const SENSITIVE_VALUE_PATTERNS = [
   /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/iu,
@@ -109,14 +139,20 @@ function keyWords(key) {
     .filter(Boolean);
 }
 
+function isSafeCredentialMetadataKey(normalized) {
+  return SAFE_CREDENTIAL_METADATA_KEYS.has(normalized);
+}
+
 function isSensitiveCredentialKey(key) {
   const words = keyWords(key);
   const normalized = words.join('');
-  if (SAFE_CREDENTIAL_METADATA_SUFFIXES.has(words.at(-1))) return false;
+  if (isSafeCredentialMetadataKey(normalized)) return false;
   if (
-    /(?:connectionstring|accountkey|accesskey|sharedaccesskey|sharedaccesssignature|privatekey|clientsecret|apikey|devicecode|authjson)/u.test(normalized)
+    /(?:connectionstrings?|accountkeys?|accesskeys?|sharedaccesskeys?|sharedaccesssignatures?|privatekeys?|clientsecrets?|apikeys?|devicecodes?|authjson)/u.test(normalized)
   ) return true;
-  return words.some((word) => ['authorization', 'credential', 'password', 'secret', 'token'].includes(word));
+  return words.some((word) => [
+    'authorization', 'credential', 'credentials', 'password', 'passwords', 'secret', 'secrets', 'token', 'tokens',
+  ].includes(word));
 }
 
 export function assertNoSensitiveMaterial(value, location = 'record', seen = new Set()) {
@@ -341,6 +377,7 @@ export function createRuntimeSnapshotBundle({ documents, sourceCommit, exportedA
 }
 
 export function validateMigrationBundle(bundle) {
+  assertNoSensitiveMaterial(bundle, 'migration bundle');
   if (!bundle || typeof bundle !== 'object' || !bundle.manifest || !Array.isArray(bundle.records)) {
     throw new Error('Malformed migration bundle.');
   }

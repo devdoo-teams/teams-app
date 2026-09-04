@@ -82,7 +82,9 @@ npm run azure:state-import -- \
   --receipt /absolute/path/to/rollback-receipt.json
 ```
 
-Rollback restores the exact application document envelopes captured before import and removes records absent from that snapshot. It uses the same immutable per-record receipt ledger and returns durable `PARTIAL` evidence rather than throwing away progress when a target mutation fails. Reconcile the rollback snapshot afterward. Do not switch or stop the current Dev Tunnel as part of migration or rollback.
+Rollback restores the exact application document envelopes captured before import and removes records absent from that snapshot. Import snapshot writers and mutation receipt writers are repository-created private capabilities; arbitrary callbacks and copied properties are rejected before target mutation. The receipt ledger binds a UUID operation ID and canonical request SHA-256 and hash-chains each immutable checkpoint. A normal target-operation failure can seal durable `PARTIAL`; if an outcome or terminal receipt cannot be persisted after a mutation may have committed, the command instead reports `MIGRATION_RECOVERY_REQUIRED`. The last durable entry remains nonterminal `IN_PROGRESS`/seal intent. An existing incomplete ledger is never replayed as a fresh operation: inspect its operation ID, request hash, in-flight item, reconcile the target, and choose an operator-reviewed recovery before using a new receipt path. Do not delete or relabel an incomplete ledger as completion.
+
+The secret guard scans the complete accepted bundle, record, runtime-document, target-document, preflight evidence, reconciliation receipt, and mutation receipt envelopes before use or persistence, including nested arrays. Singular and plural credential key families are rejected. Explicit metadata fields such as `tokenCount`, `tokenReference`, `tokenExpiresAt`, `authorizationStatus`, `authorizationUrl`, `secretReference`, `secretUri`, `connectionStatus`, and policy names remain permitted only as metadata; credential-shaped values are still rejected regardless of field name.
 
 ## Integrated non-mutating preflight
 
@@ -99,8 +101,13 @@ Azure mode requires paths to these already-created immutable inputs:
 - `AZURE_PROVIDER_READINESS_RECEIPT_PATH`
 - `AZURE_PUBLIC_CANARY_RECEIPT_PATH`
 - `AZURE_JIRA_MAPPING_RECEIPT_PATH`
+- `AZURE_RELEASE_ATTESTATION_PATH`
 
-Approval structure is additionally bound to `AZURE_DEVOPS_ENVIRONMENT_ID`, `AZURE_DEVOPS_ENVIRONMENT_NAME`, and the exact release identity. This structural match is not proof that approval occurred; unsigned local approval JSON remains unverified.
+Set `AZURE_RELEASE_ATTESTATION_TRUSTED_PUBLIC_KEYS` to a bounded JSON object keyed by attestation `keyId`. Each allowlist entry contains only `publicKeyPem`, `issuer`, `subject`, and `audience`; never place a private key in this variable, Git, pipeline artifacts, migration artifacts, or logs. The matching private Ed25519 key remains in the authenticated Azure DevOps producer's external key service.
+
+The producer writes one `teamsapp.azure-release-aggregate-attestation.v1` envelope with `algorithm=Ed25519`, `producer=azure-devops-release-pipeline`, key ID, issuer, subject, audience, exact environment ID/name, exact Cosmos/queue/managed-identity/Teams target, canonical issued/expiry timestamps, a bounded nonce, and the exact commit/version/image/image-digest/Teams-package/client/server identity. Its `evidenceHashes` are SHA-256 hashes of canonical stable JSON for the release receipt, handoff provenance, migration bundle, reconciliation receipt, approval receipt, provider receipt, public canary receipt, and Jira receipt. The detached signature is base64url Ed25519 over the canonical envelope with the `signature` field omitted. The gate permits no unknown attestation fields, allows at most a 15-minute validity window, and rejects missing signatures, untrusted keys, fixture producer labels, wrong claims/targets/releases, expired envelopes, evidence tampering, and non-Ed25519 keys.
+
+The repository contains verification only. It does not contain a signer or private key and does not claim that constructing `DefaultAzureCredential` proves a live Azure request. Local generated-key tests prove the signed-verifier contract; only an externally authenticated Azure DevOps producer can generate operational evidence for a real release.
 
 Then run:
 
@@ -108,7 +115,7 @@ Then run:
 TEAMS_RELEASE_TARGET=azure npm run release:preflight
 ```
 
-The evidence join validates that all inputs bind the same handoff commit/version/image/package/client/server identity, the migration bundle and reconciliation source commits match the handoff, the Teams package hash and manifest match, enabled providers contain a nonempty result plus cancellation/recovery structure, approval names the exact configured environment and release, and every recorded defect/blocker/improvement has a Jira mapping. It recursively rejects credential-bearing fields and values. Because these inputs are unsigned local JSON, the join then fails closed as `AZURE_LIVE_EVIDENCE_UNVERIFIED`; it performs no provisioning, deployment, endpoint switch, portal operation, Jira write, or secret lookup.
+The evidence join validates that all inputs bind the same handoff commit/version/image/package/client/server identity, the migration bundle and reconciliation source commits match the handoff, the Teams package hash and manifest match, enabled providers contain a nonempty result plus cancellation/recovery structure, approval names the exact configured environment and release, and every recorded defect/blocker/improvement has a Jira mapping. It recursively rejects credential-bearing fields and values. Unsigned JSON and local fixture evidence fail closed as `AZURE_LIVE_EVIDENCE_UNVERIFIED`; an exact-bound valid allowlisted signature can satisfy the verifier contract. The command remains non-mutating: it performs no provisioning, deployment, endpoint switch, portal operation, Jira write, or secret lookup.
 
 ## Promotion rule
 

@@ -643,6 +643,245 @@ function assertReleaseIdentity(actual, expected, label) {
   }
 }
 
+function assertExactObjectKeys(value, expectedKeys, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw azureGateError(`${label} must be an object.`, 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  const actualKeys = Object.keys(value).sort();
+  const wantedKeys = [...expectedKeys].sort();
+  if (stableMigrationJson(actualKeys) !== stableMigrationJson(wantedKeys)) {
+    throw azureGateError(`${label} contains missing or unknown fields.`, 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+}
+
+function attestationSha256(value) {
+  return crypto.createHash('sha256').update(stableMigrationJson(value)).digest('hex');
+}
+
+function assertNoFixtureEvidence(value, location, seen = new Set()) {
+  if (value === null || typeof value !== 'object') return;
+  if (seen.has(value)) throw azureGateError(`Cyclic evidence is invalid at ${location}.`, 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  seen.add(value);
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => assertNoFixtureEvidence(entry, `${location}[${index}]`, seen));
+  } else {
+    for (const [key, entry] of Object.entries(value)) {
+      const normalizedKey = key.replace(/[^a-z0-9]/giu, '').toLowerCase();
+      if (
+        ['evidenceclass', 'producerprovenance'].includes(normalizedKey)
+        && typeof entry === 'string'
+        && /(?:^|[-_])(fixture|local)(?:$|[-_])|local-contract/iu.test(entry)
+      ) {
+        throw azureGateError(
+          `Fixture/local-contract provenance at ${location}.${key} cannot satisfy the producer attestation gate.`,
+          'AZURE_LIVE_EVIDENCE_UNVERIFIED',
+        );
+      }
+      assertNoFixtureEvidence(entry, `${location}.${key}`, seen);
+    }
+  }
+  seen.delete(value);
+}
+
+function parseTrustedAttestationKey(env, keyId) {
+  const encoded = env.AZURE_RELEASE_ATTESTATION_TRUSTED_PUBLIC_KEYS?.trim();
+  if (!encoded || encoded.length > 64 * 1024) {
+    throw azureGateError(
+      'AZURE_RELEASE_ATTESTATION_TRUSTED_PUBLIC_KEYS must provide a bounded public-key allowlist.',
+      'AZURE_LIVE_EVIDENCE_UNVERIFIED',
+    );
+  }
+  let allowlist;
+  try {
+    allowlist = JSON.parse(encoded);
+  } catch {
+    throw azureGateError('The release-attestation public-key allowlist is not valid JSON.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  if (!allowlist || typeof allowlist !== 'object' || Array.isArray(allowlist)) {
+    throw azureGateError('The release-attestation public-key allowlist must be an object.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  const trusted = allowlist[keyId];
+  if (!trusted) {
+    throw azureGateError(`Release attestation key ${keyId || '<missing>'} is not in the trusted allowlist.`, 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  assertExactObjectKeys(trusted, ['publicKeyPem', 'issuer', 'subject', 'audience'], 'trusted release-attestation key');
+  if (![trusted.publicKeyPem, trusted.issuer, trusted.subject, trusted.audience].every((value) => typeof value === 'string' && value.trim())) {
+    throw azureGateError('The trusted release-attestation key entry is incomplete.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  let publicKey;
+  try {
+    publicKey = crypto.createPublicKey(trusted.publicKeyPem);
+  } catch {
+    throw azureGateError('The trusted release-attestation public key is invalid.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  if (publicKey.type !== 'public' || publicKey.asymmetricKeyType !== 'ed25519') {
+    throw azureGateError('The trusted release-attestation key must be an Ed25519 public key.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  return { trusted, publicKey };
+}
+
+function assertCanonicalAttestationTimestamp(value, label) {
+  let canonical;
+  try {
+    canonical = typeof value === 'string' && value ? new Date(value).toISOString() : '';
+  } catch {
+    canonical = '';
+  }
+  if (canonical !== value) {
+    throw azureGateError(`Release attestation ${label} must be a canonical timestamp.`, 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  return Date.parse(value);
+}
+
+export function verifyAzureAggregateAttestation({
+  env,
+  aggregateAttestation,
+  configuration,
+  releaseReceipt,
+  handoffProvenance,
+  migrationBundle,
+  migrationReceipt,
+  approvalReceipt,
+  providerReceipt,
+  publicCanaryReceipt,
+  jiraReceipt,
+  now = Date.now(),
+}) {
+  if (!aggregateAttestation || typeof aggregateAttestation !== 'object' || Array.isArray(aggregateAttestation)) {
+    throw azureGateError(
+      'Unsigned local JSON evidence cannot establish live state; a signed aggregate release attestation is required.',
+      'AZURE_LIVE_EVIDENCE_UNVERIFIED',
+    );
+  }
+  try {
+    assertNoSensitiveMaterial(aggregateAttestation, 'preflight.aggregateAttestation');
+  } catch (error) {
+    throw azureGateError(error instanceof Error ? error.message : String(error));
+  }
+  for (const [label, evidence] of Object.entries({
+    releaseReceipt,
+    handoffProvenance,
+    migrationBundle,
+    migrationReceipt,
+    approvalReceipt,
+    providerReceipt,
+    publicCanaryReceipt,
+    jiraReceipt,
+  })) {
+    assertNoFixtureEvidence(evidence, `preflight.${label}`);
+  }
+  if (typeof aggregateAttestation.signature !== 'string' || !aggregateAttestation.signature) {
+    throw azureGateError('Release attestation is unsigned; an Ed25519 signature is required.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  assertExactObjectKeys(aggregateAttestation, [
+    'schemaVersion', 'algorithm', 'keyId', 'producer', 'issuer', 'subject', 'audience', 'environment', 'resource',
+    'issuedAt', 'expiresAt', 'nonce', 'releaseIdentity', 'evidenceHashes', 'signature',
+  ], 'release aggregate attestation');
+  if (
+    aggregateAttestation.schemaVersion !== 'teamsapp.azure-release-aggregate-attestation.v1'
+    || aggregateAttestation.algorithm !== 'Ed25519'
+    || aggregateAttestation.producer !== 'azure-devops-release-pipeline'
+  ) {
+    throw azureGateError(
+      'Release attestation provenance is not the accepted Azure DevOps producer contract; fixture provenance is not live evidence.',
+      'AZURE_LIVE_EVIDENCE_UNVERIFIED',
+    );
+  }
+  if (!/^[A-Za-z0-9._-]{1,128}$/u.test(aggregateAttestation.keyId ?? '')) {
+    throw azureGateError('Release attestation keyId is invalid.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  if (!/^[A-Za-z0-9_-]{16,128}$/u.test(aggregateAttestation.nonce ?? '')) {
+    throw azureGateError('Release attestation nonce is missing or invalid.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  const issuedAt = assertCanonicalAttestationTimestamp(aggregateAttestation.issuedAt, 'issuedAt');
+  const expiresAt = assertCanonicalAttestationTimestamp(aggregateAttestation.expiresAt, 'expiresAt');
+  if (issuedAt > now + 60_000) {
+    throw azureGateError('Release attestation issuedAt is in the future.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  if (expiresAt <= now || expiresAt <= issuedAt || expiresAt - issuedAt > 15 * 60_000) {
+    throw azureGateError('Release attestation is expired or has an invalid expiry window.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+
+  const { trusted, publicKey } = parseTrustedAttestationKey(env, aggregateAttestation.keyId);
+  for (const claim of ['issuer', 'subject', 'audience']) {
+    if (aggregateAttestation[claim] !== trusted[claim]) {
+      throw azureGateError(`Release attestation ${claim} is not trusted for key ${aggregateAttestation.keyId}.`, 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+    }
+  }
+  assertExactObjectKeys(aggregateAttestation.environment, ['id', 'name'], 'release attestation environment');
+  const expectedEnvironment = {
+    id: configuration.AZURE_DEVOPS_ENVIRONMENT_ID,
+    name: configuration.AZURE_DEVOPS_ENVIRONMENT_NAME,
+  };
+  if (stableMigrationJson(aggregateAttestation.environment) !== stableMigrationJson(expectedEnvironment)) {
+    throw azureGateError('Release attestation environment does not match the exact promotion environment.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  const expectedResource = {
+    cosmosEndpoint: configuration.AZURE_COSMOS_ENDPOINT,
+    cosmosDatabase: configuration.AZURE_COSMOS_DATABASE,
+    cosmosContainer: configuration.AZURE_COSMOS_CONTAINER,
+    storageQueueEndpoint: configuration.AZURE_STORAGE_QUEUE_ENDPOINT,
+    azureClientId: configuration.AZURE_CLIENT_ID,
+    teamsAppId: configuration.TEAMS_APP_ID,
+    tabDomain: configuration.TAB_DOMAIN,
+  };
+  assertExactObjectKeys(aggregateAttestation.resource, Object.keys(expectedResource), 'release attestation resource');
+  if (stableMigrationJson(aggregateAttestation.resource) !== stableMigrationJson(expectedResource)) {
+    throw azureGateError('Release attestation resource/target does not match the configured Azure release target.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  const expectedReleaseIdentity = {
+    commit: releaseReceipt.commit,
+    version: releaseReceipt.version,
+    image: releaseReceipt.image,
+    imageDigest: releaseReceipt.imageDigest,
+    teamsPackageSha256: releaseReceipt.teamsPackageSha256,
+    clientBundleSha256: releaseReceipt.clientBundleSha256,
+    serverBundleSha256: releaseReceipt.serverBundleSha256,
+  };
+  assertExactObjectKeys(aggregateAttestation.releaseIdentity, Object.keys(expectedReleaseIdentity), 'release attestation releaseIdentity');
+  if (stableMigrationJson(aggregateAttestation.releaseIdentity) !== stableMigrationJson(expectedReleaseIdentity)) {
+    throw azureGateError('Release attestation release identity does not match the exact immutable release.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  const expectedEvidenceHashes = {
+    releaseReceipt: attestationSha256(releaseReceipt),
+    handoffProvenance: attestationSha256(handoffProvenance),
+    migrationBundle: attestationSha256(migrationBundle),
+    migrationReceipt: attestationSha256(migrationReceipt),
+    approvalReceipt: attestationSha256(approvalReceipt),
+    providerReceipt: attestationSha256(providerReceipt),
+    publicCanaryReceipt: attestationSha256(publicCanaryReceipt),
+    jiraReceipt: attestationSha256(jiraReceipt),
+  };
+  assertExactObjectKeys(aggregateAttestation.evidenceHashes, Object.keys(expectedEvidenceHashes), 'release attestation evidenceHashes');
+  if (stableMigrationJson(aggregateAttestation.evidenceHashes) !== stableMigrationJson(expectedEvidenceHashes)) {
+    throw azureGateError('Release attestation evidence hashes do not match the exact release receipts.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  if (!/^[A-Za-z0-9_-]{86}$/u.test(aggregateAttestation.signature ?? '')) {
+    throw azureGateError('Release attestation is unsigned or has an invalid Ed25519 signature.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  const unsigned = structuredClone(aggregateAttestation);
+  delete unsigned.signature;
+  const signature = Buffer.from(aggregateAttestation.signature, 'base64url');
+  if (!crypto.verify(null, Buffer.from(stableMigrationJson(unsigned)), publicKey, signature)) {
+    throw azureGateError('Release attestation signature verification failed.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  return {
+    status: 'VERIFIED',
+    evidenceClass: 'producer-signed-attestation',
+    verification: 'ED25519_AGGREGATE_VERIFIED',
+    keyId: aggregateAttestation.keyId,
+    issuer: aggregateAttestation.issuer,
+    subject: aggregateAttestation.subject,
+    audience: aggregateAttestation.audience,
+    environment: structuredClone(expectedEnvironment),
+    resource: structuredClone(expectedResource),
+    releaseIdentity: structuredClone(expectedReleaseIdentity),
+    issuedAt: aggregateAttestation.issuedAt,
+    expiresAt: aggregateAttestation.expiresAt,
+    nonce: aggregateAttestation.nonce,
+  };
+}
+
 export function validateAzureIntegratedEvidence({
   env,
   releaseReceipt: releaseReceiptInput,
@@ -657,6 +896,7 @@ export function validateAzureIntegratedEvidence({
   providerReceipt,
   publicCanaryReceipt,
   jiraReceipt,
+  aggregateAttestation,
 }) {
   const configuration = requireAzureConfiguration(env ?? {});
   for (const [label, evidence] of Object.entries({
@@ -664,6 +904,7 @@ export function validateAzureIntegratedEvidence({
     handoffProvenance,
     sourceManifest,
     packageManifest,
+    migrationBundle,
     migrationReceipt,
     approvalReceipt,
     providerReceipt,
@@ -828,10 +1069,25 @@ export function validateAzureIntegratedEvidence({
     }
   }
 
-  throw azureGateError(
-    'unsigned local JSON evidence is classified as fixture/local-contract and cannot establish live Azure, provider, canary, approval, or Jira state; an authenticated producer verifier is required.',
-    'AZURE_LIVE_EVIDENCE_UNVERIFIED',
-  );
+  const attestation = verifyAzureAggregateAttestation({
+    env,
+    aggregateAttestation,
+    configuration,
+    releaseReceipt,
+    handoffProvenance,
+    migrationBundle,
+    migrationReceipt,
+    approvalReceipt,
+    providerReceipt,
+    publicCanaryReceipt,
+    jiraReceipt,
+  });
+  return {
+    phase: 'azure-integrated-evidence',
+    status: 'READY',
+    evidenceClass: attestation.evidenceClass,
+    attestation,
+  };
 }
 
 async function readBoundedJson(filePath, label, maxBytes = 1024 * 1024) {
@@ -857,6 +1113,7 @@ async function readBoundedJson(filePath, label, maxBytes = 1024 * 1024) {
 async function readAndValidateAzureIntegratedEvidence({ env, sourceCommit }) {
   const releaseReceipt = await readBoundedJson(env.AZURE_RELEASE_RECEIPT_PATH, 'release receipt');
   const handoffProvenance = await readBoundedJson(env.AZURE_HANDOFF_PROVENANCE_PATH, 'handoff provenance');
+  const aggregateAttestation = await readBoundedJson(env.AZURE_RELEASE_ATTESTATION_PATH, 'aggregate release attestation');
   const migrationBundlePath = env.AZURE_MIGRATION_BUNDLE_PATH;
   if (!migrationBundlePath?.trim()) throw azureGateError('AZURE_MIGRATION_BUNDLE_PATH is required.');
   let migrationBundle;
@@ -905,6 +1162,7 @@ async function readAndValidateAzureIntegratedEvidence({ env, sourceCommit }) {
     providerReceipt,
     publicCanaryReceipt,
     jiraReceipt,
+    aggregateAttestation,
   });
 }
 
