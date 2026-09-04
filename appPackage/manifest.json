@@ -47,6 +47,7 @@
             { "title": "status", "description": "앱 상태를 확인합니다." },
             { "title": "list", "description": "진행 중인 업무 목록을 보여줍니다." },
             { "title": "agent run", "description": "읽기 전용 Core 에이전트 작업을 시작합니다." },
+            { "title": "agent write", "description": "승인이 필요한 작업공간 변경 작업을 시작합니다." },
             { "title": "agent status", "description": "Core 에이전트 작업 상태를 확인합니다." },
             { "title": "agent list", "description": "Core 에이전트 작업 목록을 확인합니다." },
             { "title": "agent cancel", "description": "Core 에이전트 작업 취소를 요청합니다." },

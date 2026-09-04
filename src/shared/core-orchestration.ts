@@ -66,6 +66,30 @@ export type CoreProviderFact = Readonly<{
   source: CoreProviderFactSource;
 }>;
 
+export class CoreOrchestrationProviderUnavailableError extends Error {
+  readonly code = 'CORE_ORCHESTRATION_PROVIDER_UNAVAILABLE' as const;
+
+  constructor(
+    readonly provider: string,
+    readonly availability: CoreProviderAvailability,
+  ) {
+    super(`Provider ${provider} is ${availability} and cannot accept Core orchestration work.`);
+    this.name = 'CoreOrchestrationProviderUnavailableError';
+  }
+}
+
+export class CoreOrchestrationProviderCapabilityError extends Error {
+  readonly code = 'CORE_ORCHESTRATION_PROVIDER_CAPABILITY_UNAVAILABLE' as const;
+
+  constructor(
+    readonly provider: string,
+    readonly capability: string,
+  ) {
+    super(`Provider ${provider} has no measured ${capability} capability.`);
+    this.name = 'CoreOrchestrationProviderCapabilityError';
+  }
+}
+
 export class CoreOrchestrationIdempotencyConflictError extends Error {
   readonly code = 'CORE_ORCHESTRATION_IDEMPOTENCY_CONFLICT' as const;
 

@@ -12,6 +12,7 @@ import type {
   CoreJobRequest,
   CoreListRequest,
   CoreOrchestrationJob,
+  CoreOrchestrationProvider,
   CoreProviderFact,
   CoreProvideInputRequest,
   CoreProvideInputResult,
@@ -20,6 +21,8 @@ import type {
 } from '../shared/core-orchestration.js';
 import {
   CoreOrchestrationIdempotencyConflictError,
+  CoreOrchestrationProviderCapabilityError,
+  CoreOrchestrationProviderUnavailableError,
   CoreOrchestrationValidationError,
 } from '../shared/core-orchestration.js';
 
@@ -55,7 +58,15 @@ export interface CoreAgentServicePort {
     requestHash?: string;
   }): Promise<AgentJob>;
   get(id: string, scope: AgentJobScope): AgentJob | undefined;
+  getForPrincipal?(
+    id: string,
+    principal: Pick<AgentJobScope, 'tenantId' | 'requesterId'>,
+  ): AgentJob | undefined;
   list(scope: AgentJobScope, limit?: number): AgentJob[];
+  listForPrincipal?(
+    principal: Pick<AgentJobScope, 'tenantId' | 'requesterId'>,
+    limit?: number,
+  ): AgentJob[];
   cancelStrict(id: string, scope: AgentJobScope): Promise<AgentJob | undefined>;
   approve(id: string, scope: AgentJobScope): Promise<AgentJob | undefined>;
   retry(id: string, scope: AgentJobScope): Promise<AgentJob | undefined>;
@@ -67,6 +78,14 @@ export interface CoreAgentJobStorePort {
     idempotencyKey: string,
     requestHash: string,
   ): AgentJob | undefined;
+  getForPrincipal?(
+    id: string,
+    principal: Pick<AgentJobScope, 'tenantId' | 'requesterId'>,
+  ): AgentJob | undefined;
+  listForPrincipal?(
+    principal: Pick<AgentJobScope, 'tenantId' | 'requesterId'>,
+    limit?: number,
+  ): AgentJob[];
 }
 
 export type CoreInputResumeObservation = Readonly<{
@@ -86,6 +105,7 @@ export interface CoreInputResumePort {
 export type CoreOrchestrationServiceOptions = Readonly<{
   agentService: CoreAgentServicePort;
   jobStore: CoreAgentJobStorePort;
+  defaultProvider?: CoreOrchestrationProvider;
   observeProviderFacts?: () => readonly CoreProviderFact[];
   inputResume?: CoreInputResumePort;
 }>;
@@ -107,8 +127,11 @@ export class CoreOrchestrationService {
         );
         if (existing) return { job: toCoreJob(existing), replayed: true, requestHash };
 
+        const provider = normalized.provider ?? this.defaultProvider();
+        this.assertProviderCapability(provider, 'submit');
         const job = await this.options.agentService.submit({
           ...normalized,
+          provider,
           scope,
           idempotencyKey: request.idempotencyKey,
           requestHash,
@@ -129,7 +152,8 @@ export class CoreOrchestrationService {
   get(scope: ServerDerivedCoreScope, request: CoreJobRequest): CoreOrchestrationJob | undefined {
     assertServerScope(scope);
     assertNoClientScope(request);
-    return mapOptional(this.options.agentService.get(normalizeJobId(request.jobId), scope));
+    const job = this.resolveJob(scope, normalizeJobId(request.jobId));
+    return mapOptional(job && storedScopeForPrincipal(job, scope) ? job : undefined);
   }
 
   list(scope: ServerDerivedCoreScope, request: CoreListRequest = {}): CoreOrchestrationJob[] {
@@ -139,19 +163,31 @@ export class CoreOrchestrationService {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIST_LIMIT) {
       throw new CoreOrchestrationValidationError(`limit must be an integer from 1 to ${MAX_LIST_LIMIT}.`);
     }
-    return this.options.agentService.list(scope, limit).map(toCoreJob);
+    const principal = { tenantId: scope.tenantId, requesterId: scope.requesterId };
+    const jobs = this.options.agentService.listForPrincipal?.(principal, limit)
+      ?? this.options.jobStore.listForPrincipal?.(principal, limit)
+      ?? this.options.agentService.list(scope, limit);
+    return jobs
+      .filter((job) => Boolean(storedScopeForPrincipal(job, scope)))
+      .map(toCoreJob);
   }
 
   async cancel(scope: ServerDerivedCoreScope, request: CoreJobRequest): Promise<CoreOrchestrationJob | undefined> {
-    return this.mutate(scope, request, (id) => this.options.agentService.cancelStrict(id, scope));
+    return this.mutate(scope, request, (job, storedScope) => this.options.agentService.cancelStrict(job.id, storedScope));
   }
 
   async approve(scope: ServerDerivedCoreScope, request: CoreJobRequest): Promise<CoreOrchestrationJob | undefined> {
-    return this.mutate(scope, request, (id) => this.options.agentService.approve(id, scope));
+    return this.mutate(scope, request, (job, storedScope) => {
+      this.assertProviderCapability(this.providerForJob(job), 'approve');
+      return this.options.agentService.approve(job.id, storedScope);
+    });
   }
 
   async retry(scope: ServerDerivedCoreScope, request: CoreJobRequest): Promise<CoreOrchestrationJob | undefined> {
-    return this.mutate(scope, request, (id) => this.options.agentService.retry(id, scope));
+    return this.mutate(scope, request, (job, storedScope) => {
+      this.assertProviderCapability(this.providerForJob(job), 'retry');
+      return this.options.agentService.retry(job.id, storedScope);
+    });
   }
 
   async provideInput(
@@ -160,8 +196,10 @@ export class CoreOrchestrationService {
   ): Promise<CoreProvideInputResult | undefined> {
     assertServerScope(scope);
     assertNoClientScope(request);
-    const job = this.options.agentService.get(normalizeJobId(request.jobId), scope);
+    const job = this.resolveJob(scope, normalizeJobId(request.jobId));
     if (!job) return undefined;
+    const storedScope = storedScopeForPrincipal(job, scope);
+    if (!storedScope) return undefined;
     if (!this.options.inputResume) {
       return {
         status: 'unsupported',
@@ -170,7 +208,7 @@ export class CoreOrchestrationService {
       };
     }
     const observation = validateInputResumeObservation(
-      await this.options.inputResume.observe(job, scope),
+      await this.options.inputResume.observe(job, storedScope),
     );
     if (!observation.supported) {
       return {
@@ -187,8 +225,8 @@ export class CoreOrchestrationService {
       };
     }
     const boundedInput = normalizeProviderInput(request.input);
-    const resumed = await this.options.inputResume.resume(job, scope, boundedInput);
-    assertSameDurableIdentity(job, resumed, scope);
+    const resumed = await this.options.inputResume.resume(job, storedScope, boundedInput);
+    assertSameDurableIdentity(job, resumed, storedScope);
     return {
       status: 'accepted',
       job: toCoreJob(resumed),
@@ -202,11 +240,48 @@ export class CoreOrchestrationService {
   private async mutate(
     scope: ServerDerivedCoreScope,
     request: CoreJobRequest,
-    operation: (id: string) => Promise<AgentJob | undefined>,
+    operation: (job: AgentJob, storedScope: ServerDerivedCoreScope) => Promise<AgentJob | undefined>,
   ): Promise<CoreOrchestrationJob | undefined> {
     assertServerScope(scope);
     assertNoClientScope(request);
-    return mapOptional(await operation(normalizeJobId(request.jobId)));
+    const job = this.resolveJob(scope, normalizeJobId(request.jobId));
+    if (!job) return undefined;
+    const storedScope = storedScopeForPrincipal(job, scope);
+    if (!storedScope) return undefined;
+    return mapOptional(await operation(job, storedScope));
+  }
+
+  private resolveJob(scope: ServerDerivedCoreScope, id: string): AgentJob | undefined {
+    const direct = this.options.agentService.get(id, scope);
+    if (direct) return direct;
+    const principal = { tenantId: scope.tenantId, requesterId: scope.requesterId };
+    return this.options.agentService.getForPrincipal?.(id, principal)
+      ?? this.options.jobStore.getForPrincipal?.(id, principal);
+  }
+
+  private defaultProvider(): CoreOrchestrationProvider {
+    return this.options.defaultProvider ?? 'codex';
+  }
+
+  private providerForJob(job: AgentJob): CoreOrchestrationProvider {
+    const provider = job.provider ?? this.defaultProvider();
+    if (provider !== 'codex' && provider !== 'copilot') {
+      throw new CoreOrchestrationProviderUnavailableError(String(provider), 'unknown');
+    }
+    return provider;
+  }
+
+  private assertProviderCapability(
+    provider: CoreOrchestrationProvider,
+    capability: string,
+  ): void {
+    const fact = this.listProviderFacts().find((candidate) => candidate.provider === provider);
+    if (!fact || fact.availability !== 'available') {
+      throw new CoreOrchestrationProviderUnavailableError(provider, fact?.availability ?? 'unknown');
+    }
+    if (!fact.capabilities.includes(capability)) {
+      throw new CoreOrchestrationProviderCapabilityError(provider, capability);
+    }
   }
 }
 
@@ -220,6 +295,22 @@ function validateInputResumeObservation(observation: CoreInputResumeObservation)
     throw new CoreOrchestrationValidationError('Input resume support requires a measured runtime observation.');
   }
   return observation;
+}
+
+function storedScopeForPrincipal(
+  job: AgentJob,
+  principal: Pick<AgentJobScope, 'tenantId' | 'requesterId'>,
+): ServerDerivedCoreScope | undefined {
+  if (typeof job.tenantId !== 'string'
+    || job.tenantId !== principal.tenantId
+    || job.requesterId !== principal.requesterId) {
+    return undefined;
+  }
+  return createServerDerivedCoreScope({
+    tenantId: job.tenantId,
+    requesterId: job.requesterId,
+    conversationId: job.conversationId,
+  });
 }
 
 function normalizeProviderInput(value: unknown): unknown {

@@ -186,6 +186,10 @@ import {
   type CoreInputResumePort,
 } from './core-orchestration-service.js';
 import { mountCoreOrchestrationRoutes } from './core-orchestration-route.js';
+import {
+  CoreOrchestrationProviderCapabilityError,
+  CoreOrchestrationProviderUnavailableError,
+} from '../shared/core-orchestration.js';
 import type { CoreOrchestrationJob, CoreProviderFact } from '../shared/core-orchestration.js';
 
 /**
@@ -2690,6 +2694,7 @@ function composeMeasuredInputResumePort(): CoreInputResumePort | undefined {
 const coreOrchestrationService = new CoreOrchestrationService({
   agentService,
   jobStore: agentJobStore,
+  defaultProvider: agentProvider,
   inputResume: composeMeasuredInputResumePort(),
   observeProviderFacts: (): CoreProviderFact[] => [...new Set(Object.keys(providerRunners).concat(agentProvider))]
     .map((provider) => {
@@ -3885,6 +3890,9 @@ async function handleCoreOrchestrationChatCommand(
   } catch (error) {
     const message = error instanceof AgentMutationAuthorizationError
       ? '이 작업을 조회하거나 변경할 권한이 없습니다.'
+      : error instanceof CoreOrchestrationProviderUnavailableError
+        || error instanceof CoreOrchestrationProviderCapabilityError
+        ? '현재 측정된 실행 준비가 완료되지 않은 Core provider입니다.'
       : error instanceof AgentExecutionUnavailableError
         ? '현재 실행 가능한 Core provider가 없습니다.'
         : error instanceof AgentCapacityError
@@ -3934,6 +3942,9 @@ async function handleCoreOrchestrationCardSubmission(activity: any, send: BotSen
     } catch (error) {
       const message = error instanceof AgentMutationAuthorizationError
         ? '이 작업을 조회하거나 변경할 권한이 없습니다.'
+        : error instanceof CoreOrchestrationProviderUnavailableError
+          || error instanceof CoreOrchestrationProviderCapabilityError
+          ? '현재 측정된 실행 준비가 완료되지 않은 Core provider입니다.'
         : 'Core 에이전트 확인 요청을 처리하지 못했습니다.';
       await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity(message));
       return;

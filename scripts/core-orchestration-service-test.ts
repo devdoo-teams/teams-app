@@ -20,6 +20,14 @@ const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-core-orchestration-'
 const store = new AgentJobStore(path.join(root, 'agent-jobs.json'));
 await store.initialize();
 
+const measuredProviderFacts = () => [{
+  provider: 'codex',
+  availability: 'available' as const,
+  capabilities: ['approve', 'cancel', 'retry', 'submit'],
+  observedAt: '2026-09-04T00:00:00.000Z',
+  source: 'runtime-observation' as const,
+}];
+
 let submitCalls = 0;
 let executionLaunches = 0;
 const agentService = {
@@ -64,7 +72,12 @@ const agentService = {
   },
 };
 
-const service = new CoreOrchestrationService({ agentService, jobStore: store });
+const service = new CoreOrchestrationService({
+  agentService,
+  jobStore: store,
+  defaultProvider: 'codex',
+  observeProviderFacts: measuredProviderFacts,
+});
 const scope = createServerDerivedCoreScope({
   tenantId: 'tenant-a',
   requesterId: 'requester-a',
@@ -115,8 +128,13 @@ const otherTenant = createServerDerivedCoreScope({
 for (const isolatedScope of [otherConversation, otherRequester, otherTenant]) {
   const isolated = await service.submit(isolatedScope, request);
   assert.notEqual(isolated.job.id, first.job.id, 'each server-derived scope dimension isolates idempotency');
-  assert.equal(service.get(isolatedScope, { jobId: first.job.id }), undefined);
-  assert.equal(service.list(isolatedScope).some((job) => job.id === first.job.id), false);
+  if (isolatedScope === otherConversation) {
+    assert.equal(service.get(isolatedScope, { jobId: first.job.id })?.id, first.job.id, 'same principal can resolve a task across surfaces');
+    assert.equal(service.list(isolatedScope).some((job) => job.id === first.job.id), true);
+  } else {
+    assert.equal(service.get(isolatedScope, { jobId: first.job.id }), undefined);
+    assert.equal(service.list(isolatedScope).some((job) => job.id === first.job.id), false);
+  }
 }
 
 await assert.rejects(
@@ -329,6 +347,8 @@ await restartedStore.initialize();
 let restartedSubmits = 0;
 const restartedService = new CoreOrchestrationService({
   jobStore: restartedStore,
+  defaultProvider: 'codex',
+  observeProviderFacts: measuredProviderFacts,
   agentService: {
     ...agentService,
     submit: async (input) => {
@@ -385,6 +405,8 @@ await integrationAgentService.initialize();
 const integrationService = new CoreOrchestrationService({
   agentService: integrationAgentService,
   jobStore: integrationStore,
+  defaultProvider: 'codex',
+  observeProviderFacts: measuredProviderFacts,
 });
 const integrationScope = createServerDerivedCoreScope({
   tenantId: 'integration-tenant',

@@ -15,6 +15,8 @@ import {
 import type { AgentJobScope } from './agent-job-store.js';
 import {
   CoreOrchestrationIdempotencyConflictError,
+  CoreOrchestrationProviderCapabilityError,
+  CoreOrchestrationProviderUnavailableError,
   CoreOrchestrationValidationError,
   type CoreJobRequest,
   type CoreListRequest,
@@ -214,6 +216,11 @@ function sendError(response: Response, error: unknown): void {
   }
   if (error instanceof CoreOrchestrationIdempotencyConflictError) {
     sendPublicError(response, 409, error.code, false);
+    return;
+  }
+  if (error instanceof CoreOrchestrationProviderUnavailableError
+    || error instanceof CoreOrchestrationProviderCapabilityError) {
+    sendPublicError(response, 503, error.code, true);
     return;
   }
   if (error instanceof AgentJobConflictError) {

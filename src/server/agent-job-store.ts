@@ -239,10 +239,24 @@ export class AgentJobStore {
   ): AgentJob | undefined {
     const job = this.jobs.find((candidate) =>
       candidate.id === id
-      && candidate.tenantId === principal.tenantId
-      && candidate.requesterId === principal.requesterId,
+      && matchesPrincipal(candidate, principal),
     );
     return job ? cloneAgentJob(job) : undefined;
+  }
+
+  /**
+   * List jobs owned by an authenticated principal across its server-owned
+   * surface conversations. The stored conversation remains part of every
+   * returned job and must be used for subsequent mutations.
+   */
+  listForPrincipal(
+    principal: Pick<AgentJobScope, 'tenantId' | 'requesterId'>,
+    limit = 10,
+  ): AgentJob[] {
+    return this.jobs
+      .filter((job) => matchesPrincipal(job, principal))
+      .slice(0, limit)
+      .map(cloneAgentJob);
   }
 
   list(scope: AgentJobScope, limit = 10): AgentJob[] {
@@ -402,6 +416,15 @@ function matchesScope(job: AgentJob, scope: AgentJobScope): boolean {
     && job.requesterId === scope.requesterId
     && job.conversationId === scope.conversationId
     && job.tenantId === scope.tenantId;
+}
+
+function matchesPrincipal(
+  job: AgentJob,
+  principal: Pick<AgentJobScope, 'tenantId' | 'requesterId'>,
+): boolean {
+  return typeof job.tenantId === 'string'
+    && job.requesterId === principal.requesterId
+    && job.tenantId === principal.tenantId;
 }
 
 function cloneAgentJob(job: AgentJob): AgentJob {

@@ -152,8 +152,15 @@ export function orchestrationMutationNotice(
   result: { replayed?: boolean; status?: string; reason?: string },
   successMessage: string,
 ): string {
-  if (result.status === 'unsupported' && result.reason === 'agent-service-does-not-support-input') {
-    return '현재 제공자는 탭에서 추가 입력 재개를 지원하지 않습니다.';
+  if (result.status === 'unsupported') {
+    if (result.reason === 'agent-service-does-not-support-input'
+      || result.reason === 'provider-input-unsupported') {
+      return '현재 제공자는 탭에서 추가 입력 재개를 지원하지 않습니다.';
+    }
+    if (result.reason === 'job-not-awaiting-input') {
+      return '작업이 더 이상 추가 입력을 기다리지 않습니다. 최신 상태를 확인하세요.';
+    }
+    return '추가 입력을 처리하지 못했습니다. 최신 상태를 확인하세요.';
   }
   if (result.replayed) return '같은 요청의 기존 작업을 표시합니다.';
   return successMessage;
@@ -473,6 +480,11 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     try {
       const result = await busy.run(slot, operation);
       if (!result) return 'ignored';
+      if (result.status === 'unsupported') {
+        await load();
+        setError(orchestrationMutationNotice(result, '추가 입력을 처리했습니다.'));
+        return 'definitive-failure';
+      }
       updateJob(result.job);
       setNotice(orchestrationMutationNotice(result, successMessage));
       return 'success';
@@ -484,7 +496,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     } finally {
       setBusyAction((current) => current === slot ? '' : current);
     }
-  }, [busy, updateJob]);
+  }, [busy, load, updateJob]);
 
   const submit = useCallback(async () => {
     const validation = validateOrchestrationSubmission(prompt, providerId, providers);

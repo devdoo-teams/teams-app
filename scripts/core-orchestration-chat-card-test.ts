@@ -167,7 +167,7 @@ assert.equal(listCard.actions?.at(-1)?.url, tabUrl);
 const manifest = JSON.parse(await readFile(new URL('../appPackage/manifest.json', import.meta.url), 'utf8'));
 assert.equal(manifest.version, '1.0.100');
 const commands = manifest.bots[0].commandLists[0].commands.map((command: { title: string }) => command.title);
-for (const command of ['agent run', 'agent status', 'agent list', 'agent cancel', 'agent approve', 'agent retry', 'agent input']) {
+for (const command of ['agent run', 'agent write', 'agent status', 'agent list', 'agent cancel', 'agent approve', 'agent retry', 'agent input']) {
   assert.ok(commands.includes(command), `manifest discovers ${command}`);
 }
 

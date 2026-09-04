@@ -51,6 +51,8 @@ const runtimeTests = [
 ];
 const tsTests = [
   'scripts/core-orchestration-service-test.ts',
+  'scripts/core-orchestration-cross-surface-test.ts',
+  'scripts/core-orchestration-provider-gate-test.ts',
   'scripts/core-orchestration-route-test.ts',
   'scripts/client-orchestration-panel-test.tsx',
   'scripts/client-app-orchestration-integration-test.tsx',

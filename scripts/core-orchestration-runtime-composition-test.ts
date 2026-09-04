@@ -26,6 +26,39 @@ async function verifyUnknownRuntimeFailsClosed(): Promise<void> {
       [],
       'a configured runner with unknown execution readiness must not advertise operations',
     );
+
+    const before = await api(origin, '/jobs');
+    assert.equal(before.status, 200);
+    const rejectedDefault = await api(origin, '/jobs', {
+      method: 'POST',
+      body: {
+        idempotencyKey: 'unknown-runtime-default-submit',
+        prompt: 'unknown default provider must not run',
+        mode: 'read-only',
+      },
+    });
+    assert.equal(rejectedDefault.status, 503);
+    assert.equal(
+      rejectedDefault.body.error.code,
+      'CORE_ORCHESTRATION_PROVIDER_UNAVAILABLE',
+      'default provider submission uses the same measured readiness gate',
+    );
+
+    const rejectedSelected = await api(origin, '/jobs', {
+      method: 'POST',
+      body: {
+        idempotencyKey: 'unknown-runtime-selected-submit',
+        prompt: 'unregistered provider must not run',
+        provider: 'copilot',
+        mode: 'read-only',
+      },
+    });
+    assert.equal(rejectedSelected.status, 503);
+    assert.equal(rejectedSelected.body.error.code, 'CORE_ORCHESTRATION_PROVIDER_UNAVAILABLE');
+
+    const after = await api(origin, '/jobs');
+    assert.equal(after.status, 200);
+    assert.equal(after.body.jobs.length, before.body.jobs.length, 'provider rejection creates no durable job');
   });
 }
 

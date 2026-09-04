@@ -547,6 +547,18 @@ export class AgentService {
     return this.store.get(id, scope);
   }
 
+  /**
+   * Server-owned cross-surface reader. The principal dimensions come from
+   * authenticated request state; callers must use the returned job's stored
+   * conversation scope for any mutation.
+   */
+  getForPrincipal(
+    id: string,
+    principal: Pick<AgentJobScope, 'tenantId' | 'requesterId'>,
+  ): AgentJob | undefined {
+    return this.store.getForPrincipal(id, principal);
+  }
+
   async observe(id: string, scope: AgentJobScope): Promise<AgentJob | undefined> {
     const job = this.store.get(id, scope);
     const dispatcher = this.options.executionDispatcher;
@@ -591,6 +603,14 @@ export class AgentService {
 
   list(scope: AgentJobScope, limit = 8): AgentJob[] {
     return this.store.list(scope, limit);
+  }
+
+  /** Server-owned cross-surface list for one validated tenant/requester. */
+  listForPrincipal(
+    principal: Pick<AgentJobScope, 'tenantId' | 'requesterId'>,
+    limit = 8,
+  ): AgentJob[] {
+    return this.store.listForPrincipal(principal, limit);
   }
 
   latestCompletedForConversation(scope: AgentJobScope): AgentJob | undefined {

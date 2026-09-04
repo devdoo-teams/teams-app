@@ -170,6 +170,17 @@ assert.equal(
   '현재 제공자는 탭에서 추가 입력 재개를 지원하지 않습니다.',
   'an unsupported input response is never announced as success',
 );
+for (const reason of ['provider-input-unsupported', 'job-not-awaiting-input'] as const) {
+  assert.notEqual(
+    orchestrationMutationNotice({
+      status: 'unsupported',
+      job: task('input_required'),
+      reason,
+    }, '추가 입력을 보냈습니다.'),
+    '추가 입력을 보냈습니다.',
+    `${reason} is never announced as successful input delivery`,
+  );
+}
 assert.equal(
   orchestrationMutationNotice({ job: task('running'), replayed: true }, '작업을 제출했습니다.'),
   '같은 요청의 기존 작업을 표시합니다.',
