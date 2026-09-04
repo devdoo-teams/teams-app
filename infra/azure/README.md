@@ -13,3 +13,21 @@ The worker release additionally requires explicit `codexArtifactUrl` and `codexA
 Public `/api/health` currently exposes commit, version, and server bundle SHA-256. Until a later runtime task exposes every release field publicly, the deployment gate combines that public observation with the cryptographically verified GitHub receipt and exact Container App revision metadata. The revision must bind the imported image digest, client digest, server digest, Teams ZIP digest, commit, and version as immutable revision environment values, and all values must match before deployment or rollback succeeds.
 
 State migration and promotion remain separate from Bicep provisioning. Follow [`docs/azure-state-migration-runbook.md`](../../docs/azure-state-migration-runbook.md): export the local AgentJob ledger into an immutable hash manifest, run import dry-run, preserve an immutable pre-import Azure snapshot before explicit apply, and reconcile counts, stable IDs, tenant ownership, and content hashes. `TEAMS_RELEASE_TARGET=azure npm run release:preflight` is the single non-mutating evidence join for Azure configuration, attested GitHub handoff, official Bicep compilation, migration readiness, Core gates, Teams package identity, provider readiness, public canary identity, Azure DevOps approval, and Jira mappings. Fixture evidence remains unverified, and no gate changes or stops the existing Dev Tunnel.
+
+## Non-mutating foundation preflight
+
+Before requesting a foundation deployment, run the dedicated provider-level preflight from a clean tracked worktree. Supply the approved tenant, subscription, operator account, resource group, and region explicitly; never rely on the Azure CLI default subscription.
+
+```sh
+npm run azure:canary-preflight -- \
+  --tenant-id 32441482-5adf-4438-8a8f-0e15f33b77f1 \
+  --subscription-id 0e58c3cb-474d-4e70-978a-4939c586f867 \
+  --account-name doosan.baek@devdoo.onmicrosoft.com \
+  --resource-group rg-teamsapp-canary \
+  --location koreacentral \
+  --output-file /private/tmp/teamsapp-azure-canary-preflight.json
+```
+
+The command performs only read operations plus `az deployment group what-if`: canonical Git root and two tracked-clean/HEAD checks, exact account/subscription/tenant validation, required provider registration checks, exact resource-group validation, the bounded Azure Core regression suite, and a ResourceIdOnly ARM what-if with both workload switches disabled. Child processes do not inherit token, secret, password, PAT, API-key, authorization, or credential environment variables.
+
+`READY` means the what-if contains only allowlisted non-destructive changes. `REVIEW_REQUIRED` means only dynamic role-assignment changes were `Unsupported`; inspect every listed resource before any deployment request. A wrong identity, dirty source, failed test, out-of-scope resource, unexpected namespace, `Modify`, `Delete`, or unallowlisted `Unsupported` result fails closed. This command never registers providers, creates a resource group, starts a deployment, changes traffic, imports state, or touches the existing Dev Tunnel.

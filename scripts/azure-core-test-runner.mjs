@@ -22,6 +22,7 @@ export const AZURE_CORE_TESTS = Object.freeze([
   Object.freeze({ script: 'scripts/azure-github-handoff-test.mjs', timeoutMs: DEFAULT_TEST_TIMEOUT_MS }),
   Object.freeze({ script: 'scripts/azure-approval-check-test.mjs', timeoutMs: DEFAULT_TEST_TIMEOUT_MS }),
   Object.freeze({ script: 'scripts/azure-deployment-contract-test.mjs', timeoutMs: DEFAULT_TEST_TIMEOUT_MS }),
+  Object.freeze({ script: 'scripts/azure-canary-preflight-test.mjs', timeoutMs: DEFAULT_TEST_TIMEOUT_MS }),
   Object.freeze({ script: 'scripts/azure-release-identity-test.ts', timeoutMs: DEFAULT_TEST_TIMEOUT_MS }),
   Object.freeze({ script: 'scripts/azure-runtime-store-test.ts', timeoutMs: DEFAULT_TEST_TIMEOUT_MS }),
   Object.freeze({ script: 'scripts/azure-agent-dispatch-queue-test.ts', timeoutMs: DEFAULT_TEST_TIMEOUT_MS }),
