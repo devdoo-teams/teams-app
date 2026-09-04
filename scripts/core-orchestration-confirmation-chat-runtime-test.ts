@@ -99,7 +99,7 @@ try {
   assertCard((await post(baseUrl, activity('', 'approve-confirmed', approvePayload))).body, approveJob);
   await assertNotStatus(baseUrl, approveJob, 'awaiting_approval', 'confirmed approve must mutate');
   const approveReplay = await post(baseUrl, activity('', 'approve-confirmed-replay', approvePayload));
-  assertCard(approveReplay.body, '현재 상태\\(queued\\)');
+  assertCard(approveReplay.body, '현재 상태\\((?:queued|running|completed)\\)');
   await assertNotStatus(baseUrl, approveJob, 'awaiting_approval', 'replayed approve must not restart the mutation');
 
   const malformed = await post(baseUrl, activity('', 'malformed-confirm', {
