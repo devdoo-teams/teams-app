@@ -16,50 +16,72 @@ await verifyMeasuredRuntimeComposesCapabilitiesAndInputResume();
 console.log('core-orchestration-runtime-composition-test: PASS');
 
 async function verifyUnknownRuntimeFailsClosed(): Promise<void> {
-  await withRuntime({ provider: 'codex' }, async (origin) => {
-    const response = await api(origin, '/providers');
-    assert.equal(response.status, 200);
-    const fact = response.body.providers.find((candidate: any) => candidate.provider === 'codex');
-    assert.equal(fact.availability, 'unknown', 'login status alone is not execution readiness');
-    assert.deepEqual(
-      fact.capabilities,
-      [],
-      'a configured runner with unknown execution readiness must not advertise operations',
-    );
+  const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mp285-codex-login-status-'));
+  try {
+    const loginStatusFixture = path.join(fixtureRoot, 'codex-login-status.mjs');
+    await fs.writeFile(loginStatusFixture, `
+const args = process.argv.slice(2);
+if (args.length === 2 && args[0] === 'login' && args[1] === 'status') {
+  console.log('Logged in using ChatGPT');
+  process.exit(0);
+}
+console.error('unsupported Codex fixture command');
+process.exit(2);
+`);
 
-    const before = await api(origin, '/jobs');
-    assert.equal(before.status, 200);
-    const rejectedDefault = await api(origin, '/jobs', {
-      method: 'POST',
-      body: {
-        idempotencyKey: 'unknown-runtime-default-submit',
-        prompt: 'unknown default provider must not run',
-        mode: 'read-only',
+    await withRuntime({
+      provider: 'codex',
+      extraEnv: {
+        CODEX_BIN: process.execPath,
+        CODEX_SCRIPT: loginStatusFixture,
       },
-    });
-    assert.equal(rejectedDefault.status, 503);
-    assert.equal(
-      rejectedDefault.body.error.code,
-      'CORE_ORCHESTRATION_PROVIDER_UNAVAILABLE',
-      'default provider submission uses the same measured readiness gate',
-    );
+    }, async (origin) => {
+      const response = await api(origin, '/providers');
+      assert.equal(response.status, 200);
+      const fact = response.body.providers.find((candidate: any) => candidate.provider === 'codex');
+      assert.equal(fact.availability, 'unknown', 'login status alone is not execution readiness');
+      assert.deepEqual(
+        fact.capabilities,
+        [],
+        'a configured runner with unknown execution readiness must not advertise operations',
+      );
 
-    const rejectedSelected = await api(origin, '/jobs', {
-      method: 'POST',
-      body: {
-        idempotencyKey: 'unknown-runtime-selected-submit',
-        prompt: 'unregistered provider must not run',
-        provider: 'copilot',
-        mode: 'read-only',
-      },
-    });
-    assert.equal(rejectedSelected.status, 503);
-    assert.equal(rejectedSelected.body.error.code, 'CORE_ORCHESTRATION_PROVIDER_UNAVAILABLE');
+      const before = await api(origin, '/jobs');
+      assert.equal(before.status, 200);
+      const rejectedDefault = await api(origin, '/jobs', {
+        method: 'POST',
+        body: {
+          idempotencyKey: 'unknown-runtime-default-submit',
+          prompt: 'unknown default provider must not run',
+          mode: 'read-only',
+        },
+      });
+      assert.equal(rejectedDefault.status, 503);
+      assert.equal(
+        rejectedDefault.body.error.code,
+        'CORE_ORCHESTRATION_PROVIDER_UNAVAILABLE',
+        'default provider submission uses the same measured readiness gate',
+      );
 
-    const after = await api(origin, '/jobs');
-    assert.equal(after.status, 200);
-    assert.equal(after.body.jobs.length, before.body.jobs.length, 'provider rejection creates no durable job');
-  });
+      const rejectedSelected = await api(origin, '/jobs', {
+        method: 'POST',
+        body: {
+          idempotencyKey: 'unknown-runtime-selected-submit',
+          prompt: 'unregistered provider must not run',
+          provider: 'copilot',
+          mode: 'read-only',
+        },
+      });
+      assert.equal(rejectedSelected.status, 503);
+      assert.equal(rejectedSelected.body.error.code, 'CORE_ORCHESTRATION_PROVIDER_UNAVAILABLE');
+
+      const after = await api(origin, '/jobs');
+      assert.equal(after.status, 200);
+      assert.equal(after.body.jobs.length, before.body.jobs.length, 'provider rejection creates no durable job');
+    });
+  } finally {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  }
 }
 
 async function verifyMeasuredRuntimeComposesCapabilitiesAndInputResume(): Promise<void> {
