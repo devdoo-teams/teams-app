@@ -181,6 +181,26 @@ export function sanitizePreflightEnvironment(env = process.env) {
   return result;
 }
 
+function preparePreflightEnvironment(env) {
+  const result = sanitizePreflightEnvironment(env);
+  if (result.BICEP_BIN) {
+    if (!path.isAbsolute(result.BICEP_BIN)) fail('BICEP_BIN must be an absolute path');
+    const bicepDirectory = path.dirname(result.BICEP_BIN);
+    const pathEntries = String(result.PATH ?? '').split(path.delimiter).filter(Boolean);
+    result.PATH = [bicepDirectory, ...pathEntries.filter((entry) => entry !== bicepDirectory)].join(path.delimiter);
+  }
+  return result;
+}
+
+function boundedDiagnostic(error) {
+  const raw = String(error?.stderr ?? error?.stdout ?? '').trim();
+  if (!raw) return '';
+  return raw
+    .slice(0, 4_000)
+    .replace(/(Bearer\s+)[^\s]+/gi, '$1[REDACTED]')
+    .replace(/((?:token|secret|password|passwd|api[_-]?key|pat)\s*[:=]\s*)[^\s,;]+/gi, '$1[REDACTED]');
+}
+
 function parseJsonOutput(result, label) {
   try {
     return JSON.parse(String(result?.stdout ?? ''));
@@ -229,15 +249,26 @@ export async function runAzureCanaryPreflight({
   }
 
   const canonicalRoot = fs.realpathSync(path.resolve(rootCwd));
-  const childEnv = sanitizePreflightEnvironment(env);
+  const childEnv = preparePreflightEnvironment(env);
   const gitBin = config.gitBin ?? 'git';
   const azureCli = config.azureCli ?? childEnv.AZURE_CLI_BIN ?? 'az';
   const npmBin = config.npmBin ?? 'npm';
-  const run = (command, args, timeoutMs) => commandRunner(command, args, {
-    cwd: canonicalRoot,
-    env: childEnv,
-    timeoutMs,
-  });
+  const run = async (command, args, timeoutMs) => {
+    try {
+      return await commandRunner(command, args, {
+        cwd: canonicalRoot,
+        env: childEnv,
+        timeoutMs,
+      });
+    } catch (error) {
+      const diagnostic = boundedDiagnostic(error);
+      const label = `${command} ${args.slice(0, 3).join(' ')}`.trim();
+      throw new Error(
+        `Azure canary preflight command failed: ${label}${diagnostic ? `: ${diagnostic}` : ''}`,
+        { cause: error },
+      );
+    }
+  };
 
   const topLevelResult = await run(gitBin, ['rev-parse', '--show-toplevel'], 30_000);
   const reportedTopLevel = fs.realpathSync(String(topLevelResult.stdout ?? '').trim());

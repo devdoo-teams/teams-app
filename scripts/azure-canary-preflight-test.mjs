@@ -154,6 +154,7 @@ try {
   const runner = async (command, args, options) => {
     invocations.push({ command, args, options });
     assert.equal('GITHUB_TOKEN' in options.env, false, 'every child command must receive the sanitized environment');
+    assert.match(options.env.PATH, /^\/opt\/bicep\/bin:/, 'BICEP_BIN directory must be available to Azure CLI what-if');
     if (command === 'git' && args[0] === 'rev-parse' && args[1] === '--show-toplevel') return { stdout: `${fixtureRoot}\n`, stderr: '' };
     if (command === 'git' && args[0] === 'status') return { stdout: '', stderr: '' };
     if (command === 'git' && args[0] === 'rev-parse' && args[1] === 'HEAD') return { stdout: `${commit}\n`, stderr: '' };
@@ -178,7 +179,7 @@ try {
     rootCwd: fixtureRoot,
     config: { tenantId, subscriptionId, accountName, resourceGroup, location },
     commandRunner: runner,
-    env: { PATH: '/usr/bin', GITHUB_TOKEN: 'must-not-leak' },
+    env: { PATH: '/usr/bin', BICEP_BIN: '/opt/bicep/bin/bicep', GITHUB_TOKEN: 'must-not-leak' },
     now: () => '2026-09-05T00:00:00.000Z',
   });
   assert.equal(receipt.schemaVersion, 1);
@@ -218,7 +219,7 @@ try {
         azureReached ||= command === 'az';
         return runner(command, args, options);
       },
-      env: { PATH: '/usr/bin' },
+      env: { PATH: '/usr/bin', BICEP_BIN: '/opt/bicep/bin/bicep' },
     }),
     /tracked worktree.*clean/i,
   );
@@ -238,12 +239,28 @@ try {
         whatIfReached ||= command === 'az' && args[0] === 'deployment';
         return runner(command, args, options);
       },
-      env: { PATH: '/usr/bin' },
+      env: { PATH: '/usr/bin', BICEP_BIN: '/opt/bicep/bin/bicep' },
     }),
     /tracked worktree.*changed during Azure preflight/i,
   );
   assert.equal(statusChecks, 2);
   assert.equal(whatIfReached, false, 'source mutation during regression tests must fail before ARM what-if');
+
+  await assert.rejects(
+    () => runAzureCanaryPreflight({
+      rootCwd: fixtureRoot,
+      config: { tenantId, subscriptionId, accountName, resourceGroup, location },
+      commandRunner: async (command, args, options) => {
+        if (command === 'az' && args[0] === 'account') {
+          throw Object.assign(new Error('command failed'), { stderr: 'ERROR: official Azure CLI diagnostic' });
+        }
+        return runner(command, args, options);
+      },
+      env: { PATH: '/usr/bin', BICEP_BIN: '/opt/bicep/bin/bicep' },
+    }),
+    /official Azure CLI diagnostic/,
+    'bounded child diagnostics must survive the wrapper so operators can fix the actual failure',
+  );
 } finally {
   fs.rmSync(fixtureRoot, { recursive: true, force: true });
 }
