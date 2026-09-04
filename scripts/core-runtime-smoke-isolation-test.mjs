@@ -18,6 +18,22 @@ const SMOKE_TIMEOUT_MS = 60_000;
 const SMOKE_TERMINATION_GRACE_MS = 1_000;
 const SMOKE_REAP_TIMEOUT_MS = 3_000;
 
+const HOSTILE_RUNTIME_ENV = {
+  ...process.env,
+  TEAMS_STORAGE_BACKEND: 'cosmos',
+  AZURE_COSMOS_ENDPOINT: '',
+  AZURE_COSMOS_DATABASE: 'ambient-database',
+  AZURE_COSMOS_CONTAINER: 'ambient-container',
+  TEAMS_OPTIONAL_RUNTIME: 'true',
+  OPENAI_API_KEY: 'ambient-openai-secret',
+  CODEX_HOME: '/ambient/codex-home',
+  CODEX_BIN: '/ambient/bin/codex',
+  GHCP_BIN: '/ambient/bin/copilot',
+  TEAMS_A2A_AGENT_PROVIDERS: 'copilot',
+  TEAMS_AGENT_DISPATCH_MODE: 'azure-queue',
+  AZURE_STORAGE_QUEUE_ENDPOINT: 'https://ambient.queue.core.windows.net/dispatch',
+};
+
 async function listSmokeTempDirectories() {
   return (await fs.readdir(root))
     .filter((entry) => entry.startsWith('.teams-core-runtime-'))
@@ -222,7 +238,7 @@ try {
   try {
     result = await runProcessWithTimeout(process.execPath, ['scripts/core-runtime-smoke.mjs'], {
       cwd: root,
-      env: process.env,
+      env: HOSTILE_RUNTIME_ENV,
       timeoutMs: SMOKE_TIMEOUT_MS,
       terminationGraceMs: SMOKE_TERMINATION_GRACE_MS,
       reapTimeoutMs: SMOKE_REAP_TIMEOUT_MS,

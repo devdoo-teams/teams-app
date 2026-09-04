@@ -4,6 +4,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import net from 'node:net';
 
+import { createChildTestEnvironment } from './child-test-environment.mjs';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 
 const root = path.resolve(process.cwd());
@@ -104,33 +105,34 @@ try {
   a2aOutboundStorePath = path.join(dataDir, 'a2a-outbound.json');
   const tabDomain = 'runtime-smoke.example.com';
   const botClientId = '11111111-2222-4333-8444-555555555555';
-  const env = {
-    ...process.env,
-    TEAMS_RUNTIME_DIST_DIR: runtimeDistRoot,
-    NODE_ENV: 'production',
-    PORT: String(port),
-    TEAMS_USE_SDK: 'true',
-    TEAMS_SKIP_OUTBOUND: 'true',
-    TEAMS_APP_ID: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
-    TEAMS_CATALOG_APP_ID: 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff',
-    BOT_ID: botClientId,
-    BOT_CLIENT_ID: botClientId,
-    CLIENT_ID: '66666666-7777-4888-8999-000000000000',
-    CLIENT_SECRET: 'core-runtime-smoke-secret',
-    TENANT_ID: '99999999-aaaa-4bbb-8ccc-dddddddddddd',
-    TAB_DOMAIN: tabDomain,
-    APPLICATION_ID_URI: `api://${tabDomain}/botid-${botClientId}`,
-    TEAMS_USER_AUTH_ACCEPTED_AUDIENCES: `api://${tabDomain}/botid-${botClientId}`,
-    ITEM_STORE_PATH: path.join(dataDir, 'items.json'),
-    WORK_ITEM_STORE_PATH: path.join(dataDir, 'work-items.json'),
-    COLLABORATION_STORE_PATH: path.join(dataDir, 'collaboration.json'),
-    AGENT_JOB_STORE_PATH: path.join(dataDir, 'agent-jobs.json'),
-    AGENT_ADMISSION_JOURNAL_PATH: path.join(dataDir, 'agent-admission.json'),
-    A2A_STORE_PATH: a2aStorePath,
-    A2A_OUTBOUND_STORE_PATH: a2aOutboundStorePath,
-    GENUI_ACTION_STORE_PATH: path.join(dataDir, 'genui-actions.json'),
-    RESPONSE_MODE_STORE_PATH: path.join(dataDir, 'response-modes.json'),
-  };
+  const env = createChildTestEnvironment(process.env, {
+    overrides: {
+      TEAMS_RUNTIME_DIST_DIR: runtimeDistRoot,
+      NODE_ENV: 'production',
+      PORT: String(port),
+      TEAMS_USE_SDK: 'true',
+      TEAMS_SKIP_OUTBOUND: 'true',
+      TEAMS_APP_ID: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+      TEAMS_CATALOG_APP_ID: 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff',
+      BOT_ID: botClientId,
+      BOT_CLIENT_ID: botClientId,
+      CLIENT_ID: '66666666-7777-4888-8999-000000000000',
+      CLIENT_SECRET: 'core-runtime-smoke-secret',
+      TENANT_ID: '99999999-aaaa-4bbb-8ccc-dddddddddddd',
+      TAB_DOMAIN: tabDomain,
+      APPLICATION_ID_URI: `api://${tabDomain}/botid-${botClientId}`,
+      TEAMS_USER_AUTH_ACCEPTED_AUDIENCES: `api://${tabDomain}/botid-${botClientId}`,
+      ITEM_STORE_PATH: path.join(dataDir, 'items.json'),
+      WORK_ITEM_STORE_PATH: path.join(dataDir, 'work-items.json'),
+      COLLABORATION_STORE_PATH: path.join(dataDir, 'collaboration.json'),
+      AGENT_JOB_STORE_PATH: path.join(dataDir, 'agent-jobs.json'),
+      AGENT_ADMISSION_JOURNAL_PATH: path.join(dataDir, 'agent-admission.json'),
+      A2A_STORE_PATH: a2aStorePath,
+      A2A_OUTBOUND_STORE_PATH: a2aOutboundStorePath,
+      GENUI_ACTION_STORE_PATH: path.join(dataDir, 'genui-actions.json'),
+      RESPONSE_MODE_STORE_PATH: path.join(dataDir, 'response-modes.json'),
+    },
+  });
 
   const output = [];
   child = spawn(process.execPath, [entry], {
