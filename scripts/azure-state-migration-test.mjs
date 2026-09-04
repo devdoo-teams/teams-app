@@ -25,6 +25,7 @@ import {
 } from './azure-state-import.mjs';
 import { reconcileMigration } from './azure-state-reconcile.mjs';
 import {
+  createLocalSignedAzureEvidenceVerifier,
   createPreflightCommands,
   resolveReleaseTarget,
   validateAzureIntegratedEvidence,
@@ -32,6 +33,7 @@ import {
 
 const sourceCommit = '0123456789abcdef0123456789abcdef01234567';
 const exportedAt = '2026-09-03T01:02:03.000Z';
+const azureAccountKeyFixture = 'o0DPYVAbjXPGDUBFay7YLycJB7NdF+SMFn5E6tdRSnFP0d7Ioknw1cC6Yh9PDHg0EzIotFsejgUEQg1jvFwAPg==';
 const jobs = [
   {
     id: 'task-one',
@@ -213,6 +215,15 @@ for (const value of [
     'credential-shaped values must be rejected even under an ordinary field name',
   );
 }
+assert.throws(
+  () => createAgentJobExportBundle({
+    jobs: [{ ...jobs[0], metadata: { observations: [{ payload: azureAccountKeyFixture }] } }],
+    sourceCommit,
+    exportedAt,
+  }),
+  /sensitive|secret|credential|account.?key/i,
+  'an Azure account-key-shaped value under a neutral nested key must not enter a full export envelope',
+);
 assert.doesNotThrow(
   () => createAgentJobExportBundle({
     jobs: [{
@@ -221,8 +232,16 @@ assert.doesNotThrow(
         tokenCount: 42,
         tokenReference: 'key-vault://teamsapp/provider-token',
         tokenExpiresAt: '2026-09-04T12:00:00.000Z',
+        tokenExpiry: '2026-09-04T12:00:00.000Z',
+        tokenExpiryTime: '2026-09-04T12:00:00.000Z',
         secretReference: 'key-vault://teamsapp/provider-token',
         secretUri: 'key-vault://teamsapp/provider-token',
+        secretHash: `sha256:${'a'.repeat(64)}`,
+        secretDigest: `sha256:${'b'.repeat(64)}`,
+        credentialPrincipal: 'managed-identity:teamsapp-canary',
+        credentialId: 'managed-identity-client-id',
+        credentialVersion: 'v2',
+        credentialUri: 'https://login.microsoftonline.com/organizations/',
         authorizationStatus: 'required',
         authorizationUrl: 'https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize',
         connectionStatus: 'healthy',
@@ -231,12 +250,23 @@ assert.doesNotThrow(
         secretRotationPolicy: 'quarterly',
         authorizationScheme: 'managed-identity',
         secretaryName: 'ordinary-domain-value',
+        accountManagerName: 'Azure Platform Team',
+        tokenizationModel: 'wordpiece-v2',
       },
     }],
     sourceCommit,
     exportedAt,
   }),
   'ordinary non-secret metadata and credential references must remain exportable',
+);
+assert.throws(
+  () => createAgentJobExportBundle({
+    jobs: [{ ...jobs[0], metadata: { secretDigest: azureAccountKeyFixture } }],
+    sourceCommit,
+    exportedAt,
+  }),
+  /sensitive|secret|credential|account.?key/i,
+  'safe metadata names must not exempt credential-shaped values',
 );
 
 const constructedAzureTarget = await createAzureMigrationTarget({
@@ -320,6 +350,16 @@ try {
     persistSecretReceipt({ status: 'IN_PROGRESS', operationId: crypto.randomUUID(), requestSha256: 'a'.repeat(64), credentials: ['opaque-secret-material'] }),
     /sensitive|secret|credential/i,
     'mutation receipts must reject plural credential fields before persistence',
+  );
+  await assert.rejects(
+    persistSecretReceipt({
+      status: 'IN_PROGRESS',
+      operationId: crypto.randomUUID(),
+      requestSha256: 'a'.repeat(64),
+      checkpoints: [{ observations: [{ payload: azureAccountKeyFixture }] }],
+    }),
+    /sensitive|secret|credential|account.?key/i,
+    'a full receipt envelope must reject a neutral-key Azure account-key shape nested in arrays',
   );
   await fs.chmod(`${secretReceiptPath}.ledger`, 0o500);
   await assert.rejects(
@@ -807,6 +847,12 @@ try {
   const attestationIssuer = 'https://dev.azure.com/devdoo';
   const attestationSubject = 'devdoo-teams/teams-app/azure-release';
   const attestationAudience = 'teamsapp-azure-release-gate';
+  const expectedChallenge = {
+    releaseRunId: 'release-run-20260904-0001',
+    challengeId: 'challenge-20260904-0001',
+    nonce: 'nonce-20260904-0001',
+    attempt: 1,
+  };
   const attestationPayload = {
     schemaVersion: 'teamsapp.azure-release-aggregate-attestation.v1',
     algorithm: 'Ed25519',
@@ -830,7 +876,12 @@ try {
     },
     issuedAt: new Date(Date.now() - 60_000).toISOString(),
     expiresAt: new Date(Date.now() + 300_000).toISOString(),
-    nonce: 'release-run-20260904-0001',
+    operation: {
+      releaseRunId: expectedChallenge.releaseRunId,
+      challengeId: expectedChallenge.challengeId,
+      attempt: expectedChallenge.attempt,
+    },
+    nonce: expectedChallenge.nonce,
     releaseIdentity: {
       commit: releaseReceipt.commit,
       version: releaseReceipt.version,
@@ -872,14 +923,39 @@ try {
     aggregateAttestation: signAggregateAttestation(attestationPayload, privateKey),
   };
 
-  assert.equal(
-    validateAzureIntegratedEvidence(signedIntegratedEvidence).status,
-    'READY',
-    'an exact-bound Ed25519 aggregate from an allowlisted producer must clear the signed verifier contract',
+  const createLocalVerifier = () => createLocalSignedAzureEvidenceVerifier({
+    expectedConfiguration: azureConfiguration,
+    trustedPublicKeys: JSON.parse(trustedAttestationConfiguration),
+    expectedChallenge,
+  });
+
+  assert.throws(
+    () => validateAzureIntegratedEvidence(signedIntegratedEvidence),
+    (error) => error?.code === 'AZURE_LIVE_EVIDENCE_UNVERIFIED' && /protected|operational|trust/i.test(error.message),
+    'caller-controlled evidence configuration and signing keys must never produce operational READY',
   );
+  const localContractResult = createLocalVerifier().verify(signedIntegratedEvidence);
+  assert.equal(localContractResult.status, 'LOCAL_SIGNED_VERIFIER_CONTRACT_PASS');
+  assert.equal(localContractResult.evidenceClass, 'local-signed-verifier-contract');
+  assert.deepEqual(localContractResult.attestation.operation, attestationPayload.operation);
+  for (const [healthUrl, description] of [
+    ['https://wrong.example.azurecontainerapps.io/api/health', 'wrong origin'],
+    ['https://user:password@teamsapp.example.azurecontainerapps.io/api/health', 'embedded credentials'],
+    ['https://teamsapp.example.azurecontainerapps.io/api/health?release=forged', 'query'],
+    ['https://teamsapp.example.azurecontainerapps.io/api/health#forged', 'fragment'],
+  ]) {
+    assert.throws(
+      () => createLocalVerifier().verify({
+        ...signedIntegratedEvidence,
+        publicCanaryReceipt: { ...producerPublicCanaryReceipt, healthUrl },
+      }),
+      (error) => error?.code === 'AZURE_INTEGRATED_GATE_BLOCKED' && /canary|origin|target|unsafe/i.test(error.message),
+      `a public canary health URL with a ${description} must fail before attestation verification`,
+    );
+  }
 
   const assertAttestationRejected = (aggregateAttestation, pattern, message) => assert.throws(
-    () => validateAzureIntegratedEvidence({ ...signedIntegratedEvidence, aggregateAttestation }),
+    () => createLocalVerifier().verify({ ...signedIntegratedEvidence, aggregateAttestation }),
     (error) => error?.code === 'AZURE_LIVE_EVIDENCE_UNVERIFIED' && pattern.test(error.message),
     message,
   );
@@ -897,6 +973,26 @@ try {
   assertAttestationRejected(resign({ issuer: 'https://dev.azure.com/forged' }), /issuer/i, 'a wrong issuer must be rejected');
   assertAttestationRejected(resign({ subject: 'another/release' }), /subject/i, 'a wrong subject must be rejected');
   assertAttestationRejected(resign({ audience: 'another-release-gate' }), /audience/i, 'a wrong audience must be rejected');
+  assertAttestationRejected(
+    resign({ nonce: 'nonce-20260904-wrong' }),
+    /nonce|challenge/i,
+    'a signed nonce must match the independently protected release challenge',
+  );
+  assertAttestationRejected(
+    resign({ operation: { ...attestationPayload.operation, releaseRunId: 'release-run-20260904-wrong' } }),
+    /release|operation|challenge/i,
+    'a signed release run ID must match the independently protected release challenge',
+  );
+  assertAttestationRejected(
+    resign({ operation: { ...attestationPayload.operation, challengeId: 'challenge-20260904-wrong' } }),
+    /operation|challenge/i,
+    'a signed challenge ID must match the independently protected release challenge',
+  );
+  assertAttestationRejected(
+    resign({ operation: { ...attestationPayload.operation, attempt: 2 } }),
+    /attempt|operation|challenge/i,
+    'a signed attempt must match the independently protected release challenge',
+  );
   assertAttestationRejected(
     resign({ environment: { ...attestationPayload.environment, id: '99' } }),
     /environment/i,
@@ -934,7 +1030,7 @@ try {
     },
   };
   assert.throws(
-    () => validateAzureIntegratedEvidence({
+    () => createLocalVerifier().verify({
       ...signedIntegratedEvidence,
       migrationReceipt: localFixtureMigrationReceipt,
       aggregateAttestation: signAggregateAttestation(localFixturePayload, privateKey),
@@ -951,7 +1047,7 @@ try {
     'a forged Ed25519 signature must be rejected',
   );
   assert.throws(
-    () => validateAzureIntegratedEvidence({
+    () => createLocalVerifier().verify({
       ...signedIntegratedEvidence,
       providerReceipt: {
         ...producerProviderReceipt,
@@ -963,9 +1059,32 @@ try {
     (error) => error?.code === 'AZURE_LIVE_EVIDENCE_UNVERIFIED' && /hash|provider|evidence/i.test(error.message),
     'tampering with signed provider evidence must invalidate the aggregate evidence binding',
   );
+  const oneShotVerifier = createLocalVerifier();
+  assert.equal(oneShotVerifier.verify(signedIntegratedEvidence).status, 'LOCAL_SIGNED_VERIFIER_CONTRACT_PASS');
+  assert.throws(
+    () => oneShotVerifier.verify(signedIntegratedEvidence),
+    (error) => error?.code === 'AZURE_LIVE_EVIDENCE_UNVERIFIED' && /replay|consumed|challenge/i.test(error.message),
+    'a consumed signed release challenge must not be replayed through the protected verifier interface',
+  );
+  const mutableConfiguration = structuredClone(azureConfiguration);
+  const mutableTrust = JSON.parse(trustedAttestationConfiguration);
+  const mutableChallenge = structuredClone(expectedChallenge);
+  const immutablePolicyVerifier = createLocalSignedAzureEvidenceVerifier({
+    expectedConfiguration: mutableConfiguration,
+    trustedPublicKeys: mutableTrust,
+    expectedChallenge: mutableChallenge,
+  });
+  mutableConfiguration.TAB_DOMAIN = 'caller-mutated.example';
+  mutableTrust[attestationKeyId].publicKeyPem = 'caller-mutated';
+  mutableChallenge.nonce = 'caller-mutated-nonce';
+  assert.equal(
+    immutablePolicyVerifier.verify(signedIntegratedEvidence).status,
+    'LOCAL_SIGNED_VERIFIER_CONTRACT_PASS',
+    'the protected verifier must snapshot target, trust, and challenge policy before caller mutation',
+  );
 
   assert.throws(
-    () => validateAzureIntegratedEvidence(integratedEvidence),
+    () => createLocalVerifier().verify(integratedEvidence),
     (error) => error?.code === 'AZURE_LIVE_EVIDENCE_UNVERIFIED' && /unsigned|local|provenance/i.test(error.message),
     'unsigned local JSON must not self-declare live Azure, provider, canary, approval, or Jira evidence',
   );
@@ -980,6 +1099,17 @@ try {
     }),
     /sensitive|secret|credential/i,
     'preflight receipts must use the same recursive secret guard as migration artifacts',
+  );
+  assert.throws(
+    () => validateAzureIntegratedEvidence({
+      ...integratedEvidence,
+      providerReceipt: {
+        ...providerReceipt,
+        diagnostics: [{ observations: [{ payload: azureAccountKeyFixture }] }],
+      },
+    }),
+    /sensitive|secret|credential|account.?key/i,
+    'a full preflight envelope must reject a neutral-key Azure account-key shape nested in arrays',
   );
   const preflightBundleSecret = cloneBundle(diskBundle);
   preflightBundleSecret.records[0].document.extra = { sessionTokens: ['opaque-preflight-secret'] };

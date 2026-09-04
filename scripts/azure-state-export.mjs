@@ -23,19 +23,41 @@ const SAFE_CREDENTIAL_METADATA_KEYS = new Set([
   'authorizationurl',
   'connectionstatus',
   'credentialpolicyname',
+  'credentialdigest',
+  'credentialexpiresat',
+  'credentialexpiry',
+  'credentialexpirytime',
+  'credentialhash',
+  'credentialid',
+  'credentialprincipal',
   'credentialreference',
   'credentialstatus',
+  'credentialuri',
+  'credentialversion',
   'passwordpolicy',
   'passwordpolicyname',
   'secretpolicyname',
+  'secretdigest',
+  'secretexpiresat',
+  'secretexpiry',
+  'secretexpirytime',
+  'secrethash',
+  'secretid',
   'secretreference',
   'secretrotationpolicy',
   'secreturi',
+  'secretversion',
   'tokenbudget',
   'tokenconfigured',
   'tokencount',
   'tokenenabled',
   'tokenexpiresat',
+  'tokenexpiration',
+  'tokenexpirationtime',
+  'tokenexpiry',
+  'tokenexpirytime',
+  'tokenhash',
+  'tokendigest',
   'tokenid',
   'tokenname',
   'tokenpolicy',
@@ -47,6 +69,7 @@ const SAFE_CREDENTIAL_METADATA_KEYS = new Set([
   'tokenstate',
   'tokenstatus',
   'tokentype',
+  'tokenuri',
   'tokenversion',
 ]);
 const SENSITIVE_VALUE_PATTERNS = [
@@ -155,8 +178,36 @@ function isSensitiveCredentialKey(key) {
   ].includes(word));
 }
 
+function isAzureAccountKeyShape(value) {
+  const candidate = value.trim();
+  if (
+    candidate.length !== 88
+    || !/^[A-Za-z0-9+/]{86}==$/u.test(candidate)
+    || !/[a-z]/u.test(candidate)
+    || !/[A-Z]/u.test(candidate)
+    || !/[0-9]/u.test(candidate)
+  ) return false;
+  let bytes;
+  try {
+    bytes = Buffer.from(candidate, 'base64');
+  } catch {
+    return false;
+  }
+  if (bytes.byteLength !== 64 || bytes.toString('base64') !== candidate) return false;
+  const frequencies = new Map();
+  for (const byte of bytes) frequencies.set(byte, (frequencies.get(byte) ?? 0) + 1);
+  const entropy = [...frequencies.values()].reduce((total, count) => {
+    const probability = count / bytes.byteLength;
+    return total - probability * Math.log2(probability);
+  }, 0);
+  return entropy >= 4.5;
+}
+
 export function assertNoSensitiveMaterial(value, location = 'record', seen = new Set()) {
   if (typeof value === 'string') {
+    if (isAzureAccountKeyShape(value)) {
+      throw new Error(`Azure account-key-shaped credential material detected at ${location}.`);
+    }
     if (SENSITIVE_VALUE_PATTERNS.some((pattern) => pattern.test(value))) {
       throw new Error(`Sensitive credential material detected at ${location}.`);
     }

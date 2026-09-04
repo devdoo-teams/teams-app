@@ -683,24 +683,18 @@ function assertNoFixtureEvidence(value, location, seen = new Set()) {
   seen.delete(value);
 }
 
-function parseTrustedAttestationKey(env, keyId) {
-  const encoded = env.AZURE_RELEASE_ATTESTATION_TRUSTED_PUBLIC_KEYS?.trim();
-  if (!encoded || encoded.length > 64 * 1024) {
+function parseTrustedAttestationKey(trustedPublicKeys, keyId) {
+  const encoded = stableMigrationJson(trustedPublicKeys);
+  if (!trustedPublicKeys || typeof trustedPublicKeys !== 'object' || Array.isArray(trustedPublicKeys) || encoded.length > 64 * 1024) {
     throw azureGateError(
-      'AZURE_RELEASE_ATTESTATION_TRUSTED_PUBLIC_KEYS must provide a bounded public-key allowlist.',
+      'The protected verifier must provide a bounded public-key allowlist.',
       'AZURE_LIVE_EVIDENCE_UNVERIFIED',
     );
   }
-  let allowlist;
-  try {
-    allowlist = JSON.parse(encoded);
-  } catch {
-    throw azureGateError('The release-attestation public-key allowlist is not valid JSON.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  if (Object.keys(trustedPublicKeys).length < 1 || Object.keys(trustedPublicKeys).length > 16) {
+    throw azureGateError('The protected verifier public-key allowlist must contain between 1 and 16 keys.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
   }
-  if (!allowlist || typeof allowlist !== 'object' || Array.isArray(allowlist)) {
-    throw azureGateError('The release-attestation public-key allowlist must be an object.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
-  }
-  const trusted = allowlist[keyId];
+  const trusted = Object.hasOwn(trustedPublicKeys, keyId) ? trustedPublicKeys[keyId] : undefined;
   if (!trusted) {
     throw azureGateError(`Release attestation key ${keyId || '<missing>'} is not in the trusted allowlist.`, 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
   }
@@ -733,8 +727,59 @@ function assertCanonicalAttestationTimestamp(value, label) {
   return Date.parse(value);
 }
 
-export function verifyAzureAggregateAttestation({
-  env,
+const protectedAzureVerifierCapabilities = new WeakMap();
+
+function immutableJsonClone(value) {
+  const clone = JSON.parse(stableMigrationJson(value));
+  const freeze = (candidate) => {
+    if (!candidate || typeof candidate !== 'object' || Object.isFrozen(candidate)) return candidate;
+    for (const entry of Object.values(candidate)) freeze(entry);
+    return Object.freeze(candidate);
+  };
+  return freeze(clone);
+}
+
+function requireExpectedReleaseChallenge(expectedChallenge) {
+  assertExactObjectKeys(expectedChallenge, ['releaseRunId', 'challengeId', 'nonce', 'attempt'], 'expected release challenge');
+  for (const name of ['releaseRunId', 'challengeId']) {
+    if (!/^[A-Za-z0-9._-]{8,128}$/u.test(expectedChallenge[name] ?? '')) {
+      throw azureGateError(`Expected release challenge ${name} is invalid.`, 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+    }
+  }
+  if (!/^[A-Za-z0-9_-]{16,128}$/u.test(expectedChallenge.nonce ?? '')) {
+    throw azureGateError('Expected release challenge nonce is invalid.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  if (!Number.isSafeInteger(expectedChallenge.attempt) || expectedChallenge.attempt < 1) {
+    throw azureGateError('Expected release challenge attempt is invalid.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  return immutableJsonClone(expectedChallenge);
+}
+
+export function createLocalSignedAzureEvidenceVerifier({
+  expectedConfiguration,
+  trustedPublicKeys,
+  expectedChallenge,
+  now,
+}) {
+  const capability = Object.freeze(Object.create(null));
+  protectedAzureVerifierCapabilities.set(capability, {
+    evidenceClass: 'local-signed-verifier-contract',
+    configuration: immutableJsonClone(requireAzureConfiguration(immutableJsonClone(expectedConfiguration))),
+    trustedPublicKeys: immutableJsonClone(trustedPublicKeys),
+    expectedChallenge: requireExpectedReleaseChallenge(expectedChallenge),
+    now: now === undefined ? undefined : Number(now),
+    consumed: false,
+  });
+  return Object.freeze({
+    verify(evidence) {
+      return validateAzureIntegratedEvidenceWithCapability(evidence, capability);
+    },
+  });
+}
+
+function verifyAzureAggregateAttestation({
+  trustedPublicKeys,
+  expectedChallenge,
   aggregateAttestation,
   configuration,
   releaseReceipt,
@@ -775,7 +820,7 @@ export function verifyAzureAggregateAttestation({
   }
   assertExactObjectKeys(aggregateAttestation, [
     'schemaVersion', 'algorithm', 'keyId', 'producer', 'issuer', 'subject', 'audience', 'environment', 'resource',
-    'issuedAt', 'expiresAt', 'nonce', 'releaseIdentity', 'evidenceHashes', 'signature',
+    'issuedAt', 'expiresAt', 'operation', 'nonce', 'releaseIdentity', 'evidenceHashes', 'signature',
   ], 'release aggregate attestation');
   if (
     aggregateAttestation.schemaVersion !== 'teamsapp.azure-release-aggregate-attestation.v1'
@@ -793,6 +838,21 @@ export function verifyAzureAggregateAttestation({
   if (!/^[A-Za-z0-9_-]{16,128}$/u.test(aggregateAttestation.nonce ?? '')) {
     throw azureGateError('Release attestation nonce is missing or invalid.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
   }
+  assertExactObjectKeys(aggregateAttestation.operation, ['releaseRunId', 'challengeId', 'attempt'], 'release attestation operation');
+  const expectedOperation = {
+    releaseRunId: expectedChallenge.releaseRunId,
+    challengeId: expectedChallenge.challengeId,
+    attempt: expectedChallenge.attempt,
+  };
+  if (
+    stableMigrationJson(aggregateAttestation.operation) !== stableMigrationJson(expectedOperation)
+    || aggregateAttestation.nonce !== expectedChallenge.nonce
+  ) {
+    throw azureGateError(
+      'Release attestation operation, attempt, or nonce does not match the protected release challenge.',
+      'AZURE_LIVE_EVIDENCE_UNVERIFIED',
+    );
+  }
   const issuedAt = assertCanonicalAttestationTimestamp(aggregateAttestation.issuedAt, 'issuedAt');
   const expiresAt = assertCanonicalAttestationTimestamp(aggregateAttestation.expiresAt, 'expiresAt');
   if (issuedAt > now + 60_000) {
@@ -802,7 +862,7 @@ export function verifyAzureAggregateAttestation({
     throw azureGateError('Release attestation is expired or has an invalid expiry window.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
   }
 
-  const { trusted, publicKey } = parseTrustedAttestationKey(env, aggregateAttestation.keyId);
+  const { trusted, publicKey } = parseTrustedAttestationKey(trustedPublicKeys, aggregateAttestation.keyId);
   for (const claim of ['issuer', 'subject', 'audience']) {
     if (aggregateAttestation[claim] !== trusted[claim]) {
       throw azureGateError(`Release attestation ${claim} is not trusted for key ${aggregateAttestation.keyId}.`, 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
@@ -866,9 +926,9 @@ export function verifyAzureAggregateAttestation({
     throw azureGateError('Release attestation signature verification failed.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
   }
   return {
-    status: 'VERIFIED',
-    evidenceClass: 'producer-signed-attestation',
-    verification: 'ED25519_AGGREGATE_VERIFIED',
+    status: 'LOCAL_CRYPTOGRAPHIC_CONTRACT_VERIFIED',
+    evidenceClass: 'signed-attestation-cryptographic-contract',
+    verification: 'ED25519_AGGREGATE_CONTRACT_VERIFIED',
     keyId: aggregateAttestation.keyId,
     issuer: aggregateAttestation.issuer,
     subject: aggregateAttestation.subject,
@@ -878,11 +938,12 @@ export function verifyAzureAggregateAttestation({
     releaseIdentity: structuredClone(expectedReleaseIdentity),
     issuedAt: aggregateAttestation.issuedAt,
     expiresAt: aggregateAttestation.expiresAt,
+    operation: structuredClone(expectedOperation),
     nonce: aggregateAttestation.nonce,
   };
 }
 
-export function validateAzureIntegratedEvidence({
+function validateAzureIntegratedEvidenceWithCapability({
   env,
   releaseReceipt: releaseReceiptInput,
   handoffProvenance,
@@ -897,8 +958,9 @@ export function validateAzureIntegratedEvidence({
   publicCanaryReceipt,
   jiraReceipt,
   aggregateAttestation,
-}) {
-  const configuration = requireAzureConfiguration(env ?? {});
+}, verifierCapability) {
+  const verifierState = protectedAzureVerifierCapabilities.get(verifierCapability);
+  const configuration = verifierState?.configuration ?? requireAzureConfiguration(env ?? {});
   for (const [label, evidence] of Object.entries({
     releaseReceipt: releaseReceiptInput,
     handoffProvenance,
@@ -1041,16 +1103,20 @@ export function validateAzureIntegratedEvidence({
   } catch {
     throw azureGateError('public canary health URL is invalid.');
   }
+  const expectedCanaryOrigin = `https://${configuration.TAB_DOMAIN}`;
   if (
     publicCanaryReceipt.schemaVersion !== 1
     || publicCanaryReceipt.status !== 'PASS'
     || !String(publicCanaryReceipt.revisionName ?? '').trim()
     || healthUrl.protocol !== 'https:'
+    || healthUrl.origin !== expectedCanaryOrigin
     || healthUrl.pathname !== '/api/health'
     || healthUrl.username
     || healthUrl.password
+    || healthUrl.search
+    || healthUrl.hash
   ) {
-    throw azureGateError('public canary identity receipt is incomplete or unsafe.');
+    throw azureGateError(`public canary identity receipt is incomplete, unsafe, or does not match ${expectedCanaryOrigin}.`);
   }
 
   if (jiraReceipt.schemaVersion !== 1 || !Array.isArray(jiraReceipt.findings)) {
@@ -1069,8 +1135,18 @@ export function validateAzureIntegratedEvidence({
     }
   }
 
+  if (!verifierState) {
+    throw azureGateError(
+      'No protected operational verifier trust capability is available; caller evidence and environment configuration cannot establish READY.',
+      'AZURE_LIVE_EVIDENCE_UNVERIFIED',
+    );
+  }
+  if (verifierState.consumed) {
+    throw azureGateError('The protected release challenge was already consumed; replay is rejected.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
   const attestation = verifyAzureAggregateAttestation({
-    env,
+    trustedPublicKeys: verifierState.trustedPublicKeys,
+    expectedChallenge: verifierState.expectedChallenge,
     aggregateAttestation,
     configuration,
     releaseReceipt,
@@ -1081,13 +1157,19 @@ export function validateAzureIntegratedEvidence({
     providerReceipt,
     publicCanaryReceipt,
     jiraReceipt,
+    now: verifierState.now,
   });
+  verifierState.consumed = true;
   return {
     phase: 'azure-integrated-evidence',
-    status: 'READY',
-    evidenceClass: attestation.evidenceClass,
+    status: 'LOCAL_SIGNED_VERIFIER_CONTRACT_PASS',
+    evidenceClass: verifierState.evidenceClass,
     attestation,
   };
+}
+
+export function validateAzureIntegratedEvidence(evidence) {
+  return validateAzureIntegratedEvidenceWithCapability(evidence, undefined);
 }
 
 async function readBoundedJson(filePath, label, maxBytes = 1024 * 1024) {
