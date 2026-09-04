@@ -6,6 +6,8 @@ import {
   type RuntimeStore,
 } from './runtime-store.js';
 import {
+  applyAgentDispatchRecordMutation,
+  assertCanonicalAgentDispatchRecord,
   latestDurableWorkerHeartbeat,
   type AgentDispatchRecord,
   type AgentDispatchStatePort,
@@ -15,6 +17,7 @@ import type { AgentDispatchTaskReference } from '../queue/agent-dispatch-queue.j
 export function createRuntimeStoreAgentDispatchStatePort(runtimeStore: RuntimeStore): AgentDispatchStatePort {
   return {
     async create(record) {
+      assertCanonicalAgentDispatchRecord(record);
       const reference = referenceForRecord(record);
       try {
         await runtimeStore.write(scopeFor(reference), {
@@ -31,6 +34,7 @@ export function createRuntimeStoreAgentDispatchStatePort(runtimeStore: RuntimeSt
     async get(reference) {
       const record = await runtimeStore.read<AgentDispatchRecord>(scopeFor(reference), reference.taskId);
       if (!record) return undefined;
+      assertCanonicalAgentDispatchRecord(record.value);
       assertRecordScope(record.value, reference);
       return record.value;
     },
@@ -39,12 +43,13 @@ export function createRuntimeStoreAgentDispatchStatePort(runtimeStore: RuntimeSt
       for (let attempt = 0; attempt < 4; attempt += 1) {
         const current = await runtimeStore.read<AgentDispatchRecord>(scope, reference.taskId);
         if (!current) throw new Error(`No durable dispatch record exists for ${reference.taskId}.`);
+        assertCanonicalAgentDispatchRecord(current.value);
         assertRecordScope(current.value, reference);
         if (
           current.value.leaseOwner !== expected.leaseOwner
           || current.value.leaseGeneration !== expected.leaseGeneration
         ) return undefined;
-        const next = mutate(structuredClone(current.value));
+        const next = applyAgentDispatchRecordMutation(current.value, mutate);
         assertRecordScope(next, reference);
         const contentHash = crypto.createHash('sha256').update(JSON.stringify(next), 'utf8').digest('hex');
         try {
@@ -54,6 +59,7 @@ export function createRuntimeStoreAgentDispatchStatePort(runtimeStore: RuntimeSt
             expectedEtag: current.etag,
             value: next,
           });
+          assertCanonicalAgentDispatchRecord(updated.value);
           assertRecordScope(updated.value, reference);
           return updated.value;
         } catch (error) {
@@ -69,7 +75,10 @@ export function createRuntimeStoreAgentDispatchStatePort(runtimeStore: RuntimeSt
     },
     async readWorkerHeartbeat(reference) {
       const records = await runtimeStore.list<AgentDispatchRecord>(scopeFor(reference), { limit: 100 });
-      for (const record of records) assertRecordScope(record.value, reference, false);
+      for (const record of records) {
+        assertCanonicalAgentDispatchRecord(record.value);
+        assertRecordScope(record.value, reference, false);
+      }
       return latestDurableWorkerHeartbeat(records.map(({ value }) => value));
     },
   };
@@ -84,6 +93,7 @@ function scopeFor(reference: AgentDispatchTaskReference): RuntimeScope {
 }
 
 function referenceForRecord(record: AgentDispatchRecord): AgentDispatchTaskReference {
+  assertCanonicalAgentDispatchRecord(record);
   const reference = {
     taskId: record.taskId,
     tenantId: record.task.tenantId,

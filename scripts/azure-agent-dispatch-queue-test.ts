@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 
 import {
+  applyAgentDispatchRecordMutation,
   createProductionAzureQueueClient,
   DispatchConflictError,
+  DispatchImmutableIdentityConflictError,
   type AgentDispatchRecord,
   type AgentDispatchStatePort,
   type AzureQueueClientPort,
@@ -98,10 +100,129 @@ async function testRuntimeStateUsesTaskScopeForObserveCasAndHealth(): Promise<vo
       { leaseOwner: leaseA.leaseOwner, leaseGeneration: leaseA.leaseGeneration },
       (record) => ({ ...record, task: { ...record.task, tenantId: 'tenant-b' } }),
     ),
-    /scope mismatch/i,
+    DispatchImmutableIdentityConflictError,
     'CAS cannot move a durable task into another tenant partition',
   );
   assert.equal(runtimeStore.scopes.some((scope) => scope.tenantId === 'teams-core-system'), false);
+}
+
+async function testRuntimeStateRejectsImmutableIdentityMutationBeforeWrite(): Promise<void> {
+  const runtimeStore = new MemoryRuntimeStore();
+  const state = createRuntimeStoreAgentDispatchStatePort(runtimeStore);
+  const queue = new AzureAgentDispatchQueue(new MemoryQueueClient(), state, { clock });
+  const readOnlyTask = task('task-immutable-cas', { mode: 'read-only' });
+  await queue.enqueue(readOnlyTask);
+
+  const taskReference = reference(readOnlyTask);
+  const before = await state.get(taskReference);
+  assert.ok(before);
+  const writesBeforeInvalidMutations = runtimeStore.writeCount;
+  const expected = { leaseGeneration: before.leaseGeneration };
+  const immutableMutations: Array<{
+    name: string;
+    mutate: (record: AgentDispatchRecord) => AgentDispatchRecord;
+  }> = [
+    { name: 'record taskId', mutate: (record) => ({ ...record, taskId: 'attacker-task' }) },
+    { name: 'record idempotencyKey', mutate: (record) => ({ ...record, idempotencyKey: 'attacker-idempotency' }) },
+    { name: 'record requestHash', mutate: (record) => ({ ...record, requestHash: 'attacker-request-hash' }) },
+    {
+      name: 'task taskId',
+      mutate: (record) => ({ ...record, task: { ...record.task, taskId: 'attacker-task' } }),
+    },
+    {
+      name: 'task idempotencyKey',
+      mutate: (record) => ({ ...record, task: { ...record.task, idempotencyKey: 'attacker-idempotency' } }),
+    },
+    {
+      name: 'tenant scope',
+      mutate: (record) => ({ ...record, task: { ...record.task, tenantId: 'attacker-tenant' } }),
+    },
+    {
+      name: 'requester scope',
+      mutate: (record) => ({ ...record, task: { ...record.task, requesterId: 'attacker-requester' } }),
+    },
+    {
+      name: 'conversation scope',
+      mutate: (record) => ({ ...record, task: { ...record.task, conversationId: 'attacker-conversation' } }),
+    },
+    {
+      name: 'provider',
+      mutate: (record) => ({ ...record, task: { ...record.task, provider: 'attacker-provider' } }),
+    },
+    {
+      name: 'prompt',
+      mutate: (record) => ({ ...record, task: { ...record.task, prompt: 'attacker prompt' } }),
+    },
+    {
+      name: 'createdAt',
+      mutate: (record) => ({ ...record, task: { ...record.task, createdAt: '2026-09-04T00:00:00.000Z' } }),
+    },
+    {
+      name: 'execution privilege',
+      mutate: (record) => ({
+        ...record,
+        task: {
+          ...record.task,
+          execution: {
+            mode: 'workspace-write',
+            workspaceReference: 'teams-core-worker-workspace',
+          },
+        },
+      }),
+    },
+    {
+      name: 'execution workspace reference',
+      mutate: (record) => ({
+        ...record,
+        task: {
+          ...record.task,
+          execution: {
+            ...record.task.execution,
+            workspaceReference: 'attacker-workspace',
+          } as never,
+        },
+      }),
+    },
+    {
+      name: 'execution isolation reference',
+      mutate: (record) => ({
+        ...record,
+        task: {
+          ...record.task,
+          execution: {
+            ...record.task.execution,
+            isolationReference: 'attacker-isolation',
+          } as never,
+        },
+      }),
+    },
+  ];
+
+  for (const { name, mutate } of immutableMutations) {
+    await assert.rejects(
+      state.compareAndSwap(taskReference, expected, mutate),
+      (error: unknown) => (
+        error instanceof Error
+        && (error as Error & { code?: string }).code === 'AGENT_DISPATCH_IMMUTABLE_IDENTITY_CONFLICT'
+        && /immutable dispatch identity/i.test(error.message)
+      ),
+      `CAS rejects immutable ${name} mutation with an explicit conflict`,
+    );
+    assert.equal(runtimeStore.writeCount, writesBeforeInvalidMutations, `${name} conflict is rejected before write`);
+    assert.deepEqual(await state.get(taskReference), before, `${name} conflict leaves durable state unchanged`);
+  }
+
+  const valid = await state.compareAndSwap(taskReference, expected, (record) => ({
+    ...record,
+    status: 'leased',
+    leaseOwner: 'worker-valid',
+    leaseGeneration: record.leaseGeneration + 1,
+    leaseExpiresAt: '2026-09-03T00:00:30.000Z',
+    updatedAt: '2026-09-03T00:00:01.000Z',
+  }));
+  assert.equal(valid?.status, 'leased', 'legitimate lifecycle status remains mutable');
+  assert.equal(valid?.leaseOwner, 'worker-valid', 'legitimate lease ownership remains mutable');
+  assert.equal(runtimeStore.writeCount, writesBeforeInvalidMutations + 1, 'valid lifecycle mutation is written once');
 }
 
 async function testReadOnlyExecutionRequiresExplicitIsolationReference(): Promise<void> {
@@ -236,19 +357,16 @@ async function testDiagnosticFieldsAreRedactedAndBoundedAtPersistenceAndResponse
   assert.ok(Buffer.byteLength(failed.error?.code ?? '', 'utf8') <= 128, 'error code is byte bounded');
   assert.ok(Buffer.byteLength(failed.error?.message ?? '', 'utf8') <= 1_024, 'error message is byte bounded');
 
+  const responseTask = task('task-response-redaction');
+  await fixture.queue.enqueue(responseTask);
+  const canonicalResponseRecord = fixture.state.peek(reference(responseTask));
+  assert.ok(canonicalResponseRecord);
   fixture.state.put({
-    taskId: 'task-response-redaction',
-    idempotencyKey: 'idem:task-response-redaction',
-    requestHash: 'fixture-hash',
+    ...canonicalResponseRecord,
     status: 'failed',
-    task: task('task-response-redaction'),
-    enqueued: true,
-    dequeueCount: 1,
-    leaseGeneration: 0,
-    updatedAt: clock.now().toISOString(),
     error: { code: oversized, message: oversized, failedAt: clock.now().toISOString() },
   });
-  const observed = await fixture.queue.observe(reference(task('task-response-redaction')));
+  const observed = await fixture.queue.observe(reference(responseTask));
   assert.equal(JSON.stringify(observed).includes(secret), false, 'response boundary redacts legacy unsanitized diagnostics');
   assert.ok(Buffer.byteLength(observed?.error?.message ?? '', 'utf8') <= 1_024, 'response diagnostics are byte bounded');
 }
@@ -401,7 +519,7 @@ class MemoryState implements AgentDispatchStatePort {
     const current = this.records.get(key);
     if (!current) throw new Error(`missing state ${taskReference.taskId}`);
     if (current.leaseOwner !== expected.leaseOwner || current.leaseGeneration !== expected.leaseGeneration) return undefined;
-    const next = mutate(structuredClone(current));
+    const next = applyAgentDispatchRecordMutation(current, mutate);
     this.records.set(key, structuredClone(next));
     return structuredClone(next);
   }
@@ -463,6 +581,7 @@ class MemoryRuntimeStore implements RuntimeStore {
   readonly scopes: RuntimeScope[] = [];
   private readonly records = new Map<string, RuntimeRecord & { idempotencyKey: string }>();
   private revision = 0;
+  get writeCount(): number { return this.revision; }
 
   async read<T>(scope: RuntimeScope, id: string): Promise<RuntimeRecord<T> | null> {
     this.scopes.push({ ...scope });
@@ -506,6 +625,7 @@ class MemoryRuntimeStore implements RuntimeStore {
 await testEnqueueIsStableAndIdempotent();
 await testSameTaskIdIsIsolatedByServerDerivedScope();
 await testRuntimeStateUsesTaskScopeForObserveCasAndHealth();
+await testRuntimeStateRejectsImmutableIdentityMutationBeforeWrite();
 await testReadOnlyExecutionRequiresExplicitIsolationReference();
 await testLeaseRenewCompleteErrorCancelAndRecovery();
 await testPoisonAndUnknownAreQuarantined();

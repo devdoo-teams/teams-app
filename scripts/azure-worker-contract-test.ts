@@ -18,7 +18,12 @@ import { fileURLToPath } from 'node:url';
 import { CodexRunner } from '../src/server/codex-runner.js';
 import type { AgentIsolationSpawnOptions } from '../src/server/agent-execution-policy.js';
 import { createWorkerExecutor } from '../src/worker/executor.js';
-import type { AgentDispatchRecord, AgentDispatchStatePort, AzureQueueClientPort } from '../src/server/azure-agent-dispatch-queue.js';
+import {
+  applyAgentDispatchRecordMutation,
+  type AgentDispatchRecord,
+  type AgentDispatchStatePort,
+  type AzureQueueClientPort,
+} from '../src/server/azure-agent-dispatch-queue.js';
 import type { AgentDispatchTaskReference } from '../src/server/queue/agent-dispatch-queue.js';
 
 async function testWorkerCompletionDuplicateAndError(): Promise<void> {
@@ -275,7 +280,7 @@ class MemoryState implements AgentDispatchStatePort {
   records = new Map<string, AgentDispatchRecord>();
   async create(record: AgentDispatchRecord) { const key = this.key(record.task); if (this.records.has(key)) return 'exists' as const; this.records.set(key, structuredClone(record)); return 'created' as const; }
   async get(taskReference: AgentDispatchTaskReference) { const value = this.records.get(this.key(taskReference)); return value && structuredClone(value); }
-  async compareAndSwap(taskReference: AgentDispatchTaskReference, expected: { leaseOwner?: string; leaseGeneration: number }, mutate: (current: AgentDispatchRecord) => AgentDispatchRecord) { const key = this.key(taskReference); const current = this.records.get(key); if (!current) throw new Error('missing state'); if (current.leaseOwner !== expected.leaseOwner || current.leaseGeneration !== expected.leaseGeneration) return undefined; const next = mutate(structuredClone(current)); this.records.set(key, structuredClone(next)); return structuredClone(next); }
+  async compareAndSwap(taskReference: AgentDispatchTaskReference, expected: { leaseOwner?: string; leaseGeneration: number }, mutate: (current: AgentDispatchRecord) => AgentDispatchRecord) { const key = this.key(taskReference); const current = this.records.get(key); if (!current) throw new Error('missing state'); if (current.leaseOwner !== expected.leaseOwner || current.leaseGeneration !== expected.leaseGeneration) return undefined; const next = applyAgentDispatchRecordMutation(current, mutate); this.records.set(key, structuredClone(next)); return structuredClone(next); }
   private key(taskReference: AgentDispatchTaskReference) { return JSON.stringify([taskReference.tenantId, taskReference.requesterId, taskReference.conversationId, taskReference.taskId]); }
 }
 class MemoryQueueClient implements AzureQueueClientPort {

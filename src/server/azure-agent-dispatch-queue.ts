@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 
 import {
   DefaultAzureCredential,
@@ -53,7 +54,11 @@ export type AgentDispatchLease = Readonly<{
 export interface AgentDispatchStatePort {
   create(record: AgentDispatchRecord): Promise<'created' | 'exists'>;
   get(reference: AgentDispatchTaskReference): Promise<AgentDispatchRecord | undefined>;
-  /** Atomically applies mutate only while owner and generation still match. */
+  /**
+   * Atomically applies mutate only while owner and generation still match.
+   * Implementations must use applyAgentDispatchRecordMutation so immutable
+   * server-derived dispatch identity cannot be changed by a CAS callback.
+   */
   compareAndSwap(
     reference: AgentDispatchTaskReference,
     expected: { leaseOwner?: string; leaseGeneration: number },
@@ -139,6 +144,59 @@ export class DispatchLeaseConflictError extends Error {
   }
 }
 
+export class DispatchImmutableIdentityConflictError extends Error {
+  readonly code = 'AGENT_DISPATCH_IMMUTABLE_IDENTITY_CONFLICT' as const;
+
+  constructor(taskId: string) {
+    super(`Task ${taskId} compare-and-swap attempted to change immutable dispatch identity.`);
+    this.name = 'DispatchImmutableIdentityConflictError';
+  }
+}
+
+export class DispatchInvalidStateError extends Error {
+  readonly code = 'AGENT_DISPATCH_INVALID_STATE' as const;
+
+  constructor(taskId: string) {
+    super(`Task ${taskId} has invalid canonical dispatch state.`);
+    this.name = 'DispatchInvalidStateError';
+  }
+}
+
+export function assertCanonicalAgentDispatchRecord(record: AgentDispatchRecord): void {
+  try {
+    const task = canonicalTask(record.task);
+    if (
+      !isDeepStrictEqual(record.task, task)
+      || record.taskId !== task.taskId
+      || record.idempotencyKey !== task.idempotencyKey
+      || record.requestHash !== hashTask(task)
+    ) {
+      throw new Error('dispatch identity fields are inconsistent');
+    }
+  } catch (error) {
+    if (error instanceof DispatchInvalidStateError) throw error;
+    throw new DispatchInvalidStateError(safeTaskIdForError(record?.taskId));
+  }
+}
+
+export function applyAgentDispatchRecordMutation(
+  current: AgentDispatchRecord,
+  mutate: (current: AgentDispatchRecord) => AgentDispatchRecord,
+): AgentDispatchRecord {
+  assertCanonicalAgentDispatchRecord(current);
+  const next = mutate(structuredClone(current));
+  if (
+    !next
+    || typeof next !== 'object'
+    || Array.isArray(next)
+    || !isDeepStrictEqual(immutableDispatchIdentity(current), immutableDispatchIdentity(next))
+  ) {
+    throw new DispatchImmutableIdentityConflictError(current.taskId);
+  }
+  assertCanonicalAgentDispatchRecord(next);
+  return next;
+}
+
 export class AzureAgentDispatchQueue implements AgentDispatchQueue {
   private readonly clock: Clock;
 
@@ -176,7 +234,7 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
 
     await this.client.sendMessage(JSON.stringify(task));
     const current = await this.requiredRecord(reference);
-    const persisted = await this.state.compareAndSwap(reference, leaseIdentity(current), (latest) => ({
+    const persisted = await this.compareAndSwap(reference, leaseIdentity(current), (latest) => ({
       ...latest,
       enqueued: true,
       updatedAt: this.now(),
@@ -279,7 +337,7 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
 
     const leaseOwner = crypto.randomUUID();
     const leaseGeneration = record.leaseGeneration + 1;
-    const claimed = await this.state.compareAndSwap(reference, leaseIdentity(record), (current) => {
+    const claimed = await this.compareAndSwap(reference, leaseIdentity(record), (current) => {
       const currentExpired = !current.leaseExpiresAt || Date.parse(current.leaseExpiresAt) <= nowMs;
       const currentRedelivery = current.leaseMessageId === message.messageId && message.dequeueCount > current.dequeueCount;
       if (current.leaseOwner && !currentExpired && !currentRedelivery) {
@@ -313,7 +371,7 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
     if (!Number.isInteger(checkpoint.sequence) || checkpoint.sequence < 0) throw new TypeError('checkpoint sequence is invalid');
     const message = sanitizeDiagnostic(checkpoint.message, 'checkpoint message', DIAGNOSTIC_FIELD_LIMITS.checkpoint);
     const update = await this.client.updateMessage(lease.messageId, lease.popReceipt, undefined, visibilityTimeoutSeconds);
-    const persisted = await this.state.compareAndSwap(canonicalTaskReference(lease.task), leaseIdentity(lease), (record) => {
+    const persisted = await this.compareAndSwap(canonicalTaskReference(lease.task), leaseIdentity(lease), (record) => {
       assertOwned(record, lease);
       if (isTerminalDispatchStatus(record.status)) throw new DispatchLeaseConflictError(lease.task.taskId);
       return {
@@ -380,7 +438,7 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const current = await this.requiredRecord(reference);
       if (isTerminalDispatchStatus(current.status)) return;
-      const updated = await this.state.compareAndSwap(reference, leaseIdentity(current), (record) => ({
+      const updated = await this.compareAndSwap(reference, leaseIdentity(current), (record) => ({
         ...record,
         cancellationRequested: true,
         cancellationReason,
@@ -396,7 +454,7 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
     mutate: (record: AgentDispatchRecord) => AgentDispatchRecord,
   ): Promise<void> {
     validateLease(lease);
-    const persisted = await this.state.compareAndSwap(canonicalTaskReference(lease.task), leaseIdentity(lease), (record) => {
+    const persisted = await this.compareAndSwap(canonicalTaskReference(lease.task), leaseIdentity(lease), (record) => {
       assertOwned(record, lease);
       return {
         ...mutate(record),
@@ -435,7 +493,7 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
       messageSha256: crypto.createHash('sha256').update(message.messageText, 'utf8').digest('hex'),
     }));
     if (record) {
-      const updated = await this.state.compareAndSwap(canonicalTaskReference(record.task), leaseIdentity(record), (current) => ({
+      const updated = await this.compareAndSwap(canonicalTaskReference(record.task), leaseIdentity(record), (current) => ({
         ...current,
         status: 'quarantined',
         quarantineReason,
@@ -449,6 +507,16 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
 
   private now(): string {
     return this.clock.now().toISOString();
+  }
+
+  private compareAndSwap(
+    reference: AgentDispatchTaskReference,
+    expected: { leaseOwner?: string; leaseGeneration: number },
+    mutate: (current: AgentDispatchRecord) => AgentDispatchRecord,
+  ): Promise<AgentDispatchRecord | undefined> {
+    return this.state.compareAndSwap(reference, expected, (current) => (
+      applyAgentDispatchRecordMutation(current, mutate)
+    ));
   }
 }
 
@@ -554,6 +622,7 @@ export function canonicalTaskReference(value: unknown): AgentDispatchTaskReferen
 }
 
 function assertRecordScope(record: AgentDispatchRecord, reference: AgentDispatchTaskReference): void {
+  assertCanonicalAgentDispatchRecord(record);
   if (
     record.taskId !== reference.taskId
     || record.task.taskId !== reference.taskId
@@ -563,6 +632,26 @@ function assertRecordScope(record: AgentDispatchRecord, reference: AgentDispatch
   ) {
     throw new Error(`Durable dispatch record scope mismatch for ${reference.taskId}.`);
   }
+}
+
+function immutableDispatchIdentity(record: AgentDispatchRecord): Readonly<{
+  taskId: string;
+  idempotencyKey: string;
+  requestHash: string;
+  task: AgentDispatchTask;
+}> {
+  return {
+    taskId: record.taskId,
+    idempotencyKey: record.idempotencyKey,
+    requestHash: record.requestHash,
+    task: record.task,
+  };
+}
+
+function safeTaskIdForError(value: unknown): string {
+  return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(value)
+    ? value
+    : 'unknown';
 }
 
 function canonicalExecution(value: unknown): AgentDispatchTask['execution'] {

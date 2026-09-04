@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 
 import {
+  applyAgentDispatchRecordMutation,
   type AgentDispatchRecord,
   type AgentDispatchStatePort,
   type AzureQueueClientPort,
@@ -72,7 +73,7 @@ class MemoryState implements AgentDispatchStatePort {
     if (!current || current.leaseOwner !== expected.leaseOwner || current.leaseGeneration !== expected.leaseGeneration) {
       return undefined;
     }
-    const next = mutate(structuredClone(current));
+    const next = applyAgentDispatchRecordMutation(current, mutate);
     this.records.set(taskReference.taskId, structuredClone(next));
     return structuredClone(next);
   }

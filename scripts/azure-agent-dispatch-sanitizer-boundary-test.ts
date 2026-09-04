@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 
 import {
   type AgentDispatchRecord,
@@ -8,10 +9,25 @@ import {
 } from '../src/server/azure-agent-dispatch-queue.js';
 import type { AgentDispatchTaskReference } from '../src/server/queue/agent-dispatch-queue.js';
 
-const safeIdentifiers = {
+const immutableTask: AgentDispatchRecord['task'] = {
+  schemaVersion: 2,
   taskId: 'task-safe-state-id',
   idempotencyKey: 'idem:task-safe-state-id',
-  requestHash: 'sha256-safe-state-id',
+  tenantId: 'tenant-safe-state-id',
+  requesterId: 'requester-safe-state-id',
+  conversationId: 'conversation-safe-state-id',
+  provider: 'codex',
+  prompt: 'safe prompt',
+  createdAt: '2026-09-03T00:00:00.000Z',
+  execution: {
+    mode: 'workspace-write',
+    workspaceReference: 'teams-core-worker-workspace',
+  },
+};
+const safeIdentifiers = {
+  taskId: immutableTask.taskId,
+  idempotencyKey: immutableTask.idempotencyKey,
+  requestHash: crypto.createHash('sha256').update(JSON.stringify(immutableTask), 'utf8').digest('hex'),
   leaseOwner: 'worker-safe-state-id',
 };
 const unsafeDiagnostic = [
@@ -29,21 +45,7 @@ const unsafeDiagnostic = [
 const legacyRecord: AgentDispatchRecord = {
   ...safeIdentifiers,
   status: 'quarantined',
-  task: {
-    schemaVersion: 2,
-    taskId: safeIdentifiers.taskId,
-    idempotencyKey: safeIdentifiers.idempotencyKey,
-    tenantId: 'tenant-safe-state-id',
-    requesterId: 'requester-safe-state-id',
-    conversationId: 'conversation-safe-state-id',
-    provider: 'codex',
-    prompt: 'safe prompt',
-    createdAt: '2026-09-03T00:00:00.000Z',
-    execution: {
-      mode: 'workspace-write',
-      workspaceReference: 'teams-core-worker-workspace',
-    },
-  },
+  task: immutableTask,
   enqueued: true,
   dequeueCount: 1,
   updatedAt: '2026-09-03T00:00:00.000Z',
