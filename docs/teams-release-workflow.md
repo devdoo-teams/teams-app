@@ -13,6 +13,18 @@
 
 따라서 선택 provider가 설정되지 않은 상태는 Core의 실패가 아니라 `OPTIONAL_PROVIDER_NOT_CONFIGURED`로 분리한다. Core 응답이 저장된 값을 단순히 되돌리는지 여부는 실제 작업 mutation, 상태 변화, 오류, 재시작 보존을 통해 검증한다.
 
+### 공식 계약 우선 디버깅 체크포인트
+
+코드 수정이나 운영 설정 변경 전에 대상 제품의 작업 시점 공식 1차 문서와 설치된 CLI/SDK의 실제 버전·`--help`를 함께 확인한다. 디버깅 순서는 다음과 같으며, 어느 단계도 추측으로 건너뛰지 않는다.
+
+1. 공식 문서의 직접 URL, 갱신일, 지원 버전과 명령 계약을 기록한다. 기술 계약은 vendor 공식 문서·API schema·설치 help만 근거로 사용한다.
+2. 로컬/CI에 설치된 도구의 `--version`과 해당 하위 명령 `--help`를 저장하고 공식 문서와 대조한다. 불일치는 `CONTRACT_DRIFT_BLOCKED`다.
+3. 현재 서비스와 데이터를 건드리지 않는 최소 재현으로 정확한 stdout/stderr·종료 코드·대상 identity를 확보한다. 오류 원문을 얻기 전에는 설정이나 파라미터를 추측 변경하지 않는다.
+4. 재현을 focused RED 테스트로 고정하고 최소 수정한다. 동일 테스트 GREEN과 실제 read-back을 모두 확인하며 fixture 통과를 live 결과로 승격하지 않는다.
+5. 반복 스크립트/스킬은 실행 전 계약·버전·금지 동작·테스트를 점검한다. 결함이 나오면 스킬 자체를 수정하고 압박 시나리오를 다시 통과시킨 후 사용한다.
+
+Azure foundation preflight의 현재 공식 근거는 [ARM what-if operation](https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-what-if), [`az deployment group what-if`](https://learn.microsoft.com/en-us/cli/azure/deployment/group?view=azure-cli-latest), [`az bicep`](https://learn.microsoft.com/en-us/cli/azure/bicep?view=azure-cli-latest)이다. Microsoft 문서상 what-if는 리소스를 변경하지 않고 예측만 하며, `--no-pretty-print`는 프로그램이 평가할 JSON을 반환한다. 설치 help가 `bicep.use_binary_from_path=True`를 보고하면 검증된 Bicep 경로를 Azure CLI 자식 `PATH`에 넣은 뒤 실행한다. `Create`/`Delete`/`Ignore`/`NoChange`/`Modify`/`Deploy`/`Unsupported` 의미는 공식 change-type 계약대로 분류하고, 모호하거나 파괴적인 결과를 자동 승인하지 않는다.
+
 ### Optional Jira/Confluence/Bitbucket MCP 게이트
 
 provider registry 변경은 다음 순서를 추가로 따른다.
