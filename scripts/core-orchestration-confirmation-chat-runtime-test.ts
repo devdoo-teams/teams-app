@@ -11,6 +11,8 @@ const tenantId = 'mp269-tenant';
 const requesterId = 'mp269-user';
 const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mp269-confirmation-chat-'));
 await fs.chmod(runtimeRoot, 0o700);
+const copilotFixture = path.join(runtimeRoot, 'copilot-fixture');
+await createMeasuredCopilotFixture(copilotFixture);
 let child: ChildProcess | undefined;
 let output = '';
 
@@ -22,6 +24,9 @@ try {
     env: {
       ...process.env,
       NODE_ENV: 'test', PORT: String(port), TEAMS_USE_SDK: 'false',
+      TEAMS_AGENT_CLI_PROVIDER: 'copilot',
+      GHCP_BIN: copilotFixture,
+      TEAMS_GHCP_CAPABILITY_PROBE: 'true',
       TEAMS_SKIP_AUTH: 'true', TEAMS_SKIP_OUTBOUND: 'true', TEAMS_LOCAL_DEV: 'true',
       TEAMS_LOCAL_ACCESS_TOKEN: token,
       BOT_CLIENT_ID: '00000000-0000-4000-8000-000000000001',
@@ -45,6 +50,7 @@ try {
   child.stdout?.on('data', (chunk) => { output += chunk.toString(); });
   child.stderr?.on('data', (chunk) => { output += chunk.toString(); });
   await waitForHealth(baseUrl, child);
+  await assertMeasuredProvider(baseUrl);
 
   const cancelJob = await createAwaitingJob(baseUrl, '취소 확인 흐름');
   const confirmCancel = { schemaVersion: '1', action: 'orchestration.confirm-cancel', jobId: cancelJob };
@@ -114,6 +120,21 @@ async function createAwaitingJob(baseUrl: string, prompt: string): Promise<strin
     ?.find((fact: any) => fact.title === '작업 ID')?.value;
   assert.equal(typeof id, 'string');
   return id;
+}
+
+async function assertMeasuredProvider(baseUrl: string): Promise<void> {
+  const response = await fetch(`${baseUrl}/api/core-orchestration/providers`, {
+    headers: { 'x-teams-local-access-token': token },
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json() as { providers?: Array<{ provider?: string; availability?: string; capabilities?: string[] }> };
+  const provider = body.providers?.find((candidate) => candidate.provider === 'copilot');
+  assert.equal(provider?.availability, 'available', 'fixture must use measured Copilot readiness');
+  assert.deepEqual(
+    provider?.capabilities,
+    ['approve', 'cancel', 'retry', 'submit'],
+    'fixture must advertise only measured orchestration capabilities',
+  );
 }
 
 function activity(text: string, id: string, value?: unknown) {
@@ -193,6 +214,20 @@ async function waitForHealth(baseUrl: string, process: ChildProcess): Promise<vo
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   assert.fail(`server health timeout: ${output.slice(-2_000)}`);
+}
+
+async function createMeasuredCopilotFixture(executable: string): Promise<void> {
+  await fs.writeFile(executable, `#!/bin/sh
+if [ "$1" = "--help" ]; then
+  printf '%s\\n' 'GitHub Copilot CLI help'
+  exit 0
+fi
+printf '%s\\n' \\
+  '{"type":"session.start","data":{"sessionId":"019fd700-51cd-7862-a4ef-74ccae0f2b4e"}}' \\
+  '{"type":"assistant.turn_start","data":{"turnId":"turn-1"}}' \\
+  '{"type":"assistant.message","data":{"content":"GHCP_CAPABILITY_OK"}}' \\
+  '{"type":"assistant.turn_end","data":{"turnId":"turn-1"}}'
+`, { mode: 0o700 });
 }
 
 async function stop(process: ChildProcess): Promise<void> {
