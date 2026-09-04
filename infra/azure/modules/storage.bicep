@@ -6,6 +6,28 @@ param workerIdentityPrincipalId string
 var storageQueueDataMessageSenderRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'c6a89b2d-59bc-44d0-9896-0f6e12d7b80a')
 var storageBlobDataReaderRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')
 
+resource appQueueMetadataReaderRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' = {
+  name: guid(subscription().id, resourceGroup().id, 'teamsapp-core-queue-metadata-reader')
+  properties: {
+    roleName: 'TeamsApp Core Queue Metadata Reader ${uniqueString(resourceGroup().id)}'
+    description: 'Read only the assigned TeamsApp dispatch queue metadata for non-mutating submission readiness.'
+    type: 'CustomRole'
+    permissions: [
+      {
+        actions: [
+          'Microsoft.Storage/storageAccounts/queueServices/queues/read'
+        ]
+        notActions: []
+        dataActions: []
+        notDataActions: []
+      }
+    ]
+    assignableScopes: [
+      resourceGroup().id
+    ]
+  }
+}
+
 resource workerQueueLeaseRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' = {
   name: guid(subscription().id, resourceGroup().id, 'teamsapp-worker-queue-lease')
   properties: {
@@ -100,6 +122,16 @@ resource appQueueRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
     principalId: appIdentityPrincipalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: storageQueueDataMessageSenderRoleDefinitionId
+  }
+}
+
+resource appQueueMetadataReaderAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(agentDispatchQueue.id, appIdentityPrincipalId, appQueueMetadataReaderRole.id)
+  scope: agentDispatchQueue
+  properties: {
+    principalId: appIdentityPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: appQueueMetadataReaderRole.id
   }
 }
 

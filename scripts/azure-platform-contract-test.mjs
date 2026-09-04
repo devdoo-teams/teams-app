@@ -412,6 +412,13 @@ try {
     String(resource.properties?.roleDefinitionId).includes('storageQueueDataMessageSenderRoleDefinitionId')
     && String(resource.properties?.principalId).includes('appIdentityPrincipalId')
   ));
+  const appQueueMetadataReaderRoleDefinition = roleDefinitions.find((resource) => (
+    String(resource.properties?.roleName).includes('TeamsApp Core Queue Metadata Reader')
+  ));
+  const appQueueMetadataReaderRole = roleAssignments.find((resource) => (
+    String(resource.properties?.roleDefinitionId).includes('teamsapp-core-queue-metadata-reader')
+    && String(resource.properties?.principalId).includes('appIdentityPrincipalId')
+  ));
   const workerProcessorRole = roleAssignments.find((resource) => (
     String(resource.properties?.roleDefinitionId).includes('teamsapp-worker-queue-lease')
     && String(resource.properties?.principalId).includes('workerIdentityPrincipalId')
@@ -422,9 +429,22 @@ try {
     && String(resource.scope).includes('agent-dispatch-poison')
   ));
   assert.ok(appSenderRole, 'Container App identity must receive the sender-only queue role');
+  assert.ok(appQueueMetadataReaderRoleDefinition, 'Container App must have a narrow non-mutating Queue metadata reader role');
+  assert.deepEqual(
+    appQueueMetadataReaderRoleDefinition.properties?.permissions?.[0]?.actions,
+    ['Microsoft.Storage/storageAccounts/queueServices/queues/read'],
+    'Queue readiness role must permit only the Get Queue Metadata queue read action',
+  );
+  assert.deepEqual(
+    appQueueMetadataReaderRoleDefinition.properties?.permissions?.[0]?.dataActions,
+    [],
+    'Queue readiness role must not grant message read, receive, update, or delete data actions',
+  );
+  assert.ok(appQueueMetadataReaderRole, 'Container App identity must receive the narrow Queue metadata reader role');
   assert.ok(workerProcessorRole, 'worker identity must receive the custom queue lease role');
   assert.ok(workerPoisonSenderRole, 'worker identity must receive sender-only access to the poison queue');
   assert.match(String(appSenderRole.scope), /agent-dispatch/i, 'Container App sender role must be scoped to the dispatch queue');
+  assert.match(String(appQueueMetadataReaderRole.scope), /agent-dispatch/i, 'Container App metadata reader must be scoped to the dispatch queue');
   assert.match(String(workerProcessorRole.scope), /agent-dispatch/i, 'worker processor role must be scoped to the dispatch queue');
   assert.ok(
     !JSON.stringify(compiled).includes('974c5e8b-45b9-4653-ba55-5f855dd0fb88'),

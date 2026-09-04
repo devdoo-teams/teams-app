@@ -95,7 +95,11 @@ export function createRuntimeStoreAgentDispatchStatePort(
       return undefined;
     },
     async probeDependency(reference) {
-      await runtimeStore.read<AgentDispatchRecord>(scopeFor(reference), reference.taskId);
+      if (reference) {
+        await runtimeStore.read<AgentDispatchRecord>(scopeFor(reference), reference.taskId);
+      } else {
+        await runtimeStore.list<AgentJob>(AGENT_JOB_LEDGER_SCOPE, { limit: 1 });
+      }
       return { reachable: true };
     },
     async readWorkerHeartbeat(reference) {

@@ -69,8 +69,8 @@ export interface AgentDispatchStatePort {
     expected: { leaseOwner?: string; leaseGeneration: number },
     mutate: (current: AgentDispatchRecord) => AgentDispatchRecord,
   ): Promise<AgentDispatchRecord | undefined>;
-  /** Performs a read-only dependency probe without creating durable state. */
-  probeDependency?(reference: AgentDispatchTaskReference): Promise<{ reachable: true }>;
+  /** Reads the durable dependency without creating state; an absent reference probes the shared job ledger. */
+  probeDependency?(reference?: AgentDispatchTaskReference): Promise<{ reachable: true }>;
   /** Reads the latest durable worker observation without mutating shared state. */
   readWorkerHeartbeat?(reference: AgentDispatchTaskReference): Promise<{ observedAt: string; source: string } | undefined>;
 }
@@ -91,7 +91,7 @@ export interface AzureQueueClientPort {
   ): Promise<{ popReceipt: string }>;
   deleteMessage(messageId: string, popReceipt: string): Promise<void>;
   sendPoisonMessage(messageText: string): Promise<void>;
-  /** Performs read-only Queue Storage metadata probes. */
+  /** Reads Queue Storage metadata without sending a message; this never claims worker liveness. */
   probeDependency?(): Promise<{ reachable: true }>;
 }
 
@@ -106,6 +106,10 @@ export type AzureDispatchHealth = Readonly<{
   liveness: Readonly<{ state: 'alive' }>;
   configuration: Readonly<{ state: 'configured' }>;
   dependencies: Readonly<{ queue: DependencyHealth; state: DependencyHealth }>;
+  submissionReadiness: Readonly<{
+    state: 'ready' | 'unavailable';
+    observedAt: string;
+  }>;
   workerHeartbeat: Readonly<{
     state: 'observed' | 'stale' | 'not-observed';
     observedAt?: string;
@@ -273,8 +277,12 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
     maximumHeartbeatAgeMs?: number;
   } = {}): Promise<AzureDispatchHealth> {
     const reference = options.taskReference && canonicalTaskReference(options.taskReference);
-    const [stateDependency, durableHeartbeat] = await Promise.all([
-      probeDependency(reference && this.state.probeDependency
+    const observedAt = this.clock.now();
+    const [queueDependency, stateDependency, durableHeartbeat] = await Promise.all([
+      probeDependency(this.client.probeDependency
+        ? () => this.client.probeDependency!()
+        : undefined),
+      probeDependency(this.state.probeDependency
         ? () => this.state.probeDependency!(reference)
         : undefined),
       readWorkerHeartbeat(reference && this.state.readWorkerHeartbeat
@@ -287,22 +295,22 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
     }
     const heartbeat = classifyWorkerHeartbeat(
       options.workerHeartbeat ?? durableHeartbeat.value,
-      this.clock.now(),
+      observedAt,
       maximumHeartbeatAgeMs,
     );
-    const observedStateDependency = durableHeartbeat.failed
-      ? Object.freeze({ state: 'unavailable' as const })
-      : stateDependency;
-    const queueDependency = Object.freeze({
-      state: heartbeat.state === 'observed' ? 'reachable' as const : 'unverified' as const,
-    });
-    const ready = queueDependency.state === 'reachable'
-      && observedStateDependency.state === 'reachable'
+    const submissionReady = queueDependency.state === 'reachable'
+      && stateDependency.state === 'reachable';
+    const ready = submissionReady
+      && !durableHeartbeat.failed
       && heartbeat.state === 'observed';
     return Object.freeze({
       liveness: Object.freeze({ state: 'alive' as const }),
       configuration: Object.freeze({ state: 'configured' as const }),
-      dependencies: Object.freeze({ queue: queueDependency, state: observedStateDependency }),
+      dependencies: Object.freeze({ queue: queueDependency, state: stateDependency }),
+      submissionReadiness: Object.freeze({
+        state: submissionReady ? 'ready' as const : 'unavailable' as const,
+        observedAt: observedAt.toISOString(),
+      }),
       workerHeartbeat: heartbeat,
       readiness: Object.freeze({ state: ready ? 'ready' as const : 'unavailable' as const }),
       executionBoundary: ready ? 'external-linux-worker' : 'external-linux-worker-unverified',
@@ -638,6 +646,13 @@ export function createProductionAzureQueueClient(options: ProductionAzureQueueCl
   const queue = createClient(queueEndpoint, credential);
   const poison = createClient(poisonEndpoint, credential);
   return {
+    async probeDependency() {
+      if (typeof queue.getProperties !== 'function') {
+        throw new Error('Queue Storage metadata probe is unavailable in the installed SDK client.');
+      }
+      await queue.getProperties();
+      return { reachable: true };
+    },
     async sendMessage(messageText) {
       const response = await queue.sendMessage(messageText);
       return { messageId: requireText(response.messageId, 'messageId') };

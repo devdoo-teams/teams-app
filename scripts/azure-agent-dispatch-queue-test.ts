@@ -118,6 +118,18 @@ async function testRuntimeStateUsesTaskScopeForObserveCasAndHealth(): Promise<vo
   assert.equal(runtimeStore.scopes.some((scope) => scope.tenantId === 'teams-core-system'), false);
 }
 
+async function testRuntimeStateProbesEmptyLedgerWithoutTaskReference(): Promise<void> {
+  const runtimeStore = new MemoryRuntimeStore();
+  const state = createRuntimeStoreAgentDispatchStatePort(runtimeStore);
+  assert.deepEqual(await state.probeDependency?.(), { reachable: true });
+  assert.deepEqual(
+    runtimeStore.scopes,
+    [AGENT_JOB_LEDGER_SCOPE],
+    'empty-state submission probe reads the server-owned durable AgentJob ledger partition without writing a canary',
+  );
+  assert.equal(runtimeStore.writeCount, 0, 'submission readiness never mutates durable state');
+}
+
 async function testRuntimeStateRejectsImmutableIdentityMutationBeforeWrite(): Promise<void> {
   const runtimeStore = new MemoryRuntimeStore();
   const state = createRuntimeStoreAgentDispatchStatePort(runtimeStore);
@@ -567,11 +579,16 @@ async function testRuntimeStoreReadsHistoricalGlobalPartitionAndDerivesModeFromJ
 
 async function testProductionQueueFactoryUsesManagedIdentityOnly(): Promise<void> {
   const constructed: Array<{ endpoint: string; credential: object }> = [];
+  let queueMetadataReads = 0;
   const sdkClient = {
     async sendMessage() { return { messageId: 'message-id' }; },
     async receiveMessages() { return { receivedMessageItems: [] }; },
     async updateMessage() { return { popReceipt: 'next-receipt' }; },
     async deleteMessage() {},
+    async getProperties() {
+      queueMetadataReads += 1;
+      return { approximateMessagesCount: 0 };
+    },
   };
   const credential = {};
   const client = createProductionAzureQueueClient({
@@ -590,6 +607,9 @@ async function testProductionQueueFactoryUsesManagedIdentityOnly(): Promise<void
     },
   });
   await client.sendMessage('payload');
+  assert.equal(typeof client.probeDependency, 'function', 'production Queue client must expose a non-mutating dependency probe');
+  assert.deepEqual(await client.probeDependency!(), { reachable: true });
+  assert.equal(queueMetadataReads, 1, 'Queue dependency probe uses SDK getProperties without adding a message');
   assert.deepEqual(constructed.map(({ endpoint }) => endpoint), [
     'https://storage.queue.core.windows.net/agent-dispatch',
     'https://storage.queue.core.windows.net/agent-dispatch-poison',
@@ -861,6 +881,7 @@ class MemoryRuntimeStore implements RuntimeStore {
 await testEnqueueIsStableAndIdempotent();
 await testSameTaskIdIsIsolatedByServerDerivedScope();
 await testRuntimeStateUsesTaskScopeForObserveCasAndHealth();
+await testRuntimeStateProbesEmptyLedgerWithoutTaskReference();
 await testRuntimeStateRejectsImmutableIdentityMutationBeforeWrite();
 await testReadOnlyExecutionRequiresExplicitIsolationReference();
 await testLeaseRenewCompleteErrorCancelAndRecovery();

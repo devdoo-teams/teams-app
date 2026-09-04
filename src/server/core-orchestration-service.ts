@@ -107,6 +107,10 @@ export type CoreOrchestrationServiceOptions = Readonly<{
   jobStore: CoreAgentJobStorePort;
   defaultProvider?: CoreOrchestrationProvider;
   observeProviderFacts?: () => readonly CoreProviderFact[];
+  observeProviderFact?: (input: Readonly<{
+    provider: CoreOrchestrationProvider;
+    scope: ServerDerivedCoreScope;
+  }>) => CoreProviderFact | undefined | Promise<CoreProviderFact | undefined>;
   inputResume?: CoreInputResumePort;
 }>;
 
@@ -128,7 +132,7 @@ export class CoreOrchestrationService {
         if (existing) return { job: toCoreJob(existing), replayed: true, requestHash };
 
         const provider = normalized.provider ?? this.defaultProvider();
-        this.assertProviderCapability(provider, 'submit');
+        await this.assertProviderCapability(scope, provider, 'submit');
         const job = await this.options.agentService.submit({
           ...normalized,
           provider,
@@ -177,15 +181,15 @@ export class CoreOrchestrationService {
   }
 
   async approve(scope: ServerDerivedCoreScope, request: CoreJobRequest): Promise<CoreOrchestrationJob | undefined> {
-    return this.mutate(scope, request, (job, storedScope) => {
-      this.assertProviderCapability(this.providerForJob(job), 'approve');
+    return this.mutate(scope, request, async (job, storedScope) => {
+      await this.assertProviderCapability(storedScope, this.providerForJob(job), 'approve');
       return this.options.agentService.approve(job.id, storedScope);
     });
   }
 
   async retry(scope: ServerDerivedCoreScope, request: CoreJobRequest): Promise<CoreOrchestrationJob | undefined> {
-    return this.mutate(scope, request, (job, storedScope) => {
-      this.assertProviderCapability(this.providerForJob(job), 'retry');
+    return this.mutate(scope, request, async (job, storedScope) => {
+      await this.assertProviderCapability(storedScope, this.providerForJob(job), 'retry');
       return this.options.agentService.retry(job.id, storedScope);
     });
   }
@@ -271,13 +275,20 @@ export class CoreOrchestrationService {
     return provider;
   }
 
-  private assertProviderCapability(
+  private async assertProviderCapability(
+    scope: ServerDerivedCoreScope,
     provider: CoreOrchestrationProvider,
     capability: string,
-  ): void {
-    const fact = this.listProviderFacts().find((candidate) => candidate.provider === provider);
+  ): Promise<void> {
+    const observed = this.options.observeProviderFact
+      ? await this.options.observeProviderFact({ provider, scope })
+      : this.listProviderFacts().find((candidate) => candidate.provider === provider);
+    const fact = observed ? validateProviderFact(observed) : undefined;
     if (!fact || fact.availability !== 'available') {
       throw new CoreOrchestrationProviderUnavailableError(provider, fact?.availability ?? 'unknown');
+    }
+    if (fact.provider !== provider) {
+      throw new CoreOrchestrationProviderUnavailableError(provider, 'unknown');
     }
     if (!fact.capabilities.includes(capability)) {
       throw new CoreOrchestrationProviderCapabilityError(provider, capability);

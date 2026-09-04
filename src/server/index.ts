@@ -190,7 +190,11 @@ import {
   CoreOrchestrationProviderCapabilityError,
   CoreOrchestrationProviderUnavailableError,
 } from '../shared/core-orchestration.js';
-import type { CoreOrchestrationJob, CoreProviderFact } from '../shared/core-orchestration.js';
+import type {
+  CoreOrchestrationJob,
+  CoreOrchestrationProvider,
+  CoreProviderFact,
+} from '../shared/core-orchestration.js';
 
 /**
  * Same-UID process fixture for token-protected loopback integration tests.
@@ -2617,9 +2621,11 @@ agentService = new AgentService(
 );
 await agentService.initialize();
 
-const coreProviderCapabilities = azureQueueDispatch
-  ? unknownCliCapabilities()
-  : await probeCliCapabilities().catch(() => unknownCliCapabilities());
+const coreProviderCapabilities = !azureQueueDispatch
+  ? await probeCliCapabilities().catch(() => unknownCliCapabilities())
+  : undefined;
+const AZURE_CORE_SUBMISSION_FACT_MAX_AGE_MS = 30_000;
+let latestAzureCoreProviderFact: CoreProviderFact | undefined;
 type MeasuredInputResumeRuntime = ProviderNeutralAgentRunner & Readonly<{
   observeInputResume?: (
     job: AgentJob,
@@ -2636,8 +2642,8 @@ function measuredCoreRuntime(
   provider: CliAgentProvider,
 ): { runtime: MeasuredInputResumeRuntime; availability: 'available' } | undefined {
   const availability = provider === 'copilot'
-    ? coreProviderCapabilities.ghcp.state
-    : coreProviderCapabilities.codex.state;
+    ? coreProviderCapabilities?.ghcp.state
+    : coreProviderCapabilities?.codex.state;
   const runtime = providerRunners[provider] as MeasuredInputResumeRuntime | undefined;
   return availability === 'available' && runtime
     ? { runtime, availability }
@@ -2689,24 +2695,107 @@ function composeMeasuredInputResumePort(): CoreInputResumePort | undefined {
   };
 }
 
+function azureCoreProviderFact(
+  provider: CoreProviderFact['provider'],
+  availability: CoreProviderFact['availability'],
+  observedAt: string,
+  capabilities: readonly string[] = [],
+): CoreProviderFact {
+  return {
+    provider,
+    availability,
+    capabilities,
+    observedAt,
+    source: 'runtime-observation',
+  };
+}
+
+function measuredAzureCoreCapabilities(): string[] {
+  if (!azureAgentDispatchQueue || agentExecutionDispatcher?.kind !== 'azure-queue') return [];
+  const capabilities: string[] = [];
+  if (typeof agentService.approve === 'function') capabilities.push('approve');
+  if (typeof agentService.cancelStrict === 'function') capabilities.push('cancel');
+  if (typeof agentService.retry === 'function') capabilities.push('retry');
+  if (typeof agentService.submit === 'function') capabilities.push('submit');
+  return capabilities;
+}
+
+function currentAzureCoreProviderFact(): CoreProviderFact {
+  const current = latestAzureCoreProviderFact;
+  if (!current) {
+    return azureCoreProviderFact(agentProvider, 'unknown', new Date().toISOString());
+  }
+  if (current.availability !== 'available') return current;
+  const observedAt = Date.parse(current.observedAt);
+  const now = Date.now();
+  if (!Number.isFinite(observedAt)
+    || observedAt > now
+    || now - observedAt > AZURE_CORE_SUBMISSION_FACT_MAX_AGE_MS) {
+    return azureCoreProviderFact(current.provider, 'unavailable', current.observedAt);
+  }
+  return current;
+}
+
+async function observeAzureCoreProviderFact(input: Readonly<{
+  provider: CoreOrchestrationProvider;
+}>): Promise<CoreProviderFact | undefined> {
+  if (input.provider !== agentProvider || !azureAgentDispatchQueue) return undefined;
+  const capabilities = measuredAzureCoreCapabilities();
+  if (!capabilities.includes('submit')) {
+    const unavailable = azureCoreProviderFact(input.provider, 'unavailable', new Date().toISOString());
+    latestAzureCoreProviderFact = unavailable;
+    return unavailable;
+  }
+
+  try {
+    const health = await azureAgentDispatchQueue.readHealth();
+    if (health.submissionReadiness.state === 'ready') {
+      const available = azureCoreProviderFact(
+        input.provider,
+        'available',
+        health.submissionReadiness.observedAt,
+        capabilities,
+      );
+      latestAzureCoreProviderFact = available;
+      return available;
+    }
+  } catch {
+    // Queue/Cosmos observation errors are provider unavailability, never readiness.
+  }
+
+  const unavailable = azureCoreProviderFact(
+    input.provider,
+    'unavailable',
+    new Date().toISOString(),
+  );
+  latestAzureCoreProviderFact = unavailable;
+  return unavailable;
+}
+
+function observeCoreProviderFacts(): CoreProviderFact[] {
+  if (azureQueueDispatch) return [currentAzureCoreProviderFact()];
+  return [...new Set(Object.keys(providerRunners).concat(agentProvider))]
+    .map((provider) => {
+      const capability = provider === 'copilot'
+        ? coreProviderCapabilities?.ghcp
+        : coreProviderCapabilities?.codex;
+      return {
+        provider,
+        availability: capability?.state ?? 'unknown',
+        capabilities: measuredCoreProviderCapabilities(provider as CliAgentProvider),
+        observedAt: new Date().toISOString(),
+        source: 'runtime-probe' as const,
+      };
+    });
+}
+
 const coreOrchestrationService = new CoreOrchestrationService({
   agentService,
   jobStore: agentJobStore,
   defaultProvider: agentProvider,
   inputResume: composeMeasuredInputResumePort(),
-  observeProviderFacts: (): CoreProviderFact[] => [...new Set(Object.keys(providerRunners).concat(agentProvider))]
-    .map((provider) => {
-      const capability = provider === 'copilot'
-        ? coreProviderCapabilities.ghcp
-        : coreProviderCapabilities.codex;
-      return {
-        provider,
-        availability: capability.state,
-        capabilities: measuredCoreProviderCapabilities(provider as CliAgentProvider),
-        observedAt: new Date().toISOString(),
-        source: 'runtime-probe',
-      };
-    }),
+  observeProviderFacts: observeCoreProviderFacts,
+  ...(azureQueueDispatch ? { observeProviderFact: observeAzureCoreProviderFact } : {}),
 });
 mountCoreOrchestrationRoutes(http, {
   service: coreOrchestrationService,
