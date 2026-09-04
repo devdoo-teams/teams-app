@@ -14,6 +14,7 @@ import {
   type ResponseEngineOutput,
   type ResponseToolEvent,
 } from './response-engine.js';
+import { isOpaqueProviderCredentialReference } from './provider-runtime-adapter.js';
 import { formatWeatherMessage, type WeatherResponse } from './weather-service.js';
 
 const DEFAULT_BASE_URL = 'https://api.x.ai/v1';
@@ -36,7 +37,12 @@ const MAX_HTTP_ATTEMPTS = 3;
 const RETRY_DELAYS_MS = [100, 200] as const;
 
 type GrokResponseEngineOptions = {
+  /** Legacy response-only injection. Durable providers must not use this. */
   apiKey?: string;
+  /** Server-owned opaque reference used by the optional runtime path. */
+  credentialReference?: string;
+  credentialPrincipal?: string;
+  resolveCredential?: (reference: string, principalId: string) => Promise<string>;
   baseUrl?: string;
   model?: string;
   timeoutMs?: number;
@@ -519,7 +525,7 @@ export class GrokResponseEngine implements ResponseEngine {
     if (input.isCancelled?.()) return cancelledOutput();
 
     try {
-      const config = this.readConfig();
+      const config = await this.readConfig();
       let responseInput: GrokRequestItem[] = getMessageHistory(input);
       let previousResponseId: string | undefined;
       let toolEvents: ResponseToolEvent[] = [];
@@ -589,9 +595,35 @@ export class GrokResponseEngine implements ResponseEngine {
     return errorOutput('Grok 요청을 처리하지 못했습니다. 잠시 후 다시 시도하세요.', 'grok-request-error');
   }
 
-  private readConfig(): GrokConfig {
-    const configuredApiKey = (this.options.apiKey ?? process.env.XAI_API_KEY ?? '').trim();
-    const rawBaseUrl = (this.options.baseUrl ?? process.env.XAI_BASE_URL ?? DEFAULT_BASE_URL).trim().replace(/\/$/, '');
+  private async readConfig(): Promise<GrokConfig> {
+    let configuredApiKey: string;
+    const explicitCredentialReference = this.options.credentialReference;
+    if (explicitCredentialReference !== undefined) {
+      if (this.options.apiKey !== undefined
+        || !isOpaqueProviderCredentialReference(explicitCredentialReference)
+        || typeof this.options.credentialPrincipal !== 'string'
+        || !this.options.credentialPrincipal.trim()
+        || this.options.resolveCredential === undefined) {
+        throw new GrokProviderError('configuration');
+      }
+      try {
+        configuredApiKey = (await this.options.resolveCredential(
+          explicitCredentialReference,
+          this.options.credentialPrincipal,
+        )).trim();
+      } catch {
+        // Resolver diagnostics are server-owned and must not cross the
+        // response-engine boundary. The user receives only a stable code.
+        throw new GrokProviderError('configuration');
+      }
+    } else {
+      configuredApiKey = (this.options.apiKey ?? process.env.XAI_API_KEY ?? '').trim();
+    }
+    const rawBaseUrl = (
+      this.options.baseUrl
+      ?? (explicitCredentialReference === undefined ? process.env.XAI_BASE_URL : undefined)
+      ?? DEFAULT_BASE_URL
+    ).trim().replace(/\/$/, '');
     let baseUrl: URL;
     try {
       baseUrl = new URL(rawBaseUrl);

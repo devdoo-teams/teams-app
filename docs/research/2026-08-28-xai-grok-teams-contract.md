@@ -46,8 +46,10 @@ the documented Responses endpoint, normalizes assistant text, maps the
 existing narrow Teams tool allowlist to xAI's flat function-tool shape, and
 validates every returned call before executing any one of them. File changes
 still cross the existing `workspaceApproval` boundary. The engine is not
-loaded by the Core build and is selectable only when `TEAMS_OPTIONAL_RUNTIME`
-and `XAI_API_KEY` are present.
+loaded by the Core build and the preferred path is a validated
+`TEAMS_OPTIONAL_PROVIDERS` entry whose `env://XAI_API_KEY` reference is
+resolved only on the server. A legacy `XAI_API_KEY`-only response-only path is
+retained for compatibility; it is not a durable provider identity.
 
 The adapter deliberately does not expose arbitrary shell, filesystem, Jira,
 or Teams mutation to the model. xAI function calling is a model/application

@@ -15,10 +15,12 @@ try {
   assert.equal(built.status, 0, `optional provider production compilation failed:\n${built.stderr || built.stdout}`);
   const receipt = JSON.parse(await fs.readFile(path.join(outputDir, 'optional-provider-build.json'), 'utf8'));
   assert.deepEqual(receipt.requiredInputs, [
+    'src/server/providers/optional-provider-runtime.ts',
     'src/server/providers/optional-provider-entrypoint.ts',
     'src/server/providers/github-agent-tasks-contract.ts',
     'src/server/providers/github-agent-tasks-adapter.ts',
     'src/server/providers/grok-provider-runtime-adapter.ts',
+    'src/server/response-engine-grok.ts',
   ]);
   for (const requiredInput of receipt.requiredInputs) {
     assert.equal(receipt.inputs.includes(requiredInput), true, `metafile must include ${requiredInput}`);

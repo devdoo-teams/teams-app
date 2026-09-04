@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 
 import {
   GitHubAgentTasksRequestError,
@@ -8,6 +9,7 @@ import type { ProviderRuntimeOperationInput } from '../src/server/provider-runti
 
 const calls: string[] = [];
 let mode: 'pages' | 'poll' | 'rate-limit' | 'unbounded' | 'cross-origin' = 'pages';
+const repositoryContextId = `github-repository-${crypto.createHash('sha256').update('octo/repo').digest('hex').slice(0, 48)}`;
 const fetchFixture: typeof fetch = async (input) => {
   const url = String(input);
   calls.push(url);
@@ -93,7 +95,7 @@ await assert.rejects(adapter.list(input), /approved repository boundary/i);
 mode = 'poll';
 const observed = await adapter.get({
   ...input,
-  receipt: { providerExecutionId: 'task-1', providerContextId: 'octo/repo', acceptedAt: '2026-09-03T00:00:00.000Z', rawState: 'queued' },
+  receipt: { providerExecutionId: 'task-1', providerContextId: repositoryContextId, acceptedAt: '2026-09-03T00:00:00.000Z', rawState: 'queued' },
 });
 assert.deepEqual(observed.retryGuidance, { pollIntervalMs: 7_000 });
 
@@ -101,7 +103,7 @@ mode = 'rate-limit';
 await assert.rejects(
   adapter.get({
     ...input,
-    receipt: { providerExecutionId: 'task-1', providerContextId: 'octo/repo', acceptedAt: '2026-09-03T00:00:00.000Z', rawState: 'queued' },
+    receipt: { providerExecutionId: 'task-1', providerContextId: repositoryContextId, acceptedAt: '2026-09-03T00:00:00.000Z', rawState: 'queued' },
   }),
   (error) => error instanceof GitHubAgentTasksRequestError
     && error.status === 429

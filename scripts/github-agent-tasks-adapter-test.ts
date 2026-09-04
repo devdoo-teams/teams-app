@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 
 import { createGitHubAgentTasksAdapter } from '../src/server/providers/github-agent-tasks-adapter.js';
 import type { ProviderRuntimeOperationInput } from '../src/server/provider-runtime-adapter.js';
 
 const requests: Array<{ url: string; init?: RequestInit }> = [];
 let taskState = 'queued';
+const repositoryContextId = `github-repository-${crypto.createHash('sha256').update('octo/repo').digest('hex').slice(0, 48)}`;
 const fetchFixture: typeof fetch = async (input, init) => {
   const url = String(input);
   const path = new URL(url).pathname;
@@ -77,7 +79,7 @@ const submitted = await adapter.submit(input);
 assert.deepEqual(submitted, {
   rawState: 'queued',
   providerExecutionId: 'task-123',
-  providerContextId: 'octo/repo',
+  providerContextId: repositoryContextId,
   auditRefs: ['https://github.com/octo/repo/copilot/tasks/task-123'],
 });
 const submissionBody = JSON.parse(String(requests.find(({ init }) => init?.method === 'POST')?.init?.body));
@@ -88,7 +90,7 @@ await assert.rejects(
   /PR-only/i,
 );
 
-const receipt = { providerExecutionId: 'task-123', providerContextId: 'octo/repo', acceptedAt: '2026-09-03T00:00:00.000Z', rawState: 'queued' };
+const receipt = { providerExecutionId: 'task-123', providerContextId: repositoryContextId, acceptedAt: '2026-09-03T00:00:00.000Z', rawState: 'queued' };
 assert.equal((await adapter.get({ ...input, receipt })).rawState, 'queued');
 taskState = 'completed';
 const completed = await adapter.get({ ...input, receipt });

@@ -125,15 +125,18 @@ npm run release:public      # 공개 /api/health와 /tabs/home/
 npm run release:gate
 ```
 
-기본 릴리스 프로필은 `core`이며 위 명령은 기존 결정형 Teams 서비스를 기준으로 실행한다. Grok을 운영 Bot으로 승격할 때만 배포 환경에서 아래 세 값을 명시적으로 주입해 `optional` 프로필을 선택한다. `XAI_API_KEY`는 저장소·문서·릴리스 상태 파일에 기록하지 않고 호스팅 provider의 secret manager에서만 주입한다.
+기본 릴리스 프로필은 `core`이며 위 명령은 기존 결정형 Teams 서비스를 기준으로 실행한다. Grok을 운영 Bot으로 승격할 때는 검증된 `TEAMS_OPTIONAL_PROVIDERS` 항목으로 provider ID·principal·opaque credential reference·capability·policy를 함께 선언해 `optional` 프로필을 선택한다. `XAI_API_KEY` 값은 저장소·문서·릴리스 상태 파일에 기록하지 않고 호스팅 provider의 secret manager에서만 주입하며, `env://XAI_API_KEY` reference를 서버 resolver가 요청 시 해석한다.
 
 ```bash
 TEAMS_RELEASE_RUNTIME=optional \
 TEAMS_OPTIONAL_RUNTIME=true \
+TEAMS_OPTIONAL_PROVIDERS='[{"providerId":"grok-xai","principal":"teamsapp-xai","credentialReference":"env://XAI_API_KEY","capabilities":["responses"],"policy":{"durable":false,"userAuth":"server","cancellation":"unsupported"},"model":"grok-4.6"}]' \
 XAI_API_KEY='(secret manager에서 주입)' \
 TEAMS_RESPONSE_MODE_DEFAULT=grok \
 npm run release:preflight
 ```
+
+`grok-xai`는 이 registry 경로에서 `response-only` provider로만 등록된다. `durable=true` 또는 `cancellation=supported`로 바꾸거나 raw secret을 `credentialReference`에 넣으면 schema가 거부한다. GitHub Agent Tasks는 별도의 `user-to-server` credential resolver와 repository/entitlement preflight가 필요한 durable provider로 선언한다. `XAI_API_KEY`만 있고 registry 항목이 없는 기존 설정은 호환성을 위해 response-only Grok으로 동작하지만, 새 provider identity나 durable lifecycle의 근거로 사용하지 않는다.
 
 `XAI_BASE_URL`은 운영에서 공식 xAI Responses endpoint인 `https://api.x.ai/v1`만 허용한다. 로컬 mock은 운영 프로세스와 분리된 `NODE_ENV=test` 환경에서만 `XAI_ALLOW_LOOPBACK_TEST=true`, `TEAMS_LOCAL_DEV=true`, `TEAMS_SKIP_AUTH=true`, 별도의 `XAI_LOOPBACK_TEST_KEY`를 함께 지정하고 loopback 주소를 사용한다. loopback 요청에는 `XAI_API_KEY`가 절대 사용되지 않으며, `NODE_ENV=development`를 포함한 다른 환경에서는 예외가 거부된다.
 

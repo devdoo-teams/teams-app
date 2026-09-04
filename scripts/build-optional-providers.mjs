@@ -8,10 +8,12 @@ const root = process.cwd();
 const outdirArgument = process.argv.find((argument) => argument.startsWith('--outdir='));
 const outputDir = path.resolve(root, outdirArgument?.slice('--outdir='.length) ?? 'dist/optional-providers');
 const requiredInputs = [
+  'src/server/providers/optional-provider-runtime.ts',
   'src/server/providers/optional-provider-entrypoint.ts',
   'src/server/providers/github-agent-tasks-contract.ts',
   'src/server/providers/github-agent-tasks-adapter.ts',
   'src/server/providers/grok-provider-runtime-adapter.ts',
+  'src/server/response-engine-grok.ts',
 ];
 
 await fs.mkdir(path.dirname(outputDir), { recursive: true });
@@ -19,7 +21,7 @@ const temporaryDir = await fs.mkdtemp(path.join(path.dirname(outputDir), '.optio
 try {
   const result = await build({
     absWorkingDir: root,
-    entryPoints: ['src/server/providers/optional-provider-entrypoint.ts'],
+    entryPoints: ['src/server/providers/optional-provider-runtime.ts'],
     bundle: true,
     format: 'esm',
     platform: 'node',

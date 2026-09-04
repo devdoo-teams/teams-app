@@ -296,6 +296,8 @@ if (agentDispatchMode !== 'local' && agentDispatchMode !== 'azure-queue') {
   throw new Error('TEAMS_AGENT_DISPATCH_MODE must be either local or azure-queue.');
 }
 const azureQueueDispatch = agentDispatchMode === 'azure-queue';
+const optionalRuntimeRequested = process.env.TEAMS_CORE_BUILD !== 'true'
+  && process.env.TEAMS_OPTIONAL_RUNTIME === 'true';
 const itemStore = new ItemStore(
   itemStorePath,
 );
@@ -348,7 +350,7 @@ const workItemService = new WorkItemService(new WorkItemStore(workItemStorePath)
 let agentJobStore: AgentJobStore;
 const a2aStore = new A2AStore(a2aStorePath);
 const a2aOutboundStore = new TeamsA2AOutboundStore(a2aOutboundStorePath);
-const providerLifecycleStore = hermesA2ARoster.length > 0
+const providerLifecycleStore = hermesA2ARoster.length > 0 || optionalRuntimeRequested
   ? new FileProviderLifecycleStore(providerLifecycleStorePath)
   : undefined;
 const codexRunner = azureQueueDispatch
@@ -642,33 +644,46 @@ const coreBuild = process.env.TEAMS_CORE_BUILD === 'true';
 // Optional CopilotKit/LLM runtime is explicitly opt-in in every environment.
 // The deterministic Teams Bot and tab must start without an OpenAI/API key and
 // must not load an optional provider graph merely because the process is local.
-const optionalRuntimeEnabled = process.env.TEAMS_CORE_BUILD !== 'true'
-  && process.env.TEAMS_OPTIONAL_RUNTIME === 'true';
+const optionalRuntimeEnabled = optionalRuntimeRequested;
 const genUiMode = process.env.TEAMS_GENUI_MODE === 'legacy' || process.env.TEAMS_GENUI_MODE === 'channels-shadow'
   ? process.env.TEAMS_GENUI_MODE
   : 'hybrid';
 const openAiConfigured = process.env.TEAMS_CORE_BUILD !== 'true'
   && optionalRuntimeEnabled
   && Boolean(process.env.OPENAI_API_KEY?.trim());
-const grokConfigured = process.env.TEAMS_CORE_BUILD !== 'true'
+const legacyGrokResponseConfigured = process.env.TEAMS_CORE_BUILD !== 'true'
   && optionalRuntimeEnabled
   && Boolean(process.env.XAI_API_KEY?.trim());
+type OptionalProviderRuntimeSnapshot = import('./providers/optional-provider-runtime.js').OptionalProviderRuntimeSnapshot;
+let optionalProviderRuntime: OptionalProviderRuntimeSnapshot | undefined;
 let optionalResponseEngines: Array<import('./response-engine.js').ResponseEngine> = [];
 let localModelConfigured = false;
-if (process.env.TEAMS_CORE_BUILD !== 'true' && optionalRuntimeEnabled) {
-  const [{ LocalCompatibleResponseEngine }, { OpenAIResponseEngine }, { GrokResponseEngine }, { isLocalModelBaseUrlConfigured }] = await Promise.all([
+if (optionalRuntimeEnabled) {
+  const [{ LocalCompatibleResponseEngine }, { OpenAIResponseEngine }, { GrokResponseEngine }, { isLocalModelBaseUrlConfigured }, { createOptionalProviderRuntime }] = await Promise.all([
     import('./response-engine-local.js'),
     import('./response-engine-openai.js'),
     import('./response-engine-grok.js'),
     import('./local-model-url.js'),
+    import('./providers/optional-provider-runtime.js'),
   ]);
+  optionalProviderRuntime = await createOptionalProviderRuntime({
+    enabled: true,
+    configuration: process.env.TEAMS_OPTIONAL_PROVIDERS,
+    environment: process.env,
+    lifecycleStore: providerLifecycleStore,
+  });
   localModelConfigured = isLocalModelBaseUrlConfigured(process.env.LOCAL_MODEL_BASE_URL);
   optionalResponseEngines = [
     ...(localModelConfigured ? [new LocalCompatibleResponseEngine()] : []),
     ...(openAiConfigured ? [new OpenAIResponseEngine()] : []),
-    ...(grokConfigured ? [new GrokResponseEngine()] : []),
+    ...(legacyGrokResponseConfigured && !optionalProviderRuntime.responseProviderConfigured
+      ? [new GrokResponseEngine()]
+      : []),
+    ...optionalProviderRuntime.responseEngines,
   ];
 }
+const grokConfigured = optionalRuntimeEnabled
+  && (legacyGrokResponseConfigured || optionalProviderRuntime?.responseProviderConfigured === true);
 type ChannelsShadowRenderer = typeof import('./copilot-channels-shadow.js')['renderChannelsShadow'];
 let renderChannelsShadow: ChannelsShadowRenderer | undefined;
 if (process.env.TEAMS_CORE_BUILD !== 'true' && optionalRuntimeEnabled && genUiMode === 'channels-shadow') {
@@ -693,7 +708,7 @@ const openAiModel = process.env.TEAMS_CORE_BUILD === 'true'
   : process.env.OPENAI_MODEL?.trim() || 'gpt-4o-mini';
 const grokModel = process.env.TEAMS_CORE_BUILD === 'true'
   ? 'deterministic'
-  : process.env.XAI_MODEL?.trim() || 'grok-4.6';
+  : optionalProviderRuntime?.responseModel || process.env.XAI_MODEL?.trim() || 'grok-4.6';
 const localModelName = process.env.TEAMS_CORE_BUILD === 'true'
   ? 'local-model'
   : process.env.LOCAL_MODEL_NAME?.trim() || 'local-model';
@@ -1881,6 +1896,10 @@ http.get('/api/health', async (_request: any, response: any) => {
       model: (grokConfigured ? grokModel : openAiModel).slice(0, 120),
     },
     responseProviders,
+    optionalRuntime: {
+      enabled: optionalRuntimeEnabled,
+      providers: optionalProviderRuntime?.facts ?? [],
+    },
     responseModeDefault: defaultResponseMode,
     weatherMode,
     genUiMode,

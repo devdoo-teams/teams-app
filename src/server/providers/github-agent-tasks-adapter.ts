@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+
 import {
   createProviderRuntimeAdapter,
   isOpaqueProviderCredentialReference,
@@ -14,6 +16,14 @@ import {
   parseGitHubAgentTaskList,
   verifyGitHubPullRequestArtifact,
 } from './github-agent-tasks-contract.js';
+
+function repositoryContextId(repository: string): string {
+  // Provider lifecycle identities are bounded IDs and therefore cannot carry
+  // the slash from an owner/name repository key. Hashing the full key keeps
+  // the receipt unambiguous without persisting or exposing repository syntax
+  // in a field that is validated as an identity.
+  return `github-repository-${crypto.createHash('sha256').update(repository).digest('hex').slice(0, 48)}`;
+}
 
 const API_VERSION = '2026-03-10';
 const REPOSITORY = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/u;
@@ -98,7 +108,8 @@ export function createGitHubAgentTasksAdapter(options: Readonly<{
 
   const observe = async (input: ProviderRuntimeReceiptOperationInput): Promise<GitHubAgentTaskObservation> => {
     const repository = repositoryFor(input);
-    if (input.receipt.providerContextId !== repository) throw new Error('GitHub receipt repository continuity mismatch.');
+    const contextId = repositoryContextId(repository);
+    if (input.receipt.providerContextId !== contextId) throw new Error('GitHub receipt repository continuity mismatch.');
     const response = await request(input, taskPath(repository, input.receipt.providerExecutionId));
     const task = parseGitHubAgentTask(response.body);
     if (task.id !== input.receipt.providerExecutionId) throw new Error('GitHub task receipt continuity mismatch.');
@@ -106,7 +117,7 @@ export function createGitHubAgentTasksAdapter(options: Readonly<{
       return {
         rawState: task.state,
         providerExecutionId: task.id,
-        providerContextId: repository,
+        providerContextId: contextId,
         auditRefs: [task.htmlUrl],
         ...(hasRetryGuidance(response.retryGuidance) ? { retryGuidance: response.retryGuidance } : {}),
       };
@@ -118,7 +129,7 @@ export function createGitHubAgentTasksAdapter(options: Readonly<{
     return {
       rawState: task.state,
       providerExecutionId: task.id,
-      providerContextId: repository,
+      providerContextId: contextId,
       result: `GitHub pull request #${artifact.pullNumber} at ${artifact.headSha}`,
       artifacts: [{
         artifactId: `github-pr-${repository.replace('/', '-')}-${artifact.pullNumber}-${artifact.headSha}`,
@@ -173,7 +184,12 @@ export function createGitHubAgentTasksAdapter(options: Readonly<{
       if (input.payload.baseRef !== undefined) body.base_ref = boundedRef(input.payload.baseRef);
       const response = await request(input, taskPath(repository), { method: 'POST', body: JSON.stringify(body) });
       const task = parseGitHubAgentTask(response.body);
-      return { rawState: task.state, providerExecutionId: task.id, providerContextId: repository, auditRefs: [task.htmlUrl] };
+      return {
+        rawState: task.state,
+        providerExecutionId: task.id,
+        providerContextId: repositoryContextId(repository),
+        auditRefs: [task.htmlUrl],
+      };
     },
     get: observe,
     async cancel() {
