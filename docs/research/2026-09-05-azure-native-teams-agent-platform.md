@@ -2,7 +2,7 @@
 
 Checked: 2026-09-05
 
-Repository baseline: `41abd7afd1b8042bbdd3e74606d670054e492b8f`
+Repository evidence baseline: `47ac4384568c9a5f498e4062ab46a49cfd88a199`
 
 Decision status: research recommendation only; no Azure resource, traffic, secret, package, or runtime was changed
 
@@ -10,7 +10,7 @@ Decision status: research recommendation only; no Azure resource, traffic, secre
 
 The smallest sufficient next architecture is an **Azure canary that keeps the current q3 Dev Tunnel/local service intact**, runs Teams Core in one Azure Container App, externalizes authoritative state to Cosmos DB and Storage Queue, stores immutable worker artifacts in Blob Storage/ACR, and executes strict local CLI providers on **one separately hardened Linux VM**. Managed identity, Key Vault, Log Analytics, Application Insights, GitHub OIDC, and an Azure DevOps environment approval complete the minimum control plane.
 
-This is not yet a deployment decision. Before any mutation, the eight unresolved `Unsupported` role-assignment results in the latest supplied ARM what-if receipt require manual resolution and the what-if must be refreshed at this baseline; the Container App needs explicit startup/readiness/liveness probes; and `minReplicas: 0` must either be accepted as a cold-start/availability trade-off or changed to `1` for the promoted service. The existing q3 service remains the rollback origin until one release identity passes state reconciliation, public runtime, worker, package, Teams desktop, and Teams mobile gates.
+This is not yet a deployment decision. A current non-mutating ARM what-if reports nine `Unsupported` role assignments. Their principal, scope, role definition, and purpose passed the itemized static contract review in [`2026-09-05-azure-what-if-rbac-review.md`](2026-09-05-azure-what-if-rbac-review.md), but live assignment and authorization remain unverified. The Container App still needs explicit startup/readiness/liveness probes; `minReplicas: 0` must either be accepted as a cold-start/availability trade-off or changed to `1` for the promoted service. The existing q3 service remains the rollback origin until one release identity passes state reconciliation, public runtime, worker, package, Teams desktop, and Teams mobile gates.
 
 A fuller Azure-native resilient target—Service Bus Standard where ordering is required, a replaceable VM Scale Set worker pool, multiple Container App revisions/origins, and Front Door—is intentionally deferred until measured workload or continuity requirements justify its cost and operational surface. AKS and Container Apps Jobs do not satisfy the repository's current strict-worker contract by documentation alone.
 
@@ -169,13 +169,13 @@ Everything in this section was observed from the pinned baseline or supplied non
 
 ### 2.3 Integrated fixes and current handoff state
 
-**OBSERVED REPOSITORY EVIDENCE.** Baseline history contains `af297e5` (`fix(azure): verify worker archive before execution (MP-279)`) and `41abd7a` (`fix(azure): fence state rollback ownership (MP-278)`). MP-279 changes the worker archive bootstrap/contract tests; MP-278 changes state import ownership fencing/rollback tests. Both are integrated in the requested base history, but neither is proven by a deployed Azure canary or live task in this research.
+**OBSERVED REPOSITORY EVIDENCE.** Baseline history contains `af297e5` (`fix(azure): verify worker archive before execution (MP-279)`), `41abd7a` (`fix(azure): fence state rollback ownership (MP-278)`), `6914563` (`fix(azure): retain what-if unsupported reasons (MP-281)`), `7e8efd2` (`fix(azure): separate submit readiness from worker liveness (MP-277)`), and `f98b09e` (`test(core): await durable outbound receipt (MP-179)`). The clean-head Core source check, Azure Core 18/18, full Core test, and Core build passed at `f98b09e`. These are integrated repository results, not deployed Azure or live Teams proof.
 
-**OBSERVED REPOSITORY EVIDENCE.** The current handoff states that the local server was preserved and the q3 Dev Tunnel endpoint was restored. This research did not issue a public health request or inspect the running process, so the statement is retained as handoff evidence rather than a current live PASS.
+**OBSERVED LIVE EVIDENCE.** On 2026-09-05, the existing q3 origin returned `/api/health` HTTP 200 for version `1.0.100`, source commit `fbddeaa299d88d2e80ce75b9ca39bfcefa6bc515`, production Teams authentication/bot/outbound, and `/tabs/home/` HTTP 200. `devtunnel show` reported one host connection. This proves point-in-time service continuity only; it does not prove Azure, provider execution, uptime, or a current Teams UI round trip.
 
-**OBSERVED REPOSITORY EVIDENCE.** The current handoff states that the exact Azure target contains no deployed TeamsApp resources. This research did not run `az resource list` or another live target query, so “Azure exact target empty” remains a handoff observation, not independently refreshed cloud evidence.
+**OBSERVED LIVE EVIDENCE.** An explicit read-only `az resource list` against subscription `0e58c3cb-474d-4e70-978a-4939c586f867` and resource group `rg-teamsapp-canary` returned `[]` on 2026-09-05. This proves the target was empty at that observation time; it is not a future deployment guarantee.
 
-**OBSERVED REPOSITORY EVIDENCE.** A supplied non-mutating canary preflight receipt generated at ancestor `8dff40a2355e9857a4679ffff12a5c794e412399` for version `1.0.100` reports ARM what-if status `REVIEW_REQUIRED`: `22 Create`, `8 Unsupported`, and `0` destructive changes. The eight unsupported entries are dynamic role assignments that ARM could not resolve. Per both repository policy and the official what-if contract, they remain manual blockers rather than approved changes, and the receipt must be regenerated for baseline `41abd7a` before any deployment decision.
+**OBSERVED LIVE EVIDENCE.** The non-mutating preflight receipt `/private/tmp/teamsapp-azure-canary-preflight-47ac438-20260905T0120KST.json` (SHA-256 `3a5285742401e1020b14255534b0dd20e2566e47eb792eba68462245bfb0e898`, mode `0600`) binds clean source `47ac4384568c9a5f498e4062ab46a49cfd88a199`, version `1.0.100`, the exact target, registered providers, and Azure Core PASS. ARM what-if returned `23 Create`, `9 Unsupported`, `0` destructive changes, with all nine `unsupportedReason` values retained. The unsupported rows are dynamic role assignments whose IDs depend on managed-identity principal IDs available only during deployment. Their static contracts passed itemized review, while live creation and authorization remain unverified.
 
 ### 2.4 Release and pipeline controls already present
 
@@ -212,7 +212,7 @@ The ratings below are **INFERENCE / RECOMMENDATION** based on Sections 1 and 2, 
 1. Add explicit startup, readiness, and liveness probes against bounded endpoints that verify process/bootstrap readiness without exposing secrets.
 2. Set the promoted Core revision to `minReplicas: 1`; keep `maxReplicas: 1` until all authoritative state and coordination are external and horizontally safe.
 3. Route traffic to an explicitly verified revision/label rather than blindly trusting `latestRevision`.
-4. Resolve all eight what-if `Unsupported` role assignments against exact principal, scope, role definition, and deterministic resource ID.
+4. Preserve the itemized review of all nine what-if `Unsupported` role assignments and re-run it after any identity, role, scope, or template change.
 5. Remove or defer the unused Azure Files share/endpoint unless a reviewed runtime consumer is introduced.
 6. Preserve Storage Queue and Cosmos-backed idempotency; prove lease heartbeat, duplicate delivery, poison handling, cancellation, restart recovery, and nonempty terminal receipt live.
 7. Preserve the q3 service and local state export until Azure reconciliation and same-release Teams verification finish.
@@ -301,7 +301,7 @@ Every phase below is an **INFERENCE / RECOMMENDATION**. A phase may advance only
 ### Phase 1 — make the foundation reviewable, still without deployment
 
 - Re-run official Bicep build and exact-target ARM what-if from a clean, pinned commit.
-- Resolve each of the eight current `Unsupported` role assignments manually; any unexplained resource or scope fails closed.
+- Reconcile each of the nine current `Unsupported` role assignments with the itemized review; any unexplained resource or scope fails closed.
 - Add/prove explicit ACA startup, readiness, and liveness probe definitions.
 - Decide and approve the canary/promoted replica policy: `0` may be used only for an accepted cold-start canary; promotion requires `1` under the current availability objective.
 - Remove/defer Azure Files if it remains unused.
@@ -423,9 +423,9 @@ The proposal intentionally does **not**:
 
 The following remain explicitly **LIVE UNVERIFIED** after this research:
 
-1. Current q3 public health, runtime process identity, tab assets, bot round trip, and uptime.
-2. Exact Azure target resource inventory and the continued claim that it is empty.
-3. The identities/scopes behind all eight ARM what-if `Unsupported` role assignments.
+1. q3 bot round trip, Teams UI behavior, and sustained uptime beyond the point-in-time health/tab observation.
+2. Azure target inventory after the point-in-time empty-resource observation.
+3. Live creation, propagation, and authorization behavior for all nine statically reviewed ARM what-if `Unsupported` role assignments.
 4. Azure subscription offer, free-tier eligibility, quotas, region availability, price estimate, and budget alerts.
 5. GitHub OIDC federated trust, artifact-attestation plan availability, generated attestation, and consumer verification.
 6. Azure DevOps WIF service connection, numeric environment ID, resource-owner approval check, explicit approvers, and pipeline permission read-back.
@@ -440,6 +440,6 @@ The following remain explicitly **LIVE UNVERIFIED** after this research:
 
 ## Final recommendation
 
-**INFERENCE / RECOMMENDATION.** Approve Option B only as a gated canary design. Preserve the current local/q3 service; resolve the eight unsupported role assignments; add probes; choose the nonzero promoted replica floor; remove unused Files; verify supply-chain identities and approval controls; then provision without changing Teams traffic. Promote only after state, worker, runtime, package, desktop, and mobile evidence are bound to one release identity. Defer Service Bus, VMSS, Front Door, multi-region Cosmos, premium ACR, and AKS until an accepted requirement proves the smaller design insufficient.
+**INFERENCE / RECOMMENDATION.** Approve Option B only as a gated canary design. Preserve the current local/q3 service; retain and refresh the nine-row RBAC review; add probes; choose the nonzero promoted replica floor; remove unused Files; verify supply-chain identities and approval controls; then provision without changing Teams traffic. Promote only after state, worker, runtime, package, desktop, and mobile evidence are bound to one release identity. Defer Service Bus, VMSS, Front Door, multi-region Cosmos, premium ACR, and AKS until an accepted requirement proves the smaller design insufficient.
 
 That sequence uses Azure where it directly closes a current failure boundary while avoiding an unverified “use every Azure service” architecture that would increase cost and rollback complexity without improving the present acceptance evidence.
