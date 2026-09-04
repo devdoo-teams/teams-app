@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 
 import { isFullCommitOid } from './fileprovider-git-clean.mjs';
 import { resolveCoreTestWorkspace } from './core-test-workspace.mjs';
+import { createChildTestEnvironment } from './child-test-environment.mjs';
 
 const moduleRunner = 'scripts/run-module-test.mjs';
 const coreBuildSteps = [
@@ -350,7 +351,9 @@ export function createCoreTestInvocations({
   if (!isFullCommitOid(sourceCommit)) {
     throw new Error('sourceCommit must be one full immutable Git OID for every Core child test');
   }
-  const childEnv = { ...env, TEAMS_SOURCE_COMMIT: sourceCommit };
+  const childEnv = createChildTestEnvironment(env, {
+    overrides: { TEAMS_SOURCE_COMMIT: sourceCommit },
+  });
   const optionalRouteMountTests = [
     'scripts/core-orchestration-route-mount-integration-test.ts',
     'scripts/core-orchestration-route-mount-test.ts',

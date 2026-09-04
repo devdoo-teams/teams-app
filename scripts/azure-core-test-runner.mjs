@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { isFullCommitOid } from './fileprovider-git-clean.mjs';
 import { resolveCoreTestWorkspace } from './core-test-workspace.mjs';
 import { runProcessWithTimeout } from './core-test-runner.mjs';
+import { createChildTestEnvironment } from './child-test-environment.mjs';
 
 const moduleRunner = 'scripts/run-module-test.mjs';
 const DEFAULT_TEST_TIMEOUT_MS = 120_000;
@@ -51,7 +52,10 @@ export function createAzureCoreTestInvocations({
 } = {}) {
   if (!sourceCwd) throw new Error('sourceCwd is required for pinned Azure Core tests');
   assertSourceCommit(sourceCommit);
-  const childEnv = { ...env, TEAMS_SOURCE_COMMIT: sourceCommit };
+  const childEnv = createChildTestEnvironment(env, {
+    additionalPassThrough: ['BICEP_BIN'],
+    overrides: { TEAMS_SOURCE_COMMIT: sourceCommit },
+  });
 
   return AZURE_CORE_TESTS.map(({ script, timeoutMs }) => {
     if (!existsSync(path.resolve(sourceCwd, script))) {
