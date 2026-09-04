@@ -83,10 +83,18 @@ const jobs = [
 ];
 
 class MemoryMigrationTarget {
-  constructor(documents = []) {
+  constructor(documents = [], { targetId = crypto.randomUUID() } = {}) {
     this.documents = new Map(documents.map((document) => [document.id, structuredClone(document)]));
+    this.migrationTargetBinding = Object.freeze({
+      kind: 'memory-migration-target',
+      targetId,
+    });
     this.calls = [];
     this.failures = new Map();
+    this.etags = new Map();
+    this.nextEtag = 1;
+    this.beforeDelete = undefined;
+    for (const document of documents) this.etags.set(document.id, this.createEtag());
   }
 
   fail(id, count, statusCode = 503) {
@@ -105,19 +113,52 @@ class MemoryMigrationTarget {
     this.maybeFail(document.id);
     if (this.documents.has(document.id)) throw Object.assign(new Error('conflict'), { statusCode: 409 });
     this.documents.set(document.id, structuredClone(document));
+    const etag = this.createEtag();
+    this.etags.set(document.id, etag);
+    return { document: structuredClone(document), etag };
   }
 
-  async replace(document) {
-    this.calls.push({ operation: 'replace', id: document.id });
-    this.maybeFail(document.id);
-    if (!this.documents.has(document.id)) throw Object.assign(new Error('missing'), { statusCode: 404 });
-    this.documents.set(document.id, structuredClone(document));
+  async read(id, partitionKey) {
+    this.calls.push({ operation: 'read', id, partitionKey });
+    const document = this.documents.get(id);
+    if (!document || document.partitionKey !== partitionKey) return undefined;
+    return {
+      document: structuredClone(document),
+      etag: this.etags.get(id),
+    };
   }
 
-  async delete(id, partitionKey) {
-    this.calls.push({ operation: 'delete', id, partitionKey });
+  async delete(id, partitionKey, { ifMatch } = {}) {
+    this.calls.push({ operation: 'delete', id, partitionKey, ifMatch });
     this.maybeFail(id);
+    await this.beforeDelete?.({ id, partitionKey, ifMatch, target: this });
+    if (!this.documents.has(id)) return { absent: true };
+    if (ifMatch !== undefined && ifMatch !== this.etags.get(id)) {
+      throw Object.assign(new Error('precondition failed'), { code: 412 });
+    }
     this.documents.delete(id);
+    this.etags.delete(id);
+    return { deleted: true };
+  }
+
+  externalCreate(document) {
+    if (this.documents.has(document.id)) throw new Error(`fixture document already exists: ${document.id}`);
+    this.documents.set(document.id, structuredClone(document));
+    this.etags.set(document.id, this.createEtag());
+  }
+
+  externalUpdate(id, update) {
+    const current = this.documents.get(id);
+    if (!current) throw new Error(`fixture document is missing: ${id}`);
+    const next = update(structuredClone(current));
+    this.documents.set(id, structuredClone(next));
+    this.etags.set(id, this.createEtag());
+  }
+
+  createEtag() {
+    const etag = `fixture-etag-${String(this.nextEtag).padStart(6, '0')}`;
+    this.nextEtag += 1;
+    return etag;
   }
 
   maybeFail(id) {
@@ -538,7 +579,7 @@ try {
   assert.equal(repeat.unchanged, 2, 'repeated import must be idempotent');
 
   const partialTarget = new MemoryMigrationTarget();
-  partialTarget.fail('task-two', 3, 503);
+  partialTarget.fail('task-two', 1, 400);
   const partialReceiptPath = path.join(tempRoot, 'partial-import-receipt.json');
   const partialSnapshotPath = path.join(tempRoot, 'partial-import-snapshot');
   const partialPersistReceipt = await createImmutableReceiptLedger(partialReceiptPath);
@@ -585,14 +626,103 @@ try {
     'receipt ledger hash-chain inspection must reject modified checkpoints',
   );
 
+  const resumedImportTarget = new MemoryMigrationTarget([], { targetId: 'resumed-import-lineage' });
+  resumedImportTarget.fail('task-two', 1, 400);
+  const firstAttemptReceiptPath = path.join(tempRoot, 'resumed-import-first-receipt.json');
+  const firstAttemptSnapshotPath = path.join(tempRoot, 'resumed-import-original-snapshot');
+  const firstAttempt = await importMigrationBundle({
+    bundle: diskBundle,
+    target: resumedImportTarget,
+    apply: true,
+    writeSnapshot: createImmutableSnapshotWriter(firstAttemptSnapshotPath),
+    persistReceipt: await createImmutableReceiptLedger(firstAttemptReceiptPath),
+  });
+  assert.equal(firstAttempt.status, 'PARTIAL');
+  const firstAttemptReceipt = (await inspectImmutableReceiptLedger(firstAttemptReceiptPath)).lastReceipt;
+  const firstAttemptSnapshot = await readMigrationBundle(firstAttemptSnapshotPath);
+  const resumedAttemptReceiptPath = path.join(tempRoot, 'resumed-import-final-receipt.json');
+  const resumedAttempt = await importMigrationBundle({
+    bundle: diskBundle,
+    target: resumedImportTarget,
+    apply: true,
+    resumeImportReceipt: firstAttemptReceipt,
+    resumeSnapshot: firstAttemptSnapshot,
+    persistReceipt: await createImmutableReceiptLedger(resumedAttemptReceiptPath),
+  });
+  assert.equal(resumedAttempt.status, 'APPLIED');
+  assert.deepEqual(
+    resumedAttempt.ownedMutations.map(({ stableId }) => stableId).sort(),
+    ['agent-job/task-one', 'agent-job/task-two'],
+    'an idempotent import retry must seal the verified ownership union from every attempt',
+  );
+  const resumedAttemptReceipt = (await inspectImmutableReceiptLedger(resumedAttemptReceiptPath)).lastReceipt;
+  const noOpResumeReceiptPath = path.join(tempRoot, 'resumed-import-no-op-receipt.json');
+  const noOpResume = await importMigrationBundle({
+    bundle: diskBundle,
+    target: resumedImportTarget,
+    apply: true,
+    resumeImportReceipt: resumedAttemptReceipt,
+    resumeSnapshot: firstAttemptSnapshot,
+    persistReceipt: await createImmutableReceiptLedger(noOpResumeReceiptPath),
+  });
+  assert.equal(noOpResume.status, 'APPLIED');
+  assert.deepEqual(
+    noOpResume.ownedMutations.map(({ stableId }) => stableId).sort(),
+    ['agent-job/task-one', 'agent-job/task-two'],
+    'a no-op retry must retain the complete verified ownership lineage',
+  );
+  const noOpResumeReceipt = (await inspectImmutableReceiptLedger(noOpResumeReceiptPath)).lastReceipt;
+  const resumedRollback = await rollbackMigrationSnapshot({
+    snapshot: firstAttemptSnapshot,
+    target: resumedImportTarget,
+    originatingImportReceipt: noOpResumeReceipt,
+    apply: true,
+    persistReceipt: await createImmutableReceiptLedger(path.join(tempRoot, 'resumed-import-rollback-receipt.json')),
+  });
+  assert.equal(resumedRollback.status, 'ROLLED_BACK');
+  assert.equal(resumedRollback.deleted, 2);
+  assert.equal(resumedImportTarget.documents.size, 0, 'retry rollback must restore the original pre-import snapshot');
+
+  const ambiguousCreateReceiptPath = path.join(tempRoot, 'ambiguous-create-receipt.json');
+  const ambiguousCreateTarget = new MemoryMigrationTarget();
+  const originalAmbiguousCreate = ambiguousCreateTarget.create.bind(ambiguousCreateTarget);
+  let droppedCreateResponse = false;
+  ambiguousCreateTarget.create = async (document) => {
+    const observation = await originalAmbiguousCreate(document);
+    if (!droppedCreateResponse && document.id === 'task-one') {
+      droppedCreateResponse = true;
+      throw Object.assign(new Error('create committed but its response was lost'), { code: 503 });
+    }
+    return observation;
+  };
+  await assert.rejects(
+    importMigrationBundle({
+      bundle: diskBundle,
+      target: ambiguousCreateTarget,
+      apply: true,
+      maxAttempts: 3,
+      delay: async () => {},
+      writeSnapshot: createImmutableSnapshotWriter(path.join(tempRoot, 'ambiguous-create-snapshot')),
+      persistReceipt: await createImmutableReceiptLedger(ambiguousCreateReceiptPath),
+    }),
+    (error) => error?.code === 'MIGRATION_RECOVERY_REQUIRED' && /create|commit|reconcil|ownership/i.test(error.message),
+    'a create that may have committed without an observed post-image and ETag must require reconciliation',
+  );
+  assert.equal(ambiguousCreateTarget.documents.has('task-one'), true);
+  assert.equal(ambiguousCreateTarget.documents.has('task-two'), false, 'an ambiguous create must stop later mutations');
+  const ambiguousCreateInspection = await inspectImmutableReceiptLedger(ambiguousCreateReceiptPath);
+  assert.equal(ambiguousCreateInspection.status, 'RECOVERY_REQUIRED');
+  assert.equal(ambiguousCreateInspection.lastReceipt.inFlight?.stableId, 'agent-job/task-one');
+
   const failedOutcomeReceiptPath = path.join(tempRoot, 'failed-outcome-receipt.json');
   const failedOutcomeLedgerPath = `${failedOutcomeReceiptPath}.ledger`;
   const failedOutcomeSnapshotPath = path.join(tempRoot, 'failed-outcome-snapshot');
   const failedOutcomeTarget = new MemoryMigrationTarget();
   const originalFailedOutcomeCreate = failedOutcomeTarget.create.bind(failedOutcomeTarget);
   failedOutcomeTarget.create = async (document) => {
-    await originalFailedOutcomeCreate(document);
+    const observation = await originalFailedOutcomeCreate(document);
     await fs.chmod(failedOutcomeLedgerPath, 0o500);
+    return observation;
   };
   let failedOutcomeError;
   try {
@@ -629,17 +759,18 @@ try {
   const failedTerminalReceiptPath = path.join(tempRoot, 'failed-terminal-receipt.json');
   const failedTerminalLedgerPath = `${failedTerminalReceiptPath}.ledger`;
   const failedTerminalTarget = new MemoryMigrationTarget();
+  const originalFailedTerminalCreate = failedTerminalTarget.create.bind(failedTerminalTarget);
   let failedTerminalAttempts = 0;
   failedTerminalTarget.create = async (document) => {
-    failedTerminalTarget.calls.push({ operation: 'create', id: document.id });
     if (document.id === 'task-two') {
+      failedTerminalTarget.calls.push({ operation: 'create', id: document.id });
       failedTerminalAttempts += 1;
-      if (failedTerminalAttempts === 3) {
+      if (failedTerminalAttempts === 1) {
         await fs.writeFile(failedTerminalReceiptPath, '{}\n', { flag: 'wx', mode: 0o400 });
       }
-      throw Object.assign(new Error('fixture terminal failure'), { statusCode: 503 });
+      throw Object.assign(new Error('fixture terminal failure'), { statusCode: 400 });
     }
-    failedTerminalTarget.documents.set(document.id, structuredClone(document));
+    return originalFailedTerminalCreate(document);
   };
   let failedTerminalError;
   try {
@@ -694,48 +825,213 @@ try {
     'reconciliation must fail on a target content hash mismatch',
   );
 
-  const priorValue = { ...jobs[0], result: 'pre-import value' };
-  const priorDocument = {
-    ...bundle.records[0].document,
-    idempotencyKey: 'pre-import-envelope-key',
-    contentHash: sha256(stableMigrationJson(priorValue)),
-    value: priorValue,
-    etag: 'pre-import-domain-etag',
-    updatedAt: '2026-09-01T00:00:30.000Z',
+  const createAppliedRollbackFixture = async (label) => {
+    const target = new MemoryMigrationTarget([], { targetId: `rollback-${label}` });
+    const importReceiptPath = path.join(tempRoot, `${label}-origin-import-receipt.json`);
+    const snapshotPath = path.join(tempRoot, `${label}-origin-snapshot`);
+    await importMigrationBundle({
+      bundle: diskBundle,
+      target,
+      apply: true,
+      writeSnapshot: createImmutableSnapshotWriter(snapshotPath),
+      persistReceipt: await createImmutableReceiptLedger(importReceiptPath),
+    });
+    const inspection = await inspectImmutableReceiptLedger(importReceiptPath);
+    return {
+      target,
+      snapshot: await readMigrationBundle(snapshotPath),
+      originatingImportReceipt: inspection.lastReceipt,
+    };
   };
-  const rollbackTarget = new MemoryMigrationTarget([...retryTarget.documents.values()]);
-  const rollbackSnapshot = createRuntimeSnapshotBundle({
-    documents: [priorDocument],
-    sourceCommit,
-    exportedAt,
-  });
+  const createPostCutoverDocument = (id, result) => {
+    const value = { ...jobs[0], id, result };
+    return {
+      ...diskBundle.records[0].document,
+      id,
+      contentHash: sha256(stableMigrationJson(value)),
+      value,
+    };
+  };
+  const rollbackSafetyFailures = [];
+  const rollbackSafetyCases = [
+    ['post-cutover create is preserved and retry is idempotent', async () => {
+      const fixture = await createAppliedRollbackFixture('post-cutover-create');
+      fixture.target.externalCreate(createPostCutoverDocument('post-cutover-job', 'created by the live service'));
+      const first = await rollbackMigrationSnapshot({
+        snapshot: fixture.snapshot,
+        target: fixture.target,
+        originatingImportReceipt: fixture.originatingImportReceipt,
+        apply: true,
+        persistReceipt: await createImmutableReceiptLedger(path.join(tempRoot, 'post-cutover-create-rollback.json')),
+      });
+      assert.equal(first.status, 'ROLLED_BACK');
+      assert.deepEqual([...fixture.target.documents.keys()], ['post-cutover-job']);
+      assert.equal(first.deleted, 2, 'only the two import-owned records may be deleted');
+      const retry = await rollbackMigrationSnapshot({
+        snapshot: fixture.snapshot,
+        target: fixture.target,
+        originatingImportReceipt: fixture.originatingImportReceipt,
+        apply: true,
+        persistReceipt: await createImmutableReceiptLedger(path.join(tempRoot, 'post-cutover-create-rollback-retry.json')),
+      });
+      assert.equal(retry.status, 'ROLLED_BACK');
+      assert.equal(retry.deleted, 0, 'a retry must treat already-absent import-owned records as rolled back');
+      assert.deepEqual([...fixture.target.documents.keys()], ['post-cutover-job']);
+    }],
+    ['post-cutover update rejects rollback before any mutation', async () => {
+      const fixture = await createAppliedRollbackFixture('post-cutover-update');
+      fixture.target.externalUpdate('task-one', (document) => {
+        const value = { ...document.value, result: 'updated by the live service after cutover' };
+        return { ...document, value, contentHash: sha256(stableMigrationJson(value)) };
+      });
+      const mutationCallCount = fixture.target.calls.length;
+      const rollbackReceiptPath = path.join(tempRoot, 'post-cutover-update-rollback.json');
+      await assert.rejects(
+        rollbackMigrationSnapshot({
+          snapshot: fixture.snapshot,
+          target: fixture.target,
+          originatingImportReceipt: fixture.originatingImportReceipt,
+          apply: true,
+          persistReceipt: await createImmutableReceiptLedger(rollbackReceiptPath),
+        }),
+        (error) => error?.code === 'MIGRATION_OWNERSHIP_CONFLICT' && /post-image|etag|concurr|owned/i.test(error.message),
+      );
+      assert.equal(fixture.target.documents.get('task-one').value.result, 'updated by the live service after cutover');
+      assert.equal(fixture.target.documents.has('task-two'), true);
+      assert.equal(
+        fixture.target.calls.slice(mutationCallCount).some(({ operation }) => ['delete', 'replace', 'create'].includes(operation)),
+        false,
+        'ownership preflight must reject all target mutations when one import-owned record drifted',
+      );
+      await assert.rejects(
+        fs.stat(`${rollbackReceiptPath}.ledger`),
+        { code: 'ENOENT' },
+        'a rejected ownership preflight must not leave an empty rollback ledger that blocks idempotent retry',
+      );
+      await createImmutableReceiptLedger(rollbackReceiptPath);
+    }],
+    ['wrong originating receipt target is rejected', async () => {
+      const fixture = await createAppliedRollbackFixture('correct-target');
+      const wrongTarget = new MemoryMigrationTarget(
+        [...fixture.target.documents.values()],
+        { targetId: 'wrong-target' },
+      );
+      const mutationCallCount = wrongTarget.calls.length;
+      await assert.rejects(
+        rollbackMigrationSnapshot({
+          snapshot: fixture.snapshot,
+          target: wrongTarget,
+          originatingImportReceipt: fixture.originatingImportReceipt,
+          apply: true,
+          persistReceipt: await createImmutableReceiptLedger(path.join(tempRoot, 'wrong-origin-receipt-rollback.json')),
+        }),
+        (error) => error?.code === 'MIGRATION_RECEIPT_TARGET_MISMATCH' && /receipt|target/i.test(error.message),
+      );
+      assert.equal(wrongTarget.documents.size, 2);
+      assert.equal(
+        wrongTarget.calls.slice(mutationCallCount).some(({ operation }) => ['delete', 'replace', 'create'].includes(operation)),
+        false,
+      );
+    }],
+    ['mutating a verified receipt after ledger inspection is rejected', async () => {
+      const fixture = await createAppliedRollbackFixture('mutated-verified-receipt');
+      fixture.target.externalUpdate('task-one', (document) => {
+        const value = { ...document.value, result: 'updated after immutable ledger inspection' };
+        return { ...document, value, contentHash: sha256(stableMigrationJson(value)) };
+      });
+      const current = await fixture.target.read('task-one', diskBundle.records[0].document.partitionKey);
+      const forgedOwnership = fixture.originatingImportReceipt.ownedMutations.find(({ id }) => id === 'task-one');
+      forgedOwnership.postImageSha256 = sha256(stableMigrationJson(current.document));
+      forgedOwnership.etag = current.etag;
+      await assert.rejects(
+        rollbackMigrationSnapshot({
+          snapshot: fixture.snapshot,
+          target: fixture.target,
+          originatingImportReceipt: fixture.originatingImportReceipt,
+          apply: true,
+          persistReceipt: await createImmutableReceiptLedger(path.join(tempRoot, 'mutated-verified-receipt-rollback.json')),
+        }),
+        (error) => error?.code === 'MIGRATION_IMPORT_RECEIPT_UNVERIFIED' && /immutable|integrity|ledger|modified/i.test(error.message),
+      );
+      assert.equal(fixture.target.documents.has('task-one'), true);
+      assert.equal(fixture.target.documents.has('task-two'), true);
+    }],
+    ['concurrent update at delete is fenced by the recorded ETag', async () => {
+      const fixture = await createAppliedRollbackFixture('concurrent-delete');
+      let raced = false;
+      fixture.target.beforeDelete = async ({ id, target }) => {
+        if (raced || id !== 'task-one') return;
+        raced = true;
+        target.externalUpdate(id, (document) => {
+          const value = { ...document.value, result: 'raced after ownership preflight' };
+          return { ...document, value, contentHash: sha256(stableMigrationJson(value)) };
+        });
+      };
+      const result = await rollbackMigrationSnapshot({
+        snapshot: fixture.snapshot,
+        target: fixture.target,
+        originatingImportReceipt: fixture.originatingImportReceipt,
+        apply: true,
+        persistReceipt: await createImmutableReceiptLedger(path.join(tempRoot, 'concurrent-delete-rollback.json')),
+      });
+      assert.equal(result.status, 'PARTIAL');
+      assert.deepEqual(result.failedIds, ['agent-job/task-one']);
+      assert.equal(fixture.target.documents.get('task-one').value.result, 'raced after ownership preflight');
+      assert.equal(fixture.target.documents.has('task-two'), true, 'a concurrency failure must stop later mutations');
+      assert.equal(
+        fixture.target.calls.filter(({ operation }) => operation === 'delete').length,
+        1,
+        'the recorded ETag must be passed directly to the first conditional delete',
+      );
+    }],
+  ];
+  for (const [name, run] of rollbackSafetyCases) {
+    try {
+      await run();
+    } catch (error) {
+      rollbackSafetyFailures.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  assert.deepEqual(
+    rollbackSafetyFailures,
+    [],
+    `rollback ownership regressions:\n${rollbackSafetyFailures.join('\n')}`,
+  );
+
+  const unverifiedReceiptFixture = await createAppliedRollbackFixture('unverified-origin-receipt');
   await assert.rejects(
-    rollbackMigrationSnapshot({ snapshot: rollbackSnapshot, target: rollbackTarget, apply: true }),
+    rollbackMigrationSnapshot({
+      snapshot: unverifiedReceiptFixture.snapshot,
+      target: unverifiedReceiptFixture.target,
+      originatingImportReceipt: structuredClone(unverifiedReceiptFixture.originatingImportReceipt),
+      apply: true,
+      persistReceipt: await createImmutableReceiptLedger(path.join(tempRoot, 'unverified-origin-rollback.json')),
+    }),
+    (error) => error?.code === 'MIGRATION_IMPORT_RECEIPT_UNVERIFIED' && /verified|immutable|ledger/i.test(error.message),
+    'an unverified copy of an import receipt must not authorize rollback',
+  );
+  assert.deepEqual([...unverifiedReceiptFixture.target.documents.keys()], ['task-one', 'task-two']);
+
+  const noReceiptFixture = await createAppliedRollbackFixture('missing-rollback-ledger');
+  await assert.rejects(
+    rollbackMigrationSnapshot({
+      snapshot: noReceiptFixture.snapshot,
+      target: noReceiptFixture.target,
+      originatingImportReceipt: noReceiptFixture.originatingImportReceipt,
+      apply: true,
+    }),
     /durable|receipt|ledger/i,
     'rollback must refuse to mutate without durable evidence',
   );
-  assert.deepEqual([...rollbackTarget.documents.keys()], ['task-one', 'task-two']);
-  const rollbackReceiptPath = path.join(tempRoot, 'rollback-receipt.json');
-  const rollback = await rollbackMigrationSnapshot({
-    snapshot: rollbackSnapshot,
-    target: rollbackTarget,
-    apply: true,
-    evidenceClass: 'local-fixture',
-    persistReceipt: await createImmutableReceiptLedger(rollbackReceiptPath),
-  });
-  assert.equal(rollback.status, 'ROLLED_BACK');
-  assert.deepEqual([...rollbackTarget.documents.keys()], ['task-one']);
-  assert.equal(rollbackTarget.documents.get('task-one').value.result, 'pre-import value');
-  assert.equal(rollbackTarget.documents.get('task-one').idempotencyKey, 'pre-import-envelope-key');
-  assert.equal(rollbackTarget.documents.get('task-one').updatedAt, '2026-09-01T00:00:30.000Z');
-  assert.equal(JSON.parse(await fs.readFile(rollbackReceiptPath, 'utf8')).status, 'ROLLED_BACK');
+  assert.deepEqual([...noReceiptFixture.target.documents.keys()], ['task-one', 'task-two']);
 
-  const partialRollbackTarget = new MemoryMigrationTarget([...retryTarget.documents.values()]);
-  partialRollbackTarget.fail('task-two', 3, 503);
+  const partialRollbackFixture = await createAppliedRollbackFixture('partial-rollback');
+  partialRollbackFixture.target.fail('task-two', 3, 503);
   const partialRollbackReceiptPath = path.join(tempRoot, 'partial-rollback-receipt.json');
   const partialRollback = await rollbackMigrationSnapshot({
-    snapshot: rollbackSnapshot,
-    target: partialRollbackTarget,
+    snapshot: partialRollbackFixture.snapshot,
+    target: partialRollbackFixture.target,
+    originatingImportReceipt: partialRollbackFixture.originatingImportReceipt,
     apply: true,
     maxAttempts: 3,
     delay: async () => {},
@@ -746,6 +1042,18 @@ try {
   const partialRollbackDurableReceipt = JSON.parse(await fs.readFile(partialRollbackReceiptPath, 'utf8'));
   assert.deepEqual(partialRollbackDurableReceipt.failedIds, ['agent-job/task-two']);
   assert.equal(partialRollbackDurableReceipt.reconciliationRequired, true);
+  assert.deepEqual([...partialRollbackFixture.target.documents.keys()], ['task-two']);
+  const partialRetry = await rollbackMigrationSnapshot({
+    snapshot: partialRollbackFixture.snapshot,
+    target: partialRollbackFixture.target,
+    originatingImportReceipt: partialRollbackFixture.originatingImportReceipt,
+    apply: true,
+    persistReceipt: await createImmutableReceiptLedger(path.join(tempRoot, 'partial-rollback-retry-receipt.json')),
+  });
+  assert.equal(partialRetry.status, 'ROLLED_BACK');
+  assert.equal(partialRetry.deleted, 1);
+  assert.equal(partialRetry.alreadyAbsent, 1);
+  assert.equal(partialRollbackFixture.target.documents.size, 0, 'a partial rollback retry must finish idempotently');
 
   assert.equal(resolveReleaseTarget({}), 'local');
   assert.equal(resolveReleaseTarget({ TEAMS_RELEASE_TARGET: 'azure' }), 'azure');
@@ -759,6 +1067,31 @@ try {
     /--receipt|immutable.*ledger/i,
     'the CLI must reject rollback apply without an immutable receipt ledger path before target creation',
   );
+  assert.throws(
+    () => parseAzureStateImportArguments(['--rollback-snapshot', bundlePath, '--apply', '--receipt', 'rollback.json']),
+    /--import-receipt|originating import/i,
+    'the CLI must require the exact originating import receipt for rollback',
+  );
+  assert.throws(
+    () => parseAzureStateImportArguments([
+      '--bundle', bundlePath,
+      '--apply',
+      '--receipt', 'retry.json',
+      '--resume-import-receipt', 'partial.json',
+    ]),
+    /--resume-import-receipt.*--resume-snapshot|supplied together/i,
+    'an import retry must bind both the verified prior receipt and its original snapshot',
+  );
+  const resumeArguments = parseAzureStateImportArguments([
+    '--bundle', bundlePath,
+    '--apply',
+    '--receipt', 'retry.json',
+    '--resume-import-receipt', 'partial.json',
+    '--resume-snapshot', 'original-snapshot',
+  ]);
+  assert.equal(resumeArguments.resumeImportReceipt, 'partial.json');
+  assert.equal(resumeArguments.resumeSnapshot, 'original-snapshot');
+  assert.equal(resumeArguments.snapshotOutput, undefined);
   const localCommands = createPreflightCommands(undefined, 'core', 'local');
   const azureCommands = createPreflightCommands(undefined, 'core', 'azure');
   assert.equal(localCommands.some(([, script]) => script === 'test:azure-state-migration'), false);
