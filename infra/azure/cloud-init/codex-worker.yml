@@ -10,6 +10,8 @@ write_files:
   - path: /etc/teamsapp/worker.env.example
     owner: root:teamsworker
     permissions: '0640'
+    # write_files normally runs before cloud-init-created users are available.
+    defer: true
     content: |
       # Non-secret shape only. The verified runtime installer writes worker.env.
       AZURE_CLIENT_ID=SET_BY_MANAGED_IDENTITY

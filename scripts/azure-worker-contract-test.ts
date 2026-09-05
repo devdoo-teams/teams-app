@@ -116,6 +116,15 @@ async function testCancellationCleansProcessTree(): Promise<void> {
   assert.equal((await fixture.queue.observe(reference(task('task-cancel'))))?.status, 'cancelled');
 }
 
+function cloudInitWriteFileBlocks(source: string): string[] {
+  const section = source.match(/^write_files:\n([\s\S]*?)^runcmd:/m)?.[1];
+  assert.ok(section, 'worker cloud-init must define write_files before runcmd');
+  return section
+    .split(/\n(?=  - path: )/)
+    .map((block) => block.trim())
+    .filter(Boolean);
+}
+
 async function testLinuxPreflightAndCloudInit(): Promise<void> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-azure-worker-'));
   try {
@@ -146,6 +155,18 @@ async function testLinuxPreflightAndCloudInit(): Promise<void> {
   assert.doesNotMatch(cloudInit, /CODEX_BIN=\/opt\/teamsapp\/current\/bin\/codex/);
   assert.match(cloudInit, /auth material is provisioned out of band/i);
   assert.doesNotMatch(cloudInit, /(client_secret|account[_-]?key|bearer\s+|auth\.json\s*:)/i);
+  const createdPrincipals = new Set(
+    [...cloudInit.matchAll(/^  - name:\s*([^\s#]+)\s*$/gm)].map((match) => match[1]),
+  );
+  for (const block of cloudInitWriteFileBlocks(cloudInit)) {
+    const owner = block.match(/^\s*owner:\s*([^:\s]+):([^\s#]+)\s*$/m);
+    if (!owner || (!createdPrincipals.has(owner[1]) && !createdPrincipals.has(owner[2]))) continue;
+    assert.match(
+      block,
+      /^\s*defer:\s*true\s*$/m,
+      `write_files entry owned by cloud-init-created principal ${owner[0]} must defer until the final stage`,
+    );
+  }
 }
 
 async function testProductionPreflightRunsBeforeExecutorAndFailsClosed(): Promise<void> {
