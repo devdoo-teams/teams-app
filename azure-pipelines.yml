@@ -219,6 +219,7 @@ stages:
               azureSubscription: $(azureServiceConnection)
               scriptType: bash
               scriptLocation: inlineScript
+              addSpnToEnvironment: true
               inlineScript: |
                 set -euo pipefail
                 test "$(az account show --query id --output tsv)" = "$AZURE_SUBSCRIPTION_ID"
@@ -245,6 +246,10 @@ stages:
                 version="$(jq -er '.version' "$release_receipt")"
                 source_image="$(jq -er '.image' "$release_receipt")"
                 source_digest="$(jq -er '.imageDigest' "$release_receipt")"
+                deployment_principal_id="$(
+                  az account get-access-token --resource-type arm --subscription "$AZURE_SUBSCRIPTION_ID" --query accessToken --output tsv |
+                    node scripts/azure-access-token-principal.mjs --expected-tenant "$tenantId" --expected-client "$servicePrincipalId"
+                )"
                 test "$(git rev-parse HEAD)" = "$commit"
                 test -z "$(git status --porcelain=v1 --untracked-files=no)"
                 az --version
@@ -264,6 +269,7 @@ stages:
                   --workload-name "$AZURE_WORKLOAD_NAME" \
                   --location "$AZURE_LOCATION" \
                   --container-image "${source_image}@${source_digest}" \
+                  --deployment-principal-id "$deployment_principal_id" \
                   --worker-admin-ssh-public-key "$WORKER_ADMIN_SSH_PUBLIC_KEY" \
                   --output "$foundation_parameters"
                 az deployment group what-if \
@@ -368,6 +374,7 @@ stages:
                     azureSubscription: $(azureServiceConnection)
                     scriptType: bash
                     scriptLocation: inlineScript
+                    addSpnToEnvironment: true
                     inlineScript: |
                       set -euo pipefail
                       test "$(az account show --query id --output tsv)" = "$AZURE_SUBSCRIPTION_ID"
@@ -415,6 +422,10 @@ stages:
                       version="$(jq -er '.version' "$receipt")"
                       source_image="$(jq -er '.image' "$receipt")"
                       source_digest="$(jq -er '.imageDigest' "$receipt")"
+                      deployment_principal_id="$(
+                        az account get-access-token --resource-type arm --subscription "$AZURE_SUBSCRIPTION_ID" --query accessToken --output tsv |
+                          node scripts/azure-access-token-principal.mjs --expected-tenant "$tenantId" --expected-client "$servicePrincipalId"
+                      )"
                       test -n "$GHCR_IMPORT_USERNAME"
                       test -n "$GHCR_IMPORT_TOKEN"
                       test "$(git rev-parse HEAD)" = "$commit"
@@ -437,6 +448,7 @@ stages:
                         --workload-name "$AZURE_WORKLOAD_NAME" \
                         --location "$AZURE_LOCATION" \
                         --container-image "${source_image}@${source_digest}" \
+                        --deployment-principal-id "$deployment_principal_id" \
                         --worker-admin-ssh-public-key "$WORKER_ADMIN_SSH_PUBLIC_KEY" \
                         --output "$foundation_parameters"
                       node scripts/azure-what-if-receipt.mjs verify \
@@ -476,6 +488,7 @@ stages:
                         --workload-name "$AZURE_WORKLOAD_NAME" \
                         --location "$AZURE_LOCATION" \
                         --container-image "$deployed_image" \
+                        --deployment-principal-id "$deployment_principal_id" \
                         --worker-admin-ssh-public-key "$WORKER_ADMIN_SSH_PUBLIC_KEY" \
                         --worker-artifact-url "$worker_artifact_url" \
                         --worker-artifact-sha256 "$worker_artifact_sha" \
@@ -515,10 +528,14 @@ stages:
                         --parameters "$workload_parameters" \
                         --output "$workload_what_if_receipt_dir/azure-what-if-workload-receipt.json"
 
-                      if [[ "$(az storage blob exists --auth-mode login --account-name "$worker_storage_account" --container-name "$worker_artifact_container" --name "$worker_blob_name" --query exists --output tsv)" == true ]]; then
+                      blob_exists="$(node scripts/azure-storage-blob-rbac-probe.mjs \
+                        --account-name "$worker_storage_account" \
+                        --container-name "$worker_artifact_container" \
+                        --blob-name "$worker_blob_name")"
+                      if [[ "$blob_exists" == true ]]; then
                         existing_sha="$(az storage blob metadata show --auth-mode login --account-name "$worker_storage_account" --container-name "$worker_artifact_container" --name "$worker_blob_name" --query metadata.sha256 --output tsv)"
                         test "$existing_sha" = "$worker_artifact_sha"
-                      else
+                      elif [[ "$blob_exists" == false ]]; then
                         az storage blob upload \
                           --auth-mode login \
                           --account-name "$worker_storage_account" \
@@ -528,6 +545,9 @@ stages:
                           --metadata sha256="$worker_artifact_sha" \
                           --overwrite false \
                           --output none
+                      else
+                        echo "Unexpected Azure Blob existence result" >&2
+                        exit 1
                       fi
                       az acr import --name "$registry_name" --source "${source_image}@${source_digest}" --image "teamsapp:${image_tag}" --username "$GHCR_IMPORT_USERNAME" --password "$GHCR_IMPORT_TOKEN" --force
                       imported_digest="$(az acr repository show --name "$registry_name" --image "teamsapp:${image_tag}" --query digest --output tsv)"

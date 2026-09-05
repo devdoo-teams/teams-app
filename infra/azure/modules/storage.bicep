@@ -1,10 +1,12 @@
 param location string
 param storageAccountName string
+param deploymentPrincipalId string
 param appIdentityPrincipalId string
 param workerIdentityPrincipalId string
 
 var storageQueueDataMessageSenderRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'c6a89b2d-59bc-44d0-9896-0f6e12d7b80a')
 var storageBlobDataReaderRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')
+var storageBlobDataContributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
 
 resource appQueueMetadataReaderRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' = {
   name: guid(subscription().id, resourceGroup().id, 'teamsapp-core-queue-metadata-reader')
@@ -150,6 +152,16 @@ resource workerArtifactReaderRole 'Microsoft.Authorization/roleAssignments@2022-
     principalId: workerIdentityPrincipalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: storageBlobDataReaderRoleDefinitionId
+  }
+}
+
+resource deploymentArtifactContributorRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(workerArtifactContainer.id, deploymentPrincipalId, storageBlobDataContributorRoleDefinitionId)
+  scope: workerArtifactContainer
+  properties: {
+    principalId: deploymentPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: storageBlobDataContributorRoleDefinitionId
   }
 }
 

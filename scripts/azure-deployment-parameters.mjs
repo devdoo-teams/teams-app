@@ -10,6 +10,7 @@ import {
 const SHA256 = /^[0-9a-f]{64}$/u;
 const WORKLOAD_NAME = /^[a-z][a-z0-9-]{2,13}$/u;
 const LOCATION = /^[a-z0-9]+$/u;
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const SSH_PUBLIC_KEY = /^(?:ssh-(?:ed25519|rsa)|ecdsa-sha2-nistp(?:256|384|521)) [A-Za-z0-9+/=]+(?: [^\r\n]{1,128})?$/u;
 const ACR_IMAGE = /^[a-z0-9][a-z0-9.-]*\.azurecr\.io\/teamsapp@sha256:[0-9a-f]{64}$/u;
 const PHASES = new Set(['foundation', 'workload']);
@@ -47,6 +48,7 @@ export function buildAzureDeploymentParameters({
   release: inputRelease,
   workloadName,
   location,
+  deploymentPrincipalId,
   containerImage,
   workerAdminSshPublicKey,
   workerArtifactUrl,
@@ -57,6 +59,7 @@ export function buildAzureDeploymentParameters({
   const release = validateAzureReleaseInput(inputRelease);
   if (!WORKLOAD_NAME.test(String(workloadName ?? ''))) fail('workload name is invalid');
   if (!LOCATION.test(String(location ?? ''))) fail('location is invalid');
+  if (!GUID.test(String(deploymentPrincipalId ?? ''))) fail('deployment principal ID is invalid');
   if (!SSH_PUBLIC_KEY.test(String(workerAdminSshPublicKey ?? ''))) fail('worker admin SSH public key is invalid');
 
   if (phase === 'foundation') {
@@ -81,6 +84,7 @@ export function buildAzureDeploymentParameters({
   const parameters = {
     workloadName: parameter(workloadName),
     location: parameter(location),
+    deploymentPrincipalId: parameter(deploymentPrincipalId.toLowerCase()),
     containerImage: parameter(containerImage),
     workerAdminSshPublicKey: parameter(workerAdminSshPublicKey),
     enableCosmosFreeTier: parameter(true),
@@ -113,6 +117,7 @@ function parseArguments(args) {
     '--workload-name',
     '--location',
     '--container-image',
+    '--deployment-principal-id',
     '--worker-admin-ssh-public-key',
     '--worker-artifact-url',
     '--worker-artifact-sha256',
@@ -125,6 +130,7 @@ function parseArguments(args) {
     '--workload-name',
     '--location',
     '--container-image',
+    '--deployment-principal-id',
     '--worker-admin-ssh-public-key',
     '--output',
   ]);
@@ -175,6 +181,7 @@ function runCli() {
     workloadName: values.get('--workload-name'),
     location: values.get('--location'),
     containerImage: values.get('--container-image'),
+    deploymentPrincipalId: values.get('--deployment-principal-id'),
     workerAdminSshPublicKey: values.get('--worker-admin-ssh-public-key'),
     workerArtifactUrl: values.get('--worker-artifact-url'),
     workerArtifactSha256: values.get('--worker-artifact-sha256'),

@@ -26,6 +26,7 @@ try {
     release,
     workloadName: 'teamsapp',
     location: 'koreacentral',
+    deploymentPrincipalId: '12345678-1234-1234-1234-123456789abc',
     workerAdminSshPublicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixture fixture@example.invalid',
   };
 
@@ -39,6 +40,7 @@ try {
   assert.equal(foundation.parameters.deployContainerApp.value, false);
   assert.equal(foundation.parameters.deployWorkerVm.value, false);
   assert.equal(foundation.parameters.containerImage.value, `${release.image}@${digest}`);
+  assert.equal(foundation.parameters.deploymentPrincipalId.value, common.deploymentPrincipalId);
   assert.equal(foundation.parameters.releaseSourceCommit.value, commit);
   assert.equal(Object.hasOwn(foundation.parameters, 'workerArtifactUrl'), false);
 
@@ -53,10 +55,20 @@ try {
   });
   assert.equal(workload.parameters.deployContainerApp.value, true);
   assert.equal(workload.parameters.deployWorkerVm.value, true);
+  assert.equal(workload.parameters.deploymentPrincipalId.value, common.deploymentPrincipalId);
   assert.equal(workload.parameters.workerArtifactUrl.value, workerArtifactUrl);
   assert.equal(workload.parameters.workerArtifactSha256.value, 'f'.repeat(64));
   assert.equal(workload.parameters.codexBinSha256.value, '1'.repeat(64));
 
+  assert.throws(
+    () => buildAzureDeploymentParameters({
+      ...common,
+      deploymentPrincipalId: 'not-an-object-id',
+      phase: 'foundation',
+      containerImage: `${release.image}@${digest}`,
+    }),
+    /deployment principal/i,
+  );
   assert.throws(
     () => buildAzureDeploymentParameters({
       ...common,
@@ -95,6 +107,7 @@ try {
     '--workload-name', common.workloadName,
     '--location', common.location,
     '--container-image', `${release.image}@${digest}`,
+    '--deployment-principal-id', common.deploymentPrincipalId,
     '--worker-admin-ssh-public-key', common.workerAdminSshPublicKey,
     '--output', outputPath,
   ];

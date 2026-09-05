@@ -8,6 +8,9 @@ param workloadName string = 'teamsapp'
 @description('Azure region for this resource-group-scoped deployment.')
 param location string = resourceGroup().location
 
+@description('Object ID of the Azure DevOps service-connection principal that stages the immutable worker archive.')
+param deploymentPrincipalId string
+
 @description('Immutable OCI image reference supplied by the GitHub release handoff and Azure DevOps deployment.')
 param containerImage string
 
@@ -108,6 +111,7 @@ module storage './modules/storage.bicep' = {
   params: {
     location: location
     storageAccountName: storageName
+    deploymentPrincipalId: deploymentPrincipalId
     appIdentityPrincipalId: identities.outputs.appIdentityPrincipalId
     workerIdentityPrincipalId: identities.outputs.workerIdentityPrincipalId
   }

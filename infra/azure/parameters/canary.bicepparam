@@ -2,6 +2,7 @@ using '../main.bicep'
 
 param workloadName = 'teamsapp'
 param location = 'koreacentral'
+param deploymentPrincipalId = '11111111-1111-1111-1111-111111111111'
 param enableCosmosFreeTier = true
 param deployContainerApp = false
 

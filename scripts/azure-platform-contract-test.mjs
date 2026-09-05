@@ -540,6 +540,13 @@ try {
   ));
   assert.ok(workerArtifactReader, 'worker managed identity must receive blob reader access to only the artifact container');
   assert.match(String(workerArtifactReader.scope), /worker-artifacts/i);
+  const deploymentArtifactContributor = roleAssignments.find((resource) => (
+    String(resource.properties?.roleDefinitionId).includes('storageBlobDataContributorRoleDefinitionId')
+    && String(resource.properties?.principalId).includes('deploymentPrincipalId')
+  ));
+  assert.ok(deploymentArtifactContributor, 'the exact deployment principal must receive Blob contributor access for immutable artifact staging');
+  assert.match(String(deploymentArtifactContributor.scope), /worker-artifacts/i, 'deployment Blob write access must be scoped to the artifact container');
+  assert.equal(deploymentArtifactContributor.properties?.principalType, 'ServicePrincipal');
 
   const workerRoleAssignments = roleAssignments.filter((resource) => (
     String(resource.properties?.principalId).includes('workerIdentityPrincipalId')
@@ -696,6 +703,10 @@ try {
   ));
   assert.ok(platformRbacStep, 'caller-effective RBAC must be verified before the deployment environment approval');
   const platformWhatIfScript = platformRbacStep?.inputs?.inlineScript;
+  assert.equal(platformRbacStep?.inputs?.addSpnToEnvironment, true, 'pre-approval must bind parameters to the selected Azure service connection');
+  assert.ok(platformWhatIfScript?.includes('az account get-access-token --resource-type arm'), 'pre-approval must resolve the authenticated ARM principal without Graph lookup');
+  assert.ok(platformWhatIfScript?.includes('scripts/azure-access-token-principal.mjs'), 'pre-approval must validate tenant and client claims before using the token object ID');
+  assert.ok(platformWhatIfScript?.includes('--deployment-principal-id "$deployment_principal_id"'), 'pre-approval parameters must include the exact deployment principal object ID');
   assert.ok(platformWhatIfScript?.includes('az deployment group what-if'), 'foundation what-if must execute before environment approval');
   assert.ok(platformWhatIfScript?.includes('--subscription "$AZURE_SUBSCRIPTION_ID"'), 'pre-approval what-if must pin the subscription explicitly');
   assert.ok(platformWhatIfScript?.includes('--validation-level Provider'), 'pre-approval what-if must use provider validation');
@@ -736,6 +747,10 @@ try {
   const azureCliSteps = deploySteps.filter((step) => step.task === 'AzureCLI@2');
   const deployStep = azureCliSteps.find((step) => step.inputs?.inlineScript?.includes('az deployment group create'));
   const deployScript = deployStep?.inputs?.inlineScript;
+  assert.equal(deployStep?.inputs?.addSpnToEnvironment, true, 'deployment must bind to the selected Azure service connection identity');
+  assert.ok(deployScript?.includes('az account get-access-token --resource-type arm'), 'deployment must resolve the authenticated ARM principal without Graph lookup');
+  assert.ok(deployScript?.includes('scripts/azure-access-token-principal.mjs'), 'deployment must validate tenant and client claims before using the token object ID');
+  assert.ok(deployScript?.includes('--deployment-principal-id "$deployment_principal_id"'), 'deployment parameters must include the exact deployment principal object ID');
   assert.ok(
     platformRbacStep?.inputs?.inlineScript?.includes('/providers/Microsoft.Authorization/permissions?api-version=2022-04-01'),
     'pre-approval RBAC must use the official resource-group caller-permissions API',
@@ -852,6 +867,10 @@ try {
   assert.equal(deployScript?.includes('cp -RL'), false, 'deployment must never copy the hosted Node toolcache');
   assert.ok(deployScript?.includes('az storage blob upload'), 'deployment must stage the immutable worker archive in private Azure Blob storage');
   assert.ok(deployScript?.includes('--auth-mode login'), 'artifact staging must use Entra authentication rather than account keys or SAS');
+  assert.ok(deployScript?.includes('scripts/azure-storage-blob-rbac-probe.mjs'), 'deployment must use a bounded Blob RBAC propagation probe before staging');
+  assert.equal(deployScript?.includes('az storage blob exists'), false, 'unbounded inline Blob authorization probes must not bypass the tested helper');
+  assert.equal(deployScript?.includes('--auth-mode key'), false, 'deployment must never fall back to shared account keys');
+  assert.equal(/--account-key|--sas-token/u.test(deployScript ?? ''), false, 'deployment must never use account keys or SAS tokens');
   assert.ok(deployScript?.includes('metadata.sha256'), 'an existing immutable worker blob must be accepted only when its SHA-256 metadata matches');
   assert.ok(deployScript?.includes('--worker-artifact-sha256 "$worker_artifact_sha"'), 'deployment must bind the worker archive digest into Bicep parameters');
   assert.ok(deployScript?.includes('--codex-bin-sha256 "$codex_bin_sha"'), 'deployment must bind the measured Codex executable digest into Bicep parameters');
