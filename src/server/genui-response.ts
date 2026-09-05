@@ -4,8 +4,8 @@ import type { AgentJob } from './agent-job-store.js';
 import type { AgentNotification } from './agent-service.js';
 import type { GenUiActionStore } from './genui-action-store.js';
 import type { Item } from './item-store.js';
-import type { WeatherResponse } from './weather-service.js';
 import type {
+  CoreAgentToolCategory,
   CoreOrchestrationJob,
   CoreProviderFact,
 } from '../shared/core-orchestration.js';
@@ -14,7 +14,6 @@ import { redactSensitiveText } from './sensitive-text.js';
 import { normalizeCliCapability, type CliCapability } from './codex-capability.js';
 import {
   GENUI_SCHEMA_VERSION,
-  GENUI_COMMANDS,
   GenUiEnvelopeV1Schema,
   type GenUiAction,
   type GenUiEnvelopeV1,
@@ -127,6 +126,36 @@ function withTabAction(
   return action ? [...actions, action] : actions;
 }
 
+function toolUsageLabel(category: CoreAgentToolCategory): string {
+  if (category === 'skill') return '스킬';
+  if (category === 'plugin') return '플러그인';
+  if (category === 'mcp') return 'MCP';
+  if (category === 'builtin') return '기본 도구';
+  return 'CLI';
+}
+
+function orchestrationDetailAction(job: CoreOrchestrationJob): Record<string, unknown> {
+  const tools = job.tools ?? [];
+  const observedTools = tools.length > 0
+    ? tools.map((usage) => `• ${toolUsageLabel(usage.category)} · ${identifierText(usage.name, 120, '이름 미확인')}`).join('\n')
+    : '실행 제공자가 이름을 보고한 도구가 없습니다. 스킬·플러그인은 제공자가 식별자를 보고한 경우에만 표시됩니다.';
+  return {
+    type: 'Action.ShowCard',
+    title: '프롬프트·도구',
+    card: {
+      type: 'AdaptiveCard',
+      $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+      version: '1.2',
+      body: [
+        { type: 'TextBlock', text: '원본 프롬프트', weight: 'Bolder', wrap: true },
+        { type: 'TextBlock', text: displayText(job.prompt, 2_000, '(작업 설명 없음)'), wrap: true },
+        { type: 'TextBlock', text: '제공자가 보고한 도구', weight: 'Bolder', spacing: 'Medium', wrap: true },
+        { type: 'TextBlock', text: observedTools, wrap: true, isSubtle: true },
+      ],
+    },
+  };
+}
+
 function orchestrationActions(
   job: CoreOrchestrationJob,
   options?: CoreOrchestrationCardOptions,
@@ -166,7 +195,7 @@ function orchestrationActions(
   } else {
     actions = [];
   }
-  return withTabAction(actions, options);
+  return withTabAction([...actions, orchestrationDetailAction(job)], options);
 }
 
 function orchestrationActivity(card: CoreOrchestrationAdaptiveCard): CoreOrchestrationTeamsActivity {
@@ -548,30 +577,6 @@ export class GenUiResponseFactory {
     }];
   }
 
-  private commandActions(): GenUiAction[] {
-    // Teams recommends no more than six primary card actions. Every card
-    // also receives the default tab link, so keep five command buttons here;
-    // collaboration remains available as a text command.
-    const cardCommands = GENUI_COMMANDS.filter((command) => command !== 'collaboration');
-    const labels: Record<(typeof GENUI_COMMANDS)[number], string> = {
-      help: '도움말',
-      weather: '날씨',
-      status: '상태',
-      list: '업무 목록',
-      work: '탭 업무',
-      collaboration: '알림 digest',
-    };
-    return cardCommands.map((command) => ({
-      id: `command-${command}`,
-      action: 'command' as const,
-      label: labels[command],
-      entityId: command,
-      correlationId: 'command-palette',
-      actionToken: randomUUID(),
-      style: 'default' as const,
-    }));
-  }
-
   withTabAction(input: GenUiEnvelopeV1): GenUiEnvelopeV1 {
     const envelope = GenUiEnvelopeV1Schema.parse(input);
     if (!this.openTabUrl) return envelope;
@@ -654,7 +659,7 @@ export class GenUiResponseFactory {
   }
 
   help(): GenUiEnvelopeV1 {
-    const text = '사용 가능한 명령: help, carousel, weather [위도 경도], status, list, work, collaboration, run <작업>, continue <작업 ID> <추가 요청>, write <작업>, approve <작업 ID>, commit <작업 ID> [메시지], cancel <작업 ID>';
+    const text = '사용 가능한 에이전트 명령: agent run <작업>, agent write <쓰기 작업>, agent status <작업 ID>, agent list, agent cancel <작업 ID>, agent approve <작업 ID>, agent retry <작업 ID>, agent input <작업 ID> <입력>';
     return this.create({
       kind: 'answer',
       id: 'help',
@@ -662,7 +667,7 @@ export class GenUiResponseFactory {
       summary: 'Teams 모바일에서 사용할 수 있는 명령입니다.',
       sections: [{ type: 'text', title: '명령', text }],
       fallbackText: text,
-      actions: this.commandActions(),
+      actions: [],
       includeTabAction: true,
       metadata: { source: 'teams-bot', deterministic: true },
     });
@@ -712,7 +717,7 @@ export class GenUiResponseFactory {
   }
 
   install(scopeHint: string): GenUiEnvelopeV1 {
-    const text = `업무 허브가 ${scopeHint}에 추가되었습니다. 탭에서 업무와 현재 위치 날씨를 확인하고, help·날씨·status·list 명령으로 기능을 사용할 수 있습니다.`;
+    const text = `에이전트 업무 허브가 ${scopeHint}에 추가되었습니다. help 또는 agent list 명령으로 시작하세요.`;
     return this.create({
       kind: 'answer',
       id: 'installation',
@@ -722,62 +727,6 @@ export class GenUiResponseFactory {
       fallbackText: text,
       includeTabAction: true,
       metadata: { source: 'teams-bot', deterministic: true },
-    });
-  }
-
-  weatherUnavailable(): GenUiEnvelopeV1 {
-    const text = 'Bot 대화에는 현재 기기 위치가 자동으로 전달되지 않습니다. Teams 탭에서 “내 위치 사용”을 누르거나, weather 37.5665 126.978처럼 좌표를 함께 입력하세요.';
-    return this.create({
-      kind: 'answer',
-      id: 'weather-location-required',
-      title: '현재 위치 날씨',
-      summary: '날씨를 조회하려면 위치 또는 좌표가 필요합니다.',
-      sections: [{ type: 'text', title: '위치 입력 안내', text }],
-      fallbackText: text,
-      includeTabAction: true,
-      metadata: { source: 'teams-bot', deterministic: true },
-    });
-  }
-
-  invalidCoordinates(): GenUiEnvelopeV1 {
-    const text = '위도는 -90~90, 경도는 -180~180 범위로 입력하세요. 예: weather 37.5665 126.978';
-    return this.error(text, 'weather-invalid-coordinates');
-  }
-
-  weather(weather: WeatherResponse, hint?: string): GenUiEnvelopeV1 {
-    const { current, location } = weather;
-    const text = [
-      `날씨 위젯 · ${location.name}`,
-      `${current.condition} · ${current.temperature.toFixed(1)}°C (체감 ${current.apparentTemperature.toFixed(1)}°C)`,
-      `습도 ${Math.round(current.humidity)}% · 바람 ${current.windSpeed.toFixed(1)}km/h · 강수 ${current.precipitation.toFixed(1)}mm`,
-      `좌표 ${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)} · ${location.timezone}`,
-      `데이터: ${weather.source === 'demo' ? '데모' : 'Open-Meteo'}`,
-      hint,
-    ].filter(Boolean).join('\n');
-    return this.create({
-      kind: 'weather',
-      id: `weather-${location.latitude.toFixed(4)}-${location.longitude.toFixed(4)}`,
-      title: '현재 위치 날씨',
-      summary: `${location.name} · ${current.temperature.toFixed(1)}°C · ${current.condition}`,
-      sections: [{
-        type: 'weather',
-        location: location.name,
-        latitude: location.latitude,
-        longitude: location.longitude,
-        timezone: location.timezone,
-        temperature: current.temperature,
-        apparentTemperature: current.apparentTemperature,
-        humidity: current.humidity,
-        windSpeed: current.windSpeed,
-        precipitation: current.precipitation,
-        condition: current.condition,
-        icon: current.icon,
-        source: weather.source,
-        observedAt: current.time,
-      }],
-      fallbackText: text,
-      includeTabAction: true,
-      metadata: { source: weather.source, deterministic: true },
     });
   }
 

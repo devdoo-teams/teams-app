@@ -11,16 +11,6 @@ export const app = {
   isInitialized: () => true,
 };
 export const authentication = { getAuthToken: async () => 'test-token' };
-export const geoLocation = {
-  getCurrentLocation: async () => ({ latitude: 37.5, longitude: 127 }),
-  hasPermission: async () => true,
-  isSupported: () => false,
-  requestPermission: async () => true,
-};
-export const location = {
-  getLocation: () => undefined,
-  isSupported: () => false,
-};
 `;
 
 const hooks = registerHooks({
@@ -56,33 +46,14 @@ function renderAppAt(search: string): string {
 
 const { App } = await import('../src/client/App.js');
 
-const orchestrationMarkup = renderAppAt('?view=orchestration');
-assert.match(orchestrationMarkup, /<nav[^>]*aria-label="업무 허브 메뉴"/, 'the Core surface stays in the existing accessible hub navigation');
-assert.match(orchestrationMarkup, /aria-current="page"[^>]*>에이전트</, 'the orchestration destination is discoverable and active');
-assert.match(orchestrationMarkup, /<h2[^>]*>에이전트 오케스트레이션<\/h2>/, 'the orchestration route renders the committed Core panel');
-assert.doesNotMatch(orchestrationMarkup, /현재 위치 날씨 위젯/, 'the orchestration route does not accidentally render the Today surface');
-
-for (const label of ['오늘', '내 업무', '활동', '설정']) {
-  assert.match(orchestrationMarkup, new RegExp(`>${label}<`), `existing ${label} navigation remains available`);
+for (const search of ['', '?view=orchestration', '?view=work', '?view=settings']) {
+  const markup = renderAppAt(search);
+  assert.match(markup, /<h1[^>]*>에이전트 허브<\/h1>/, 'every legacy deep link resolves to the one minimal agent hub');
+  assert.match(markup, /<h2[^>]*>에이전트 작업<\/h2>/, 'the shipped tab renders the durable agent work surface');
+  assert.doesNotMatch(markup, /<nav/, 'the single-purpose tab has no redundant section navigation');
+  assert.doesNotMatch(markup, /현재 위치|날씨|weather/i, 'weather and device location are absent from the shipped tab');
+  assert.doesNotMatch(markup, /오늘 업무|Atlassian parity|협업|응답 모드|CopilotKit/i, 'unrelated legacy surfaces are absent from the shipped tab');
 }
-
-const todayMarkup = renderAppAt('');
-assert.match(todayMarkup, /aria-current="page"[^>]*>오늘</, 'Today remains the default active destination');
-assert.match(todayMarkup, /aria-label="현재 위치 날씨 위젯"/, 'the existing weather surface remains rendered on Today');
-assert.match(todayMarkup, /오늘 업무/, 'the existing work summary remains rendered on Today');
-assert.doesNotMatch(todayMarkup, /<h2[^>]*>에이전트 오케스트레이션<\/h2>/, 'the Core panel does not crowd the existing Today surface');
-
-const workMarkup = renderAppAt('?view=work');
-assert.match(workMarkup, /aria-current="page"[^>]*>내 업무</, 'the existing Work destination remains active and addressable');
-assert.match(workMarkup, /aria-label="Atlassian parity 업무 항목"/, 'the existing Work panel remains rendered');
-
-const activityMarkup = renderAppAt('?view=activity');
-assert.match(activityMarkup, /aria-current="page"[^>]*>활동</, 'the existing Activity destination remains active and addressable');
-assert.match(activityMarkup, /협업/, 'the existing collaboration surface remains rendered');
-
-const settingsMarkup = renderAppAt('?view=settings');
-assert.match(settingsMarkup, /aria-current="page"[^>]*>설정</, 'the existing Settings destination remains active and addressable');
-assert.match(settingsMarkup, /응답 모드/, 'the existing response-mode settings remain rendered');
 
 hooks.deregister();
 delete (globalThis as { window?: unknown }).window;

@@ -41,7 +41,19 @@ function toCodexRunEvent(event: CliAgentLifecycleEvent, provider: CliAgentProvid
     case 'turn.started':
       return { type: 'turn.started' };
     case 'tool.started':
-      return { type: 'item.started', item: { type: 'command_execution' } };
+      if (event.mcpServerName && event.mcpToolName) {
+        return {
+          type: 'item.started',
+          item: { type: 'mcp_tool_call', server: event.mcpServerName, name: event.mcpToolName },
+        };
+      }
+      if (event.toolName) {
+        return { type: 'item.started', item: { type: 'tool_call', name: event.toolName } };
+      }
+      return {
+        type: 'item.started',
+        item: { type: 'command_execution', ...(event.command ? { command: event.command } : {}) },
+      };
     case 'agent.message':
       return { type: 'item.completed', item: { type: 'agent_message', text: event.message } };
     case 'turn.completed':

@@ -51,6 +51,30 @@ async function testWorkerCompletionDuplicateAndError(): Promise<void> {
   assert.equal((await fixture.queue.observe(reference(task('task-failure'))))?.error?.code, 'RUNNER_FAILED');
 }
 
+async function testWorkerPersistsSafeToolObservations(): Promise<void> {
+  const fixture = createFixture();
+  const dispatched = task('task-tool-observation');
+  await fixture.queue.enqueue(dispatched);
+  const worker = new AzureCodexWorker(fixture.queue, {
+    start: async (_task, context) => {
+      await context.checkpoint('item.started', [{
+        category: 'cli',
+        name: 'git',
+        observedAt: '2026-09-05T00:00:00.000Z',
+      }]);
+      return handle(Promise.resolve({ result: 'worker result', providerExecutionId: 'exec-tool' }));
+    },
+  }, { visibilityTimeoutSeconds: 30, heartbeatIntervalMs: 5 });
+
+  assert.equal(await worker.runOnce(), 'completed');
+  const completed = await fixture.queue.observe(reference(dispatched));
+  assert.deepEqual(completed?.checkpoint?.tools, [{
+    category: 'cli',
+    name: 'git',
+    observedAt: '2026-09-05T00:00:00.000Z',
+  }], 'safe provider-reported tools survive the durable Azure worker boundary');
+}
+
 async function testCancellationCleansProcessTree(): Promise<void> {
   const fixture = createFixture();
   await fixture.queue.enqueue(task('task-cancel'));
@@ -144,6 +168,7 @@ async function testWorkerCompositionPreservesModeAndPrivateCodexHome(): Promise<
       '#!/bin/sh',
       "printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"11111111-1111-4111-8111-111111111111\"}'",
       "printf '%s\\n' '{\"type\":\"turn.started\"}'",
+      "printf '%s\\n' '{\"type\":\"item.started\",\"item\":{\"type\":\"command_execution\",\"command\":\"/usr/bin/git status --token must-not-persist\"}}'",
       "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"fixture result\"}}'",
       "printf '%s\\n' '{\"type\":\"turn.completed\"}'",
     ].join('\n'), { mode: 0o700 });
@@ -162,7 +187,13 @@ async function testWorkerCompositionPreservesModeAndPrivateCodexHome(): Promise<
       },
       runner,
     });
-    const context = { signal: new AbortController().signal, checkpoint: async () => undefined };
+    const checkpoints: Array<{ message: string; tools: unknown[] }> = [];
+    const context = {
+      signal: new AbortController().signal,
+      checkpoint: async (message: string, tools: readonly unknown[] = []) => {
+        checkpoints.push({ message, tools: structuredClone([...tools]) });
+      },
+    };
     const writeHandle = await executor.start(task('task-mode-write'), context);
     assert.equal((await writeHandle.result).result, 'fixture result');
     assert.equal(spawnCalls.length, 1);
@@ -170,6 +201,13 @@ async function testWorkerCompositionPreservesModeAndPrivateCodexHome(): Promise<
     assert.ok(spawnCalls[0].args.includes('workspace-write'));
     assert.equal(spawnCalls[0].options.env.CODEX_HOME, agentCodexHome);
     assert.equal(spawnCalls[0].options.env.UNRELATED_CREDENTIAL, undefined);
+    assert.deepEqual(
+      checkpoints.find((checkpoint) => checkpoint.tools.length > 0)?.tools,
+      [{ category: 'cli', name: 'git', observedAt: checkpoints.find((checkpoint) => checkpoint.tools.length > 0)?.tools
+        && (checkpoints.find((checkpoint) => checkpoint.tools.length > 0)?.tools[0] as { observedAt: string }).observedAt }],
+      'the real worker executor projects the Codex command into an argument-free tool identifier',
+    );
+    assert.equal(JSON.stringify(checkpoints).includes('must-not-persist'), false);
 
     await assert.rejects(
       executor.start({
@@ -296,6 +334,7 @@ class MemoryQueueClient implements AzureQueueClientPort {
 }
 
 await testWorkerCompletionDuplicateAndError();
+await testWorkerPersistsSafeToolObservations();
 await testCancellationCleansProcessTree();
 await testLinuxPreflightAndCloudInit();
 await testProductionPreflightRunsBeforeExecutorAndFailsClosed();

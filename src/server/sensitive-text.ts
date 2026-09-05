@@ -1,8 +1,7 @@
 const REDACTED = '[REDACTED]';
 
 // These patterns intentionally target credential-shaped values only.  Generic
-// task IDs, weather coordinates, and action payloads are not passed through a
-// broad "token" matcher.
+// Task IDs and action payloads are not passed through a broad "token" matcher.
 const PRIVATE_KEY_PATTERN = /-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----[\s\S]*?-----END(?: [A-Z0-9]+)* PRIVATE KEY-----/gi;
 const URL_CREDENTIAL_PATTERN = /([?&](?:access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|api[_-]?key|apikey|password|passwd|pwd|secret|token|signature|sig|code)=)([^&#\s)\[\]]+)/gi;
 const URL_AUTH_CREDENTIAL_PATTERN = /(https?:\/\/)([^\s/:@]+)(?::[^\s/@]*)?@/gi;

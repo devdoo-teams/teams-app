@@ -1,5 +1,6 @@
 import { AgentExecutionUnavailableError } from '../server/agent-execution-policy.js';
 import { CodexRunner } from '../server/codex-runner.js';
+import { observeCodexToolUsage } from '../server/agent-tool-observation.js';
 import {
   AGENT_DISPATCH_WORKSPACE_REFERENCE,
   type AgentDispatchTask,
@@ -51,7 +52,7 @@ export function createWorkerExecutor(options: {
           jobId: task.taskId,
         },
         onEvent: async (event) => {
-          if (event.type) await context.checkpoint(event.type);
+          if (event.type) await context.checkpoint(event.type, observeCodexToolUsage(event));
         },
       }).then((outcome) => {
         if (!outcome.threadId) throw new Error('Codex worker completed without a provider execution ID.');

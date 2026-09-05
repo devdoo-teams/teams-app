@@ -17,21 +17,6 @@ const scope: AgentJobScope = {
   tenantId: 'local-test-tenant',
 };
 
-const liveWeather = {
-  source: 'open-meteo',
-  location: { name: '서울', latitude: 37.5665, longitude: 126.978, timezone: 'Asia/Seoul' },
-  current: {
-    time: '2026-08-08T00:00:00Z',
-    temperature: 25,
-    apparentTemperature: 26,
-    humidity: 60,
-    windSpeed: 8,
-    precipitation: 0,
-    condition: '맑음',
-    icon: 'sun',
-  },
-};
-
 type FakeAgentService = AgentService & {
   submitted: Array<{ prompt: string; mode: string; scope: AgentJobScope }>;
 };
@@ -295,12 +280,14 @@ async function main(): Promise<void> {
 
     await withFakeServer(async (body, request) => {
       assert.equal(request.url, '/v1/chat/completions');
+      assert.equal(body.tool_choice, 'auto', 'retired weather prompts must not force a tool');
+      const tools = body.tools as Array<{ function: { name: string } }>;
+      assert.deepEqual(tools.map((tool) => tool.function.name), ['showTaskCard', 'workspaceApproval']);
       const messages = body.messages as Array<{ role: string; content: string | null }>;
-      assert.ok(messages.some((message) => message.role === 'system'));
-      if (messages.some((message) => message.role === 'tool')) {
-        return { body: textBody('현재 위치 날씨를 확인했습니다.') };
-      }
-      return { body: toolBody('showWeatherCard') };
+      const systemMessage = messages.find((message) => message.role === 'system')?.content ?? '';
+      assert.doesNotMatch(systemMessage, /날씨|weather|현재 위치|Open-Meteo/i);
+      assert.doesNotMatch(JSON.stringify(body), /retired-weather-context/);
+      return { body: textBody('날씨 기능은 제공하지 않습니다.') };
     }, async (baseUrl) => {
       const restore = withEnvironment({ LOCAL_MODEL_BASE_URL: baseUrl, LOCAL_MODEL_API_KEY: 'weather-secret' });
       const toolNames: string[] = [];
@@ -308,14 +295,25 @@ async function main(): Promise<void> {
         itemStore,
         createAgentServiceFake(),
         '현재 날씨 알려줘',
-        [{ description: '날씨 컨텍스트', value: JSON.stringify(liveWeather) }],
+        [{ description: '날씨 컨텍스트', value: JSON.stringify({ source: 'open-meteo', secret: 'retired-weather-context' }) }],
         (tool) => toolNames.push(tool.name),
       ));
       restore();
-      assert.equal(result.envelope.kind, 'weather');
+      assert.equal(result.envelope.kind, 'answer');
       assert.equal(result.envelope.aiGenerated, true);
-      assert.deepEqual(toolNames, ['showWeatherCard']);
+      assert.deepEqual(toolNames, []);
       assert.doesNotMatch(JSON.stringify(result), /weather-secret/);
+    });
+
+    await withFakeServer(async () => ({ body: toolBody('showWeatherCard') }), async (baseUrl) => {
+      const restore = withEnvironment({ LOCAL_MODEL_BASE_URL: baseUrl, LOCAL_MODEL_API_KEY: 'retired-tool-secret' });
+      const result = await new LocalCompatibleResponseEngine().run(
+        await createInput(itemStore, createAgentServiceFake(), '현재 날씨 알려줘'),
+      );
+      restore();
+      assert.equal(result.envelope.kind, 'error');
+      assert.equal(result.envelope.metadata.errorCode, 'local-invalid-tool');
+      assert.doesNotMatch(result.text, /내 위치|위치 권한/);
     });
 
     await withFakeServer(async (body) => {

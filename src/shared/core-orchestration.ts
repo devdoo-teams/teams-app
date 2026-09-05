@@ -9,6 +9,13 @@ export type CoreOrchestrationJobStatus =
   | 'failed'
   | 'cancelled';
 
+export type CoreAgentToolCategory = 'skill' | 'plugin' | 'mcp' | 'cli' | 'builtin';
+export type CoreAgentToolUsage = Readonly<{
+  category: CoreAgentToolCategory;
+  name: string;
+  observedAt: string;
+}>;
+
 export type CoreOrchestrationJob = Readonly<{
   id: string;
   idempotencyKey?: string;
@@ -21,6 +28,8 @@ export type CoreOrchestrationJob = Readonly<{
   result?: string;
   error?: string;
   progress: readonly string[];
+  /** Safe, argument-free tool observations. Legacy jobs may omit this field. */
+  tools?: readonly CoreAgentToolUsage[];
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;

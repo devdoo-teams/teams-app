@@ -3,6 +3,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import type { CoreAgentToolUsage } from '../shared/core-orchestration.js';
+import { mergeObservedToolUsage } from '../server/agent-tool-observation.js';
+
 import type {
   AgentDispatchQueue,
   AgentDispatchTask,
@@ -29,7 +32,7 @@ export type WorkerExecutionHandle = Readonly<{
 export interface WorkerExecutionPort {
   start(task: AgentDispatchTask, context: {
     signal: AbortSignal;
-    checkpoint(message: string): Promise<void>;
+    checkpoint(message: string, tools?: readonly CoreAgentToolUsage[]): Promise<void>;
   }): Promise<WorkerExecutionHandle>;
 }
 
@@ -69,6 +72,7 @@ export class AzureCodexWorker {
 
     const abort = new AbortController();
     let sequence = existing?.checkpoint?.sequence ?? 0;
+    let observedTools = mergeObservedToolUsage([], existing?.checkpoint?.tools ?? []);
     let renewalChain: Promise<void> = Promise.resolve();
     let stopped = false;
     let cancelDetected = false;
@@ -77,10 +81,15 @@ export class AzureCodexWorker {
     const cancellation = new Promise<'cancelled' | 'lease-lost'>((resolve) => {
       wake = () => resolve(wakeReason);
     });
-    const renew = (message: string): Promise<void> => {
+    const renew = (message: string, tools: readonly CoreAgentToolUsage[] = []): Promise<void> => {
       const operation = renewalChain.then(async () => {
         sequence += 1;
-        lease = await this.queue.heartbeat(lease, { sequence, message }, this.visibilityTimeoutSeconds);
+        observedTools = mergeObservedToolUsage(observedTools, tools);
+        lease = await this.queue.heartbeat(
+          lease,
+          { sequence, message, ...(observedTools.length > 0 ? { tools: observedTools } : {}) },
+          this.visibilityTimeoutSeconds,
+        );
       });
       renewalChain = operation.catch(() => undefined);
       return operation;

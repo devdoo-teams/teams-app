@@ -92,6 +92,7 @@ try {
   restartDispatcher.observations.set(seeded.id, {
     status: 'completed',
     result: 'authoritative durable result',
+    tools: [{ category: 'mcp', name: 'jira/search_issues', observedAt: '2026-09-03T00:00:20.000Z' }],
   });
   restartDispatcher.observations.set(previouslyMisrecovered.id, {
     status: 'completed',
@@ -105,6 +106,9 @@ try {
   assert.equal(afterRestart?.status, 'completed', 'durable terminal state must be reconciled before local restart recovery');
   assert.equal(afterRestart?.result, 'authoritative durable result');
   assert.equal(afterRestart?.error, undefined, 'local interrupted error must not overwrite durable completion');
+  assert.deepEqual(afterRestart?.tools, [
+    { category: 'mcp', name: 'jira/search_issues', observedAt: '2026-09-03T00:00:20.000Z' },
+  ], 'durable provider tool observations reconcile into the user-visible AgentJob');
   const repairedTerminal = restartedStore.get(previouslyMisrecovered.id, scope);
   assert.equal(repairedTerminal?.status, 'completed');
   assert.equal(repairedTerminal?.result, 'durable result recovered after an earlier bad restart');

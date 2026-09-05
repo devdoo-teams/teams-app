@@ -146,7 +146,6 @@ try {
       TEAMS_AGENT_GLOBAL_LIMIT: '4',
       TEAMS_AGENT_TENANT_LIMIT: '4',
       COPILOTKIT_DETERMINISTIC_MODE: 'true',
-      WEATHER_MODE: 'demo',
       TEAMS_OPERATOR_REQUESTER_ALLOWLIST: `${scope.tenantId}/${scope.requesterId}`,
       MCP_PUBLIC_ENABLED: '',
       TEAMS_OPTIONAL_RUNTIME: '',

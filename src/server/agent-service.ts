@@ -15,6 +15,8 @@ import type { CliAgentProvider } from './cli-agent-runner.js';
 import { redactCliDiagnostics } from './cli-diagnostics.js';
 import { GitService, type GitWorkspaceSnapshot } from './git-service.js';
 import { diagnoseRemoteAgentResult, formatRemoteTroubleshooting } from './remote-troubleshooting.js';
+import { mergeObservedToolUsage, observeCodexToolUsage } from './agent-tool-observation.js';
+import type { CoreAgentToolUsage } from '../shared/core-orchestration.js';
 
 export type AgentNotificationKind = 'progress' | 'result' | 'error' | 'cancelled';
 export type AgentNotificationPhase =
@@ -49,6 +51,7 @@ export type AgentExecutionObservation = Readonly<{
   result?: string;
   providerExecutionId?: string;
   error?: string;
+  tools?: readonly CoreAgentToolUsage[];
 }>;
 
 /**
@@ -582,6 +585,9 @@ export class AgentService {
     const status = observation.status === 'quarantined' ? 'failed' : observation.status;
     if (isTerminalJob(job) && !isTerminalStatus(status)) return job;
     const update: Partial<AgentJob> = { status };
+    if (observation.tools?.length) {
+      update.tools = mergeObservedToolUsage(job.tools ?? [], observation.tools);
+    }
     if (status === 'running' && !job.startedAt) update.startedAt = new Date().toISOString();
     if (status === 'completed') {
       update.result = observation.result;
@@ -1016,7 +1022,18 @@ export class AgentService {
       return;
     }
 
-    if (event.type === 'item.started' && event.item?.type === 'command_execution') {
+    if (event.type === 'item.started'
+      && (event.item?.type === 'command_execution'
+        || event.item?.type === 'mcp_tool_call'
+        || event.item?.type === 'tool_call')) {
+      const observations = observeCodexToolUsage(event);
+      const scope = scopeForJob(job);
+      if (observations.length > 0 && scope) {
+        await this.withJobMutationLock(job.id, scope, async () => {
+          if (!this.isCurrentRunningProgress(job, state)) return;
+          await this.store.appendToolUsage(job.id, scope, observations);
+        });
+      }
       await this.flushPendingAgentMessage(job, state);
       await this.publishProgress(job, state, 'tools', 'tools', `${this.agentLabel}가 필요한 도구를 실행하고 있습니다.`, `${this.agentLabel}가 필요한 도구를 실행하고 있습니다.`);
       return;

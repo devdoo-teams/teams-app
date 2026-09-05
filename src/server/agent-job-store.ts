@@ -3,6 +3,12 @@ import crypto from 'node:crypto';
 import { atomicWriteJson, readAtomicJsonStore } from './atomic-file.js';
 import type { CliAgentProvider } from './cli-agent-runner.js';
 import { isAgentTokenUsage, type AgentTokenUsage } from './agent-token-usage.js';
+import {
+  MAX_AGENT_TOOL_NAME_LENGTH,
+  MAX_OBSERVED_AGENT_TOOLS,
+  mergeObservedToolUsage,
+} from './agent-tool-observation.js';
+import type { CoreAgentToolCategory, CoreAgentToolUsage } from '../shared/core-orchestration.js';
 
 export type AgentJobMode = 'read-only' | 'workspace-write';
 export type AgentJobStatus =
@@ -36,6 +42,7 @@ const AGENT_JOB_STATUSES: readonly AgentJobStatus[] = [
 ];
 const AGENT_JOB_MODES: readonly AgentJobMode[] = ['read-only', 'workspace-write'];
 const AGENT_JOB_PROVIDERS: readonly CliAgentProvider[] = ['codex', 'copilot'];
+const AGENT_TOOL_CATEGORIES: readonly CoreAgentToolCategory[] = ['skill', 'plugin', 'mcp', 'cli', 'builtin'];
 // Preserve the whitespace characters used by normal multi-line Codex output
 // while rejecting the remaining C0/C1 control range in persisted records.
 const CONTROL_CHARACTERS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
@@ -68,6 +75,8 @@ export interface AgentJob {
   changedPaths?: string[];
   error?: string;
   progress: string[];
+  /** Safe, argument-free tool observations. Legacy in-memory fixtures may omit it. */
+  tools?: CoreAgentToolUsage[];
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;
@@ -205,6 +214,7 @@ export class AgentJobStore {
       parentJobId: input.parentJobId,
       threadId: input.threadId,
       progress: [],
+      tools: [],
       createdAt: new Date().toISOString(),
     };
 
@@ -329,6 +339,23 @@ export class AgentJobStore {
     });
   }
 
+  async appendToolUsage(
+    id: string,
+    scope: AgentJobScope,
+    observations: readonly CoreAgentToolUsage[],
+  ): Promise<AgentJob | undefined> {
+    return this.enqueueMutation(() => {
+      const index = this.jobs.findIndex((job) => job.id === id && matchesScope(job, scope));
+      if (index === -1) return undefined;
+      const job = this.jobs[index];
+      const tools = mergeObservedToolUsage(job.tools ?? [], observations);
+      if (tools.length === (job.tools?.length ?? 0)) return cloneAgentJob(job);
+      const updated = { ...job, tools };
+      this.jobs = this.jobs.map((candidate, jobIndex) => jobIndex === index ? updated : candidate);
+      return cloneAgentJob(updated);
+    });
+  }
+
   countActive(scope: AgentJobScope): number {
     return this.jobs.filter((job) =>
       matchesScope(job, scope) &&
@@ -436,6 +463,7 @@ function cloneAgentJob(job: AgentJob): AgentJob {
   return {
     ...job,
     progress: [...job.progress],
+    ...(job.tools ? { tools: job.tools.map((usage) => ({ ...usage })) } : {}),
     ...(job.changedPaths ? { changedPaths: [...job.changedPaths] } : {}),
     ...(job.tokenUsage ? { tokenUsage: { ...job.tokenUsage } } : {}),
   };
@@ -583,6 +611,7 @@ function loadJob(
   const changedPaths = readChangedPaths(value, index, legacy);
   let error = readOptionalText(value, 'error', MAX_AGENT_ERROR_LENGTH, index, legacy);
   const progress = readProgress(value, index, legacy);
+  const tools = readTools(value, index);
   const createdAt = readTimestamp(value.createdAt, 'createdAt', index, legacy);
   const startedAt = readOptionalTimestamp(value, 'startedAt', index, legacy);
   const finishedAt = readOptionalTimestamp(value, 'finishedAt', index, legacy);
@@ -611,6 +640,7 @@ function loadJob(
     changedPaths.migrated,
     error.migrated,
     progress.migrated,
+    tools.migrated,
     createdAt.migrated,
     startedAt.migrated,
     finishedAt.migrated,
@@ -635,6 +665,7 @@ function loadJob(
     ...(changedPaths.value ? { changedPaths: changedPaths.value } : {}),
     ...(error.value ? { error: error.value } : {}),
     progress: progress.value,
+    tools: tools.value,
     createdAt: createdAt.value,
     ...(startedAt.value ? { startedAt: startedAt.value } : {}),
     ...(finishedAt.value ? { finishedAt: finishedAt.value } : {}),
@@ -647,6 +678,30 @@ function readTokenUsage(value: JobRecord, index: number): AgentTokenUsage | unde
   if (!hasOwn(value, 'tokenUsage') || value.tokenUsage === undefined) return undefined;
   if (!isAgentTokenUsage(value.tokenUsage)) throw invalidJob(index, 'token usage is invalid');
   return { ...value.tokenUsage };
+}
+
+function readTools(value: JobRecord, index: number): LoadedValue<CoreAgentToolUsage[]> {
+  if (!hasOwn(value, 'tools')) return { value: [], migrated: true };
+  if (!Array.isArray(value.tools)) throw invalidJob(index, 'tools must be an array');
+  if (value.tools.length > MAX_OBSERVED_AGENT_TOOLS) {
+    throw invalidJob(index, `tools must contain ${MAX_OBSERVED_AGENT_TOOLS} entries or fewer`);
+  }
+  const tools: CoreAgentToolUsage[] = [];
+  const seen = new Set<string>();
+  for (const [toolIndex, raw] of value.tools.entries()) {
+    if (!isRecord(raw)) throw invalidJob(index, `tools[${toolIndex}] must be an object`);
+    const category = readEnum(raw.category, `tools[${toolIndex}].category`, AGENT_TOOL_CATEGORIES, index);
+    const name = readText(raw.name, `tools[${toolIndex}].name`, MAX_AGENT_TOOL_NAME_LENGTH, index, false, true).value;
+    if (!/^[a-z0-9][a-z0-9._:+-]*(?:\/[a-z0-9][a-z0-9._:+-]*)?$/iu.test(name)) {
+      throw invalidJob(index, `tools[${toolIndex}].name is invalid`);
+    }
+    const observedAt = readTimestamp(raw.observedAt, `tools[${toolIndex}].observedAt`, index, false).value;
+    const key = `${category}:${name}`;
+    if (seen.has(key)) throw invalidJob(index, 'tools entries must be unique');
+    seen.add(key);
+    tools.push({ category, name, observedAt });
+  }
+  return { value: tools, migrated: false };
 }
 
 function readChangedPaths(

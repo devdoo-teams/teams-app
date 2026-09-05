@@ -52,6 +52,7 @@ import {
   type ResponseEngineInput,
 } from './response-engine.js';
 import {
+  coreOrchestrationCommandHelp,
   DeterministicResponseEngine,
   parseCoreOrchestrationChatCommand,
   type CoreOrchestrationChatCommand,
@@ -63,7 +64,6 @@ import {
   parseResponseModeCardAction,
   type PublicResponseModeAvailability,
 } from './response-mode-card.js';
-import { formatWeatherMessage, getWeather } from './weather-service.js';
 import { GenUiActionStore, type GenUiActionName } from './genui-action-store.js';
 import {
   GenUiResponseFactory,
@@ -237,18 +237,20 @@ function createQueueExecutionDispatcher(
     async observe(job): Promise<AgentExecutionObservation | undefined> {
       const record = await submission.observe(createAgentDispatchTaskReferenceFromJob(job));
       if (!record) return undefined;
-      if (record.status === 'leased') return { status: 'running' };
+      const tools = record.checkpoint?.tools;
+      if (record.status === 'leased') return { status: 'running', ...(tools?.length ? { tools } : {}) };
       if (record.status === 'completed') {
         return {
           status: 'completed',
           result: record.receipt?.result,
           providerExecutionId: record.receipt?.providerExecutionId,
+          ...(tools?.length ? { tools } : {}),
         };
       }
-      if (record.status === 'failed') return { status: 'failed', error: record.error?.message };
-      if (record.status === 'cancelled') return { status: 'cancelled' };
-      if (record.status === 'quarantined') return { status: 'quarantined', error: record.quarantineReason };
-      return { status: 'queued' };
+      if (record.status === 'failed') return { status: 'failed', error: record.error?.message, ...(tools?.length ? { tools } : {}) };
+      if (record.status === 'cancelled') return { status: 'cancelled', ...(tools?.length ? { tools } : {}) };
+      if (record.status === 'quarantined') return { status: 'quarantined', error: record.quarantineReason, ...(tools?.length ? { tools } : {}) };
+      return { status: 'queued', ...(tools?.length ? { tools } : {}) };
     },
     async cancel(job, reason) {
       await submission.requestCancellation(createAgentDispatchTaskReferenceFromJob(job), reason);
@@ -695,7 +697,6 @@ const grokModel = process.env.TEAMS_CORE_BUILD === 'true'
 const localModelName = process.env.TEAMS_CORE_BUILD === 'true'
   ? 'local-model'
   : process.env.LOCAL_MODEL_NAME?.trim() || 'local-model';
-const weatherMode = process.env.WEATHER_MODE === 'demo' ? 'demo' : 'live';
 const responseProviders = {
   deterministic: true,
   openai: optionalRuntimeEnabled && openAiConfigured,
@@ -805,10 +806,6 @@ if (isProduction) {
 
 if (isProduction && skipAuth) {
   throw new Error('TEAMS_SKIP_AUTH must not be enabled in production.');
-}
-
-if (isProduction && weatherMode === 'demo') {
-  throw new Error('WEATHER_MODE=demo is forbidden in production.');
 }
 
 let storeProcessLease: StoreProcessLease | undefined;
@@ -1547,7 +1544,7 @@ if (teamsApp && loopbackOnly) {
 
 if (safeLocal) {
   // Static tab assets and policy pages are intentionally public. Everything
-  // else, including health, Bot, MCP, CopilotKit, data, weather, and debug
+  // else, including health, Bot, MCP, CopilotKit, data, and debug
   // routes, requires both a direct loopback connection and the explicit local
   // access secret. The gate is before body parsing so rejected requests cannot
   // make the JSON parser process attacker-controlled bodies.
@@ -1884,7 +1881,6 @@ http.get('/api/health', async (_request: any, response: any) => {
       providers: optionalRuntime?.providerRuntime.facts ?? [],
     },
     responseModeDefault: defaultResponseMode,
-    weatherMode,
     genUiMode,
     genUi: 'adaptive-cards',
     channelsShadow: genUiMode === 'channels-shadow'
@@ -2067,44 +2063,6 @@ http.get('/api/items/:id', (request: any, response: any) => {
   }
 
   response.json({ item });
-});
-
-http.use(
-  '/api/weather',
-  createUserAuthMiddleware({
-    allowUnauthenticated: skipAuth,
-    validator: userAuthValidator,
-    configuredTenantId: configuredTenantId || undefined,
-    acceptedAudiences: acceptedUserAudiences,
-  }),
-);
-
-http.get('/api/weather', async (request: any, response: any) => {
-  const latitude = Number(request.query?.latitude);
-  const longitude = Number(request.query?.longitude);
-  const demo = request.query?.mode === 'demo';
-
-  if (demo && isProduction) {
-    response.status(400).json({ error: 'demo weather is disabled in production' });
-    return;
-  }
-
-  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
-    response.status(400).json({ error: 'latitude must be between -90 and 90' });
-    return;
-  }
-
-  if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
-    response.status(400).json({ error: 'longitude must be between -180 and 180' });
-    return;
-  }
-
-  try {
-    response.json(await getWeather(latitude, longitude, { demo }));
-  } catch (error) {
-    console.error('Weather lookup failed', error);
-    response.status(502).json({ error: '날씨 정보를 가져오지 못했습니다.' });
-  }
 });
 
 // The manifest uses the origin root as its developer/static-tab website URL.
@@ -2903,7 +2861,6 @@ if (mcpEnabled) {
   mcpRouter = createMcpGenUiRouter({
     itemStore,
     agentService,
-    getWeather,
     ...(providerTools ? { providerTools } : {}),
     ...(providerToolsForPrincipal ? { providerToolsForPrincipal } : {}),
     ...(authenticatedMcpConfig.enabled
@@ -3230,43 +3187,8 @@ function isGenUiCommand(value: string): value is GenUiCommand {
   return GENUI_COMMANDS.includes(value as GenUiCommand);
 }
 
-async function resolveGenUiCommand(activity: any, command: GenUiCommand): Promise<GenUiEnvelopeV1> {
-  if (command === 'help') return genUi.help();
-  if (command === 'weather') return genUi.weatherUnavailable();
-
-  const scope = activityScope(activity);
-  if (!scope) return genUi.error('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', 'command-scope-missing');
-
-  return itemStore.runWithScope(itemScopeFromAgentScope(scope), async () => {
-    await itemStore.ensureScope();
-    if (command === 'status') {
-      return buildStatusEnvelope();
-    }
-    if (command === 'work') {
-      const items = workItemService.recent({
-        tenantId: scope.tenantId,
-        requesterId: scope.requesterId,
-        conversationId: scope.conversationId,
-      }, 8);
-      const text = items.length === 0
-        ? '탭 업무가 없습니다. 업무 허브 탭에서 첫 업무를 추가하세요.'
-        : `탭 업무 ${items.length}개\n\n${items.map((item) => `- ${item.title} · ${item.status}${item.dueDate ? ` · 기한 ${item.dueDate}` : ''}`).join('\n')}`;
-      return genUi.answer(text, 'work-items-command');
-    }
-    if (command === 'collaboration') {
-      const collaborationScope = {
-        tenantId: scope.tenantId,
-        requesterId: scope.requesterId,
-        conversationId: scope.conversationId,
-      };
-      const subscriptions = collaborationService.listSubscriptions(collaborationScope);
-      const digest = collaborationService.weeklyDigest(collaborationScope);
-      const text = `팔로우 ${subscriptions.length}개 · 이번 주 업데이트 ${digest.totalCount}건\n\n${digest.entries.slice(0, 5).map((entry) => `- ${entry.title} · ${entry.count}건`).join('\n') || '새 업데이트가 없습니다.'}`;
-      return genUi.answer(text, 'collaboration-digest-command');
-    }
-    const jobs = agentService.list(scope, 5);
-    return genUi.list(itemStore.list(), jobs);
-  });
+async function resolveGenUiCommand(_activity: any, _command: GenUiCommand): Promise<GenUiEnvelopeV1> {
+  return genUi.help();
 }
 
 function mutationConflictEnvelope(error: unknown, fallbackId = 'agent-mutation-error'): GenUiEnvelopeV1 {
@@ -4188,7 +4110,7 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
     }
 
     if (normalizedText === 'help') {
-      const responseText = '사용 가능한 명령: help, mode, carousel, weather [위도 경도], status, list, work, collaboration, a2a <협업 요청>, run <작업>, continue <작업 ID> <추가 요청>, write <작업>, approve <작업 ID>, commit <작업 ID> [메시지], cancel <작업 ID>';
+      const responseText = `사용 가능한 에이전트 명령:\n${coreOrchestrationCommandHelp()}`;
       const envelope = genUi.help();
       await send(responseText, envelope);
       return;
@@ -4198,38 +4120,6 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
       const responseText = '카드 갤러리를 보냅니다. Teams 메시지에서 카드를 좌우로 넘기고 카드 내부 이미지를 확인하세요.';
       const carouselActivity = genUiMode === 'legacy' ? undefined : createAdaptiveCardCarouselActivity(genUi.carousel());
       await send(responseText, undefined, carouselActivity);
-      return;
-    }
-
-    const weatherMatch = userText.match(/^(?:weather|날씨)(?:\s+([-+]?\d+(?:\.\d+)?)\s+([-+]?\d+(?:\.\d+)?))?$/i);
-    if (weatherMatch) {
-      const isExplicitLocation = Boolean(weatherMatch[1] && weatherMatch[2]);
-
-      if (!isExplicitLocation) {
-        const responseText = 'Bot 대화에는 현재 기기 위치가 자동으로 전달되지 않습니다. Teams 탭에서 “내 위치 사용”을 누르거나, weather 37.5665 126.978처럼 좌표를 함께 입력하세요.';
-        const envelope = genUi.weatherUnavailable();
-        await send(responseText, envelope);
-        return;
-      }
-
-      const latitude = Number(weatherMatch[1]);
-      const longitude = Number(weatherMatch[2]);
-
-      if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
-        const responseText = '위도는 -90~90, 경도는 -180~180 범위로 입력하세요. 예: weather 37.5665 126.978';
-        const envelope = genUi.invalidCoordinates();
-        await send(responseText, envelope);
-        return;
-      }
-
-      try {
-        const weather = await getWeather(latitude, longitude);
-        const responseText = formatWeatherMessage(weather);
-        await send(responseText, genUi.weather(weather));
-      } catch {
-        const responseText = '날씨 정보를 가져오지 못했습니다. 잠시 후 다시 시도하세요.';
-        await send(responseText, genUi.error(responseText, 'weather-error'));
-      }
       return;
     }
 
@@ -4485,7 +4375,7 @@ async function handleInstall(activity: any, send: BotSend): Promise<void> {
     ? '이 대화'
     : '개인 공간';
 
-  const text = `업무 허브가 ${scopeHint}에 추가되었습니다. 탭에서 업무와 현재 위치 날씨를 확인하고, help·날씨·status·list 명령으로 기능을 사용할 수 있습니다.`;
+  const text = `에이전트 업무 허브가 ${scopeHint}에 추가되었습니다. help 또는 agent list 명령으로 시작하세요.`;
   await send(text, genUi.install(scopeHint));
 }
 

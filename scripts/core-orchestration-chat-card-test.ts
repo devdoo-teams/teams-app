@@ -23,6 +23,10 @@ const job = (status: CoreOrchestrationJob['status']): CoreOrchestrationJob => ({
   provider: 'codex',
   status,
   progress: ['작업을 접수했습니다.'],
+  tools: [
+    { category: 'cli', name: 'rg', observedAt: '2026-09-03T00:01:00.000Z' },
+    { category: 'skill', name: 'systematic-debugging', observedAt: '2026-09-03T00:02:00.000Z' },
+  ],
   createdAt: '2026-09-03T00:00:00.000Z',
 });
 
@@ -122,6 +126,15 @@ assert.deepEqual(inputForm?.actions?.[0]?.data, {
 });
 assert.equal(inputCard.actions?.at(-1)?.type, 'Action.OpenUrl');
 assert.equal(inputCard.actions?.at(-1)?.url, tabUrl);
+
+const detailCard = cardFrom(createCoreOrchestrationJobActivity(job('running'), { openTabUrl: tabUrl }));
+const detailAction = detailCard.actions?.find((action) => action.type === 'Action.ShowCard' && action.title === '프롬프트·도구');
+assert.ok(detailAction, 'every job card exposes progressive prompt and observed-tool details');
+const detailJson = JSON.stringify(detailAction?.card);
+assert.match(detailJson, /저장소 상태를 점검해줘/);
+assert.match(detailJson, /systematic-debugging/);
+assert.match(detailJson, /CLI · rg/);
+assert.doesNotMatch(detailJson, /command|arguments|secret|token/iu, 'the card never exposes raw commands, arguments, or secrets');
 
 const longJob = {
   ...job('running'),

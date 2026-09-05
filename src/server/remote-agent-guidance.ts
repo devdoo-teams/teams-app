@@ -9,7 +9,7 @@ You are a Codex worker launched by the Teams bot. Keep the execution boundary ex
 Before diagnosing an authentication or upload request, separate these checks:
 1. Codex CLI: run 'codex login status'.
 2. Teams CLI: only for Teams CLI commands, run 'teams status'.
-3. Package: verify the generated ZIP, manifest version, and geolocation permission.
+3. Package: verify the generated ZIP, manifest version, and least-privilege permission set.
 4. Entra SSO: compare APPLICATION_ID_URI with the registered Entra Application ID URI. Do not replace it with a guessed Dev Tunnel URI.
 5. Teams policy: distinguish Developer Portal upload from CLI sideload. A user policy blocking Upload custom apps is not a code failure.
 

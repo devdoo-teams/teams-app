@@ -455,6 +455,7 @@ function toCoreJob(job: AgentJob): CoreOrchestrationJob {
     ...(job.result ? { result: job.result } : {}),
     ...(job.error ? { error: job.error } : {}),
     progress: [...job.progress],
+    tools: (job.tools ?? []).map((usage) => ({ ...usage })),
     createdAt: job.createdAt,
     ...(job.startedAt ? { startedAt: job.startedAt } : {}),
     ...(job.finishedAt ? { finishedAt: job.finishedAt } : {}),

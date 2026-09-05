@@ -10,16 +10,6 @@ export const app = {
   getContext: async () => ({ app: { host: { clientType: 'web', name: 'Teams' } } }),
 };
 export const authentication = { getAuthToken: async () => 'test-token' };
-export const geoLocation = {
-  getCurrentLocation: async () => ({ latitude: 37.5, longitude: 127 }),
-  hasPermission: async () => true,
-  isSupported: () => false,
-  requestPermission: async () => true,
-};
-export const location = {
-  getLocation: () => undefined,
-  isSupported: () => false,
-};
 `;
 
 const appTestModule = 'export function App() { return null; }';

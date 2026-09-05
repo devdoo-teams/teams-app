@@ -80,7 +80,6 @@ const validManifest = {
   id: expected.appId,
   staticTabs: [{ contentUrl: `https://${expected.tabDomain}/tabs/home/` }],
   validDomains: [expected.tabDomain, 'token.botframework.com'],
-  devicePermissions: ['geolocation'],
   webApplicationInfo: {
     id: expected.clientId,
     resource: expected.applicationIdUri,
@@ -198,7 +197,7 @@ assert.throws(
   /Bot client ID|resource/i,
 );
 assert.throws(
-  () => assertPackagedManifest({ ...validManifest, devicePermissions: [] }, expected),
+  () => assertPackagedManifest({ ...validManifest, devicePermissions: ['geolocation'] }, expected),
   /geolocation/,
 );
 assert.doesNotThrow(() => assertPublicHealth(validHealth, expected));

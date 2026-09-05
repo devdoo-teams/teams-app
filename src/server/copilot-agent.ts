@@ -53,7 +53,7 @@ export class TeamsCodexAgent extends AbstractAgent {
   ) {
     super({
       agentId: AGENT_ID,
-      description: 'Teams 업무 허브의 업무·날씨·Codex 작업 에이전트',
+      description: 'Teams 업무 허브의 업무·Codex 작업 에이전트',
     });
   }
 
@@ -75,11 +75,6 @@ export class TeamsCodexAgent extends AbstractAgent {
       tools: {
         supported: true,
         items: [
-          {
-            name: 'showWeatherCard',
-            description: '현재 날씨를 Teams 업무 허브 카드로 표시합니다.',
-            parameters: { type: 'object' },
-          },
           {
             name: 'showTaskCard',
             description: '업무 목록을 Teams 업무 허브 카드로 표시합니다.',

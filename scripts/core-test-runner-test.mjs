@@ -76,8 +76,8 @@ async function assertProcessReaped(pid, label, timeoutMs = 2_000) {
   const a2aRuntimeContract = invocations.find(({ args }) => args.includes('scripts/teams-a2a-chat-regression-test.ts'));
   const a2aIndexRuntimeContract = invocations.find(({ args }) => args.includes('scripts/a2a-index-integration-test.mjs'));
   const outboundStoreContract = invocations.find(({ args }) => args.includes('scripts/teams-a2a-outbound-store-test.ts'));
-  const sourceContract = invocations.find(({ args }) => args.includes('scripts/client-item-mutation-test.ts'));
-  const renderContract = invocations.find(({ args }) => args.includes('scripts/client-work-item-render-test.ts'));
+  const sourceContract = invocations.find(({ args }) => args.includes('scripts/agent-only-hub-contract-test.mjs'));
+  const renderContract = invocations.find(({ args }) => args.includes('scripts/client-app-orchestration-integration-test.tsx'));
   assert.equal(clientBuild.kind, 'build', 'Core tests must build the client from the pinned release source');
   assert.deepEqual(clientBuild.args, ['scripts/build-client.mjs', '--core']);
   assert.equal(serverBuild.kind, 'build', 'Core tests must build the server from the pinned release source');
@@ -113,8 +113,8 @@ async function assertProcessReaped(pid, label, timeoutMs = 2_000) {
   assert.equal(a2aIndexRuntimeContract.kind, 'runtime', 'A2A index integration must execute against the compiled release bundle');
   assert.equal(a2aIndexRuntimeContract.cwd, '/repo', 'A2A index integration executes beside the commit-bound dist output');
   assert.equal(outboundStoreContract.cwd, '/tmp/pinned-source', 'Teams A2A outbound store test executes the pinned source tree');
-  assert.equal(sourceContract.cwd, '/tmp/pinned-source', 'TypeScript behavior tests execute the pinned source tree');
-  assert.equal(renderContract.cwd, '/tmp/pinned-source', 'client render tests execute the pinned source tree');
+  assert.equal(sourceContract.cwd, '/tmp/pinned-source', 'agent-only source contract tests execute the pinned source tree');
+  assert.equal(renderContract.cwd, '/tmp/pinned-source', 'agent-hub render tests execute the pinned source tree');
   assert.equal(
     invocations.filter(({ kind }) => kind === 'source').every(({ cwd }) => cwd === '/tmp/pinned-source'),
     true,

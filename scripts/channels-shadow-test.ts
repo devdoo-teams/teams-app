@@ -13,6 +13,7 @@ import {
   envelopeToChannelsIR,
   renderChannelsShadow,
 } from '../src/server/copilot-channels-shadow.js';
+import { TeamsCodexAgent } from '../src/server/copilot-agent.js';
 import { ChannelsShadowMonitor } from '../src/server/channels-shadow-monitor.js';
 import { renderGenUiCardDiagnostic } from '../src/server/genui-teams.js';
 
@@ -30,18 +31,6 @@ const allSections = [
   { type: 'text', title: '설명', text: '모바일 Teams 응답입니다.' },
   { type: 'facts', title: '사실', facts: [{ label: '환경', value: '테스트' }] },
   { type: 'stats', title: '통계', stats: [{ label: '활성', value: 2 }] },
-  {
-    type: 'weather',
-    title: '현재 날씨',
-    location: '서울',
-    temperature: 22,
-    apparentTemperature: 22.8,
-    humidity: 58,
-    windSpeed: 9.4,
-    precipitation: 0,
-    condition: '맑음',
-    source: 'Open-Meteo',
-  },
   { type: 'list', title: '업무', items: [{ label: 'GenUI 계약', value: '검증 중', status: '진행' }] },
   { type: 'progress', title: '진행률', progress: 50 },
   { type: 'status', title: '상태', status: 'running', description: '정상' },
@@ -193,7 +182,7 @@ deliberateMismatchMonitor.record({
     sectionTypes: ['text', 'facts'],
   },
   shadowSignature: {
-    kind: 'weather',
+    kind: 'result',
     status: 'error',
     sectionTypes: ['facts', 'text'],
   },
@@ -220,10 +209,21 @@ assert.deepEqual(deliberateMismatchMonitor.snapshot(), {
 
 const privateHealthShape = JSON.stringify(deliberateMismatchMonitor.snapshot());
 assert(!privateHealthShape.includes('answer'));
-assert(!privateHealthShape.includes('weather'));
+assert(!privateHealthShape.includes('result'));
 assert(!privateHealthShape.includes('text'));
 assert(!privateHealthShape.includes('facts'));
 assert(!privateHealthShape.includes('token'));
 assert(!privateHealthShape.includes('https://'));
+
+const capabilities = await new TeamsCodexAgent(
+  undefined as never,
+  undefined as never,
+  { requesterId: 'shadow-test-user', tenantId: 'shadow-test-tenant' },
+).getCapabilities();
+assert.deepEqual(
+  capabilities.tools?.items.map((tool) => tool.name),
+  ['showTaskCard', 'workspaceApproval'],
+);
+assert.doesNotMatch(capabilities.identity?.description ?? '', /날씨|weather/i);
 
 console.log(`Channels shadow tests passed: ${GENUI_KINDS.length} kinds, ${GENUI_SECTION_TYPES.length} sections, ${GENUI_ACTIONS.length} actions, ${result.payloadBytes} bytes.`);

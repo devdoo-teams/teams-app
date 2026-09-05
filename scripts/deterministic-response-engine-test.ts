@@ -183,39 +183,6 @@ async function main(): Promise<void> {
     ));
     assert.ok((longHistory.envelope.sections[0]?.description?.length ?? 0) <= 2_000, 'history card descriptions stay within the GenUI schema bound');
 
-    const originalFetch = globalThis.fetch;
-    let fetchCalled = false;
-    globalThis.fetch = (async () => {
-      fetchCalled = true;
-      throw new Error('deterministic weather must not call a provider');
-    }) as typeof fetch;
-    try {
-      const weather = await engine.run(await createInput(itemStore, agentService, 'weather'));
-      assert.equal(weather.envelope.kind, 'answer');
-      assert.equal(weather.envelope.aiGenerated, false);
-      assert.equal(weather.toolCalls.length, 0, 'deterministic no-location weather must not call a demo provider');
-      assert.match(weather.text, /내 위치 사용|위치를 추측하지 않습니다/);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-    assert.equal(fetchCalled, false);
-
-    const liveWeather = await engine.run(await createInput(
-      itemStore,
-      agentService,
-      'weather',
-      [{ description: '날씨 컨텍스트', value: JSON.stringify({
-        source: 'open-meteo',
-        location: { name: '서울', latitude: 37.5665, longitude: 126.978, timezone: 'Asia/Seoul' },
-        current: {
-          time: '2026-08-08T00:00:00Z', temperature: 25, apparentTemperature: 26,
-          humidity: 60, windSpeed: 8, precipitation: 0, condition: '맑음', icon: 'sun',
-        },
-      }) }],
-    ));
-    assert.equal(liveWeather.envelope.kind, 'weather');
-    assert.equal(liveWeather.toolCalls[0]?.name, 'showWeatherCard');
-
     const approvalEnvelope = (createdJob: AgentJob) => GenUiEnvelopeV1Schema.parse({
       schemaVersion: '1',
       kind: 'approval',

@@ -93,6 +93,21 @@ if (process.argv.includes('exec')) {
   } else if (prompt.includes('CASE:slow')) {
     await new Promise(() => setInterval(() => {}, 1_000));
   } else {
+    emit({
+      type: 'tool.execution_start',
+      data: {
+        toolName: 'shell',
+        arguments: { command: 'git status --token must-never-persist' },
+      },
+    });
+    emit({
+      type: 'tool.execution_start',
+      data: {
+        mcpServerName: 'jira',
+        mcpToolName: 'search_issues',
+        arguments: { bearer: 'must-never-persist' },
+      },
+    });
     if (prompt.includes('CASE:progress')) {
       emit({ type: 'assistant.message', data: { messageId: 'progress-1', content: 'COPILOT_PROGRESS' } });
     }
@@ -262,14 +277,28 @@ try {
     provider: 'copilot',
     sessionId,
     finalResult: 'COPILOT_FINAL',
-    eventCount: 5,
+    eventCount: 7,
   });
   assert.deepEqual(events.map((event) => event.type), [
     'session.started',
     'turn.started',
+    'tool.started',
+    'tool.started',
     'agent.message',
     'turn.completed',
   ]);
+  assert.deepEqual(events[2], {
+    provider: 'copilot',
+    type: 'tool.started',
+    toolName: 'shell',
+  }, 'official Copilot toolName is preserved without arguments');
+  assert.deepEqual(events[3], {
+    provider: 'copilot',
+    type: 'tool.started',
+    mcpServerName: 'jira',
+    mcpToolName: 'search_issues',
+  }, 'official Copilot MCP identifiers are preserved without arguments');
+  assert.equal(JSON.stringify(events).includes('must-never-persist'), false);
 
   const args = JSON.parse(await fs.readFile(argvPath, 'utf8')) as string[];
   assert.deepEqual(args.slice(0, 4), [

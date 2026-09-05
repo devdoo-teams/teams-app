@@ -15,6 +15,7 @@ import type {
 type PanelPhase = 'loading' | 'ready' | 'error';
 
 const DEFAULT_CLIENT = createCoreOrchestrationClient();
+const ORCHESTRATION_POLL_INTERVAL_MS = 3_000;
 const statusLabels: Record<CoreOrchestrationJob['status'], string> = {
   queued: '대기 중',
   awaiting_approval: '승인 필요',
@@ -24,6 +25,13 @@ const statusLabels: Record<CoreOrchestrationJob['status'], string> = {
   failed: '실패',
   cancelled: '취소됨',
 };
+const toolCategoryLabels = {
+  skill: '스킬',
+  plugin: '플러그인',
+  mcp: 'MCP',
+  cli: 'CLI',
+  builtin: '기본 도구',
+} as const;
 
 function nextIdempotencyKey(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -114,6 +122,53 @@ export function createOrchestrationBusyController(): OrchestrationBusyController
   };
 }
 
+export type OrchestrationPollingController = {
+  start: () => void;
+  stop: () => void;
+};
+
+export function createOrchestrationPollingController<TTimer = ReturnType<typeof setTimeout>>(options: {
+  intervalMs?: number;
+  refresh: () => Promise<void>;
+  schedule?: (callback: () => Promise<void> | void, delay: number) => TTimer;
+  cancel?: (timer: TTimer) => void;
+}): OrchestrationPollingController {
+  const intervalMs = options.intervalMs ?? ORCHESTRATION_POLL_INTERVAL_MS;
+  const schedule = options.schedule
+    ?? ((callback, delay) => globalThis.setTimeout(() => void callback(), delay) as TTimer);
+  const cancel = options.cancel
+    ?? ((timer) => globalThis.clearTimeout(timer as ReturnType<typeof setTimeout>));
+  let active = false;
+  let timer: TTimer | undefined;
+
+  const scheduleNext = (): void => {
+    if (!active || timer !== undefined) return;
+    timer = schedule(async () => {
+      timer = undefined;
+      if (!active) return;
+      try {
+        await options.refresh();
+      } finally {
+        scheduleNext();
+      }
+    }, intervalMs);
+  };
+
+  return {
+    start() {
+      if (active) return;
+      active = true;
+      scheduleNext();
+    },
+    stop() {
+      active = false;
+      if (timer === undefined) return;
+      cancel(timer);
+      timer = undefined;
+    },
+  };
+}
+
 export type OrchestrationPanelViewProps = {
   phase: PanelPhase;
   jobs: readonly CoreOrchestrationJob[];
@@ -127,6 +182,7 @@ export type OrchestrationPanelViewProps = {
   error: string;
   notice: string;
   validationError: string;
+  lastUpdatedAt?: string;
   mobile: boolean;
   pendingConfirmation?: Readonly<{ kind: 'approve' | 'cancel'; jobId: string }> | null;
   onPromptChange: (value: string) => void;
@@ -191,8 +247,11 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
       <div className="section-heading">
         <div>
           <p className="eyebrow">TEAMS CORE</p>
-          <h2 id="orchestration-heading">에이전트 오케스트레이션</h2>
-          <p className="panel-description">인증된 Teams 범위에서 내구성 있는 작업을 제출하고 상태를 확인합니다.</p>
+          <h2 id="orchestration-heading">에이전트 작업</h2>
+          <p className="panel-description">
+            자동 새로고침 3초
+            {props.lastUpdatedAt ? ` · 마지막 업데이트 ${new Date(props.lastUpdatedAt).toLocaleTimeString('ko-KR')}` : ''}
+          </p>
         </div>
         <button className="secondary" disabled={props.phase === 'loading'} onClick={() => void props.onReload()} type="button">
           새로고침
@@ -298,6 +357,17 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
           <h3 id="orchestration-detail-heading">작업 상세</h3>
           <p><strong>상태:</strong> {statusLabels[props.selectedJob.status]}</p>
           <p><strong>작업 ID:</strong> {props.selectedJob.id}</p>
+          <p><strong>프롬프트:</strong> {props.selectedJob.prompt}</p>
+          <div>
+            <strong>제공자가 보고한 도구:</strong>
+            {(props.selectedJob.tools?.length ?? 0) > 0 ? (
+              <ul aria-label="관찰된 도구">
+                {props.selectedJob.tools?.map((usage) => (
+                  <li key={`${usage.category}:${usage.name}`}>{toolCategoryLabels[usage.category]} · {usage.name}</li>
+                ))}
+              </ul>
+            ) : <span> 없음 (스킬·플러그인은 제공자가 식별자를 보고한 경우에만 표시)</span>}
+          </div>
           {props.selectedJob.progress.length > 0 ? (
             <ul aria-label="작업 진행 기록">
               {props.selectedJob.progress.map((entry, index) => <li key={`${index}-${entry}`}>{entry}</li>)}
@@ -421,6 +491,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [validationError, setValidationError] = useState('');
+  const [lastUpdatedAt, setLastUpdatedAt] = useState('');
   const [pendingConfirmation, setPendingConfirmation] = useState<Readonly<{ kind: 'approve' | 'cancel'; jobId: string }> | null>(null);
   const busy = useMemo(() => createOrchestrationBusyController(), []);
   const submissionKeys = useRef(createSubmissionIdempotencyController());
@@ -433,12 +504,14 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     setSelectedJob(nextJob);
   }, []);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (options: { silent?: boolean } = {}) => {
     loadController.current?.abort();
     const controller = new AbortController();
     loadController.current = controller;
-    setPhase('loading');
-    setError('');
+    if (!options.silent) {
+      setPhase('loading');
+      setError('');
+    }
     try {
       const result = await client.listJobs(controller.signal);
       if (controller.signal.aborted) return;
@@ -450,17 +523,30 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
         if (supports(retained, 'submit')) return current;
         return result.providers.find((provider) => supports(provider, 'submit'))?.provider ?? '';
       });
+      setLastUpdatedAt(new Date().toISOString());
       setPhase('ready');
     } catch (caught) {
       if (controller.signal.aborted) return;
-      setError(errorMessage(caught));
-      setPhase('error');
+      if (options.silent) {
+        setNotice(`자동 업데이트 실패: ${errorMessage(caught)}`);
+      } else {
+        setError(errorMessage(caught));
+        setPhase('error');
+      }
     }
   }, [client]);
 
   useEffect(() => {
     void load();
-    return () => loadController.current?.abort();
+    const polling = createOrchestrationPollingController({
+      intervalMs: ORCHESTRATION_POLL_INTERVAL_MS,
+      refresh: () => load({ silent: true }),
+    });
+    polling.start();
+    return () => {
+      polling.stop();
+      loadController.current?.abort();
+    };
   }, [load]);
 
   const runMutation = useCallback(async (
@@ -561,6 +647,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     error={error}
     inputValue={inputValue}
     jobs={jobs}
+    lastUpdatedAt={lastUpdatedAt}
     mobile={isMobile}
     mode={mode}
     notice={notice}

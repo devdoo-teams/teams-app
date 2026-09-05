@@ -36,19 +36,19 @@ const execFileAsync = promisify(execFile);
 
 class ControlledRunner {
   private readonly runs: Array<{
-    onEvent?: (event: { type?: string; item?: { type?: string; text?: string }; thread_id?: string }) => Promise<void> | void;
+    onEvent?: (event: { type?: string; item?: { type?: string; text?: string; command?: string }; thread_id?: string }) => Promise<void> | void;
   }> = [];
   private readonly completions: Array<{
     resolve: (result: RunResult) => void;
     reject: (error: Error) => void;
-    onEvent?: (event: { type?: string; item?: { type?: string; text?: string }; thread_id?: string }) => Promise<void> | void;
+    onEvent?: (event: { type?: string; item?: { type?: string; text?: string; command?: string }; thread_id?: string }) => Promise<void> | void;
   }> = [];
   private readonly startWaiters: Array<{ count: number; resolve: () => void }> = [];
   readonly cancelled: string[] = [];
   starts = 0;
 
   async run(options: {
-    onEvent?: (event: { type?: string; item?: { type?: string; text?: string }; thread_id?: string }) => Promise<void> | void;
+    onEvent?: (event: { type?: string; item?: { type?: string; text?: string; command?: string }; thread_id?: string }) => Promise<void> | void;
   }): Promise<RunResult> {
     this.starts += 1;
     for (const waiter of this.startWaiters.splice(0)) {
@@ -104,13 +104,13 @@ class ControlledRunner {
     completion.reject(error);
   }
 
-  async emit(event: { type?: string; item?: { type?: string; text?: string }; thread_id?: string }, index = 0): Promise<void> {
+  async emit(event: { type?: string; item?: { type?: string; text?: string; command?: string }; thread_id?: string }, index = 0): Promise<void> {
     const completion = this.completions[index];
     assert.ok(completion, `missing controlled run ${index}`);
     await completion.onEvent?.(event);
   }
 
-  async emitRun(runIndex: number, event: { type?: string; item?: { type?: string; text?: string }; thread_id?: string }): Promise<void> {
+  async emitRun(runIndex: number, event: { type?: string; item?: { type?: string; text?: string; command?: string }; thread_id?: string }): Promise<void> {
     const run = this.runs[runIndex];
     assert.ok(run, `missing historical controlled run ${runIndex}`);
     await run.onEvent?.(event);
@@ -226,7 +226,7 @@ try {
   await runner.emit({ type: 'thread.started', thread_id: 'retry-thread' });
   await runner.emit({ type: 'turn.started' });
   await runner.emit({ type: 'item.completed', item: { type: 'agent_message', text: 'first progress update' } });
-  await runner.emit({ type: 'item.started', item: { type: 'command_execution' } });
+  await runner.emit({ type: 'item.started', item: { type: 'command_execution', command: '/bin/zsh -lc rg' } });
   runner.release(0);
   await waitForStatus(store, delayedJob.id, scope, 'completed');
   await waitForNotification(notifications, (notification) => notification.job.id === delayedJob.id && notification.phase === 'completed');
@@ -234,6 +234,11 @@ try {
   assert.ok(delayedNotifications.some((notification) => notification.message.includes('실행을 시작했습니다')), 'running ACK is delivered as a same-conversation notification');
   assert.ok(delayedNotifications.some((notification) => notification.kind === 'progress' && notification.phase === 'analysis'), 'running/progress notification is emitted for a delayed runner');
   assert.ok(delayedNotifications.some((notification) => notification.kind === 'progress' && notification.phase === 'tools'), 'tool progress notification is emitted');
+  assert.deepEqual(store.get(delayedJob.id, scope)?.tools, [{
+    category: 'cli',
+    name: 'rg',
+    observedAt: store.get(delayedJob.id, scope)?.tools?.[0]?.observedAt,
+  }], 'safe observed CLI identity is durably attached to the job without raw command arguments');
   assert.ok(delayedNotifications.some((notification) => notification.kind === 'progress' && notification.phase === 'agent-update'), 'agent update notification is emitted');
   assert.ok(delayedNotifications.some((notification) => notification.kind === 'result' && notification.phase === 'completed'), 'terminal completion notification is emitted');
   assert.ok(delayedNotifications.every((notification) => notification.conversationId === scope.conversationId), 'progress and completion notifications stay in the originating conversation');

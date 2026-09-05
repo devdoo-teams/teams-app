@@ -1,10 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
 import type { AgentJob } from './agent-job-store.js';
-import {
-  formatWeatherMessage,
-  type WeatherResponse,
-} from './weather-service.js';
 import { redactSensitiveText, redactSensitiveValue } from './sensitive-text.js';
 import {
   GENUI_SCHEMA_VERSION,
@@ -23,17 +19,6 @@ type TaskToolArgs = {
   total: number;
   open: number;
   done: number;
-};
-
-type WeatherToolArgs = {
-  location: string;
-  temperature: number;
-  apparentTemperature: number;
-  humidity: number;
-  windSpeed: number;
-  precipitation: number;
-  condition: string;
-  source: string;
 };
 
 type ApprovalToolArgs = {
@@ -104,29 +89,6 @@ function contextValue(input: ResponseEngineInput, keyword: string): unknown {
   } catch {
     return undefined;
   }
-}
-
-function isWeather(value: unknown): value is WeatherResponse {
-  const weather = value as WeatherResponse | undefined;
-  return Boolean(
-    weather?.location?.name
-      && Number.isFinite(weather.location.latitude)
-      && Number.isFinite(weather.location.longitude)
-      && weather.current,
-  );
-}
-
-function compactWeather(weather: WeatherResponse): WeatherToolArgs {
-  return {
-    location: weather.location.name,
-    temperature: weather.current.temperature,
-    apparentTemperature: weather.current.apparentTemperature,
-    humidity: weather.current.humidity,
-    windSpeed: weather.current.windSpeed,
-    precipitation: weather.current.precipitation,
-    condition: weather.current.condition,
-    source: weather.source === 'demo' ? '데모' : 'Open-Meteo',
-  };
 }
 
 function compactTasks(input: ResponseEngineInput): TaskToolArgs {
@@ -260,7 +222,7 @@ export class DeterministicResponseEngine implements ResponseEngine {
 
     const normalized = prompt.toLowerCase();
     if (/^(help|도움|사용법|명령)/i.test(normalized)) {
-      const text = `업무 허브 명령\n\n- 현재 업무 목록 보여줘\n- 현재 위치 날씨 보여줘\n- Codex 작업 상태 알려줘\n- 저장소를 분석해줘\n- write로 파일 변경 작업을 요청하면 승인 카드가 표시됩니다.\n\nCore 오케스트레이션\n${coreOrchestrationCommandHelp()}`;
+      const text = `에이전트 업무 허브 명령\n\n${coreOrchestrationCommandHelp()}\n\n읽기 작업은 agent run, 변경 작업은 승인 후 실행되는 agent write를 사용하세요.`;
       return output({ text, envelope: envelope({ kind: 'answer', id: 'help', title: '업무 허브 명령 안내', text }), toolCalls });
     }
 
@@ -273,50 +235,6 @@ export class DeterministicResponseEngine implements ResponseEngine {
         envelope: envelope({
           kind: 'task-list', id: 'workspace-list', title: '업무 목록', text,
           sections: [{ type: 'list', title: '업무', items: tasks.items.map((item) => ({ id: item.id, label: item.title, status: item.status })) }],
-        }),
-        toolCalls,
-      });
-    }
-
-    if (/(날씨|weather)/i.test(normalized)) {
-      const contextWeather = contextValue(input, '날씨');
-      if (!isWeather(contextWeather)) {
-        const text = '현재 위치 날씨를 확인하려면 Teams 탭에서 “내 위치 사용”을 눌러 위치 권한을 허용한 뒤 다시 요청하세요. 결정형 모드는 위치를 추측하지 않습니다.';
-        return output({
-          text,
-          envelope: envelope({
-            kind: 'answer',
-            id: 'weather-location-required',
-            title: '현재 위치 날씨',
-            text,
-            sections: [{ type: 'status', title: '위치 권한 필요', status: 'ready', description: text }],
-          }),
-          toolCalls,
-        });
-      }
-      const weather = contextWeather;
-      const text = `${formatWeatherMessage(weather, weather.source === 'demo')}\n\n탭의 “내 위치 사용” 버튼을 누르면 Teams 모바일 위치 권한으로 실시간 위치를 갱신할 수 있습니다.`;
-      emitTool({ name: 'showWeatherCard', args: compactWeather(weather) as unknown as Record<string, unknown>, result: text, weather });
-      return output({
-        text,
-        envelope: envelope({
-          kind: 'weather', id: `weather-${weather.location.latitude}-${weather.location.longitude}`, title: '현재 위치 날씨', text,
-          sections: [{
-            type: 'weather',
-            location: weather.location.name,
-            latitude: weather.location.latitude,
-            longitude: weather.location.longitude,
-            timezone: weather.location.timezone,
-            temperature: weather.current.temperature,
-            apparentTemperature: weather.current.apparentTemperature,
-            humidity: weather.current.humidity,
-            windSpeed: weather.current.windSpeed,
-            precipitation: weather.current.precipitation,
-            condition: weather.current.condition,
-            icon: weather.current.icon,
-            source: weather.source,
-            observedAt: weather.current.time,
-          }],
         }),
         toolCalls,
       });

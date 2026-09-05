@@ -87,7 +87,6 @@ try {
     CODEX_BIN: isolatedNodePath,
     CODEX_SCRIPT: 'scripts/fake-codex.mjs',
     COPILOTKIT_DETERMINISTIC_MODE: '',
-    WEATHER_MODE: 'demo',
     TEAMS_OPERATOR_REQUESTER_ALLOWLIST: `${tenantId}/${requesterId}`,
     MCP_PUBLIC_ENABLED: '',
     TEAMS_OPTIONAL_RUNTIME: '',

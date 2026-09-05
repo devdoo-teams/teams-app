@@ -45,7 +45,6 @@ async function expectStartupFailure(label, overrides, expectedOutput) {
       AGENT_WORKSPACE: root,
       CODEX_BIN: '',
       CODEX_SCRIPT: '',
-      WEATHER_MODE: 'live',
       TEAMS_USE_SDK: 'true',
       TEAMS_SKIP_AUTH: '',
       TEAMS_LOCAL_DEV: 'false',

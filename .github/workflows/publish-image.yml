@@ -116,8 +116,8 @@ jobs:
           ) {
             throw new Error('server build marker does not prove the exact clean Core source commit');
           }
-          if (manifest.version !== packageJson.version || manifest.devicePermissions?.includes('geolocation') !== true) {
-            throw new Error('packaged manifest version or geolocation permission is invalid');
+          if (manifest.version !== packageJson.version || manifest.devicePermissions?.includes('geolocation')) {
+            throw new Error('packaged manifest version or agent-only permissions are invalid');
           }
           const identity = {
             schema: 2,

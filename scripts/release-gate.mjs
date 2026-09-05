@@ -157,9 +157,9 @@ export function assertPackagedManifest(manifest, expected) {
     'packaged manifest validDomains must include token.botframework.com for Teams SSO redirect handling',
   );
   assert.equal(
-    manifest.devicePermissions?.includes('geolocation'),
-    true,
-    'packaged manifest must declare geolocation',
+    manifest.devicePermissions?.includes('geolocation') ?? false,
+    false,
+    'packaged manifest must not request removed geolocation',
   );
   assert.equal(
     manifest.webApplicationInfo?.id,

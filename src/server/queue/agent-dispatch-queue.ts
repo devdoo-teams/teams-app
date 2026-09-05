@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
 
+import type { CoreAgentToolUsage } from '../../shared/core-orchestration.js';
+
 export const AGENT_DISPATCH_SCHEMA_VERSION = 2 as const;
 export const LEGACY_AGENT_DISPATCH_SCHEMA_VERSION = 1 as const;
 export const AGENT_DISPATCH_WORKSPACE_REFERENCE = 'teams-core-worker-workspace' as const;
@@ -46,6 +48,8 @@ export type AgentDispatchCheckpoint = Readonly<{
   sequence: number;
   message: string;
   recordedAt?: string;
+  /** Bounded, argument-free identifiers reported by the execution provider. */
+  tools?: readonly CoreAgentToolUsage[];
 }>;
 
 export type AgentDispatchCompletionReceipt = Readonly<{

@@ -12,6 +12,7 @@ import {
   OrchestrationPanelView,
   validateOrchestrationSubmission,
 } from '../src/client/OrchestrationPanel.js';
+import * as orchestrationPanelModule from '../src/client/OrchestrationPanel.js';
 import type { CoreOrchestrationJob, CoreProviderFact } from '../src/shared/core-orchestration.js';
 
 const provider: CoreProviderFact = {
@@ -21,6 +22,43 @@ const provider: CoreProviderFact = {
   observedAt: '2026-09-03T00:59:00.000Z',
   source: 'runtime-probe',
 };
+
+const pollingFactory = (orchestrationPanelModule as Record<string, unknown>).createOrchestrationPollingController;
+assert.equal(typeof pollingFactory, 'function', 'the agent hub exposes a bounded non-overlapping polling controller');
+
+{
+  const scheduled: Array<{ callback: () => Promise<void> | void; delay: number; token: number }> = [];
+  const cancelled: number[] = [];
+  let resolveRefresh!: () => void;
+  let refreshCalls = 0;
+  const controller = (pollingFactory as (options: Record<string, unknown>) => {
+    start: () => void;
+    stop: () => void;
+  })({
+    intervalMs: 3_000,
+    refresh: async () => {
+      refreshCalls += 1;
+      await new Promise<void>((resolve) => { resolveRefresh = resolve; });
+    },
+    schedule: (callback: () => Promise<void> | void, delay: number) => {
+      const token = scheduled.length + 1;
+      scheduled.push({ callback, delay, token });
+      return token;
+    },
+    cancel: (token: number) => { cancelled.push(token); },
+  });
+  controller.start();
+  assert.equal(scheduled.length, 1, 'start schedules one bounded refresh');
+  assert.equal(scheduled[0]?.delay, 3_000);
+  const firstTick = scheduled[0]!.callback();
+  assert.equal(refreshCalls, 1);
+  assert.equal(scheduled.length, 1, 'no second refresh is scheduled while the first one is unresolved');
+  resolveRefresh();
+  await firstTick;
+  assert.equal(scheduled.length, 2, 'the next refresh is scheduled only after the previous request settles');
+  controller.stop();
+  assert.deepEqual(cancelled, [2], 'stop cancels the outstanding timer');
+}
 
 function task(
   status: CoreOrchestrationJob['status'],
@@ -255,6 +293,7 @@ const empty = renderToStaticMarkup(<OrchestrationPanelView
 assert.match(empty, /아직 실행한 작업이 없습니다/);
 assert.match(empty, /작업 내용/);
 assert.match(empty, /실행 제공자/);
+assert.match(empty, /자동 새로고침 3초/, 'the hub tells the user that progress is refreshed automatically');
 
 const approval = renderToStaticMarkup(<OrchestrationPanelView
   {...baseProps}
@@ -311,6 +350,24 @@ assert.match(unavailableAndMobile, /<option disabled="" value="hermes">hermes \(
 assert.match(unavailableAndMobile, /hermes: 현재 사용할 수 없음/);
 assert.match(unavailableAndMobile, /Evidence prepared/);
 assert.match(unavailableAndMobile, /모바일에서 작업 제어가 원활하지 않으면 Teams 데스크톱 또는 웹 탭에서 계속하세요/);
+
+const promptAndTools = renderToStaticMarkup(<OrchestrationPanelView
+  {...baseProps}
+  phase="ready"
+  jobs={[task('running')]}
+  selectedJob={task('running', {
+    prompt: '배포 상태를 공식 문서와 비교해줘',
+    tools: [
+      { category: 'skill', name: 'systematic-debugging', observedAt: '2026-09-05T00:00:00.000Z' },
+      { category: 'mcp', name: 'jira/search_issues', observedAt: '2026-09-05T00:00:01.000Z' },
+    ],
+  })}
+  error=""
+  mobile={false}
+/>);
+assert.match(promptAndTools, /프롬프트:<\/strong> 배포 상태를 공식 문서와 비교해줘/);
+assert.match(promptAndTools, /스킬 · systematic-debugging/);
+assert.match(promptAndTools, /MCP · jira\/search_issues/);
 
 const error = renderToStaticMarkup(<OrchestrationPanelView
   {...baseProps}

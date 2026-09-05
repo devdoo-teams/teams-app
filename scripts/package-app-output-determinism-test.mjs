@@ -34,7 +34,7 @@ assert.equal(
 );
 
 const manifest = JSON.parse(execFileSync('unzip', ['-p', packagePath, 'manifest.json'], { encoding: 'utf8' }));
-assert.equal(manifest.devicePermissions?.includes('geolocation'), true, 'packaged manifest must declare geolocation');
+assert.equal(manifest.devicePermissions?.includes('geolocation') ?? false, false, 'packaged manifest must not request removed geolocation');
 assert.equal(JSON.stringify(manifest).includes('${{'), false, 'packaged manifest contains unresolved placeholders');
 
-console.log(`PASS: exact Teams package is deterministic (${sha256(second)}) and manifest permissions are verified`);
+console.log(`PASS: exact Teams package is deterministic (${sha256(second)}) and agent-only permissions are verified`);

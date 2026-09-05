@@ -1131,22 +1131,6 @@ assert.equal(createIssueBody.idempotencyKey, undefined, 'Jira create must not fo
 const integrated = createMcpGenUiServer({
   itemStore: { list: () => [], summary: () => ({ total: 0, open: 0, done: 0 }) },
   agentService: { getLocalOnly: () => undefined, listLocalOnly: () => [], countActiveLocalOnly: () => 0 },
-  getWeather: async () => ({
-    source: 'demo',
-    location: { name: 'test', latitude: 0, longitude: 0, timezone: 'UTC' },
-    current: {
-      time: '2026-08-19T00:00:00.000Z',
-      temperature: 20,
-      apparentTemperature: 20,
-      humidity: 50,
-      precipitation: 0,
-      weatherCode: 0,
-      isDay: true,
-      windSpeed: 0,
-      condition: 'clear',
-      icon: 'sun',
-    },
-  }),
   widgetHtml: '<!doctype html><html><body>test</body></html>',
   providerTools: createMcpProviderToolRegistry({
     principal: { tenantId: 'tenant-1', requesterId: 'requester-1' },

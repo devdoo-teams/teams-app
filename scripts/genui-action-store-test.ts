@@ -96,17 +96,10 @@ try {
   const personalTabUrl = 'https://teams.microsoft.com/l/entity/9b20fd94-2ac9-4423-ac1f-ff528ab245c1/home?webUrl=https%3A%2F%2Fexample.com%2Ftabs%2Fhome&label=%EC%97%85%EB%AC%B4%20%ED%97%88%EB%B8%8C';
   const configuredFactory = new GenUiResponseFactory(store, { openTabUrl: personalTabUrl });
   const helpCard = configuredFactory.help();
-  assert.equal(helpCard.actions.length, 6);
+  assert.equal(helpCard.actions.length, 1);
   assert.equal(helpCard.actions.at(-1)?.action, 'open-tab');
-  assert.deepEqual(
-    helpCard.actions.slice(0, -1).map((action) => action.action),
-    ['command', 'command', 'command', 'command', 'command'],
-    'help card keeps five command buttons plus the default tab link within the Teams action budget',
-  );
-  assert.deepEqual(
-    helpCard.actions.slice(0, -1).map((action) => action.entityId),
-    ['help', 'weather', 'status', 'list', 'work'],
-  );
+  assert.equal(helpCard.actions.some((action) => action.action === 'command'), false,
+    'the minimal help card exposes no legacy task, weather, or collaboration command palette');
   assert.equal(helpCard.actions.at(-1)?.entityId, 'home');
   assert.equal(helpCard.metadata.openTabUrl, personalTabUrl);
 

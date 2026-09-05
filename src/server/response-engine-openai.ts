@@ -19,13 +19,11 @@ import {
   type ResponseEngineOutput,
   type ResponseToolEvent,
 } from './response-engine.js';
-import { formatWeatherMessage, type WeatherResponse } from './weather-service.js';
 
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 const DEFAULT_MODEL = 'gpt-4o-mini';
 const MAX_CONVERSATION_MESSAGES = 11;
 const MAX_MESSAGE_LENGTH = 4_000;
-const MAX_SYSTEM_CONTEXT_LENGTH = 2_000;
 const MAX_TOOL_ARGUMENTS_LENGTH = 4_000;
 const MAX_TOOL_CALLS = 3;
 const MAX_MODEL_LENGTH = 120;
@@ -53,17 +51,6 @@ type ParsedAssistant = {
   toolCalls: OpenAIToolCall[];
 };
 
-type WeatherToolArgs = {
-  location: string;
-  temperature: number;
-  apparentTemperature: number;
-  humidity: number;
-  windSpeed: number;
-  precipitation: number;
-  condition: string;
-  source: string;
-};
-
 type TaskToolArgs = {
   items: Array<{ id: number; title: string; status: 'open' | 'done' }>;
   total: number;
@@ -78,7 +65,7 @@ type ApprovalToolArgs = {
 };
 
 class OpenAIProviderError extends Error {
-  constructor(readonly code: 'configuration' | 'timeout' | 'network' | 'http' | 'response' | 'tool' | 'location' | 'cancelled') {
+  constructor(readonly code: 'configuration' | 'timeout' | 'network' | 'http' | 'response' | 'tool' | 'cancelled') {
     super(code);
     this.name = 'OpenAIProviderError';
   }
@@ -111,45 +98,6 @@ function textContent(content: unknown): string {
     })
     .filter(Boolean)
     .join('\n');
-}
-
-function contextValue(input: ResponseEngineInput, keyword: string): unknown {
-  const context = input.request.context.find((entry) => entry.description.toLowerCase().includes(keyword));
-  if (!context) return undefined;
-  try {
-    return JSON.parse(context.value) as unknown;
-  } catch {
-    return undefined;
-  }
-}
-
-function isLiveWeather(value: unknown): value is WeatherResponse {
-  const weather = value as WeatherResponse | undefined;
-  return Boolean(
-    weather?.source === 'open-meteo'
-      && weather.location?.name
-      && Number.isFinite(weather.location.latitude)
-      && Number.isFinite(weather.location.longitude)
-      && weather.current
-      && Number.isFinite(weather.current.temperature)
-      && Number.isFinite(weather.current.apparentTemperature)
-      && Number.isFinite(weather.current.humidity)
-      && Number.isFinite(weather.current.windSpeed)
-      && Number.isFinite(weather.current.precipitation),
-  );
-}
-
-function compactWeather(weather: WeatherResponse): WeatherToolArgs {
-  return {
-    location: weather.location.name,
-    temperature: weather.current.temperature,
-    apparentTemperature: weather.current.apparentTemperature,
-    humidity: weather.current.humidity,
-    windSpeed: weather.current.windSpeed,
-    precipitation: weather.current.precipitation,
-    condition: weather.current.condition,
-    source: 'Open-Meteo',
-  };
 }
 
 function compactTasks(input: ResponseEngineInput): TaskToolArgs {
@@ -243,7 +191,6 @@ function providerErrorOutput(error: unknown): ResponseEngineOutput {
     }
     if (error.code === 'timeout') return errorOutput('GenAI 응답 시간이 초과되었습니다. 잠시 후 다시 시도하세요.', 'openai-timeout');
     if (error.code === 'tool') return errorOutput('GenAI가 유효하지 않은 도구 요청을 반환했습니다. 요청을 다시 시도하세요.', 'openai-invalid-tool');
-    if (error.code === 'location') return errorOutput('현재 위치 날씨 컨텍스트가 없습니다. 탭의 “내 위치 사용” 버튼을 눌러 위치 권한을 허용한 뒤 다시 시도하세요.', 'openai-location-required');
     if (error.code === 'http') return errorOutput('GenAI 제공자에 연결할 수 없습니다. 서버 설정과 제공자 상태를 확인하세요.', 'openai-provider-http');
     if (error.code === 'response') return errorOutput('GenAI 제공자의 응답 형식을 확인할 수 없습니다. 잠시 후 다시 시도하세요.', 'openai-invalid-response');
     return errorOutput('GenAI 제공자 요청에 실패했습니다. 잠시 후 다시 시도하세요.', 'openai-provider-error');
@@ -265,14 +212,7 @@ function getMessageHistory(input: ResponseEngineInput): OpenAIMessage[] {
   return [{ role: 'user', content: boundedText(input.prompt) }];
 }
 
-function locationSystemContext(input: ResponseEngineInput): string {
-  const weather = contextValue(input, '날씨');
-  if (!isLiveWeather(weather)) return '없음';
-  return JSON.stringify(weather).slice(0, MAX_SYSTEM_CONTEXT_LENGTH);
-}
-
 function forcedToolChoice(prompt: string): { type: 'function'; function: { name: string } } | 'auto' {
-  if (/(날씨|weather)/i.test(prompt)) return { type: 'function', function: { name: 'showWeatherCard' } };
   if (/(업무|할 일|task).*(목록|리스트|보여|확인)|^(list|업무 목록)$/i.test(prompt)) {
     return { type: 'function', function: { name: 'showTaskCard' } };
   }
@@ -309,7 +249,7 @@ function parseAssistant(payload: OpenAIChatResponse): ParsedAssistant {
 }
 
 function parseArguments(toolCall: OpenAIToolCall): Record<string, unknown> {
-  if (!['showWeatherCard', 'showTaskCard', 'workspaceApproval'].includes(toolCall.function.name)) {
+  if (!['showTaskCard', 'workspaceApproval'].includes(toolCall.function.name)) {
     throw new OpenAIProviderError('tool');
   }
   let value: unknown;
@@ -319,7 +259,7 @@ function parseArguments(toolCall: OpenAIToolCall): Record<string, unknown> {
     throw new OpenAIProviderError('tool');
   }
   if (!isRecord(value)) throw new OpenAIProviderError('tool');
-  if (toolCall.function.name === 'showWeatherCard' || toolCall.function.name === 'showTaskCard') {
+  if (toolCall.function.name === 'showTaskCard') {
     if (Object.keys(value).length > 0) throw new OpenAIProviderError('tool');
     return {};
   }
@@ -330,33 +270,6 @@ function parseArguments(toolCall: OpenAIToolCall): Record<string, unknown> {
 }
 
 function toolEnvelope(tool: ResponseToolEvent, text: string, model: string): GenUiEnvelopeV1 {
-  if (tool.name === 'showWeatherCard' && tool.weather) {
-    const weather = tool.weather;
-    return responseEnvelope({
-      kind: 'weather',
-      id: `weather-${weather.location.latitude}-${weather.location.longitude}`,
-      title: '현재 위치 날씨',
-      text,
-      aiGenerated: true,
-      model,
-      sections: [{
-        type: 'weather',
-        location: weather.location.name,
-        latitude: weather.location.latitude,
-        longitude: weather.location.longitude,
-        timezone: weather.location.timezone,
-        temperature: weather.current.temperature,
-        apparentTemperature: weather.current.apparentTemperature,
-        humidity: weather.current.humidity,
-        windSpeed: weather.current.windSpeed,
-        precipitation: weather.current.precipitation,
-        condition: weather.current.condition,
-        icon: weather.current.icon,
-        source: weather.source,
-        observedAt: weather.current.time,
-      }],
-    });
-  }
   if (tool.name === 'showTaskCard') {
     const tasks = tool.args as unknown as TaskToolArgs;
     return responseEnvelope({
@@ -389,10 +302,8 @@ function toolEnvelope(tool: ResponseToolEvent, text: string, model: string): Gen
 function buildMessages(input: ResponseEngineInput): OpenAIMessage[] {
   const system = [
     '너는 Teams 업무 허브의 GenAI 업무 도우미다.',
-    '짧고 자연스러운 한국어로 답하고, 업무 목록·날씨·파일 변경 요청에는 제공된 도구를 사용한다.',
-    '날씨 도구는 현재 위치 컨텍스트가 있을 때만 사용한다. 위치 컨텍스트가 없으면 좌표를 추측하지 말고 탭의 “내 위치 사용”을 안내한다.',
+    '짧고 자연스러운 한국어로 답하고, 업무 목록·파일 변경 요청에는 제공된 도구를 사용한다.',
     '파일 변경은 반드시 workspaceApproval 도구를 사용해 승인 카드를 먼저 보여준다.',
-    `현재 위치 날씨 컨텍스트: ${locationSystemContext(input)}`,
   ].join('\n');
   return [{ role: 'system', content: system.slice(0, MAX_MESSAGE_LENGTH) }, ...getMessageHistory(input)];
 }
@@ -435,9 +346,6 @@ export class OpenAIResponseEngine implements ResponseEngine {
         if (attempt > 0) throw new OpenAIProviderError('tool');
         const validatedToolCalls = assistant.toolCalls.map((toolCall) => {
           const args = parseArguments(toolCall);
-          if (toolCall.function.name === 'showWeatherCard' && !isLiveWeather(contextValue(input, '날씨'))) {
-            throw new OpenAIProviderError('location');
-          }
           return { toolCall, args };
         });
         messages = [
@@ -533,19 +441,6 @@ export class OpenAIResponseEngine implements ResponseEngine {
     input: ResponseEngineInput,
     args: Record<string, unknown>,
   ): Promise<{ event: ResponseToolEvent; approvalEnvelope?: GenUiEnvelopeV1 }> {
-    if (toolCall.function.name === 'showWeatherCard') {
-      const contextWeather = contextValue(input, '날씨');
-      if (!isLiveWeather(contextWeather)) throw new OpenAIProviderError('location');
-      const weather = contextWeather;
-      return {
-        event: {
-          name: 'showWeatherCard',
-          args: safeProviderValue(compactWeather(weather)) as Record<string, unknown>,
-          result: safeProviderText(formatWeatherMessage(weather, false)),
-          weather,
-        },
-      };
-    }
     if (toolCall.function.name === 'showTaskCard') {
       const tasks = compactTasks(input);
       return {

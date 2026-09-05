@@ -23,6 +23,7 @@ import {
   hashLegacyAgentDispatchTask,
   isTerminalDispatchStatus,
 } from './queue/agent-dispatch-queue.js';
+import { mergeObservedToolUsage } from './agent-tool-observation.js';
 
 export type AgentDispatchRecord = {
   taskId: string;
@@ -399,13 +400,22 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
     validateVisibility(visibilityTimeoutSeconds);
     if (!Number.isInteger(checkpoint.sequence) || checkpoint.sequence < 0) throw new TypeError('checkpoint sequence is invalid');
     const message = sanitizeDiagnostic(checkpoint.message, 'checkpoint message', DIAGNOSTIC_FIELD_LIMITS.checkpoint);
+    const tools = mergeObservedToolUsage([], checkpoint.tools ?? []);
+    if (tools.length !== (checkpoint.tools?.length ?? 0)) {
+      throw new TypeError('checkpoint tools must be unique bounded provider observations');
+    }
     const update = await this.client.updateMessage(lease.messageId, lease.popReceipt, undefined, visibilityTimeoutSeconds);
     const persisted = await this.compareAndSwap(canonicalTaskReference(lease.task), leaseIdentity(lease), (record) => {
       assertOwned(record, lease);
       if (isTerminalDispatchStatus(record.status)) throw new DispatchLeaseConflictError(lease.task.taskId);
       return {
         ...record,
-        checkpoint: { sequence: checkpoint.sequence, message, recordedAt: this.now() },
+        checkpoint: {
+          sequence: checkpoint.sequence,
+          message,
+          recordedAt: this.now(),
+          ...(tools.length > 0 ? { tools } : {}),
+        },
         leaseExpiresAt: new Date(this.clock.now().getTime() + visibilityTimeoutSeconds * 1_000).toISOString(),
         updatedAt: this.now(),
       };
@@ -937,6 +947,9 @@ function sanitizeRecordForResponse(value: AgentDispatchRecord): AgentDispatchRec
           DIAGNOSTIC_FIELD_LIMITS.checkpoint,
         ),
         recordedAt: value.checkpoint.recordedAt,
+        ...(mergeObservedToolUsage([], value.checkpoint.tools ?? []).length > 0
+          ? { tools: mergeObservedToolUsage([], value.checkpoint.tools ?? []) }
+          : {}),
       },
     } : {}),
     ...(value.receipt ? {

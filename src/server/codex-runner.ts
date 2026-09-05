@@ -31,6 +31,8 @@ export interface CodexRunEvent {
     text?: string;
     command?: string;
     message?: string;
+    name?: string;
+    server?: string;
   };
   thread_id?: string;
   error?: unknown;
@@ -180,6 +182,8 @@ function sanitizeRunEvent(value: Record<string, unknown>): CodexRunEvent {
     if (typeof value.item.text === 'string') item.text = value.item.text;
     if (typeof value.item.command === 'string') item.command = value.item.command;
     if (typeof value.item.message === 'string') item.message = value.item.message;
+    if (typeof value.item.name === 'string') item.name = value.item.name;
+    if (typeof value.item.server === 'string') item.server = value.item.server;
     if (Object.keys(item).length > 0) event.item = item;
   }
 

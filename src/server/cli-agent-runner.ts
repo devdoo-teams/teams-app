@@ -35,6 +35,10 @@ export type CliAgentLifecycleEvent = Readonly<{
   sessionId?: string;
   message?: string;
   tokenUsage?: AgentTokenUsage;
+  command?: string;
+  toolName?: string;
+  mcpServerName?: string;
+  mcpToolName?: string;
 }>;
 
 export type CliAgentRunResult = Readonly<{
@@ -283,7 +287,7 @@ function normalizeCodexEvent(event: CodexRunEvent): CliAgentLifecycleEvent | und
   }
   if (event.type === 'turn.started') return { provider: 'codex', type: 'turn.started' };
   if (event.type === 'item.started' && event.item?.type === 'command_execution') {
-    return { provider: 'codex', type: 'tool.started' };
+    return { provider: 'codex', type: 'tool.started', command: event.item.command };
   }
   if (event.type === 'item.completed' && event.item?.type === 'agent_message') {
     const message = event.item.text?.trim();
@@ -487,7 +491,13 @@ export class CliAgentRunner {
       }
       if (type === 'tool.execution_start') {
         if (!turnStarted) return terminate(new Error('GitHub Copilot CLI tool ordering is invalid.'));
-        queueEvent({ provider: 'copilot', type: 'tool.started' });
+        queueEvent({
+          provider: 'copilot',
+          type: 'tool.started',
+          ...(typeof data.toolName === 'string' ? { toolName: data.toolName } : {}),
+          ...(typeof data.mcpServerName === 'string' ? { mcpServerName: data.mcpServerName } : {}),
+          ...(typeof data.mcpToolName === 'string' ? { mcpToolName: data.mcpToolName } : {}),
+        });
         return;
       }
       if (type === 'assistant.turn_end') {
