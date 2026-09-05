@@ -27,6 +27,32 @@ const files = {
   'codex-package.json': `${JSON.stringify(packageManifest)}\n`,
 };
 
+function unsafeArchiveTransformArgs(versionOutput) {
+  if (/\bGNU tar\b/u.test(versionOutput)) {
+    return ['--absolute-names', '--transform=s,^escape$,../escape,'];
+  }
+  if (/\bbsdtar\b|\blibarchive\b/u.test(versionOutput)) {
+    return ['-s', ',^escape$,../escape,'];
+  }
+  throw new Error(`unsupported tar implementation: ${versionOutput.split('\n', 1)[0] || '<empty>'}`);
+}
+
+assert.deepEqual(
+  unsafeArchiveTransformArgs('tar (GNU tar) 1.35'),
+  ['--absolute-names', '--transform=s,^escape$,../escape,'],
+  'GNU tar must use its documented create-mode name transformation options',
+);
+assert.deepEqual(
+  unsafeArchiveTransformArgs('bsdtar 3.5.3 - libarchive 3.7.4'),
+  ['-s', ',^escape$,../escape,'],
+  'bsdtar must use its documented -s substitution option',
+);
+assert.throws(
+  () => unsafeArchiveTransformArgs('unknown tar 1.0'),
+  /unsupported tar implementation/i,
+  'unknown tar implementations must fail closed',
+);
+
 function sha256(filePath) {
   return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
@@ -45,9 +71,11 @@ function createArchive(name, { omit, overrides = {}, unsafeMember = false } = {}
   let args = ['-czf', archive, '-C', payload, '.'];
   if (unsafeMember) {
     fs.writeFileSync(path.join(payload, 'escape'), 'must not escape\n');
+    const versionResult = spawnSync('tar', ['--version'], { encoding: 'utf8' });
+    assert.equal(versionResult.status, 0, versionResult.stderr || versionResult.stdout);
     args = [
       '-czf', archive,
-      '-s', ',^escape$,../escape,',
+      ...unsafeArchiveTransformArgs(`${versionResult.stdout}\n${versionResult.stderr}`),
       '-C', payload,
       'bin', 'codex-path', 'codex-resources', 'codex-package.json', 'escape',
     ];

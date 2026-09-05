@@ -19,7 +19,7 @@ jobs:
     if: >-
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       TEAMS_SOURCE_COMMIT: ${{ github.sha }}
@@ -62,6 +62,23 @@ jobs:
             exit 1
           fi
           npm ci --ignore-scripts --no-audit --no-fund
+          az --version
+          az bicep version
+          if command -v bicep >/dev/null 2>&1; then
+            export BICEP_BIN="$(command -v bicep)"
+          else
+            bicep_config_dir="${AZURE_CONFIG_DIR:-$HOME/.azure}"
+            export BICEP_BIN="${bicep_config_dir}/bin/bicep"
+          fi
+          test -x "$BICEP_BIN"
+          export PATH="$(dirname "$BICEP_BIN"):$PATH"
+          "$BICEP_BIN" --version
+          tar --version
+          ruby --version
+          ruby -rpsych -e 'puts "Psych #{Psych::VERSION}"'
+          python3 --version
+          npm run test:azure-core
+          npm run build:worker
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             package_version="$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")"
             tag_version="${GITHUB_REF_NAME#v}"

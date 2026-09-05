@@ -48,7 +48,7 @@ stages:
       - job: ValidateReleaseArtifact
         displayName: Resolve the release artifact by repository and commit
         pool:
-          vmImage: ubuntu-latest
+          vmImage: ubuntu-24.04
         steps:
           - checkout: self
           - bash: |
@@ -76,7 +76,7 @@ stages:
       - job: VerifyEnvironmentApproval
         displayName: Query enabled approval check for the exact environment
         pool:
-          vmImage: ubuntu-latest
+          vmImage: ubuntu-24.04
         steps:
           - checkout: self
           - bash: |
@@ -101,15 +101,117 @@ stages:
               targetPath: $(Pipeline.Workspace)/approval-preflight
               artifact: approval-configuration-receipt
 
+  - stage: ValidateAzurePlatform
+    displayName: Verify Azure Core and RBAC before environment approval
+    dependsOn:
+      - ValidateHandoff
+    condition: and(succeeded(), eq(${{ parameters.rollback }}, false))
+    jobs:
+      - job: ValidatePinnedLinuxRuntime
+        displayName: Run the complete Azure gate on the pinned deployment OS
+        pool:
+          vmImage: ubuntu-24.04
+        steps:
+          - checkout: self
+          - download: current
+            artifact: validated-github-handoff
+          - task: UseNode@1
+            displayName: Install the pinned worker Node runtime
+            inputs:
+              version: 24.19.0
+          - bash: |
+              set -euo pipefail
+              platform_dir="$(Pipeline.Workspace)/azure-platform-preflight"
+              mkdir -p "$platform_dir" "$(Pipeline.Workspace)/azure-rbac-preflight"
+              release_receipt="$(Pipeline.Workspace)/validated-github-handoff/dist/evidence/azure-release-receipt.json"
+              commit="$(jq -er '.commit' "$release_receipt")"
+              git fetch --no-tags origin "$commit" --depth=1
+              git checkout --detach "$commit"
+              test "$(git rev-parse HEAD)" = "$commit"
+              test -z "$(git status --porcelain=v1 --untracked-files=no)"
+              node scripts/azure-release-input.mjs "$release_receipt"
+              npm ci --ignore-scripts --no-audit --no-fund
+              az --version
+              az bicep version
+              if command -v bicep >/dev/null 2>&1; then
+                export BICEP_BIN="$(command -v bicep)"
+              else
+                bicep_config_dir="${AZURE_CONFIG_DIR:-$HOME/.azure}"
+                export BICEP_BIN="${bicep_config_dir}/bin/bicep"
+              fi
+              test -x "$BICEP_BIN"
+              export PATH="$(dirname "$BICEP_BIN"):$PATH"
+              bicep_version="$("$BICEP_BIN" --version)"
+              tar_version="$(tar --version | sed -n '1p')"
+              ruby_version="$(ruby --version)"
+              psych_version="$(ruby -rpsych -e 'print Psych::VERSION')"
+              python_version="$(python3 --version 2>&1)"
+              printf '%s\n' "$bicep_version" "$tar_version" "$ruby_version" "Psych $psych_version" "$python_version"
+              export TEAMS_SOURCE_COMMIT="$commit"
+              npm run test:azure-core
+              npm run build:worker
+              test "$(git rev-parse HEAD)" = "$commit"
+              test -z "$(git status --porcelain=v1 --untracked-files=no)"
+              jq -n \
+                --arg sourceCommit "$commit" \
+                --arg runnerImage "ubuntu-24.04" \
+                --arg nodeVersion "$(node --version)" \
+                --arg bicepVersion "$bicep_version" \
+                --arg tarVersion "$tar_version" \
+                --arg rubyVersion "$ruby_version" \
+                --arg psychVersion "$psych_version" \
+                --arg pythonVersion "$python_version" \
+                '{schemaVersion:1,kind:"azure-platform-preflight",status:"READY",sourceCommit:$sourceCommit,runnerImage:$runnerImage,nodeVersion:$nodeVersion,bicepVersion:$bicepVersion,tarVersion:$tarVersion,rubyVersion:$rubyVersion,psychVersion:$psychVersion,pythonVersion:$pythonVersion,azureCorePassed:true,workerBuildPassed:true}' \
+                > "$platform_dir/azure-platform-preflight-receipt.json"
+            displayName: Test exact source with hosted Bicep, GNU tar, Ruby, and Python
+          - task: AzureCLI@2
+            displayName: Verify caller-effective Azure RBAC permissions before approval
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                test "$(az account show --query id --output tsv)" = "$AZURE_SUBSCRIPTION_ID"
+                receipt_dir="$(Pipeline.Workspace)/azure-rbac-preflight"
+                permissions="$(Agent.TempDirectory)/azure-rbac-permissions.json"
+                mkdir -p "$receipt_dir"
+                trap 'rm -f "$permissions"' EXIT
+                az rest \
+                  --method get \
+                  --url "https://management.azure.com/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourcegroups/${AZURE_RESOURCE_GROUP}/providers/Microsoft.Authorization/permissions?api-version=2022-04-01" \
+                  --only-show-errors \
+                  --output json > "$permissions"
+                node scripts/azure-deployment-rbac.mjs \
+                  "$permissions" \
+                  "$receipt_dir/azure-deployment-rbac-receipt.json"
+            env:
+              AZURE_RESOURCE_GROUP: $(azureResourceGroup)
+              AZURE_SUBSCRIPTION_ID: $(azureSubscriptionId)
+          - task: PublishPipelineArtifact@1
+            displayName: Retain pre-approval Azure platform receipt
+            inputs:
+              targetPath: $(Pipeline.Workspace)/azure-platform-preflight
+              artifact: azure-platform-preflight-receipt
+          - task: PublishPipelineArtifact@1
+            displayName: Retain pre-approval caller-effective RBAC receipt
+            condition: always()
+            inputs:
+              targetPath: $(Pipeline.Workspace)/azure-rbac-preflight
+              artifact: azure-rbac-preflight-receipt
+
   - stage: DeployCanary
     displayName: Provision and deploy immutable canary revision
     dependsOn:
       - ValidateHandoff
       - ValidateApprovalConfiguration
+      - ValidateAzurePlatform
     condition: and(succeeded(), eq(${{ parameters.rollback }}, false))
     jobs:
       - deployment: DeployCanaryRevision
         displayName: Deploy main.bicep with the verified release identity
+        pool:
+          vmImage: ubuntu-24.04
         environment: ${{ parameters.azureDevOpsEnvironment }}
         strategy:
           runOnce:
@@ -120,40 +222,14 @@ stages:
                   artifact: validated-github-handoff
                 - download: current
                   artifact: approval-configuration-receipt
+                - download: current
+                  artifact: azure-platform-preflight-receipt
+                - download: current
+                  artifact: azure-rbac-preflight-receipt
                 - task: UseNode@1
                   displayName: Install the pinned worker Node runtime
                   inputs:
                     version: 24.19.0
-                - task: AzureCLI@2
-                  displayName: Verify caller-effective Azure RBAC permissions
-                  inputs:
-                    azureSubscription: $(azureServiceConnection)
-                    scriptType: bash
-                    scriptLocation: inlineScript
-                    inlineScript: |
-                      set -euo pipefail
-                      test "$(az account show --query id --output tsv)" = "$AZURE_SUBSCRIPTION_ID"
-                      receipt_dir="$(Pipeline.Workspace)/azure-rbac-preflight"
-                      permissions="$(Agent.TempDirectory)/azure-rbac-permissions.json"
-                      mkdir -p "$receipt_dir"
-                      trap 'rm -f "$permissions"' EXIT
-                      az rest \
-                        --method get \
-                        --url "https://management.azure.com/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourcegroups/${AZURE_RESOURCE_GROUP}/providers/Microsoft.Authorization/permissions?api-version=2022-04-01" \
-                        --only-show-errors \
-                        --output json > "$permissions"
-                      node scripts/azure-deployment-rbac.mjs \
-                        "$permissions" \
-                        "$receipt_dir/azure-deployment-rbac-receipt.json"
-                  env:
-                    AZURE_RESOURCE_GROUP: $(azureResourceGroup)
-                    AZURE_SUBSCRIPTION_ID: $(azureSubscriptionId)
-                - task: PublishPipelineArtifact@1
-                  displayName: Retain caller-effective Azure RBAC receipt
-                  condition: always()
-                  inputs:
-                    targetPath: $(Pipeline.Workspace)/azure-rbac-preflight
-                    artifact: azure-rbac-preflight-receipt
                 - task: AzureCLI@2
                   displayName: Provision from Bicep outputs, import digest, deploy, and verify
                   inputs:
@@ -170,8 +246,17 @@ stages:
                       test "$CODEX_PACKAGE_URL" = "$expected_codex_package_url"
                       receipt="$(Pipeline.Workspace)/validated-github-handoff/dist/evidence/azure-release-receipt.json"
                       provenance="$(Pipeline.Workspace)/validated-github-handoff/github-handoff-provenance.json"
+                      platform_receipt="$(Pipeline.Workspace)/azure-platform-preflight-receipt/azure-platform-preflight-receipt.json"
+                      rbac_receipt="$(Pipeline.Workspace)/azure-rbac-preflight-receipt/azure-deployment-rbac-receipt.json"
                       node scripts/azure-release-input.mjs "$receipt"
                       commit="$(jq -er '.commit' "$receipt")"
+                      test "$(jq -er '.sourceCommit' "$platform_receipt")" = "$commit"
+                      test "$(jq -er '.runnerImage' "$platform_receipt")" = "ubuntu-24.04"
+                      test "$(jq -er '.status' "$platform_receipt")" = "READY"
+                      test "$(jq -er '.azureCorePassed' "$platform_receipt")" = "true"
+                      test "$(jq -er '.workerBuildPassed' "$platform_receipt")" = "true"
+                      test "$(jq -er '.status' "$rbac_receipt")" = "READY"
+                      test "$(jq -er '.missingActions | length' "$rbac_receipt")" = "0"
                       version="$(jq -er '.version' "$receipt")"
                       source_image="$(jq -er '.image' "$receipt")"
                       source_digest="$(jq -er '.imageDigest' "$receipt")"
@@ -213,7 +298,6 @@ stages:
                       test -x "$BICEP_BIN"
                       export PATH="$(dirname "$BICEP_BIN"):$PATH"
                       "$BICEP_BIN" --version
-                      npm run test:azure-core
                       npm run build:worker
 
                       worker_stage="$(Agent.TempDirectory)/worker-runtime"
@@ -310,6 +394,8 @@ stages:
     jobs:
       - deployment: RollbackCanaryRevision
         displayName: Activate, verify, and route to the previous revision
+        pool:
+          vmImage: ubuntu-24.04
         environment: ${{ parameters.azureDevOpsEnvironment }}
         strategy:
           runOnce:

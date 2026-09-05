@@ -19,14 +19,23 @@ assert.deepEqual(
 
 const a2aStart = workflow.indexOf('\n  a2a:');
 const continuityStart = workflow.indexOf('\n  continuity:');
+const azureStart = workflow.indexOf('\n  azure:');
+const optionalStart = workflow.indexOf('\n  optional:');
 assert.notEqual(a2aStart, -1, 'workflow must define an A2A job');
 assert.notEqual(continuityStart, -1, 'workflow must define a continuity job');
+assert.notEqual(azureStart, -1, 'workflow must define an Azure deployment-runner compatibility job');
+assert.notEqual(optionalStart, -1, 'workflow must define an optional-provider job');
 const a2aJob = workflow.slice(a2aStart, continuityStart);
 assert.match(
   a2aJob,
   /npm run build:core/,
   'A2A runtime integration fixtures must build the commit-bound Core dist in their isolated job',
 );
+const azureJob = workflow.slice(azureStart, optionalStart);
+assert.match(azureJob, /runs-on:\s*ubuntu-24\.04/, 'Azure compatibility must run on the pinned deployment OS');
+assert.match(azureJob, /az bicep version/, 'Azure compatibility must validate the hosted Azure CLI Bicep integration');
+assert.match(azureJob, /npm run test:azure-core/, 'Azure compatibility must run the complete explicit Azure Core inventory');
+assert.match(azureJob, /npm run build:worker/, 'Azure compatibility must build the Linux worker before promotion');
 
 const artifactStart = workflow.indexOf('\n  artifact:');
 assert.notEqual(artifactStart, -1, 'workflow must define an immutable artifact job');
@@ -69,8 +78,8 @@ assert.doesNotMatch(
 );
 assert.match(
   artifactHeader,
-  /needs:\s*\[\s*core\s*,\s*a2a\s*,\s*continuity\s*,\s*container\s*\]/,
-  'immutable artifact job must wait for Core, A2A, continuity, and Docker runtime verification',
+  /needs:\s*\[\s*core\s*,\s*a2a\s*,\s*continuity\s*,\s*azure\s*,\s*container\s*\]/,
+  'immutable artifact job must wait for Core, A2A, continuity, Azure, and Docker runtime verification',
 );
 for (const script of [
   'check:deployment',
@@ -96,6 +105,11 @@ assert.match(
 const containerStart = workflow.indexOf('\n  container:');
 assert.notEqual(containerStart, -1, 'workflow must define a container build job');
 const containerJob = workflow.slice(containerStart, artifactStart);
+assert.match(
+  containerJob,
+  /needs:\s*\[\s*core\s*,\s*a2a\s*,\s*continuity\s*,\s*azure\s*\]/,
+  'container verification must wait for Azure deployment-runner compatibility',
+);
 assert.match(
   containerJob,
   /docker\/build-push-action@[0-9a-f]{40}/,

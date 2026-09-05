@@ -39,6 +39,10 @@ requireText(/subject-path:\s*dist\/evidence\/azure-release-receipt\.json/, 'the 
 requireText(/subject-path:\s*appPackage\/build\/teams-sdk-mvp\.zip/, 'the Teams package bound by the receipt must be attested');
 requireText(/npm run typecheck:core/, 'publishing must verify the Core source first');
 requireText(/npm run test:core/, 'publishing must verify the Core test suite first');
+requireText(/runs-on:\s*ubuntu-24\.04/, 'publishing must pin the same supported Ubuntu image used by Azure canary validation');
+requireText(/az bicep version/, 'publishing must validate the hosted Azure CLI Bicep integration');
+requireText(/npm run test:azure-core/, 'publishing must pass the Azure deployment-runner regression inventory before image push');
+requireText(/npm run build:worker/, 'publishing must build the Linux worker before image push');
 requireText(/npm run check:deployment/, 'publishing must verify the deployment variable contract');
 requireText(/npm run package:app/, 'publishing must package the exact source commit');
 requireText(/teamsPackageSha256/, 'promotion evidence must bind the Teams package digest');
@@ -67,10 +71,18 @@ assert.ok(packageAttestationStep < identityUploadStep, 'the handoff artifact mus
 requireText(/npm run validate:manifest/, 'publishing must verify the Teams manifest');
 requireText(/GITHUB_REF_NAME#v/, 'version-tag publication must derive the package version from the tag');
 requireText(/package_version.*tag_version/s, 'version-tag publication must compare the package and tag versions');
+const azureEnvironmentNames = [...new Set(
+  [...workflow.matchAll(/\bAZURE_[A-Z0-9_]+\b/g)].map((match) => match[0]),
+)];
+assert.deepEqual(
+  azureEnvironmentNames,
+  ['AZURE_CONFIG_DIR'],
+  'image publication may read only Azure CLI local configuration location, never Azure credentials or deployment targets',
+);
 assert.doesNotMatch(
   workflow,
-  /TEAMS_PUBLIC_URL|AZURE_|VERCEL_|FLY_|RENDER_|RAILWAY_|deployment endpoint/i,
-  'image publication must not guess or invoke a hosting provider',
+  /TEAMS_PUBLIC_URL|VERCEL_|FLY_|RENDER_|RAILWAY_|deployment endpoint|azure\/login|az deployment|az containerapp|az acr/i,
+  'image publication may validate Azure tooling but must not authenticate to or mutate a hosting provider',
 );
 
 console.log('PASS: immutable image publish workflow contract');

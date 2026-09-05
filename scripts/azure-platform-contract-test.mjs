@@ -571,10 +571,11 @@ try {
 
   const validateStage = findStage(pipeline, 'ValidateHandoff');
   const approvalStage = findStage(pipeline, 'ValidateApprovalConfiguration');
+  const platformStage = findStage(pipeline, 'ValidateAzurePlatform');
   const deployStage = findStage(pipeline, 'DeployCanary');
   const rollbackStage = findStage(pipeline, 'RollbackCanary');
-  assert.ok(validateStage && approvalStage && deployStage && rollbackStage, 'pipeline must model handoff, approval preflight, deploy, and rollback as separate stages');
-  assert.deepEqual(deployStage.dependsOn, ['ValidateHandoff', 'ValidateApprovalConfiguration']);
+  assert.ok(validateStage && approvalStage && platformStage && deployStage && rollbackStage, 'pipeline must model handoff, approval configuration, Azure platform preflight, deploy, and rollback as separate stages');
+  assert.deepEqual(deployStage.dependsOn, ['ValidateHandoff', 'ValidateApprovalConfiguration', 'ValidateAzurePlatform']);
   assert.deepEqual(rollbackStage.dependsOn, ['ValidateApprovalConfiguration']);
 
   const validateScripts = allSteps(validateStage).map((step) => step.bash).filter(Boolean);
@@ -584,30 +585,57 @@ try {
   const approvalScripts = allSteps(approvalStage).map((step) => step.bash).filter(Boolean);
   assert.ok(approvalScripts.some((script) => script.includes('scripts/azure-approval-check.mjs')), 'approval stage must query and receipt the external Azure DevOps check');
 
+  const platformJob = platformStage?.jobs?.[0];
+  assert.equal(platformJob?.pool?.vmImage, 'ubuntu-24.04', 'Azure platform tests must pin the same supported Linux runner used for deployment');
+  const platformSteps = allSteps(platformStage);
+  const platformScripts = platformSteps.map((step) => step.bash).filter(Boolean);
+  const platformScript = platformScripts.find((script) => script.includes('npm run test:azure-core'));
+  assert.ok(platformScript, 'Azure Core must run before the deployment environment approval is requested');
+  assert.ok(platformScript?.includes('git checkout --detach "$commit"'), 'pre-approval Azure tests must use the exact attested source commit');
+  assert.ok(platformScript?.includes('az bicep version'), 'pre-approval Azure tests must validate Azure CLI Bicep integration');
+  assert.ok(platformScript?.includes('command -v bicep'), 'pre-approval Azure tests must resolve the hosted Bicep executable');
+  assert.ok(platformScript?.includes('npm run build:worker'), 'pre-approval Azure tests must build the Linux worker');
+  const platformRbacStep = platformSteps.find((step) => (
+    step.task === 'AzureCLI@2' && step.inputs?.inlineScript?.includes('scripts/azure-deployment-rbac.mjs')
+  ));
+  assert.ok(platformRbacStep, 'caller-effective RBAC must be verified before the deployment environment approval');
+  assert.ok(
+    platformSteps.some((step) => step.task === 'PublishPipelineArtifact@1'
+      && step.inputs?.artifact === 'azure-platform-preflight-receipt'),
+    'pipeline must retain the successful pre-approval Azure platform receipt',
+  );
+  assert.ok(
+    platformSteps.some((step) => step.task === 'PublishPipelineArtifact@1'
+      && step.inputs?.artifact === 'azure-rbac-preflight-receipt'),
+    'pipeline must retain the pre-approval caller-effective RBAC receipt',
+  );
+
   const deploySteps = allSteps(deployStage);
   const azureCliSteps = deploySteps.filter((step) => step.task === 'AzureCLI@2');
-  const rbacPreflightStep = azureCliSteps.find((step) => (
-    step.inputs?.inlineScript?.includes('scripts/azure-deployment-rbac.mjs')
-  ));
   const deployStep = azureCliSteps.find((step) => step.inputs?.inlineScript?.includes('az deployment group create'));
   const deployScript = deployStep?.inputs?.inlineScript;
-  assert.ok(rbacPreflightStep, 'deployment must validate caller-effective RBAC permissions before mutating ARM');
   assert.ok(
-    rbacPreflightStep?.inputs?.inlineScript?.includes('/providers/Microsoft.Authorization/permissions?api-version=2022-04-01'),
-    'RBAC preflight must use the official resource-group caller-permissions API',
+    platformRbacStep?.inputs?.inlineScript?.includes('/providers/Microsoft.Authorization/permissions?api-version=2022-04-01'),
+    'pre-approval RBAC must use the official resource-group caller-permissions API',
+  );
+  assert.equal(
+    azureCliSteps.some((step) => step.inputs?.inlineScript?.includes('scripts/azure-deployment-rbac.mjs')),
+    false,
+    'deployment must consume the pre-approval RBAC receipt instead of discovering permissions after approval',
   );
   assert.ok(
-    deploySteps.indexOf(rbacPreflightStep) < deploySteps.indexOf(deployStep),
-    'RBAC preflight must execute before the first resource-group deployment',
+    deploySteps.some((step) => step.download === 'current' && step.artifact === 'azure-platform-preflight-receipt'),
+    'deployment must consume the exact pre-approval platform receipt',
   );
-  const rbacReceiptStep = deploySteps.find((step) => step.task === 'PublishPipelineArtifact@1'
-    && step.inputs?.artifact === 'azure-rbac-preflight-receipt');
-  assert.ok(rbacReceiptStep, 'pipeline must retain the RBAC preflight receipt');
-  assert.equal(rbacReceiptStep?.condition, 'always()', 'RBAC receipt must survive a fail-closed preflight');
+  assert.ok(
+    deploySteps.some((step) => step.download === 'current' && step.artifact === 'azure-rbac-preflight-receipt'),
+    'deployment must consume the pre-approval RBAC receipt',
+  );
   assert.ok(deployScript?.includes('az deployment group create'), 'deployment must provision with an Azure resource-group deployment');
   assert.ok(deployScript?.includes('--template-file infra/azure/main.bicep'), 'deployment must execute the compiled main.bicep contract');
   assert.ok(deployScript?.includes('scripts/azure-deployment-contract.mjs outputs'), 'deployment must consume validated Bicep outputs');
-  assert.ok(deployScript?.includes('npm run test:azure-core'), 'Azure deployment must run the single bounded Azure Core regression gate');
+  assert.equal(deployScript?.includes('npm run test:azure-core'), false, 'the first Azure Core execution must not be deferred until after approval');
+  assert.ok(deployScript?.includes('azure-platform-preflight-receipt.json'), 'deployment must bind the pre-approval receipt to the exact release commit');
   assert.equal(
     deployScript?.includes('az bicep install'),
     false,
