@@ -331,14 +331,14 @@ try {
 
   const cosmos = findResource(resources, 'Microsoft.DocumentDB/databaseAccounts');
   assert.equal(cosmos.properties?.disableLocalAuth, true, 'Cosmos must reject key-based local authentication and use RBAC only');
-  assert.equal(cosmos.properties?.enableAutomaticFailover, false, 'single-region canary Cosmos must explicitly disable automatic failover');
+  assert.equal(cosmos.properties?.enableAutomaticFailover, true, 'canary Cosmos must preserve the live automatic-failover setting');
   assert.equal(cosmos.properties?.minimalTlsVersion, 'Tls12', 'Cosmos must explicitly require the documented TLS 1.2 baseline');
   assert.equal(cosmos.properties?.defaultIdentity, 'FirstPartyIdentity', 'Cosmos must explicitly preserve its documented default identity');
   assert.equal(cosmos.properties?.enableAnalyticalStorage, false, 'Cosmos analytical storage must remain explicitly disabled');
   assert.equal(
     cosmos.properties?.analyticalStorageConfiguration?.schemaType,
-    'FullFidelity',
-    'disabled Cosmos analytical storage must preserve the documented schema baseline',
+    'WellDefined',
+    'disabled Cosmos analytical storage must preserve the live schema setting',
   );
   assert.ok(
     !(cosmos.properties?.capabilities ?? []).some((capability) => capability.name === 'EnableServerless'),
@@ -367,7 +367,7 @@ try {
       automatic: true,
       indexingMode: 'consistent',
       includedPaths: [{ path: '/*' }],
-      excludedPaths: [{ path: '/_etag/?' }],
+      excludedPaths: [{ path: '/"_etag"/?' }],
     },
     'Cosmos container must explicitly preserve the documented default indexing policy',
   );

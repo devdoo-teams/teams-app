@@ -275,6 +275,99 @@ function collectPropertyChanges(entries, result, depth = 0) {
   return true;
 }
 
+const providerNoiseRules = Object.freeze([
+  Object.freeze({
+    rule: 'managed-environment-customer-id-reference',
+    changeType: 'Modify',
+    resource: /^providers\/microsoft\.app\/managedenvironments\/teamsapp-env-[a-z0-9]{8}$/u,
+    propertyChanges: Object.freeze([
+      Object.freeze({
+        path: 'properties.appLogsConfiguration.logAnalyticsConfiguration.customerId',
+        propertyChangeType: 'Modify',
+      }),
+    ]),
+  }),
+  Object.freeze({
+    rule: 'cosmos-account-read-only-endpoint',
+    changeType: 'Modify',
+    resource: /^providers\/microsoft\.documentdb\/databaseaccounts\/teamsapp-cosmos-[a-z0-9]{8}$/u,
+    propertyChanges: Object.freeze([
+      Object.freeze({ path: 'properties.sqlEndpoint', propertyChangeType: 'Delete' }),
+    ]),
+  }),
+  Object.freeze({
+    rule: 'cosmos-database-request-options',
+    changeType: 'Modify',
+    resource: /^providers\/microsoft\.documentdb\/databaseaccounts\/teamsapp-cosmos-[a-z0-9]{8}\/sqldatabases\/teamsapp$/u,
+    propertyChanges: Object.freeze([
+      Object.freeze({ path: 'properties.options', propertyChangeType: 'Create' }),
+    ]),
+  }),
+  Object.freeze({
+    rule: 'application-insights-rest-defaults',
+    changeType: 'Modify',
+    resource: /^providers\/microsoft\.insights\/components\/teamsapp-insights-[a-z0-9]{8}$/u,
+    propertyChanges: Object.freeze([
+      Object.freeze({ path: 'properties.Flow_Type', propertyChangeType: 'Create' }),
+      Object.freeze({ path: 'properties.Request_Source', propertyChangeType: 'Create' }),
+    ]),
+  }),
+  Object.freeze({
+    rule: 'incremental-smart-detection-ignore',
+    changeType: 'Ignore',
+    resource: /^providers\/microsoft\.insights\/actiongroups\/application insights smart detection$/u,
+    propertyChanges: Object.freeze([]),
+  }),
+]);
+
+function sortedPropertyChanges(propertyChanges) {
+  return [...propertyChanges]
+    .map(({ path, propertyChangeType }) => ({
+      path: validatedPropertyPath(path),
+      propertyChangeType: String(propertyChangeType ?? ''),
+    }))
+    .sort((left, right) => `${left.path}\u0000${left.propertyChangeType}`
+      .localeCompare(`${right.path}\u0000${right.propertyChangeType}`));
+}
+
+function equalPropertyChanges(left, right) {
+  return JSON.stringify(sortedPropertyChanges(left)) === JSON.stringify(sortedPropertyChanges(right));
+}
+
+export function classifyAzureWhatIfProviderNoise(change, { subscriptionId, resourceGroup }) {
+  if (!change || typeof change !== 'object' || Array.isArray(change)) return null;
+  const resourceId = String(change.resourceId ?? '');
+  const changeType = String(change.changeType ?? '');
+  const expectedScope = normalized(`/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/`);
+  const normalizedResourceId = normalized(resourceId);
+  if (!normalizedResourceId.startsWith(expectedScope)) return null;
+
+  let propertyChanges;
+  if (Array.isArray(change.propertyChanges)) {
+    propertyChanges = sortedPropertyChanges(change.propertyChanges);
+  } else {
+    const collected = [];
+    const detailsAvailable = collectPropertyChanges(change.delta, collected);
+    if (changeType === 'Modify' && !detailsAvailable) return null;
+    propertyChanges = sortedPropertyChanges(collected);
+  }
+
+  const scopedResource = normalizedResourceId.slice(expectedScope.length);
+  const matchingRule = providerNoiseRules.find((candidate) => (
+    candidate.changeType === changeType
+    && candidate.resource.test(scopedResource)
+    && equalPropertyChanges(candidate.propertyChanges, propertyChanges)
+  ));
+  if (!matchingRule) return null;
+
+  return {
+    resourceId,
+    changeType,
+    rule: matchingRule.rule,
+    propertyChanges,
+  };
+}
+
 export function diagnoseAzureWhatIf(payload, { subscriptionId, resourceGroup }) {
   if (!payload || typeof payload !== 'object' || !Array.isArray(payload.changes)) fail('what-if response is malformed');
   if (payload.status !== 'Succeeded') fail(`what-if status must be Succeeded, got ${String(payload.status)}`);
@@ -330,10 +423,11 @@ export function summarizeAzureWhatIf(payload, { subscriptionId, resourceGroup })
   if (payload.changes.length === 0) fail('what-if returned no resource changes');
 
   const expectedScope = normalized(`/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/`);
-  const allowedChangeTypes = new Set(['Create', 'Ignore', 'NoChange', 'Unsupported']);
+  const allowedChangeTypes = new Set(['Create', 'NoChange', 'Unsupported']);
   const changeCounts = {};
   const unsupportedResources = [];
   const unsupportedChanges = [];
+  const approvedProviderNoise = [];
 
   for (const change of payload.changes) {
     const resourceId = String(change?.resourceId ?? '');
@@ -349,7 +443,11 @@ export function summarizeAzureWhatIf(payload, { subscriptionId, resourceGroup })
       ? unsupportedExpressionNamespace(resourceId, { subscriptionId, resourceGroup })
       : resourceNamespace(resourceId);
     if (!expectedResourceNamespaces.has(namespace)) fail(`resource namespace is outside the canary allowlist: ${namespace || resourceId}`);
-    if (!allowedChangeTypes.has(changeType)) fail(`what-if contains disallowed ${changeType || 'unknown'} change for ${resourceId}`);
+    const providerNoise = classifyAzureWhatIfProviderNoise(change, { subscriptionId, resourceGroup });
+    if (!allowedChangeTypes.has(changeType) && !providerNoise) {
+      fail(`what-if contains disallowed ${changeType || 'unknown'} change for ${resourceId}`);
+    }
+    if (providerNoise) approvedProviderNoise.push(providerNoise);
     if (changeType === 'Unsupported') {
       if (!unresolvedExpression && !isAllowlistedUnsupported(resourceId)) fail(`Unsupported resource is outside the manual-review allowlist: ${resourceId}`);
       unsupportedResources.push(resourceId);
@@ -366,6 +464,7 @@ export function summarizeAzureWhatIf(payload, { subscriptionId, resourceGroup })
     changeCounts,
     unsupportedResources,
     unsupportedChanges,
+    approvedProviderNoise,
     missingUnsupportedReasonCount: unsupportedChanges.filter(({ unsupportedReason }) => unsupportedReason === null).length,
     manualReviewRequired: unsupportedResources.length > 0,
     destructiveChangeCount: 0,

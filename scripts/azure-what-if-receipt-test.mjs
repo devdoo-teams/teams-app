@@ -57,7 +57,7 @@ try {
     whatIf: whatIfPayload,
     checkedAt: '2026-09-05T12:00:00.000Z',
   });
-  assert.equal(receipt.schemaVersion, 1);
+  assert.equal(receipt.schemaVersion, 2);
   assert.equal(receipt.kind, 'azure-deployment-what-if');
   assert.equal(receipt.nonMutating, true);
   assert.equal(receipt.status, 'REVIEW_REQUIRED');
@@ -75,7 +75,26 @@ try {
   });
   assert.equal(receipt.whatIf.manualReviewRequired, true);
   assert.equal(receipt.whatIf.changeCounts.Ignore, 1);
+  assert.deepEqual(receipt.whatIf.approvedProviderNoise, [{
+    resourceId: `${scope}/providers/microsoft.insights/actiongroups/Application Insights Smart Detection`,
+    changeType: 'Ignore',
+    rule: 'incremental-smart-detection-ignore',
+    propertyChanges: [],
+  }]);
   assert.deepEqual(verifyAzureWhatIfReceipt(receipt, identity), receipt);
+
+  const observedDiagnostic = createAzureWhatIfDiagnostic({
+    ...identity,
+    whatIf: whatIfPayload,
+    checkedAt: '2026-09-05T12:00:30.000Z',
+  });
+  assert.equal(observedDiagnostic.schemaVersion, 1);
+  assert.equal(observedDiagnostic.status, 'OBSERVED');
+  assert.deepEqual(observedDiagnostic.whatIf.changeCounts, {
+    Create: 1,
+    Ignore: 1,
+    Unsupported: 1,
+  });
 
   const createResult = spawnSync(process.execPath, [
     path.join(import.meta.dirname, 'azure-what-if-receipt.mjs'),
@@ -213,6 +232,33 @@ try {
       },
     }, identity),
     /Unsupported.*count/i,
+  );
+  assert.throws(
+    () => verifyAzureWhatIfReceipt({
+      ...persisted,
+      whatIf: {
+        ...persisted.whatIf,
+        changeCounts: { ...persisted.whatIf.changeCounts, Modify: 1 },
+      },
+    }, identity),
+    /provider noise|Modify/i,
+    'a receipt cannot claim an unaccounted Modify row',
+  );
+  assert.throws(
+    () => verifyAzureWhatIfReceipt({
+      ...persisted,
+      whatIf: {
+        ...persisted.whatIf,
+        approvedProviderNoise: [{
+          resourceId: `${scope}/providers/Microsoft.Storage/storageAccounts/teamsapp123`,
+          changeType: 'Ignore',
+          rule: 'incremental-smart-detection-ignore',
+          propertyChanges: [],
+        }],
+      },
+    }, identity),
+    /provider noise|Ignore/i,
+    'a receipt cannot substitute another resource for an approved provider-noise row',
   );
 
   const symlinkPath = path.join(temporaryDirectory, 'parameters-link.json');

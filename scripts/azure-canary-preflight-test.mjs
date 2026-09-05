@@ -121,6 +121,125 @@ assert.deepEqual(whatIf.unsupportedChanges, [
 assert.equal(whatIf.missingUnsupportedReasonCount, 3);
 assert.equal(whatIf.manualReviewRequired, true);
 assert.equal(whatIf.destructiveChangeCount, 0);
+assert.deepEqual(whatIf.approvedProviderNoise, [{
+  resourceId: `${scope}/providers/microsoft.insights/actiongroups/Application Insights Smart Detection`,
+  changeType: 'Ignore',
+  rule: 'incremental-smart-detection-ignore',
+  propertyChanges: [],
+}]);
+
+const managedEnvironmentId = `${scope}/providers/Microsoft.App/managedEnvironments/teamsapp-env-goictvxm`;
+const cosmosAccountId = `${scope}/providers/Microsoft.DocumentDB/databaseAccounts/teamsapp-cosmos-goictvxm`;
+const cosmosDatabaseId = `${cosmosAccountId}/sqlDatabases/teamsapp`;
+const applicationInsightsId = `${scope}/providers/Microsoft.Insights/components/teamsapp-insights-goictvxm`;
+const approvedProviderNoise = summarizeAzureWhatIf({
+  status: 'Succeeded',
+  changes: [{
+    resourceId: managedEnvironmentId,
+    changeType: 'Modify',
+    delta: [{
+      path: 'properties.appLogsConfiguration.logAnalyticsConfiguration.customerId',
+      propertyChangeType: 'Modify',
+    }],
+  }, {
+    resourceId: cosmosAccountId,
+    changeType: 'Modify',
+    delta: [{
+      path: 'properties.sqlEndpoint',
+      propertyChangeType: 'Delete',
+    }],
+  }, {
+    resourceId: cosmosDatabaseId,
+    changeType: 'Modify',
+    delta: [{
+      path: 'properties.options',
+      propertyChangeType: 'Create',
+    }],
+  }, {
+    resourceId: applicationInsightsId,
+    changeType: 'Modify',
+    delta: [{
+      path: 'properties.Flow_Type',
+      propertyChangeType: 'Create',
+    }, {
+      path: 'properties.Request_Source',
+      propertyChangeType: 'Create',
+    }],
+  }],
+}, { subscriptionId, resourceGroup });
+assert.deepEqual(approvedProviderNoise.changeCounts, { Modify: 4 });
+assert.equal(approvedProviderNoise.manualReviewRequired, false);
+assert.equal(approvedProviderNoise.destructiveChangeCount, 0);
+assert.deepEqual(approvedProviderNoise.approvedProviderNoise, [{
+  resourceId: managedEnvironmentId,
+  changeType: 'Modify',
+  rule: 'managed-environment-customer-id-reference',
+  propertyChanges: [{
+    path: 'properties.appLogsConfiguration.logAnalyticsConfiguration.customerId',
+    propertyChangeType: 'Modify',
+  }],
+}, {
+  resourceId: cosmosAccountId,
+  changeType: 'Modify',
+  rule: 'cosmos-account-read-only-endpoint',
+  propertyChanges: [{ path: 'properties.sqlEndpoint', propertyChangeType: 'Delete' }],
+}, {
+  resourceId: cosmosDatabaseId,
+  changeType: 'Modify',
+  rule: 'cosmos-database-request-options',
+  propertyChanges: [{ path: 'properties.options', propertyChangeType: 'Create' }],
+}, {
+  resourceId: applicationInsightsId,
+  changeType: 'Modify',
+  rule: 'application-insights-rest-defaults',
+  propertyChanges: [{
+    path: 'properties.Flow_Type',
+    propertyChangeType: 'Create',
+  }, {
+    path: 'properties.Request_Source',
+    propertyChangeType: 'Create',
+  }],
+}]);
+
+for (const unsafeNoise of [{
+  resourceId: managedEnvironmentId,
+  changeType: 'Modify',
+  delta: [{
+    path: 'properties.appLogsConfiguration.logAnalyticsConfiguration.sharedKey',
+    propertyChangeType: 'Modify',
+  }],
+}, {
+  resourceId: managedEnvironmentId,
+  changeType: 'Modify',
+  delta: [{
+    path: 'properties.appLogsConfiguration.logAnalyticsConfiguration.customerId',
+    propertyChangeType: 'Modify',
+  }, {
+    path: 'properties.peerTrafficConfiguration.encryption.enabled',
+    propertyChangeType: 'Modify',
+  }],
+}, {
+  resourceId: cosmosAccountId,
+  changeType: 'Modify',
+  delta: [{ path: 'properties.enableAutomaticFailover', propertyChangeType: 'Modify' }],
+}, {
+  resourceId: cosmosDatabaseId,
+  changeType: 'Modify',
+  delta: [{ path: 'properties.options', propertyChangeType: 'Modify' }],
+}, {
+  resourceId: applicationInsightsId,
+  changeType: 'Modify',
+  delta: [{ path: 'properties.Flow_Type', propertyChangeType: 'Create' }],
+}, {
+  resourceId: `${scope}/providers/Microsoft.Insights/actionGroups/not-the-smart-detection-group`,
+  changeType: 'Ignore',
+}]) {
+  assert.throws(
+    () => summarizeAzureWhatIf({ status: 'Succeeded', changes: [unsafeNoise] }, { subscriptionId, resourceGroup }),
+    /disallowed (?:Modify|Ignore)|provider noise/i,
+    'only an exact resource, property set, and change type may be classified as provider noise',
+  );
+}
 
 for (const unsupportedReason of [{ message: 'not a string' }, 'x'.repeat(4097), 'unsafe\u001bterminal']) {
   assert.throws(

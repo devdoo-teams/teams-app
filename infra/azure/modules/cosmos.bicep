@@ -21,9 +21,9 @@ resource account 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
     defaultIdentity: 'FirstPartyIdentity'
     enableAnalyticalStorage: false
     analyticalStorageConfiguration: {
-      schemaType: 'FullFidelity'
+      schemaType: 'WellDefined'
     }
-    enableAutomaticFailover: false
+    enableAutomaticFailover: true
     enableFreeTier: enableFreeTier
     disableKeyBasedMetadataWriteAccess: true
     disableLocalAuth: true
@@ -78,7 +78,7 @@ resource runtimeContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
         ]
         excludedPaths: [
           {
-            path: '/_etag/?'
+            path: '/"_etag"/?'
           }
         ]
       }
