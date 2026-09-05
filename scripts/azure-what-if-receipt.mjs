@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { summarizeAzureWhatIf } from './azure-canary-preflight.mjs';
+import { diagnoseAzureWhatIf, summarizeAzureWhatIf } from './azure-canary-preflight.mjs';
 
 const COMMIT = /^[0-9a-f]{40}$/u;
 const SHA256 = /^[0-9a-f]{64}$/u;
@@ -12,9 +12,12 @@ const SUBSCRIPTION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 const RESOURCE_GROUP = /^[A-Za-z0-9._()\-]{1,90}$/u;
 const PHASES = new Set(['foundation', 'workload']);
 const CHANGE_TYPES = new Set(['Create', 'NoChange', 'Unsupported']);
+const DIAGNOSTIC_CHANGE_TYPES = new Set(['Create', 'Delete', 'Ignore', 'Deploy', 'NoChange', 'Modify', 'Unsupported']);
+const PROPERTY_CHANGE_TYPES = new Set(['Create', 'Delete', 'Modify', 'Array', 'NoEffect']);
 const PARAMETER_SCHEMA = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#';
 const MAX_INPUT_BYTES = 8 * 1024 * 1024;
 const MAX_RECEIPT_BYTES = 2 * 1024 * 1024;
+const MAX_DIAGNOSTIC_PROPERTY_CHANGES = 4096;
 
 function fail(message) {
   throw new Error(`Invalid Azure what-if receipt: ${message}`);
@@ -103,6 +106,16 @@ function validateCheckedAt(value) {
   if (Number.isNaN(parsed.valueOf()) || parsed.toISOString() !== value) fail('checkedAt must be an ISO timestamp');
 }
 
+function validateDiagnosticPropertyPath(value) {
+  if (typeof value !== 'string' || value.length === 0) fail('diagnostic property path is invalid');
+  if (Buffer.byteLength(value, 'utf8') > 2048) fail('diagnostic property path exceeds the 2 KiB limit');
+  const containsForbiddenControl = [...value].some((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint <= 31 || (codePoint >= 127 && codePoint <= 159);
+  });
+  if (containsForbiddenControl) fail('diagnostic property path contains a forbidden control character');
+}
+
 function validateWhatIfSummary(summary) {
   assertExactKeys(summary, [
     'status',
@@ -189,6 +202,138 @@ function validateReceiptShape(receipt) {
   return receipt;
 }
 
+function validateDiagnosticShape(diagnostic) {
+  assertExactKeys(diagnostic, [
+    'schemaVersion',
+    'kind',
+    'nonMutating',
+    'status',
+    'phase',
+    'sourceCommit',
+    'releaseVersion',
+    'target',
+    'templateSha256',
+    'parametersSha256',
+    'contract',
+    'whatIf',
+    'checkedAt',
+  ], 'diagnostic');
+  if (diagnostic.schemaVersion !== 1) fail('diagnostic schemaVersion must be 1');
+  if (diagnostic.kind !== 'azure-deployment-what-if-diagnostic') fail('diagnostic kind is invalid');
+  if (diagnostic.nonMutating !== true) fail('diagnostic nonMutating must be true');
+  if (!['OBSERVED', 'BLOCKED'].includes(diagnostic.status)) fail('diagnostic status is invalid');
+  if (!PHASES.has(diagnostic.phase)) fail('diagnostic phase is invalid');
+  if (!COMMIT.test(String(diagnostic.sourceCommit ?? ''))) fail('diagnostic sourceCommit is invalid');
+  if (!VERSION.test(String(diagnostic.releaseVersion ?? ''))) fail('diagnostic releaseVersion is invalid');
+  assertExactKeys(diagnostic.target, ['subscriptionId', 'resourceGroup'], 'diagnostic target');
+  if (!SUBSCRIPTION_ID.test(String(diagnostic.target.subscriptionId ?? ''))) fail('diagnostic target subscription ID is invalid');
+  if (!RESOURCE_GROUP.test(String(diagnostic.target.resourceGroup ?? ''))) fail('diagnostic target resource group is invalid');
+  if (!SHA256.test(String(diagnostic.templateSha256 ?? ''))) fail('diagnostic template SHA-256 is invalid');
+  if (!SHA256.test(String(diagnostic.parametersSha256 ?? ''))) fail('diagnostic parameters SHA-256 is invalid');
+  assertExactKeys(diagnostic.contract, ['validationLevel', 'resultFormat', 'noPrettyPrint', 'noPrompt'], 'diagnostic contract');
+  if (diagnostic.contract.validationLevel !== 'Provider'
+    || diagnostic.contract.resultFormat !== 'FullResourcePayloads'
+    || diagnostic.contract.noPrettyPrint !== true
+    || diagnostic.contract.noPrompt !== true) {
+    fail('diagnostic what-if CLI contract is invalid');
+  }
+  assertExactKeys(diagnostic.whatIf, ['status', 'changeCounts', 'changes'], 'diagnostic whatIf');
+  if (diagnostic.whatIf.status !== 'Succeeded') fail('diagnostic whatIf status must be Succeeded');
+  if (!diagnostic.whatIf.changeCounts || typeof diagnostic.whatIf.changeCounts !== 'object'
+    || Array.isArray(diagnostic.whatIf.changeCounts)) {
+    fail('diagnostic changeCounts must be an object');
+  }
+  if (!Array.isArray(diagnostic.whatIf.changes) || diagnostic.whatIf.changes.length === 0) {
+    fail('diagnostic changes must be a non-empty array');
+  }
+  const declaredCounts = Object.entries(diagnostic.whatIf.changeCounts);
+  if (declaredCounts.length === 0) fail('diagnostic changeCounts must not be empty');
+  for (const [changeType, count] of declaredCounts) {
+    if (!DIAGNOSTIC_CHANGE_TYPES.has(changeType)) fail('diagnostic changeCounts contain an unknown change type');
+    if (!Number.isSafeInteger(count) || count < 1) fail(`diagnostic change count for ${changeType} is invalid`);
+  }
+
+  const observedCounts = {};
+  let propertyChangeCount = 0;
+  for (const change of diagnostic.whatIf.changes) {
+    assertExactKeys(change, [
+      'resourceId',
+      'changeType',
+      'propertyChangeDetailsAvailable',
+      'propertyChanges',
+    ], 'diagnostic change');
+    if (typeof change.resourceId !== 'string' || change.resourceId.length === 0) fail('diagnostic resourceId is invalid');
+    if (!DIAGNOSTIC_CHANGE_TYPES.has(change.changeType)) fail('diagnostic resource change type is invalid');
+    if (typeof change.propertyChangeDetailsAvailable !== 'boolean') fail('diagnostic property detail availability is invalid');
+    if (!Array.isArray(change.propertyChanges)) fail('diagnostic propertyChanges must be an array');
+    for (const propertyChange of change.propertyChanges) {
+      assertExactKeys(propertyChange, ['path', 'propertyChangeType'], 'diagnostic property change');
+      validateDiagnosticPropertyPath(propertyChange.path);
+      if (!PROPERTY_CHANGE_TYPES.has(propertyChange.propertyChangeType)) fail('diagnostic property change type is invalid');
+      propertyChangeCount += 1;
+      if (propertyChangeCount > MAX_DIAGNOSTIC_PROPERTY_CHANGES) {
+        fail(`diagnostic property changes exceed the ${MAX_DIAGNOSTIC_PROPERTY_CHANGES} entry limit`);
+      }
+    }
+    observedCounts[change.changeType] = (observedCounts[change.changeType] ?? 0) + 1;
+  }
+  const normalizedObservedCounts = Object.entries(observedCounts).sort(([left], [right]) => left.localeCompare(right));
+  const normalizedDeclaredCounts = declaredCounts.sort(([left], [right]) => left.localeCompare(right));
+  if (JSON.stringify(normalizedObservedCounts) !== JSON.stringify(normalizedDeclaredCounts)) {
+    fail('diagnostic changeCounts are inconsistent');
+  }
+  const blocked = diagnostic.whatIf.changes.some(({ changeType }) => !CHANGE_TYPES.has(changeType));
+  if (diagnostic.status !== (blocked ? 'BLOCKED' : 'OBSERVED')) fail('diagnostic status is inconsistent');
+  validateCheckedAt(diagnostic.checkedAt);
+  return diagnostic;
+}
+
+export function createAzureWhatIfDiagnostic({
+  whatIf,
+  phase,
+  sourceCommit,
+  releaseVersion,
+  subscriptionId,
+  resourceGroup,
+  templatePath,
+  parametersPath,
+  checkedAt = new Date().toISOString(),
+}) {
+  const identity = {
+    phase,
+    sourceCommit,
+    releaseVersion,
+    subscriptionId,
+    resourceGroup,
+    templatePath,
+    parametersPath,
+  };
+  validateIdentity(identity);
+  validateCheckedAt(checkedAt);
+  const whatIfDiagnostic = diagnoseAzureWhatIf(whatIf, { subscriptionId, resourceGroup });
+  const blocked = whatIfDiagnostic.changes.some(({ changeType }) => !CHANGE_TYPES.has(changeType));
+  return validateDiagnosticShape({
+    schemaVersion: 1,
+    kind: 'azure-deployment-what-if-diagnostic',
+    nonMutating: true,
+    status: blocked ? 'BLOCKED' : 'OBSERVED',
+    phase,
+    sourceCommit,
+    releaseVersion,
+    target: { subscriptionId, resourceGroup },
+    templateSha256: sha256File(templatePath, 'Bicep template'),
+    parametersSha256: sha256File(parametersPath, 'deployment parameters'),
+    contract: {
+      validationLevel: 'Provider',
+      resultFormat: 'FullResourcePayloads',
+      noPrettyPrint: true,
+      noPrompt: true,
+    },
+    whatIf: whatIfDiagnostic,
+    checkedAt,
+  });
+}
+
 export function createAzureWhatIfReceipt({
   whatIf,
   phase,
@@ -257,6 +402,10 @@ export function verifyAzureWhatIfReceipt(receipt, identity) {
 
 export function readAzureWhatIfReceipt(receiptPath) {
   return validateReceiptShape(readJsonObject(receiptPath, 'receipt', MAX_RECEIPT_BYTES));
+}
+
+export function readAzureWhatIfDiagnostic(diagnosticPath) {
+  return validateDiagnosticShape(readJsonObject(diagnosticPath, 'diagnostic', MAX_RECEIPT_BYTES));
 }
 
 function parsePairs(args, allowed, required) {
@@ -328,16 +477,17 @@ function runCli() {
     '--template',
     '--parameters',
   ]);
-  if (command === 'create') {
+  if (command === 'create' || command === 'diagnose') {
     const allowed = new Set([...identityFlags, '--what-if', '--output']);
     const values = parsePairs(args, allowed, allowed);
     const identity = identityFromArguments(values);
-    const receipt = createAzureWhatIfReceipt({
+    const create = command === 'diagnose' ? createAzureWhatIfDiagnostic : createAzureWhatIfReceipt;
+    const receipt = create({
       ...identity,
       whatIf: readJsonObject(values.get('--what-if'), 'what-if result'),
     });
     writeReceiptExclusive(values.get('--output'), receipt);
-    process.stdout.write(`Azure ${receipt.phase} what-if receipt: ${receipt.status}\n`);
+    process.stdout.write(`Azure ${receipt.phase} what-if ${command === 'diagnose' ? 'diagnostic' : 'receipt'}: ${receipt.status}\n`);
     return;
   }
   if (command === 'verify') {
@@ -350,7 +500,7 @@ function runCli() {
     process.stdout.write(`Azure ${receipt.phase} what-if receipt verified: ${receipt.status}\n`);
     return;
   }
-  fail('usage: azure-what-if-receipt.mjs <create|verify> --name value ...');
+  fail('usage: azure-what-if-receipt.mjs <diagnose|create|verify> --name value ...');
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {

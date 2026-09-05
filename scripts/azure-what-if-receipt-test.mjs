@@ -5,7 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
+  createAzureWhatIfDiagnostic,
   createAzureWhatIfReceipt,
+  readAzureWhatIfDiagnostic,
   readAzureWhatIfReceipt,
   verifyAzureWhatIfReceipt,
 } from './azure-what-if-receipt.mjs';
@@ -21,6 +23,8 @@ try {
   const parametersPath = path.join(temporaryDirectory, 'foundation.parameters.json');
   const whatIfPath = path.join(temporaryDirectory, 'foundation.what-if.json');
   const receiptPath = path.join(temporaryDirectory, 'foundation.receipt.json');
+  const blockedWhatIfPath = path.join(temporaryDirectory, 'foundation.blocked.what-if.json');
+  const diagnosticPath = path.join(temporaryDirectory, 'foundation.diagnostic.json');
   const scope = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}`;
 
   fs.writeFileSync(templatePath, "targetScope = 'resourceGroup'\n", { mode: 0o600 });
@@ -102,6 +106,86 @@ try {
     '--parameters', parametersPath,
   ], { encoding: 'utf8' });
   assert.equal(verifyResult.status, 0, verifyResult.stderr);
+
+  const blockedWhatIfPayload = {
+    status: 'Succeeded',
+    changes: [{
+      resourceId: `${scope}/providers/Microsoft.App/managedEnvironments/teamsapp-env-goictvxm`,
+      changeType: 'Modify',
+      before: { properties: { appLogsConfiguration: { logAnalyticsConfiguration: { sharedKey: 'before-secret' } } } },
+      after: { properties: { appLogsConfiguration: { logAnalyticsConfiguration: { sharedKey: 'after-secret' } } } },
+      delta: [{
+        path: 'properties.appLogsConfiguration.logAnalyticsConfiguration.sharedKey',
+        propertyChangeType: 'Modify',
+        before: 'before-secret',
+        after: 'after-secret',
+      }, {
+        path: 'properties.workloadProfiles',
+        propertyChangeType: 'Array',
+        children: [{
+          path: 'properties.workloadProfiles[0].name',
+          propertyChangeType: 'NoEffect',
+          before: 'Consumption',
+          after: 'Consumption',
+        }],
+      }],
+    }],
+  };
+  const diagnostic = createAzureWhatIfDiagnostic({
+    ...identity,
+    whatIf: blockedWhatIfPayload,
+    checkedAt: '2026-09-05T12:01:00.000Z',
+  });
+  assert.equal(diagnostic.kind, 'azure-deployment-what-if-diagnostic');
+  assert.equal(diagnostic.status, 'BLOCKED');
+  assert.deepEqual(diagnostic.whatIf.changeCounts, { Modify: 1 });
+  assert.deepEqual(diagnostic.whatIf.changes, [{
+    resourceId: `${scope}/providers/Microsoft.App/managedEnvironments/teamsapp-env-goictvxm`,
+    changeType: 'Modify',
+    propertyChangeDetailsAvailable: true,
+    propertyChanges: [{
+      path: 'properties.appLogsConfiguration.logAnalyticsConfiguration.sharedKey',
+      propertyChangeType: 'Modify',
+    }, {
+      path: 'properties.workloadProfiles',
+      propertyChangeType: 'Array',
+    }, {
+      path: 'properties.workloadProfiles[0].name',
+      propertyChangeType: 'NoEffect',
+    }],
+  }]);
+  assert.equal(JSON.stringify(diagnostic).includes('before-secret'), false);
+  assert.equal(JSON.stringify(diagnostic).includes('after-secret'), false);
+  fs.writeFileSync(blockedWhatIfPath, `${JSON.stringify(blockedWhatIfPayload)}\n`, { mode: 0o600 });
+  const diagnoseResult = spawnSync(process.execPath, [
+    path.join(import.meta.dirname, 'azure-what-if-receipt.mjs'),
+    'diagnose',
+    '--what-if', blockedWhatIfPath,
+    '--phase', 'foundation',
+    '--commit', sourceCommit,
+    '--version', releaseVersion,
+    '--subscription', subscriptionId,
+    '--resource-group', resourceGroup,
+    '--template', templatePath,
+    '--parameters', parametersPath,
+    '--output', diagnosticPath,
+  ], { encoding: 'utf8' });
+  assert.equal(diagnoseResult.status, 0, diagnoseResult.stderr);
+  const persistedDiagnostic = readAzureWhatIfDiagnostic(diagnosticPath);
+  assert.equal(persistedDiagnostic.kind, diagnostic.kind);
+  assert.equal(persistedDiagnostic.status, diagnostic.status);
+  assert.equal(persistedDiagnostic.sourceCommit, diagnostic.sourceCommit);
+  assert.equal(persistedDiagnostic.releaseVersion, diagnostic.releaseVersion);
+  assert.deepEqual(persistedDiagnostic.target, diagnostic.target);
+  assert.deepEqual(persistedDiagnostic.contract, diagnostic.contract);
+  assert.deepEqual(persistedDiagnostic.whatIf, diagnostic.whatIf);
+  assert.equal(JSON.stringify(persistedDiagnostic).includes('before-secret'), false);
+  assert.equal(JSON.stringify(persistedDiagnostic).includes('after-secret'), false);
+  assert.throws(
+    () => createAzureWhatIfReceipt({ ...identity, whatIf: blockedWhatIfPayload }),
+    /Modify/i,
+    'diagnostic evidence must not weaken the fail-closed deployment receipt gate',
+  );
 
   fs.appendFileSync(parametersPath, ' ');
   assert.throws(() => verifyAzureWhatIfReceipt(persisted, identity), /parameters.*SHA-256/i);

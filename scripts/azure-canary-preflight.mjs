@@ -230,6 +230,100 @@ function validatedUnsupportedReason(value) {
   return reason;
 }
 
+const knownResourceChangeTypes = new Set([
+  'Create',
+  'Delete',
+  'Ignore',
+  'Deploy',
+  'NoChange',
+  'Modify',
+  'Unsupported',
+]);
+const knownPropertyChangeTypes = new Set(['Create', 'Delete', 'Modify', 'Array', 'NoEffect']);
+const MAX_DIAGNOSTIC_CHANGES = 512;
+const MAX_DIAGNOSTIC_PROPERTY_CHANGES = 4096;
+const MAX_DIAGNOSTIC_DEPTH = 32;
+
+function validatedPropertyPath(value) {
+  if (typeof value !== 'string' || value.length === 0) fail('what-if property-change path is invalid');
+  if (Buffer.byteLength(value, 'utf8') > 2048) fail('what-if property-change path exceeds the 2 KiB limit');
+  const containsForbiddenControl = [...value].some((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint <= 31 || (codePoint >= 127 && codePoint <= 159);
+  });
+  if (containsForbiddenControl) fail('what-if property-change path contains a forbidden control character');
+  return value;
+}
+
+function collectPropertyChanges(entries, result, depth = 0) {
+  if (entries === undefined || entries === null) return false;
+  if (!Array.isArray(entries)) fail('what-if property-change delta must be an array');
+  if (depth > MAX_DIAGNOSTIC_DEPTH) fail('what-if property-change nesting exceeds the supported depth');
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) fail('what-if property change is malformed');
+    const path = validatedPropertyPath(entry.path);
+    const propertyChangeType = String(entry.propertyChangeType ?? '');
+    if (!knownPropertyChangeTypes.has(propertyChangeType)) {
+      fail(`what-if property change has an unknown type: ${propertyChangeType || '<missing>'}`);
+    }
+    result.push({ path, propertyChangeType });
+    if (result.length > MAX_DIAGNOSTIC_PROPERTY_CHANGES) {
+      fail(`what-if property changes exceed the ${MAX_DIAGNOSTIC_PROPERTY_CHANGES} entry limit`);
+    }
+    collectPropertyChanges(entry.children, result, depth + 1);
+  }
+  return true;
+}
+
+export function diagnoseAzureWhatIf(payload, { subscriptionId, resourceGroup }) {
+  if (!payload || typeof payload !== 'object' || !Array.isArray(payload.changes)) fail('what-if response is malformed');
+  if (payload.status !== 'Succeeded') fail(`what-if status must be Succeeded, got ${String(payload.status)}`);
+  if (payload.changes.length === 0) fail('what-if returned no resource changes');
+  if (payload.changes.length > MAX_DIAGNOSTIC_CHANGES) {
+    fail(`what-if resource changes exceed the ${MAX_DIAGNOSTIC_CHANGES} entry limit`);
+  }
+
+  const expectedScope = normalized(`/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/`);
+  const changeCounts = {};
+  const changes = payload.changes.map((change) => {
+    const resourceId = String(change?.resourceId ?? '');
+    const changeType = String(change?.changeType ?? '');
+    if (!knownResourceChangeTypes.has(changeType)) {
+      fail(`what-if contains unknown change type ${changeType || '<missing>'} for ${resourceId || '<missing>'}`);
+    }
+    const unresolvedExpression = resourceId.trim().startsWith('[');
+    if (unresolvedExpression && changeType !== 'Unsupported') {
+      fail(`what-if resource expressions are only accepted for Unsupported changes: ${resourceId}`);
+    }
+    if (!unresolvedExpression && !normalized(resourceId).startsWith(expectedScope)) {
+      fail(`resource is outside the approved scope: ${resourceId}`);
+    }
+    const namespace = unresolvedExpression
+      ? unsupportedExpressionNamespace(resourceId, { subscriptionId, resourceGroup })
+      : resourceNamespace(resourceId);
+    if (!expectedResourceNamespaces.has(namespace)) {
+      fail(`resource namespace is outside the canary allowlist: ${namespace || resourceId}`);
+    }
+    if (changeType === 'Unsupported'
+      && !unresolvedExpression
+      && !isAllowlistedUnsupported(resourceId)) {
+      fail(`Unsupported resource is outside the manual-review allowlist: ${resourceId}`);
+    }
+
+    const propertyChanges = [];
+    const propertyChangeDetailsAvailable = collectPropertyChanges(change.delta, propertyChanges);
+    changeCounts[changeType] = (changeCounts[changeType] ?? 0) + 1;
+    return {
+      resourceId,
+      changeType,
+      propertyChangeDetailsAvailable,
+      propertyChanges,
+    };
+  });
+
+  return { status: payload.status, changeCounts, changes };
+}
+
 export function summarizeAzureWhatIf(payload, { subscriptionId, resourceGroup }) {
   if (!payload || typeof payload !== 'object' || !Array.isArray(payload.changes)) fail('what-if response is malformed');
   if (payload.status !== 'Succeeded') fail(`what-if status must be Succeeded, got ${String(payload.status)}`);

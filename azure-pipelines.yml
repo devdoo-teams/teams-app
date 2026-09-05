@@ -279,6 +279,16 @@ stages:
                   --validation-level Provider \
                   --only-show-errors \
                   --output json > "$foundation_what_if"
+                node scripts/azure-what-if-receipt.mjs diagnose \
+                  --what-if "$foundation_what_if" \
+                  --phase foundation \
+                  --commit "$commit" \
+                  --version "$version" \
+                  --subscription "$AZURE_SUBSCRIPTION_ID" \
+                  --resource-group "$AZURE_RESOURCE_GROUP" \
+                  --template infra/azure/main.bicep \
+                  --parameters "$foundation_parameters" \
+                  --output "$what_if_receipt_dir/azure-what-if-preflight-diagnostic.json"
                 node scripts/azure-what-if-receipt.mjs create \
                   --what-if "$foundation_what_if" \
                   --phase foundation \
@@ -313,6 +323,7 @@ stages:
               artifact: azure-rbac-preflight-receipt
           - task: PublishPipelineArtifact@1
             displayName: Retain exact pre-approval foundation what-if receipt
+            condition: always()
             inputs:
               targetPath: $(Pipeline.Workspace)/azure-what-if-preflight
               artifact: azure-what-if-preflight-receipt
@@ -483,6 +494,16 @@ stages:
                         --validation-level Provider \
                         --only-show-errors \
                         --output json > "$workload_what_if"
+                      node scripts/azure-what-if-receipt.mjs diagnose \
+                        --what-if "$workload_what_if" \
+                        --phase workload \
+                        --commit "$commit" \
+                        --version "$version" \
+                        --subscription "$AZURE_SUBSCRIPTION_ID" \
+                        --resource-group "$AZURE_RESOURCE_GROUP" \
+                        --template infra/azure/main.bicep \
+                        --parameters "$workload_parameters" \
+                        --output "$workload_what_if_receipt_dir/azure-what-if-workload-diagnostic.json"
                       node scripts/azure-what-if-receipt.mjs create \
                         --what-if "$workload_what_if" \
                         --phase workload \
@@ -546,6 +567,7 @@ stages:
                     CODEX_PACKAGE_VERSION: ${{ parameters.codexPackageVersion }}
                 - task: PublishPipelineArtifact@1
                   displayName: Retain exact workload what-if receipt
+                  condition: always()
                   inputs:
                     targetPath: $(Pipeline.Workspace)/azure-what-if-workload
                     artifact: azure-what-if-workload-receipt

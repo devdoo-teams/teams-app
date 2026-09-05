@@ -645,7 +645,13 @@ try {
   assert.equal(platformWhatIfScript?.includes('--result-format ResourceIdOnly'), false, 'pre-approval must not collapse existing resources into ambiguous Deploy rows');
   assert.ok(platformWhatIfScript?.includes('--no-pretty-print'), 'pre-approval what-if must emit machine-readable JSON');
   assert.ok(platformWhatIfScript?.includes('--no-prompt true'), 'pre-approval what-if must fail instead of prompting for missing parameters');
+  assert.ok(platformWhatIfScript?.includes('scripts/azure-what-if-receipt.mjs diagnose'), 'pre-approval what-if must retain value-free property-path diagnostics before evaluation');
   assert.ok(platformWhatIfScript?.includes('scripts/azure-what-if-receipt.mjs create'), 'pre-approval what-if must produce a validated receipt');
+  assert.ok(
+    platformWhatIfScript.indexOf('scripts/azure-what-if-receipt.mjs diagnose')
+      < platformWhatIfScript.indexOf('scripts/azure-what-if-receipt.mjs create'),
+    'pre-approval diagnostic must be written before the fail-closed receipt evaluation',
+  );
   assert.ok(
     platformSteps.some((step) => step.task === 'PublishPipelineArtifact@1'
       && step.inputs?.artifact === 'azure-platform-preflight-receipt'),
@@ -663,8 +669,9 @@ try {
   );
   assert.ok(
     platformSteps.some((step) => step.task === 'PublishPipelineArtifact@1'
-      && step.inputs?.artifact === 'azure-what-if-preflight-receipt'),
-    'pipeline must retain the exact pre-approval what-if receipt',
+      && step.inputs?.artifact === 'azure-what-if-preflight-receipt'
+      && step.condition === 'always()'),
+    'pipeline must retain the exact pre-approval what-if evidence even when evaluation blocks deployment',
   );
 
   const deploySteps = allSteps(deployStage);
@@ -767,10 +774,17 @@ try {
   assert.equal(deployScript?.includes('--result-format ResourceIdOnly'), false, 'deployment what-if must not use ambiguous ResourceIdOnly classification');
   assert.ok(deployScript?.includes('--no-pretty-print'), 'deployment what-if must emit machine-readable JSON');
   assert.ok(deployScript?.includes('--no-prompt true'), 'deployment what-if must not fall back to an interactive prompt');
+  assert.ok(deployScript?.includes('scripts/azure-what-if-receipt.mjs diagnose'), 'workload what-if must retain value-free property-path diagnostics before evaluation');
+  assert.ok(
+    deployScript.indexOf('scripts/azure-what-if-receipt.mjs diagnose')
+      < deployScript.indexOf('scripts/azure-what-if-receipt.mjs create'),
+    'workload diagnostic must be written before the fail-closed receipt evaluation',
+  );
   assert.ok(
     deploySteps.some((step) => step.task === 'PublishPipelineArtifact@1'
-      && step.inputs?.artifact === 'azure-what-if-workload-receipt'),
-    'pipeline must retain the exact workload what-if receipt',
+      && step.inputs?.artifact === 'azure-what-if-workload-receipt'
+      && step.condition === 'always()'),
+    'pipeline must retain exact workload what-if evidence even when evaluation blocks mutation',
   );
   assert.ok(deployScript?.includes("codex_bin_sha=\"$(jq -er '.codexBinSha256' \"$worker_receipt\")\""), 'deployment must read the executable digest from the pre-approval worker receipt');
   assert.ok(deployScript?.includes('codexPackageSha256'), 'worker provenance must retain the authenticated package archive digest');
