@@ -34,6 +34,7 @@
     "test:package-output-determinism": "node scripts/package-app-output-determinism-test.mjs",
     "test:package-atomic": "node scripts/package-app-atomic-test.mjs",
     "test:azure-platform-contract": "node scripts/azure-platform-contract-test.mjs",
+    "test:azure-codex-package": "node scripts/azure-codex-package-test.mjs",
     "test:azure-release-input": "node scripts/azure-release-input-test.mjs",
     "test:azure-github-handoff": "node scripts/azure-github-handoff-test.mjs",
     "test:azure-approval-check": "node scripts/azure-approval-check-test.mjs",

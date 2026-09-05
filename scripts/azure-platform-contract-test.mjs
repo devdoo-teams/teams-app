@@ -546,6 +546,11 @@ try {
   assert.ok(!parameterNames.has('githubReleaseReceiptUrl'), 'pipeline must not accept an arbitrary receipt URL');
   assert.ok(parameterNames.has('githubReleaseCommit'), 'pipeline must select a GitHub artifact by immutable commit');
   assert.ok(parameterNames.has('azureDevOpsEnvironmentId'), 'pipeline must identify the external approval-check resource');
+  assert.ok(parameterNames.has('codexPackageUrl'), 'pipeline must accept one pinned official Codex Linux package URL');
+  assert.ok(parameterNames.has('codexPackageSha256'), 'pipeline must authenticate the Codex package archive independently');
+  assert.ok(parameterNames.has('codexPackageVersion'), 'pipeline must bind the expected Codex package version');
+  assert.equal(parameterNames.has('codexArtifactUrl'), false, 'legacy single-executable Codex input must be removed');
+  assert.equal(parameterNames.has('codexArtifactSha256'), false, 'package and executable digests must not share one ambiguous input');
 
   const validateStage = findStage(pipeline, 'ValidateHandoff');
   const approvalStage = findStage(pipeline, 'ValidateApprovalConfiguration');
@@ -572,13 +577,21 @@ try {
   assert.ok(deployScript?.includes('npm run build:worker'), 'deployment must build the worker from the exact attested source commit');
   assert.ok(deployScript?.includes('git checkout --detach "$commit"'), 'worker build must check out the exact attested commit');
   assert.ok(deployScript?.includes('version: 24.19.0') || JSON.stringify(deploySteps).includes('24.19.0'), 'worker archive must carry the pinned Node runtime');
-  assert.ok(deployScript?.includes('CODEX_ARTIFACT_URL'), 'deployment must require an approved Codex artifact reference');
-  assert.ok(deployScript?.includes('CODEX_ARTIFACT_SHA256'), 'deployment must require and verify the approved Codex digest');
+  assert.ok(deployScript?.includes('CODEX_PACKAGE_URL'), 'deployment must require an approved Codex package reference');
+  assert.ok(deployScript?.includes('CODEX_PACKAGE_SHA256'), 'deployment must require and verify the package archive digest');
+  assert.ok(deployScript?.includes('CODEX_PACKAGE_VERSION'), 'deployment must bind the expected package version');
+  assert.ok(deployScript?.includes('scripts/azure-codex-package.mjs'), 'deployment must prepare the official package through the tested fail-closed helper');
+  assert.ok(deployScript?.includes('validate-worker-runtime-manifest.mjs'), 'worker artifact must retain the tested package-manifest validator used during VM installation');
+  assert.ok(deployScript?.includes("codex_bin_sha=\"$(jq -er '.codexBinSha256'"), 'deployment must read the extracted executable digest from the helper receipt');
+  assert.ok(deployScript?.includes('codexPackageSha256'), 'worker provenance must retain the authenticated package archive digest');
+  assert.ok(deployScript?.includes('codexBinSha256="$codex_bin_sha"'), 'Bicep must receive the independently measured executable digest');
+  assert.equal(deployScript?.includes('codexBinSha256="$CODEX_PACKAGE_SHA256"'), false, 'package archive SHA must never be reused as the extracted executable SHA');
+  assert.equal(deployScript?.includes('CODEX_ARTIFACT_'), false, 'legacy single-executable environment names must be removed');
   assert.ok(deployScript?.includes('az storage blob upload'), 'deployment must stage the immutable worker archive in private Azure Blob storage');
   assert.ok(deployScript?.includes('--auth-mode login'), 'artifact staging must use Entra authentication rather than account keys or SAS');
   assert.ok(deployScript?.includes('metadata.sha256'), 'an existing immutable worker blob must be accepted only when its SHA-256 metadata matches');
   assert.ok(deployScript?.includes('workerArtifactSha256='), 'deployment must bind the worker archive digest into Bicep');
-  assert.ok(deployScript?.includes('codexBinSha256='), 'deployment must bind the approved Codex digest into Bicep');
+  assert.ok(deployScript?.includes('codexBinSha256='), 'deployment must bind the measured Codex executable digest into Bicep');
   assert.ok(!Object.hasOwn(pipeline.variables ?? {}, 'azureContainerApp'), 'pipeline must not substitute a hard-coded Container App name for Bicep outputs');
   assert.ok(!Object.hasOwn(pipeline.variables ?? {}, 'azureContainerRegistry'), 'pipeline must not substitute a hard-coded ACR name for Bicep outputs');
 

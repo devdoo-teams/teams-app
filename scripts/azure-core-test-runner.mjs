@@ -19,6 +19,7 @@ const DEFAULT_BUILD_TIMEOUT_MS = 300_000;
  */
 export const AZURE_CORE_TESTS = Object.freeze([
   Object.freeze({ script: 'scripts/azure-platform-contract-test.mjs', timeoutMs: DEFAULT_TEST_TIMEOUT_MS }),
+  Object.freeze({ script: 'scripts/azure-codex-package-test.mjs', timeoutMs: DEFAULT_TEST_TIMEOUT_MS }),
   Object.freeze({ script: 'scripts/azure-release-input-test.mjs', timeoutMs: DEFAULT_TEST_TIMEOUT_MS }),
   Object.freeze({ script: 'scripts/azure-github-handoff-test.mjs', timeoutMs: DEFAULT_TEST_TIMEOUT_MS }),
   Object.freeze({ script: 'scripts/azure-approval-check-test.mjs', timeoutMs: DEFAULT_TEST_TIMEOUT_MS }),

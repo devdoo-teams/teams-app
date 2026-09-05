@@ -56,16 +56,38 @@ stage=$(mktemp -d "${TMPDIR:-/tmp}/teamsapp-worker-install.XXXXXX")
 trap 'rm -rf "$stage"' EXIT
 tar --extract --file "$archive" --directory "$stage" --no-same-owner --no-same-permissions
 [[ -z "$(find "$stage" -type l -print -quit)" ]] || { echo 'worker archive may not contain symbolic links' >&2; exit 1; }
-for required in manifest.json dist/worker/index.js dist/worker/composition.js node/bin/node bin/codex; do
+for required in \
+  manifest.json \
+  dist/worker/index.js \
+  dist/worker/composition.js \
+  node/bin/node \
+  codex-runtime/bin/codex \
+  codex-runtime/bin/codex-code-mode-host \
+  codex-runtime/codex-package.json \
+  codex-runtime/codex-path/rg \
+  codex-runtime/codex-resources/bwrap \
+  codex-runtime/codex-resources/zsh/bin/zsh \
+  validate-worker-runtime-manifest.mjs; do
   [[ -f "$stage/$required" ]] || { printf 'worker archive missing %s\n' "$required" >&2; exit 1; }
 done
-grep -Fq '"schemaVersion":1' "$stage/manifest.json" || { echo 'worker manifest schema is invalid' >&2; exit 1; }
-grep -Fq "\"commit\":\"$commit\"" "$stage/manifest.json" || { echo 'worker manifest commit mismatch' >&2; exit 1; }
-grep -Fq "\"codexBinSha256\":\"$codex_sha256\"" "$stage/manifest.json" || { echo 'worker manifest Codex digest mismatch' >&2; exit 1; }
-actual_codex_sha256=$(sha256sum "$stage/bin/codex" | awk '{print $1}')
-[[ "$actual_codex_sha256" == "$codex_sha256" ]] || { echo 'Codex executable SHA-256 mismatch' >&2; exit 1; }
 node_version=$($stage/node/bin/node --version)
 [[ "$node_version" == 'v24.19.0' ]] || { printf 'worker Node version mismatch: %s\n' "$node_version" >&2; exit 1; }
+manifest_values=$(
+  "$stage/node/bin/node" \
+    "$stage/validate-worker-runtime-manifest.mjs" \
+    "$stage/manifest.json" \
+    "$stage/codex-runtime/codex-package.json" \
+    "$commit" \
+    "$codex_sha256"
+)
+[[ "$manifest_values" == *:* ]] || { echo 'worker manifest validation result is invalid' >&2; exit 1; }
+codex_package_version=${manifest_values%%:*}
+codex_package_sha256=${manifest_values#*:}
+[[ "$codex_package_sha256" =~ ^[0-9a-f]{64}$ ]] || { echo 'Codex package SHA-256 is invalid' >&2; exit 1; }
+actual_codex_sha256=$(sha256sum "$stage/codex-runtime/bin/codex" | awk '{print $1}')
+[[ "$actual_codex_sha256" == "$codex_sha256" ]] || { echo 'Codex executable SHA-256 mismatch' >&2; exit 1; }
+codex_version=$($stage/codex-runtime/bin/codex --version)
+[[ "$codex_version" == "codex-cli $codex_package_version" ]] || { printf 'Codex executable version mismatch: %s\n' "$codex_version" >&2; exit 1; }
 
 release_root="$target_root/opt/teamsapp/releases"
 release_path="$release_root/$commit"
@@ -79,9 +101,22 @@ install -d -m 0700 "$auth_home"
 install -d -m 0700 "$workspace"
 rm -rf "$release_path"
 install -d -m 0755 "$release_path"
-cp -R "$stage/dist" "$stage/node" "$stage/bin" "$stage/manifest.json" "$release_path/"
+cp -R \
+  "$stage/dist" \
+  "$stage/node" \
+  "$stage/codex-runtime" \
+  "$stage/manifest.json" \
+  "$stage/validate-worker-runtime-manifest.mjs" \
+  "$release_path/"
 chmod 0555 "$release_path/node/bin/node"
-chmod 0500 "$release_path/bin/codex"
+chmod 0500 \
+  "$release_path/codex-runtime/bin/codex" \
+  "$release_path/codex-runtime/bin/codex-code-mode-host" \
+  "$release_path/codex-runtime/codex-path/rg" \
+  "$release_path/codex-runtime/codex-resources/bwrap" \
+  "$release_path/codex-runtime/codex-resources/zsh/bin/zsh"
+chmod 0400 "$release_path/codex-runtime/codex-package.json"
+chmod 0400 "$release_path/validate-worker-runtime-manifest.mjs"
 
 umask 077
 env_tmp="$env_dir/worker.env.tmp"
@@ -96,7 +131,7 @@ AZURE_COSMOS_CONTAINER=$cosmos_container
 NODE_ENV=production
 TEAMS_SOURCE_COMMIT=$commit
 AGENT_CODEX_HOME=/var/lib/teamsapp/codex-home
-CODEX_BIN=/opt/teamsapp/current/bin/codex
+CODEX_BIN=/opt/teamsapp/current/codex-runtime/bin/codex
 CODEX_BIN_SHA256=$codex_sha256
 TEAMS_WORKER_COMPOSITION_MODULE=/opt/teamsapp/current/dist/worker/composition.js
 TEAMS_WORKER_WORKSPACE=/var/lib/teamsapp/workspace

@@ -22,7 +22,7 @@ write_files:
       NODE_ENV=production
       TEAMS_SOURCE_COMMIT=SET_BY_DEPLOYMENT
       AGENT_CODEX_HOME=/var/lib/teamsapp/codex-home
-      CODEX_BIN=/opt/teamsapp/current/bin/codex
+      CODEX_BIN=/opt/teamsapp/current/codex-runtime/bin/codex
       CODEX_BIN_SHA256=SET_BY_DEPLOYMENT
       TEAMS_WORKER_COMPOSITION_MODULE=/opt/teamsapp/current/dist/worker/composition.js
       TEAMS_WORKER_WORKSPACE=/var/lib/teamsapp/workspace
@@ -58,7 +58,6 @@ write_files:
 runcmd:
   - [install, -d, -o, teamsworker, -g, teamsworker, -m, '0700', /var/lib/teamsapp/codex-home]
   - [install, -d, -o, root, -g, teamsworker, -m, '0750', /etc/teamsapp]
-  - [install, -d, -o, root, -g, root, -m, '0755', /opt/teamsapp/bin]
   - [systemctl, daemon-reload]
   # The managed-identity Custom Script extension installs the immutable archive,
   # writes the owner-only environment file, then enables and starts this unit.

@@ -18,12 +18,16 @@ parameters:
     displayName: Roll back the current traffic-serving revision
     type: boolean
     default: false
-  - name: codexArtifactUrl
-    displayName: Approved HTTPS URL of the Linux Codex executable
+  - name: codexPackageUrl
+    displayName: Approved HTTPS URL of the official Linux Codex package
     type: string
     default: ''
-  - name: codexArtifactSha256
-    displayName: Approved SHA-256 of the Linux Codex executable
+  - name: codexPackageSha256
+    displayName: Approved SHA-256 of the official Linux Codex package
+    type: string
+    default: ''
+  - name: codexPackageVersion
+    displayName: Expected version of the official Linux Codex package
     type: string
     default: ''
 
@@ -130,8 +134,10 @@ stages:
                       set -euo pipefail
                       test "$(az account show --query id --output tsv)" = "$AZURE_SUBSCRIPTION_ID"
                       test -n "$WORKER_ADMIN_SSH_PUBLIC_KEY"
-                      [[ "$CODEX_ARTIFACT_URL" =~ ^https://[^?#]+$ ]]
-                      [[ "$CODEX_ARTIFACT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+                      [[ "$CODEX_PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]]
+                      [[ "$CODEX_PACKAGE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+                      expected_codex_package_url="https://github.com/openai/codex/releases/download/rust-v${CODEX_PACKAGE_VERSION}/codex-package-x86_64-unknown-linux-musl.tar.gz"
+                      test "$CODEX_PACKAGE_URL" = "$expected_codex_package_url"
                       receipt="$(Pipeline.Workspace)/validated-github-handoff/dist/evidence/azure-release-receipt.json"
                       provenance="$(Pipeline.Workspace)/validated-github-handoff/github-handoff-provenance.json"
                       node scripts/azure-release-input.mjs "$receipt"
@@ -175,16 +181,33 @@ stages:
 
                       worker_stage="$(Agent.TempDirectory)/worker-runtime"
                       rm -rf "$worker_stage"
-                      mkdir -p "$worker_stage/dist" "$worker_stage/bin"
+                      mkdir -p "$worker_stage/dist"
                       cp -R dist/worker "$worker_stage/dist/worker"
                       cp infra/azure/scripts/install-worker-runtime.sh "$worker_stage/install-worker-runtime.sh"
+                      cp infra/azure/scripts/validate-worker-runtime-manifest.mjs "$worker_stage/validate-worker-runtime-manifest.mjs"
                       chmod 0500 "$worker_stage/install-worker-runtime.sh"
+                      chmod 0400 "$worker_stage/validate-worker-runtime-manifest.mjs"
                       node_root="$(dirname "$(dirname "$(command -v node)")")"
                       cp -RL "$node_root" "$worker_stage/node"
-                      curl --proto '=https' --tlsv1.2 --fail --location --retry 4 --output "$worker_stage/bin/codex" "$CODEX_ARTIFACT_URL"
-                      printf '%s  %s\n' "$CODEX_ARTIFACT_SHA256" "$worker_stage/bin/codex" | sha256sum --check --strict
-                      chmod 0500 "$worker_stage/bin/codex"
-                      printf '{"schemaVersion":1,"commit":"%s","codexBinSha256":"%s"}\n' "$commit" "$CODEX_ARTIFACT_SHA256" > "$worker_stage/manifest.json"
+                      codex_package_archive="$(Agent.TempDirectory)/codex-package-x86_64-unknown-linux-musl.tar.gz"
+                      codex_package_receipt="$(Agent.TempDirectory)/codex-package-receipt.json"
+                      curl --proto '=https' --tlsv1.2 --fail --location --retry 4 --output "$codex_package_archive" "$CODEX_PACKAGE_URL"
+                      node scripts/azure-codex-package.mjs \
+                        --archive "$codex_package_archive" \
+                        --archive-sha256 "$CODEX_PACKAGE_SHA256" \
+                        --expected-version "$CODEX_PACKAGE_VERSION" \
+                        --output "$worker_stage/codex-runtime" > "$codex_package_receipt"
+                      test "$(jq -er '.archiveSha256' "$codex_package_receipt")" = "$CODEX_PACKAGE_SHA256"
+                      test "$(jq -er '.version' "$codex_package_receipt")" = "$CODEX_PACKAGE_VERSION"
+                      codex_bin_sha="$(jq -er '.codexBinSha256' "$codex_package_receipt")"
+                      [[ "$codex_bin_sha" =~ ^[0-9a-f]{64}$ ]]
+                      jq -cn \
+                        --arg commit "$commit" \
+                        --arg codexPackageVersion "$CODEX_PACKAGE_VERSION" \
+                        --arg codexPackageSha256 "$CODEX_PACKAGE_SHA256" \
+                        --arg codexBinSha256 "$codex_bin_sha" \
+                        '{schemaVersion:2,commit:$commit,codexPackageVersion:$codexPackageVersion,codexPackageSha256:$codexPackageSha256,codexBinSha256:$codexBinSha256}' \
+                        > "$worker_stage/manifest.json"
                       worker_archive="$(Agent.TempDirectory)/worker-runtime-${commit}.tar"
                       tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner --format=posix -cf "$worker_archive" -C "$worker_stage" .
                       worker_artifact_sha="$(sha256sum "$worker_archive" | awk '{print $1}')"
@@ -217,7 +240,7 @@ stages:
                         --template-file infra/azure/main.bicep \
                         --parameters workloadName="$AZURE_WORKLOAD_NAME" location="$AZURE_LOCATION" enableCosmosFreeTier=true deployContainerApp=true deployWorkerVm=true \
                         containerImage="$deployed_image" workerAdminSshPublicKey="$WORKER_ADMIN_SSH_PUBLIC_KEY" \
-                        workerArtifactUrl="$worker_artifact_url" workerArtifactSha256="$worker_artifact_sha" codexBinSha256="$CODEX_ARTIFACT_SHA256" \
+                        workerArtifactUrl="$worker_artifact_url" workerArtifactSha256="$worker_artifact_sha" codexBinSha256="$codex_bin_sha" \
                         releaseSourceCommit="$commit" releaseVersion="$version" releaseImageDigest="$source_digest" \
                         releaseTeamsPackageSha256="$teams_package_sha" releaseClientBundleSha256="$client_sha" releaseServerBundleSha256="$server_sha" \
                         --query properties.outputs --output json > "$(Agent.TempDirectory)/deployment-outputs.json"
@@ -238,8 +261,9 @@ stages:
                     GHCR_IMPORT_USERNAME: $(githubArtifactUsername)
                     GHCR_IMPORT_TOKEN: $(githubArtifactReadToken)
                     WORKER_ADMIN_SSH_PUBLIC_KEY: $(workerAdminSshPublicKey)
-                    CODEX_ARTIFACT_URL: ${{ parameters.codexArtifactUrl }}
-                    CODEX_ARTIFACT_SHA256: ${{ parameters.codexArtifactSha256 }}
+                    CODEX_PACKAGE_URL: ${{ parameters.codexPackageUrl }}
+                    CODEX_PACKAGE_SHA256: ${{ parameters.codexPackageSha256 }}
+                    CODEX_PACKAGE_VERSION: ${{ parameters.codexPackageVersion }}
 
   - stage: RollbackCanary
     displayName: Roll back the current traffic-serving revision

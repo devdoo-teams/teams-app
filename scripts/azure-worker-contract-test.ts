@@ -142,6 +142,8 @@ async function testLinuxPreflightAndCloudInit(): Promise<void> {
   assert.match(cloudInit, /AZURE_CLIENT_ID/);
   assert.match(cloudInit, /AGENT_CODEX_HOME/);
   assert.match(cloudInit, /CODEX_BIN_SHA256/);
+  assert.match(cloudInit, /CODEX_BIN=\/opt\/teamsapp\/current\/codex-runtime\/bin\/codex/);
+  assert.doesNotMatch(cloudInit, /CODEX_BIN=\/opt\/teamsapp\/current\/bin\/codex/);
   assert.match(cloudInit, /auth material is provisioned out of band/i);
   assert.doesNotMatch(cloudInit, /(client_secret|account[_-]?key|bearer\s+|auth\.json\s*:)/i);
 }

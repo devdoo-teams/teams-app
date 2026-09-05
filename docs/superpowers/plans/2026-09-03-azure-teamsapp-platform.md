@@ -89,9 +89,11 @@ Requirements:
 5. ACA only enqueues local CLI jobs and observes durable receipts; it never spawns a CLI process.
 6. The VM worker uses managed identity for queue/state access and an owner-only `AGENT_CODEX_HOME`; authentication material is provisioned out of band and never copied into images or cloud-init.
 7. A process exit without a nonempty terminal receipt is failure, never completion.
+8. Codex is sourced only from a versioned official `openai/codex` Linux package. Authenticate the package archive SHA-256, validate `codex-package.json`, execute the extracted binary on Linux to confirm the expected version, retain the companion runtime files, and keep the archive and binary SHA-256 values distinct through the pipeline and VM installer.
 
 Verification:
 - focused queue/worker tests
+- `npm run test:azure-codex-package`
 - existing A2A execution, cancellation, restart, telemetry, and isolation suites
 - `npm run test:core`
 
@@ -109,7 +111,7 @@ Requirements:
 3. Chat and tab use the same orchestration application service and durable task identity.
 4. The tab is Core React/TeamsJS and must not depend on CopilotKit or MCP UI.
 5. Every registered provider exposes only measured capabilities and availability. No fixture-only provider is presented as live.
-6. Adaptive Card responses remain attachment-only and Teams 1.2 compatible.
+6. Adaptive Card responses remain attachment-only and use the canonical Microsoft Teams Adaptive Cards 1.6 contract with the repository-approved mobile-safe subset.
 
 Verification:
 - focused Core orchestration API/UI tests
