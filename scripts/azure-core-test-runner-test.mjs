@@ -14,6 +14,7 @@ const expectedScripts = [
   'scripts/azure-release-input-test.mjs',
   'scripts/azure-github-handoff-test.mjs',
   'scripts/azure-approval-check-test.mjs',
+  'scripts/azure-deployment-rbac-test.mjs',
   'scripts/azure-deployment-contract-test.mjs',
   'scripts/azure-canary-preflight-test.mjs',
   'scripts/azure-release-identity-test.ts',

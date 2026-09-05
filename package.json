@@ -38,6 +38,7 @@
     "test:azure-release-input": "node scripts/azure-release-input-test.mjs",
     "test:azure-github-handoff": "node scripts/azure-github-handoff-test.mjs",
     "test:azure-approval-check": "node scripts/azure-approval-check-test.mjs",
+    "test:azure-deployment-rbac": "node scripts/azure-deployment-rbac-test.mjs",
     "test:azure-deployment-contract": "node scripts/azure-deployment-contract-test.mjs",
     "test:azure-canary-preflight": "node scripts/azure-canary-preflight-test.mjs",
     "azure:canary-preflight": "node scripts/azure-canary-preflight.mjs",

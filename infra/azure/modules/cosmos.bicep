@@ -73,8 +73,11 @@ resource appDataContributor 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssign
   properties: {
     principalId: appIdentityPrincipalId
     roleDefinitionId: '${account.id}/sqlRoleDefinitions/${cosmosDataContributorRoleId}'
-    scope: '/dbs/${databaseName}/colls/${containerName}'
+    scope: '${account.id}/dbs/${databaseName}/colls/${containerName}'
   }
+  dependsOn: [
+    runtimeContainer
+  ]
 }
 
 resource workerDataContributor 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-05-15' = {
@@ -82,8 +85,11 @@ resource workerDataContributor 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAss
   properties: {
     principalId: workerIdentityPrincipalId
     roleDefinitionId: '${account.id}/sqlRoleDefinitions/${cosmosDataContributorRoleId}'
-    scope: '/dbs/${databaseName}/colls/${containerName}'
+    scope: '${account.id}/dbs/${databaseName}/colls/${containerName}'
   }
+  dependsOn: [
+    runtimeContainer
+  ]
 }
 
 output endpoint string = account.properties.documentEndpoint

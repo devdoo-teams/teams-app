@@ -498,8 +498,13 @@ try {
     const cosmosScope = String(assignment.properties?.scope);
     assert.match(
       cosmosScope,
-      /format\('\/dbs\/\{0\}\/colls\/\{1\}'/,
-      'Cosmos data-plane access must be scoped to the configured runtime jobs container',
+      /format\('\{0\}\/dbs\/\{1\}\/colls\/\{2\}'/,
+      'Cosmos data-plane access must use a fully qualified account/database/container scope',
+    );
+    assert.match(
+      cosmosScope,
+      /resourceId\('Microsoft\.DocumentDB\/databaseAccounts'/,
+      'Cosmos role-assignment scope must begin with the full ARM account resource ID',
     );
     assert.match(cosmosScope, /parameters\('databaseName'\)/);
     assert.match(cosmosScope, /parameters\('containerName'\)/);
@@ -568,7 +573,25 @@ try {
   assert.ok(approvalScripts.some((script) => script.includes('scripts/azure-approval-check.mjs')), 'approval stage must query and receipt the external Azure DevOps check');
 
   const deploySteps = allSteps(deployStage);
-  const deployScript = deploySteps.find((step) => step.task === 'AzureCLI@2')?.inputs?.inlineScript;
+  const azureCliSteps = deploySteps.filter((step) => step.task === 'AzureCLI@2');
+  const rbacPreflightStep = azureCliSteps.find((step) => (
+    step.inputs?.inlineScript?.includes('scripts/azure-deployment-rbac.mjs')
+  ));
+  const deployStep = azureCliSteps.find((step) => step.inputs?.inlineScript?.includes('az deployment group create'));
+  const deployScript = deployStep?.inputs?.inlineScript;
+  assert.ok(rbacPreflightStep, 'deployment must validate caller-effective RBAC permissions before mutating ARM');
+  assert.ok(
+    rbacPreflightStep?.inputs?.inlineScript?.includes('/providers/Microsoft.Authorization/permissions?api-version=2022-04-01'),
+    'RBAC preflight must use the official resource-group caller-permissions API',
+  );
+  assert.ok(
+    deploySteps.indexOf(rbacPreflightStep) < deploySteps.indexOf(deployStep),
+    'RBAC preflight must execute before the first resource-group deployment',
+  );
+  const rbacReceiptStep = deploySteps.find((step) => step.task === 'PublishPipelineArtifact@1'
+    && step.inputs?.artifact === 'azure-rbac-preflight-receipt');
+  assert.ok(rbacReceiptStep, 'pipeline must retain the RBAC preflight receipt');
+  assert.equal(rbacReceiptStep?.condition, 'always()', 'RBAC receipt must survive a fail-closed preflight');
   assert.ok(deployScript?.includes('az deployment group create'), 'deployment must provision with an Azure resource-group deployment');
   assert.ok(deployScript?.includes('--template-file infra/azure/main.bicep'), 'deployment must execute the compiled main.bicep contract');
   assert.ok(deployScript?.includes('scripts/azure-deployment-contract.mjs outputs'), 'deployment must consume validated Bicep outputs');
