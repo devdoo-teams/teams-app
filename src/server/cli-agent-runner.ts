@@ -19,6 +19,7 @@ import {
 } from './agent-process-controller.js';
 import { CodexRunner, reapChildProcess, type CodexRunEvent } from './codex-runner.js';
 import { redactCliDiagnostics } from './cli-diagnostics.js';
+import { isAgentTokenUsage, parseCodexTokenUsage, type AgentTokenUsage } from './agent-token-usage.js';
 import {
   ghcpCliCommandFromEnvironment,
   GHCP_SECRET_ENV_VARS,
@@ -33,6 +34,7 @@ export type CliAgentLifecycleEvent = Readonly<{
   type: 'session.started' | 'turn.started' | 'tool.started' | 'agent.message' | 'turn.completed';
   sessionId?: string;
   message?: string;
+  tokenUsage?: AgentTokenUsage;
 }>;
 
 export type CliAgentRunResult = Readonly<{
@@ -40,6 +42,7 @@ export type CliAgentRunResult = Readonly<{
   sessionId?: string;
   finalResult: string;
   eventCount: number;
+  tokenUsage?: AgentTokenUsage;
 }>;
 
 export type CliAgentCommandSpec = Readonly<{
@@ -286,7 +289,16 @@ function normalizeCodexEvent(event: CodexRunEvent): CliAgentLifecycleEvent | und
     const message = event.item.text?.trim();
     return message ? { provider: 'codex', type: 'agent.message', message } : undefined;
   }
-  if (event.type === 'turn.completed') return { provider: 'codex', type: 'turn.completed' };
+  if (event.type === 'turn.completed') {
+    const tokenUsage = isAgentTokenUsage(event.tokenUsage)
+      ? { ...event.tokenUsage }
+      : parseCodexTokenUsage(event.usage);
+    return {
+      provider: 'codex',
+      type: 'turn.completed',
+      ...(tokenUsage ? { tokenUsage } : {}),
+    };
+  }
   return undefined;
 }
 
@@ -332,6 +344,7 @@ export class CliAgentRunner {
         sessionId: result.threadId,
         finalResult: result.finalMessage,
         eventCount: result.eventCount,
+        ...(result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
       };
     }
     if (runOptions.sessionId && !SESSION_ID_PATTERN.test(runOptions.sessionId)) {

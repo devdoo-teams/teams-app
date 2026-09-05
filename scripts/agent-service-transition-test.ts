@@ -20,7 +20,18 @@ import {
 import { CodexRunner } from '../src/server/codex-runner.js';
 import { GitService } from '../src/server/git-service.js';
 
-type RunResult = { threadId: string; finalMessage: string; eventCount: number };
+type RunResult = {
+  threadId: string;
+  finalMessage: string;
+  eventCount: number;
+  tokenUsage: {
+    source: 'codex.exec.jsonl.turn.completed.usage';
+    inputTokens: number;
+    cachedInputTokens: number;
+    outputTokens: number;
+    reasoningOutputTokens: number;
+  };
+};
 const execFileAsync = promisify(execFile);
 
 class ControlledRunner {
@@ -72,7 +83,18 @@ class ControlledRunner {
     const completion = this.completions[index];
     assert.ok(completion, `missing controlled run ${index}`);
     this.completions.splice(index, 1);
-    completion.resolve({ threadId: `thread-${index + 1}`, finalMessage: 'controlled result', eventCount: 1 });
+    completion.resolve({
+      threadId: `thread-${index + 1}`,
+      finalMessage: 'controlled result',
+      eventCount: 1,
+      tokenUsage: {
+        source: 'codex.exec.jsonl.turn.completed.usage',
+        inputTokens: 21_460,
+        cachedInputTokens: 21_248,
+        outputTokens: 5,
+        reasoningOutputTokens: 0,
+      },
+    });
   }
 
   fail(error: Error, index = 0): void {
@@ -188,6 +210,13 @@ try {
 
   runner.release(0);
   await waitForStatus(store, approvalJob.id, scope, 'completed');
+  assert.deepEqual(store.get(approvalJob.id, scope)?.tokenUsage, {
+    source: 'codex.exec.jsonl.turn.completed.usage',
+    inputTokens: 21_460,
+    cachedInputTokens: 21_248,
+    outputTokens: 5,
+    reasoningOutputTokens: 0,
+  }, 'terminal Codex token usage is persisted with the completed job');
   await assert.rejects(() => service.approve(approvalJob.id, scope), AgentJobConflictError);
   await assert.rejects(() => service.cancelStrict(approvalJob.id, scope), AgentJobConflictError);
 

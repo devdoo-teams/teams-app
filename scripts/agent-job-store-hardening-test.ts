@@ -108,6 +108,26 @@ try {
   await assertRejectedUnchanged('invalid-mode', [currentJob({ mode: 'admin' as AgentJob['mode'] })]);
   await assertRejectedUnchanged('invalid-provider', [currentJob({ provider: 'unknown' as AgentJob['provider'] })]);
   await assertRejectedUnchanged('invalid-status', [currentJob({ status: 'pending' as AgentJob['status'] })]);
+  await assertRejectedUnchanged('negative-token-usage', [currentJob({
+    result: 'completed',
+    tokenUsage: {
+      source: 'codex.exec.jsonl.turn.completed.usage',
+      inputTokens: -1,
+      cachedInputTokens: 0,
+      outputTokens: 1,
+      reasoningOutputTokens: 0,
+    },
+  })]);
+  await assertRejectedUnchanged('unsafe-token-usage', [currentJob({
+    result: 'completed',
+    tokenUsage: {
+      source: 'codex.exec.jsonl.turn.completed.usage',
+      inputTokens: Number.MAX_SAFE_INTEGER + 1,
+      cachedInputTokens: 0,
+      outputTokens: 1,
+      reasoningOutputTokens: 0,
+    },
+  })]);
   await assertRejectedUnchanged('completed-without-result', [currentJob()]);
   await assertRejectedUnchanged('blank-tenant', [currentJob({ tenantId: '   ' })]);
   await assertRejectedUnchanged('non-string-tenant', [currentJob({ tenantId: null as unknown as string })]);
@@ -164,6 +184,13 @@ try {
     changedPaths: ['src/owned.ts'],
     result: '첫 번째 결과 줄\n두 번째 결과 줄',
     progress: ['첫 번째 진행 줄\n두 번째 진행 줄'],
+    tokenUsage: {
+      source: 'codex.exec.jsonl.turn.completed.usage',
+      inputTokens: 21_460,
+      cachedInputTokens: 21_248,
+      outputTokens: 5,
+      reasoningOutputTokens: 0,
+    },
   })]), 'utf8');
   const currentStore = new AgentJobStore(currentPath);
   await currentStore.initialize();
@@ -181,10 +208,12 @@ try {
   scopedSnapshot.status = 'failed';
   scopedSnapshot.progress.push('forged progress');
   scopedSnapshot.changedPaths?.push('forged.ts');
+  if (scopedSnapshot.tokenUsage) (scopedSnapshot.tokenUsage as { inputTokens: number }).inputTokens = 0;
   const afterScopedMutation = currentStore.get('task-current-1', scope);
   assert.equal(afterScopedMutation?.status, 'completed', 'scoped reads do not expose mutable job state');
   assert.deepEqual(afterScopedMutation?.progress, ['첫 번째 진행 줄\n두 번째 진행 줄'], 'progress is cloned on scoped reads');
   assert.deepEqual(afterScopedMutation?.changedPaths, ['src/owned.ts'], 'changed paths are cloned on scoped reads');
+  assert.equal(afterScopedMutation?.tokenUsage?.inputTokens, 21_460, 'token usage is cloned on scoped reads');
   const listedSnapshot = currentStore.list(scope)[0];
   listedSnapshot.status = 'failed';
   assert.equal(currentStore.get('task-current-1', scope)?.status, 'completed', 'list returns immutable job snapshots');
@@ -211,6 +240,13 @@ try {
     () => currentStore.update('task-current-1', scope, { provider: 'copilot' }),
     /provider identity is immutable/i,
     'provider identity cannot be changed after job creation',
+  );
+  await assert.rejects(
+    () => currentStore.update('task-current-1', scope, {
+      tokenUsage: { source: 'codex.exec.jsonl.turn.completed.usage', inputTokens: -1 } as AgentJob['tokenUsage'],
+    }),
+    /token usage/i,
+    'an in-memory mutation cannot persist malformed token usage',
   );
 
   await fs.rm(currentPath);

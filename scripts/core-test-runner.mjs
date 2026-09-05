@@ -62,6 +62,7 @@ const tsTests = [
   'scripts/core-orchestration-confirmation-idempotency-test.tsx',
   'scripts/core-orchestration-runtime-composition-test.ts',
   'scripts/status-card-test.ts',
+  'scripts/agent-token-usage-test.ts',
   'scripts/genui-contract-test.ts',
   'scripts/teams-tab-link-test.ts',
   'scripts/deterministic-response-engine-test.ts',

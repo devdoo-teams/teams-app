@@ -11,6 +11,7 @@ import {
 
 export const CORE_SOURCE_CHECK_FILES = [
   'src/server/codex-capability.ts',
+  'src/server/agent-token-usage.ts',
   'src/server/cli-agent-runner.ts',
   'src/server/provider-neutral-agent-runner.ts',
   'src/server/cli-diagnostics.ts',

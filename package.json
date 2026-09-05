@@ -90,6 +90,7 @@
     "test:release-loop-untracked-preservation": "node scripts/release-loop-untracked-preservation-test.mjs",
     "test:release-identity-consistency": "node scripts/release-identity-consistency-test.mjs",
     "test:status-card": "node --import tsx/esm scripts/status-card-test.ts",
+    "test:agent-token-usage": "tsx scripts/agent-token-usage-test.ts",
     "test:codex-ghcp-capability": "node --import tsx/esm scripts/codex-ghcp-capability-regression-test.mjs",
     "test:ghcp-cli-adapter": "tsx scripts/ghcp-cli-adapter-test.ts",
     "test:troubleshooting": "tsx scripts/remote-troubleshooting-test.ts",

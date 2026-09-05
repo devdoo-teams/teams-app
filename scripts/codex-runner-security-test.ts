@@ -10,7 +10,7 @@ import {
   type AgentIsolationAcquireInput,
 } from '../src/server/agent-execution-policy.js';
 import { CODEX_READ_ONLY_PERMISSION_ARGS } from '../src/server/codex-permission-profile-isolation-provider.js';
-import { CodexRunner, type CodexRunEvent } from '../src/server/codex-runner.js';
+import { CodexRunner, type CodexRunEvent, type CodexRunResult } from '../src/server/codex-runner.js';
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-codex-runner-security-'));
 const projectionRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-codex-projection-'));
@@ -107,6 +107,13 @@ if (caseName === 'malformed') {
     type: 'turn.completed',
     usage: { input_tokens: 12, cached_input_tokens: 3, output_tokens: 4, reasoning_output_tokens: 1 },
   }));
+} else if (caseName === 'malformed-usage') {
+  prefix();
+  message('COMPLETED_WITH_UNAVAILABLE_USAGE');
+  console.log(JSON.stringify({
+    type: 'turn.completed',
+    usage: { input_tokens: -1, cached_input_tokens: 3, output_tokens: 4, reasoning_output_tokens: 1 },
+  }));
 } else {
   prefix(); message('SECURITY_FAKE_OK'); completed();
 }
@@ -150,7 +157,7 @@ async function withEnvironment<T>(values: Record<string, string | undefined>, op
   }
 }
 
-async function runCase(caseName: string, onEvent?: (event: CodexRunEvent) => Promise<void> | void, timeoutMs?: number): Promise<{ finalMessage: string; eventCount: number }> {
+async function runCase(caseName: string, onEvent?: (event: CodexRunEvent) => Promise<void> | void, timeoutMs?: number): Promise<CodexRunResult> {
   const jobId = `job-${caseName}`;
   const prompt = `strict protocol CASE:${caseName}`;
   const subject = {
@@ -296,6 +303,13 @@ try {
   });
   assert.equal(recovered.finalMessage, 'RECOVERED_AFTER_OPTIONAL_MCP_ERROR');
   assert.equal(recovered.eventCount, 5);
+  assert.deepEqual(recovered.tokenUsage, {
+    source: 'codex.exec.jsonl.turn.completed.usage',
+    inputTokens: 12,
+    cachedInputTokens: 3,
+    outputTokens: 4,
+    reasoningOutputTokens: 1,
+  }, 'documented turn.completed usage is normalized into the bounded run result');
   assert.deepEqual(recoveredEvents, [
     'thread.started:',
     'item.completed:error',
@@ -303,6 +317,10 @@ try {
     'item.completed:agent_message',
     'turn.completed:',
   ], 'a bounded pre-turn optional-provider diagnostic remains observable without replacing the terminal result');
+
+  const malformedUsage = await runCase('malformed-usage');
+  assert.equal(malformedUsage.finalMessage, 'COMPLETED_WITH_UNAVAILABLE_USAGE');
+  assert.equal(malformedUsage.tokenUsage, undefined, 'malformed token counters never become trusted usage or fail a valid result');
 
   for (const [caseName, expected, timeoutMs] of negativeCases) {
     await assert.rejects(() => runCase(caseName, undefined, timeoutMs), expected, `${caseName} must be rejected`);

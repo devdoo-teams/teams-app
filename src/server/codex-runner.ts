@@ -22,6 +22,7 @@ import { diagnoseRemoteTroubleshooting, formatRemoteTroubleshooting } from './re
 import { redactCliDiagnostics } from './cli-diagnostics.js';
 import { CODEX_READ_ONLY_PERMISSION_ARGS } from './codex-permission-profile-isolation-provider.js';
 import { redactSensitiveText, redactSensitiveValue } from './sensitive-text.js';
+import { isAgentTokenUsage, parseCodexTokenUsage, type AgentTokenUsage } from './agent-token-usage.js';
 
 export interface CodexRunEvent {
   type?: string;
@@ -33,12 +34,16 @@ export interface CodexRunEvent {
   };
   thread_id?: string;
   error?: unknown;
+  usage?: unknown;
+  /** Canonical usage attached by provider-neutral adapters. */
+  tokenUsage?: AgentTokenUsage;
 }
 
 export interface CodexRunResult {
   threadId?: string;
   finalMessage: string;
   eventCount: number;
+  tokenUsage?: AgentTokenUsage;
 }
 
 type RunningCodexProcess = {
@@ -184,6 +189,9 @@ function sanitizeRunEvent(value: Record<string, unknown>): CodexRunEvent {
     event.error = { message: value.error.message };
   }
 
+  const tokenUsage = parseCodexTokenUsage(value.usage);
+  if (tokenUsage) event.tokenUsage = tokenUsage;
+
   return redactSensitiveValue(event) as CodexRunEvent;
 }
 
@@ -304,6 +312,7 @@ export class CodexRunner {
     let agentMessageCount = 0;
     const currentProtocolState = (): ProtocolState => protocolState;
     let recoverablePreTurnErrorItemCount = 0;
+    let tokenUsage: AgentTokenUsage | undefined;
     let timeoutHandle: NodeJS.Timeout | undefined;
     let resolveTermination!: (error: Error) => void;
     const terminationPromise = new Promise<Error>((resolve) => { resolveTermination = resolve; });
@@ -419,6 +428,9 @@ export class CodexRunner {
           protocolFailure('Codex must emit a non-empty final agent_message immediately before turn.completed.');
           return;
         }
+        tokenUsage = isAgentTokenUsage(event.tokenUsage)
+          ? { ...event.tokenUsage }
+          : parseCodexTokenUsage(event.usage);
         protocolState = 'completed';
         return;
       }
@@ -532,7 +544,12 @@ export class CodexRunner {
       if (currentProtocolState() !== 'completed' || agentMessageCount < 1 || !finalMessage) {
         throw new CodexTerminalProtocolError('Codex did not emit a non-empty final agent message followed by turn.completed.');
       }
-      return { threadId, finalMessage, eventCount };
+      return {
+        threadId,
+        finalMessage,
+        eventCount,
+        ...(tokenUsage ? { tokenUsage } : {}),
+      };
     } catch (error) {
       primaryError = asError(error);
       throw primaryError;

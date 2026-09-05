@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 
 import { atomicWriteJson, readAtomicJsonStore } from './atomic-file.js';
 import type { CliAgentProvider } from './cli-agent-runner.js';
+import { isAgentTokenUsage, type AgentTokenUsage } from './agent-token-usage.js';
 
 export type AgentJobMode = 'read-only' | 'workspace-write';
 export type AgentJobStatus =
@@ -61,6 +62,7 @@ export interface AgentJob {
   parentJobId?: string;
   threadId?: string;
   result?: string;
+  tokenUsage?: AgentTokenUsage;
   commitHash?: string;
   commitMessage?: string;
   changedPaths?: string[];
@@ -302,6 +304,9 @@ export class AgentJobStore {
       if ('provider' in patch && patch.provider !== this.jobs[index].provider) {
         throw new Error('agent job provider identity is immutable');
       }
+      if ('tokenUsage' in patch && patch.tokenUsage !== undefined && !isAgentTokenUsage(patch.tokenUsage)) {
+        throw new Error('agent job token usage is invalid');
+      }
       if (updated.status === 'completed' && (!updated.result || !updated.result.trim())) {
         throw new Error('completed jobs must contain a result');
       }
@@ -432,6 +437,7 @@ function cloneAgentJob(job: AgentJob): AgentJob {
     ...job,
     progress: [...job.progress],
     ...(job.changedPaths ? { changedPaths: [...job.changedPaths] } : {}),
+    ...(job.tokenUsage ? { tokenUsage: { ...job.tokenUsage } } : {}),
   };
 }
 
@@ -565,6 +571,7 @@ function loadJob(
   );
   const threadId = readOptionalText(value, 'threadId', MAX_AGENT_JOB_ID_LENGTH, index, legacy);
   const result = readOptionalText(value, 'result', MAX_AGENT_RESULT_LENGTH, index, legacy);
+  const tokenUsage = readTokenUsage(value, index);
   const commitHash = readOptionalText(value, 'commitHash', MAX_AGENT_JOB_ID_LENGTH, index, legacy);
   const commitMessage = readOptionalText(
     value,
@@ -622,6 +629,7 @@ function loadJob(
     ...(parentJobId.value ? { parentJobId: parentJobId.value } : {}),
     ...(threadId.value ? { threadId: threadId.value } : {}),
     ...(result.value ? { result: result.value } : {}),
+    ...(tokenUsage ? { tokenUsage } : {}),
     ...(commitHash.value ? { commitHash: commitHash.value } : {}),
     ...(commitMessage.value ? { commitMessage: commitMessage.value } : {}),
     ...(changedPaths.value ? { changedPaths: changedPaths.value } : {}),
@@ -633,6 +641,12 @@ function loadJob(
   };
 
   return { job, migrated };
+}
+
+function readTokenUsage(value: JobRecord, index: number): AgentTokenUsage | undefined {
+  if (!hasOwn(value, 'tokenUsage') || value.tokenUsage === undefined) return undefined;
+  if (!isAgentTokenUsage(value.tokenUsage)) throw invalidJob(index, 'token usage is invalid');
+  return { ...value.tokenUsage };
 }
 
 function readChangedPaths(

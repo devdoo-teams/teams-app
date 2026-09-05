@@ -10,6 +10,7 @@ import {
   type CodexRunEvent,
   type CodexRunResult,
 } from './codex-runner.js';
+import { isAgentTokenUsage } from './agent-token-usage.js';
 
 type CliAgentRunnerContract = Readonly<{
   run: (options: CliAgentRunOptions) => Promise<CliAgentRunResult>;
@@ -44,7 +45,10 @@ function toCodexRunEvent(event: CliAgentLifecycleEvent, provider: CliAgentProvid
     case 'agent.message':
       return { type: 'item.completed', item: { type: 'agent_message', text: event.message } };
     case 'turn.completed':
-      return { type: 'turn.completed' };
+      return {
+        type: 'turn.completed',
+        ...(isAgentTokenUsage(event.tokenUsage) ? { tokenUsage: { ...event.tokenUsage } } : {}),
+      };
   }
 }
 
@@ -80,6 +84,7 @@ export class ProviderNeutralAgentRunner extends CodexRunner {
       threadId: result.sessionId ?? threadId,
       finalMessage: result.finalResult,
       eventCount: result.eventCount,
+      ...(isAgentTokenUsage(result.tokenUsage) ? { tokenUsage: { ...result.tokenUsage } } : {}),
     };
   }
 

@@ -9,6 +9,7 @@ import type {
   CoreOrchestrationJob,
   CoreProviderFact,
 } from '../shared/core-orchestration.js';
+import { isAgentTokenUsage, type AgentTokenUsage } from './agent-token-usage.js';
 import { redactSensitiveText } from './sensitive-text.js';
 import { normalizeCliCapability, type CliCapability } from './codex-capability.js';
 import {
@@ -368,6 +369,27 @@ function safeJobError(job: AgentJob): string {
   return displayText(fieldOf(job, 'error'), 1_900);
 }
 
+function safeJobTokenUsage(job: AgentJob): AgentTokenUsage | undefined {
+  const value = fieldOf(job, 'tokenUsage');
+  return isAgentTokenUsage(value) ? value : undefined;
+}
+
+function formatTokenCount(value: number): string {
+  return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+function tokenUsageFacts(usage: AgentTokenUsage): Array<{ label: string; value: string }> {
+  return [
+    {
+      label: '입력 토큰',
+      value: `${formatTokenCount(usage.inputTokens)} (캐시 ${formatTokenCount(usage.cachedInputTokens)} 포함)`,
+    },
+    { label: '출력 토큰', value: formatTokenCount(usage.outputTokens) },
+    { label: '추론 출력', value: formatTokenCount(usage.reasoningOutputTokens) },
+    { label: '계정 잔여량', value: '제공되지 않음' },
+  ];
+}
+
 function jobFallback(job: AgentJob, agentLabel = 'Codex'): string {
   const lines = [
     `작업 ID: ${safeJobId(job)}`,
@@ -381,12 +403,19 @@ function jobFallback(job: AgentJob, agentLabel = 'Codex'): string {
   const progress = safeJobProgress(job);
   const error = safeJobError(job);
   const result = safeJobResult(job);
+  const tokenUsage = safeJobTokenUsage(job);
   if (threadId) lines.push(`${agentLabel} thread: ${threadId}`);
   if (commitHash) lines.push(`Git commit: ${commitHash}`);
   if (commitMessage && !commitHash) lines.push(`Git: ${commitMessage}`);
   if (progress.length > 0) lines.push(`최근 진행: ${progress.at(-1)}`);
   if (error) lines.push(`오류: ${error}`);
   if (result) lines.push(`결과:\n${result}`);
+  if (tokenUsage) {
+    lines.push(`입력 토큰: ${formatTokenCount(tokenUsage.inputTokens)} (캐시 ${formatTokenCount(tokenUsage.cachedInputTokens)} 포함)`);
+    lines.push(`출력 토큰: ${formatTokenCount(tokenUsage.outputTokens)}`);
+    lines.push(`추론 출력: ${formatTokenCount(tokenUsage.reasoningOutputTokens)}`);
+    lines.push('계정 잔여량: 제공되지 않음');
+  }
   return compactNotification(lines.join('\n'), 4_000);
 }
 
@@ -806,6 +835,7 @@ export class GenUiResponseFactory {
     const progress = safeJobProgress(job);
     const error = safeJobError(job);
     const result = safeJobResult(job);
+    const tokenUsage = safeJobTokenUsage(job);
     const text = `작업 ${jobId}: ${jobStatus}`;
     const actions: GenUiAction[] = [];
     if (jobStatus === 'failed') {
@@ -837,6 +867,7 @@ export class GenUiResponseFactory {
       prompt: safeJobPrompt(job),
       sections: [
         { type: 'status', status: jobStatus, description: [error, result, progress.at(-1)].filter(Boolean).join('\n').slice(0, 2_000) },
+        ...(tokenUsage ? [{ type: 'facts' as const, title: '토큰 사용량', facts: tokenUsageFacts(tokenUsage) }] : []),
         { type: 'list', title: '최근 진행 기록', items: progress.map((message, index) => ({ id: `${jobId}-${index}`.slice(0, 120), label: message })) },
       ],
       fallbackText: jobFallback(job, this.agentLabel),

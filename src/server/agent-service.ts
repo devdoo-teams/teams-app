@@ -843,6 +843,7 @@ export class AgentService {
               status: 'completed',
               threadId: result.threadId,
               result: result.finalMessage,
+              ...(result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
               ...(changedPaths ? { changedPaths } : {}),
               finishedAt: new Date().toISOString(),
             });
