@@ -177,7 +177,7 @@ function validateReceiptShape(receipt) {
   if (!SHA256.test(String(receipt.parametersSha256 ?? ''))) fail('parameters SHA-256 is invalid');
   assertExactKeys(receipt.contract, ['validationLevel', 'resultFormat', 'noPrettyPrint', 'noPrompt'], 'contract');
   if (receipt.contract.validationLevel !== 'Provider'
-    || receipt.contract.resultFormat !== 'ResourceIdOnly'
+    || receipt.contract.resultFormat !== 'FullResourcePayloads'
     || receipt.contract.noPrettyPrint !== true
     || receipt.contract.noPrompt !== true) {
     fail('what-if CLI contract is invalid');
@@ -225,7 +225,7 @@ export function createAzureWhatIfReceipt({
     parametersSha256: sha256File(parametersPath, 'deployment parameters'),
     contract: {
       validationLevel: 'Provider',
-      resultFormat: 'ResourceIdOnly',
+      resultFormat: 'FullResourcePayloads',
       noPrettyPrint: true,
       noPrompt: true,
     },

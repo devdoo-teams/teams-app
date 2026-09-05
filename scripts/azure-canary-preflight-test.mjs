@@ -76,7 +76,8 @@ const whatIfArgs = buildAzureCanaryWhatIfArguments({
 });
 assert.deepEqual(whatIfArgs.slice(0, 3), ['deployment', 'group', 'what-if']);
 assert.ok(whatIfArgs.includes('--no-pretty-print'));
-assert.ok(whatIfArgs.includes('ResourceIdOnly'));
+assert.ok(whatIfArgs.includes('FullResourcePayloads'));
+assert.equal(whatIfArgs.includes('ResourceIdOnly'), false);
 assert.ok(whatIfArgs.includes('deployContainerApp=false'));
 assert.ok(whatIfArgs.includes('deployWorkerVm=false'));
 assert.ok(whatIfArgs.includes(`releaseSourceCommit=${commit}`));
@@ -91,6 +92,7 @@ const whatIf = summarizeAzureWhatIf({
   status: 'Succeeded',
   changes: [
     { resourceId: `${scope}/providers/Microsoft.Storage/storageAccounts/teamsapp123`, changeType: 'Create' },
+    { resourceId: `${scope}/providers/Microsoft.App/managedEnvironments/teamsapp-env-goictvxm`, changeType: 'NoChange' },
     {
       resourceId: `${scope}/providers/Microsoft.Authorization/roleAssignments/${'b'.repeat(32)}`,
       changeType: 'Unsupported',
@@ -102,7 +104,7 @@ const whatIf = summarizeAzureWhatIf({
   ],
 }, { subscriptionId, resourceGroup });
 assert.equal(whatIf.status, 'Succeeded');
-assert.deepEqual(whatIf.changeCounts, { Create: 1, Unsupported: 4 });
+assert.deepEqual(whatIf.changeCounts, { Create: 1, NoChange: 1, Unsupported: 4 });
 assert.deepEqual(whatIf.unsupportedChanges, [
   {
     resourceId: `${scope}/providers/Microsoft.Authorization/roleAssignments/${'b'.repeat(32)}`,
@@ -157,6 +159,17 @@ for (const changeType of ['Delete', 'Modify', 'Deploy', 'Ignore']) {
     new RegExp(changeType, 'i'),
   );
 }
+assert.throws(
+  () => summarizeAzureWhatIf({
+    status: 'Succeeded',
+    changes: [{
+      resourceId: `${scope}/providers/Microsoft.App/managedEnvironments/teamsapp-env-goictvxm`,
+      changeType: 'Deploy',
+    }],
+  }, { subscriptionId, resourceGroup }),
+  /Deploy/i,
+  'ResourceIdOnly Deploy remains ambiguous and must never be silently accepted',
+);
 assert.throws(
   () => summarizeAzureWhatIf({
     status: 'Succeeded',

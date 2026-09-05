@@ -103,7 +103,7 @@ export function buildAzureCanaryWhatIfArguments({
     '--resource-group', resourceGroup,
     '--template-file', templateFile,
     '--mode', 'Incremental',
-    '--result-format', 'ResourceIdOnly',
+    '--result-format', 'FullResourcePayloads',
     '--no-pretty-print',
     '--only-show-errors',
     '--output', 'json',

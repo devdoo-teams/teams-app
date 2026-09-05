@@ -273,7 +273,7 @@ stages:
                   --template-file infra/azure/main.bicep \
                   --parameters "@${foundation_parameters}" \
                   --mode Incremental \
-                  --result-format ResourceIdOnly \
+                  --result-format FullResourcePayloads \
                   --no-pretty-print \
                   --no-prompt true \
                   --validation-level Provider \
@@ -477,7 +477,7 @@ stages:
                         --template-file infra/azure/main.bicep \
                         --parameters "@${workload_parameters}" \
                         --mode Incremental \
-                        --result-format ResourceIdOnly \
+                        --result-format FullResourcePayloads \
                         --no-pretty-print \
                         --no-prompt true \
                         --validation-level Provider \

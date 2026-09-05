@@ -641,7 +641,8 @@ try {
   assert.ok(platformWhatIfScript?.includes('az deployment group what-if'), 'foundation what-if must execute before environment approval');
   assert.ok(platformWhatIfScript?.includes('--subscription "$AZURE_SUBSCRIPTION_ID"'), 'pre-approval what-if must pin the subscription explicitly');
   assert.ok(platformWhatIfScript?.includes('--validation-level Provider'), 'pre-approval what-if must use provider validation');
-  assert.ok(platformWhatIfScript?.includes('--result-format ResourceIdOnly'), 'pre-approval what-if must emit bounded resource identities');
+  assert.ok(platformWhatIfScript?.includes('--result-format FullResourcePayloads'), 'pre-approval what-if must request property-level change classification');
+  assert.equal(platformWhatIfScript?.includes('--result-format ResourceIdOnly'), false, 'pre-approval must not collapse existing resources into ambiguous Deploy rows');
   assert.ok(platformWhatIfScript?.includes('--no-pretty-print'), 'pre-approval what-if must emit machine-readable JSON');
   assert.ok(platformWhatIfScript?.includes('--no-prompt true'), 'pre-approval what-if must fail instead of prompting for missing parameters');
   assert.ok(platformWhatIfScript?.includes('scripts/azure-what-if-receipt.mjs create'), 'pre-approval what-if must produce a validated receipt');
@@ -762,6 +763,8 @@ try {
   assert.ok(deployScript?.includes('--parameters "@${foundation_parameters}"'), 'foundation what-if verification and create must bind one parameter file');
   assert.ok(deployScript?.includes('--parameters "@${workload_parameters}"'), 'workload what-if and create must bind one parameter file');
   assert.ok(deployScript?.includes('--validation-level Provider'), 'deployment what-if must retain provider-level validation');
+  assert.ok(deployScript?.includes('--result-format FullResourcePayloads'), 'deployment what-if must retain property-level change classification');
+  assert.equal(deployScript?.includes('--result-format ResourceIdOnly'), false, 'deployment what-if must not use ambiguous ResourceIdOnly classification');
   assert.ok(deployScript?.includes('--no-pretty-print'), 'deployment what-if must emit machine-readable JSON');
   assert.ok(deployScript?.includes('--no-prompt true'), 'deployment what-if must not fall back to an interactive prompt');
   assert.ok(

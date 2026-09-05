@@ -64,7 +64,7 @@ try {
   assert.match(receipt.parametersSha256, /^[0-9a-f]{64}$/);
   assert.deepEqual(receipt.contract, {
     validationLevel: 'Provider',
-    resultFormat: 'ResourceIdOnly',
+    resultFormat: 'FullResourcePayloads',
     noPrettyPrint: true,
     noPrompt: true,
   });
@@ -110,6 +110,13 @@ try {
   assert.throws(
     () => verifyAzureWhatIfReceipt({ ...persisted, unexpected: true }, identity),
     /unexpected field/i,
+  );
+  assert.throws(
+    () => verifyAzureWhatIfReceipt({
+      ...persisted,
+      contract: { ...persisted.contract, resultFormat: 'ResourceIdOnly' },
+    }, identity),
+    /CLI contract/i,
   );
   assert.throws(
     () => verifyAzureWhatIfReceipt({
