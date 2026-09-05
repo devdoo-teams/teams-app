@@ -10,6 +10,7 @@ const mainBicepPath = path.join(root, 'infra', 'azure', 'main.bicep');
 const workerVmBicepPath = path.join(root, 'infra', 'azure', 'modules', 'worker-vm.bicep');
 const canaryParametersPath = path.join(root, 'infra', 'azure', 'parameters', 'canary.bicepparam');
 const pipelinePath = path.join(root, 'azure-pipelines.yml');
+const rubyYamlSafeLoadProgram = 'puts JSON.generate(YAML.safe_load(File.read(ARGV[0]), permitted_classes: [], permitted_symbols: [], aliases: true))';
 
 function resolveBicep() {
   const configured = process.env.BICEP_BIN?.trim();
@@ -33,7 +34,18 @@ function compileBicep(bicep, inputPath, outputPath) {
 }
 
 function parseYaml(filePath) {
-  const ruby = ['-ryaml', '-rjson', '-e', 'puts JSON.generate(YAML.safe_load(File.read(ARGV[0]), [], [], true))', filePath];
+  for (const keyword of ['permitted_classes:', 'permitted_symbols:', 'aliases:']) {
+    assert.ok(
+      rubyYamlSafeLoadProgram.includes(keyword),
+      `Azure pipeline YAML parsing must use the documented Psych ${keyword} keyword argument`,
+    );
+  }
+  assert.doesNotMatch(
+    rubyYamlSafeLoadProgram,
+    /safe_load\(File\.read\(ARGV\[0\]\),\s*\[\]/,
+    'Azure pipeline YAML parsing must reject the legacy positional Psych contract',
+  );
+  const ruby = ['-ryaml', '-rjson', '-e', rubyYamlSafeLoadProgram, filePath];
   const result = spawnSync('ruby', ruby, { cwd: root, encoding: 'utf8' });
   assert.equal(result.status, 0, `A real YAML parser is required for the Azure pipeline contract: ${result.stderr}`);
   return JSON.parse(result.stdout);
