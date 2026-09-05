@@ -1,8 +1,15 @@
 import crypto from 'node:crypto';
 
-import type { CoreAgentToolUsage } from '../../shared/core-orchestration.js';
+import type {
+  CoreAgentTokenUsage,
+  CoreAgentToolUsage,
+  CoreCodexModelSelection,
+  CoreCodexReasoningEffort,
+} from '../../shared/core-orchestration.js';
+import { assertSafeCodexModelSelection } from '../codex-model-catalog.js';
 
-export const AGENT_DISPATCH_SCHEMA_VERSION = 2 as const;
+export const AGENT_DISPATCH_SCHEMA_VERSION = 3 as const;
+export const PREVIOUS_AGENT_DISPATCH_SCHEMA_VERSION = 2 as const;
 export const LEGACY_AGENT_DISPATCH_SCHEMA_VERSION = 1 as const;
 export const AGENT_DISPATCH_WORKSPACE_REFERENCE = 'teams-core-worker-workspace' as const;
 export const AGENT_DISPATCH_LINUX_READ_ONLY_ISOLATION_REFERENCE = 'linux-read-only-required' as const;
@@ -27,8 +34,7 @@ export type AgentDispatchStatus =
   | 'cancelled'
   | 'quarantined';
 
-export type AgentDispatchTask = Readonly<{
-  schemaVersion: typeof AGENT_DISPATCH_SCHEMA_VERSION;
+type AgentDispatchTaskFields = Readonly<{
   taskId: string;
   idempotencyKey: string;
   tenantId: string;
@@ -39,6 +45,19 @@ export type AgentDispatchTask = Readonly<{
   createdAt: string;
   execution: AgentDispatchExecution;
 }>;
+
+/** Existing schema retained byte-for-byte so already queued v2 work remains executable. */
+export type PreviousAgentDispatchTask = Readonly<AgentDispatchTaskFields & {
+  schemaVersion: typeof PREVIOUS_AGENT_DISPATCH_SCHEMA_VERSION;
+}>;
+
+/** New submissions can bind one server-validated installed-Codex selection. */
+export type CurrentAgentDispatchTask = Readonly<AgentDispatchTaskFields & {
+  schemaVersion: typeof AGENT_DISPATCH_SCHEMA_VERSION;
+  modelSelection?: CoreCodexModelSelection;
+}>;
+
+export type AgentDispatchTask = PreviousAgentDispatchTask | CurrentAgentDispatchTask;
 
 export type AgentDispatchTaskReference = Readonly<
   Pick<AgentDispatchTask, 'taskId' | 'tenantId' | 'requesterId' | 'conversationId'>
@@ -56,6 +75,7 @@ export type AgentDispatchCompletionReceipt = Readonly<{
   result: string;
   providerExecutionId: string;
   completedAt?: string;
+  tokenUsage?: CoreAgentTokenUsage;
 }>;
 
 export type AgentDispatchErrorReceipt = Readonly<{
@@ -279,8 +299,23 @@ export function createAgentDispatchTaskFromJob(job: Readonly<{
   prompt: string;
   createdAt: string;
   mode: 'read-only' | 'workspace-write';
+  model?: string;
+  reasoningEffort?: CoreCodexReasoningEffort;
+  catalogRevision?: string;
 }>): AgentDispatchTask {
   if (!job.tenantId) throw new Error('A server-derived tenant is required for durable dispatch.');
+  const selectionFields = [job.model, job.reasoningEffort, job.catalogRevision];
+  const selectedFieldCount = selectionFields.filter((value) => value !== undefined).length;
+  if (selectedFieldCount !== 0 && selectedFieldCount !== selectionFields.length) {
+    throw new Error('A durable Codex model selection must include model, reasoning effort, and catalog revision.');
+  }
+  const modelSelection = selectedFieldCount === selectionFields.length
+    ? assertSafeCodexModelSelection({
+        model: job.model!,
+        reasoningEffort: job.reasoningEffort!,
+        catalogRevision: job.catalogRevision!,
+      })
+    : undefined;
   return Object.freeze({
     schemaVersion: AGENT_DISPATCH_SCHEMA_VERSION,
     taskId: job.id,
@@ -291,6 +326,7 @@ export function createAgentDispatchTaskFromJob(job: Readonly<{
     provider: job.provider ?? 'codex',
     prompt: job.prompt,
     createdAt: job.createdAt,
+    ...(modelSelection ? { modelSelection } : {}),
     execution: job.mode === 'read-only'
       ? Object.freeze({
           mode: 'read-only',

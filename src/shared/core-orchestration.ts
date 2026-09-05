@@ -1,5 +1,31 @@
 export type CoreOrchestrationMode = 'read-only' | 'workspace-write';
 export type CoreOrchestrationProvider = 'codex' | 'copilot';
+export type CoreCodexReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
+export type CoreCodexModelSelection = Readonly<{
+  model: string;
+  reasoningEffort: CoreCodexReasoningEffort;
+  catalogRevision: string;
+}>;
+export type CoreCodexModelOption = Readonly<{
+  id: string;
+  label: string;
+  defaultReasoningEffort: CoreCodexReasoningEffort;
+  reasoningEfforts: readonly CoreCodexReasoningEffort[];
+}>;
+export type CoreCodexModelCatalog = Readonly<{
+  revision: string;
+  observedAt: string;
+  source: 'codex-debug-models';
+  models: readonly CoreCodexModelOption[];
+}>;
+export type CoreAgentTokenUsage = Readonly<{
+  source: 'codex.exec.jsonl.turn.completed.usage';
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteInputTokens?: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+}>;
 export type CoreOrchestrationJobStatus =
   | 'queued'
   | 'awaiting_approval'
@@ -30,6 +56,12 @@ export type CoreOrchestrationJob = Readonly<{
   progress: readonly string[];
   /** Safe, argument-free tool observations. Legacy jobs may omit this field. */
   tools?: readonly CoreAgentToolUsage[];
+  /** Immutable installed-Codex selection. Legacy/default-model jobs omit these fields. */
+  model?: string;
+  reasoningEffort?: CoreCodexReasoningEffort;
+  catalogRevision?: string;
+  /** Exact terminal `turn.completed.usage`; account quota is intentionally not inferred. */
+  tokenUsage?: CoreAgentTokenUsage;
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;
@@ -40,6 +72,9 @@ export type CoreSubmitRequest = Readonly<{
   prompt: string;
   provider?: CoreOrchestrationProvider;
   mode: CoreOrchestrationMode;
+  model?: string;
+  reasoningEffort?: CoreCodexReasoningEffort;
+  catalogRevision?: string;
 }>;
 
 export type CoreJobRequest = Readonly<{ jobId: string }>;

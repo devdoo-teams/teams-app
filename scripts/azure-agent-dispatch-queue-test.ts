@@ -12,6 +12,7 @@ import {
 } from '../src/server/azure-agent-dispatch-queue.js';
 import { AzureAgentDispatchQueue as LegacyPathAzureAgentDispatchQueue } from '../src/server/queue/azure-agent-dispatch-queue.js';
 import {
+  createAgentDispatchTaskFromJob,
   createAgentDispatchSubmissionPort,
   createServerOwnedLegacyDispatchMigration,
   hashLegacyAgentDispatchTask,
@@ -61,6 +62,77 @@ async function testEnqueueIsStableAndIdempotent(): Promise<void> {
   await assert.rejects(
     fixture.queue.enqueue({ ...input, prompt: 'different' }),
     DispatchConflictError,
+  );
+}
+
+async function testV3CarriesModelSelectionAndCompletionUsageWithoutBreakingV2(): Promise<void> {
+  const fixture = createFixture();
+  const catalogRevision = 'a'.repeat(64);
+  const selectedJob = {
+    id: 'task-selected-v3',
+    tenantId: 'tenant-a',
+    requesterId: 'user-a',
+    conversationId: 'conversation-a',
+    provider: 'codex',
+    prompt: 'perform selected bounded work',
+    createdAt: clock.now().toISOString(),
+    mode: 'workspace-write' as const,
+    model: 'gpt-5.6-sol',
+    reasoningEffort: 'high' as const,
+    catalogRevision,
+  };
+  const selectedTask = createAgentDispatchTaskFromJob(selectedJob);
+  assert.equal(selectedTask.schemaVersion, 3, 'new dispatches use a new wire schema');
+  assert.deepEqual(
+    (selectedTask as unknown as { modelSelection?: unknown }).modelSelection,
+    { model: 'gpt-5.6-sol', reasoningEffort: 'high', catalogRevision },
+    'the immutable server-validated selection crosses the queue boundary',
+  );
+
+  await fixture.queue.enqueue(selectedTask);
+  const queuedPayload = JSON.parse(fixture.client.sent[0] ?? '{}') as { modelSelection?: unknown };
+  assert.deepEqual(queuedPayload.modelSelection, {
+    model: 'gpt-5.6-sol',
+    reasoningEffort: 'high',
+    catalogRevision,
+  });
+  const lease = await fixture.queue.lease({ visibilityTimeoutSeconds: 30 });
+  assert.deepEqual(
+    (lease?.task as unknown as { modelSelection?: unknown }).modelSelection,
+    queuedPayload.modelSelection,
+  );
+
+  const tokenUsage = {
+    source: 'codex.exec.jsonl.turn.completed.usage' as const,
+    inputTokens: 100,
+    cachedInputTokens: 20,
+    outputTokens: 30,
+    reasoningOutputTokens: 10,
+  };
+  await fixture.queue.complete(lease!, {
+    result: 'selected result',
+    providerExecutionId: 'selected-exec',
+    tokenUsage,
+  } as never);
+  const observed = await fixture.queue.observe({
+    taskId: selectedJob.id,
+    tenantId: selectedJob.tenantId,
+    requesterId: selectedJob.requesterId,
+    conversationId: selectedJob.conversationId,
+  });
+  assert.deepEqual(
+    (observed?.receipt as unknown as { tokenUsage?: unknown })?.tokenUsage,
+    tokenUsage,
+    'measured terminal usage survives durable completion and response projection',
+  );
+
+  await assert.rejects(
+    fixture.queue.enqueue({
+      ...task('task-v2-selection-smuggle'),
+      modelSelection: { model: 'gpt-5.6-sol', reasoningEffort: 'high', catalogRevision },
+    } as never),
+    /schema|unsupported|selection/i,
+    'a v2 payload cannot silently smuggle a field that an old worker would discard',
   );
 }
 
@@ -879,6 +951,7 @@ class MemoryRuntimeStore implements RuntimeStore {
 }
 
 await testEnqueueIsStableAndIdempotent();
+await testV3CarriesModelSelectionAndCompletionUsageWithoutBreakingV2();
 await testSameTaskIdIsIsolatedByServerDerivedScope();
 await testRuntimeStateUsesTaskScopeForObserveCasAndHealth();
 await testRuntimeStateProbesEmptyLedgerWithoutTaskReference();

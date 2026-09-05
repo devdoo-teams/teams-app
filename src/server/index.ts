@@ -70,6 +70,8 @@ import {
   createCoreOrchestrationConfirmationActivity,
   createCoreOrchestrationJobActivity,
   createCoreOrchestrationListActivity,
+  createCoreOrchestrationModelSelectionActivity,
+  createCoreOrchestrationReasoningSelectionActivity,
   type CoreOrchestrationTeamsActivity,
 } from './genui-response.js';
 import {
@@ -169,6 +171,7 @@ import {
   createRuntimeStoreAgentDispatchStatePort,
   createRuntimeStoreLegacyDispatchMigration,
 } from './storage/agent-dispatch-state-port.js';
+import { createRuntimeStoreCodexWorkerCatalogPort } from './storage/codex-worker-catalog-port.js';
 import type { AgentExecutionDispatcher, AgentExecutionObservation } from './agent-service.js';
 import {
   createAgentDispatchSubmissionPort,
@@ -189,8 +192,11 @@ import { mountCoreOrchestrationRoutes } from './core-orchestration-route.js';
 import {
   CoreOrchestrationProviderCapabilityError,
   CoreOrchestrationProviderUnavailableError,
+  CoreOrchestrationValidationError,
 } from '../shared/core-orchestration.js';
+import { loadCodexModelCatalog } from './codex-model-catalog.js';
 import type {
+  CoreCodexReasoningEffort,
   CoreOrchestrationJob,
   CoreOrchestrationProvider,
   CoreProviderFact,
@@ -244,6 +250,7 @@ function createQueueExecutionDispatcher(
           status: 'completed',
           result: record.receipt?.result,
           providerExecutionId: record.receipt?.providerExecutionId,
+          ...(record.receipt?.tokenUsage ? { tokenUsage: record.receipt.tokenUsage } : {}),
           ...(tools?.length ? { tools } : {}),
         };
       }
@@ -836,6 +843,9 @@ const runtimeStore = await createRuntimeStore({
   env: process.env,
   fileStore: createUnmigratedRuntimeCompatibilityStore(),
 });
+const codexWorkerCatalogPort = azureQueueDispatch
+  ? createRuntimeStoreCodexWorkerCatalogPort(runtimeStore)
+  : undefined;
 const agentJobDurableLedger = azureQueueDispatch
   ? new RuntimeStoreAgentJobLedger(runtimeStore)
   : undefined;
@@ -2747,12 +2757,30 @@ function observeCoreProviderFacts(): CoreProviderFact[] {
     });
 }
 
+let localCodexModelCatalog: ReturnType<typeof loadCodexModelCatalog> | undefined;
+
+async function observeCoreCodexModelCatalog() {
+  if (codexWorkerCatalogPort) return codexWorkerCatalogPort.read();
+  if (agentProvider !== 'codex') return undefined;
+  const executable = process.env.CODEX_BIN?.trim();
+  const codexHome = process.env.AGENT_CODEX_HOME?.trim();
+  if (!executable || !codexHome || !path.isAbsolute(executable) || !path.isAbsolute(codexHome)) return undefined;
+  try {
+    localCodexModelCatalog ??= loadCodexModelCatalog({ executable, codexHome });
+    return await localCodexModelCatalog;
+  } catch {
+    localCodexModelCatalog = undefined;
+    return undefined;
+  }
+}
+
 const coreOrchestrationService = new CoreOrchestrationService({
   agentService,
   jobStore: agentJobStore,
   defaultProvider: agentProvider,
   inputResume: composeMeasuredInputResumePort(),
   observeProviderFacts: observeCoreProviderFacts,
+  observeCodexModelCatalog: observeCoreCodexModelCatalog,
   ...(azureQueueDispatch ? { observeProviderFact: observeAzureCoreProviderFact } : {}),
 });
 mountCoreOrchestrationRoutes(http, {
@@ -3713,6 +3741,8 @@ const CORE_ORCHESTRATION_CARD_ACTIONS = new Set([
   'orchestration.approve',
   'orchestration.retry',
   'orchestration.provide-input',
+  'orchestration.select-model',
+  'orchestration.submit-selected',
 ]);
 
 type CoreOrchestrationCardSubmission = Readonly<{
@@ -3723,11 +3753,19 @@ type CoreOrchestrationCardSubmission = Readonly<{
     | 'orchestration.cancel'
     | 'orchestration.approve'
     | 'orchestration.retry'
-    | 'orchestration.provide-input';
-  jobId: string;
+    | 'orchestration.provide-input'
+    | 'orchestration.select-model'
+    | 'orchestration.submit-selected';
+  jobId?: string;
   input?: string;
   confirmationToken?: string;
   correlationId?: string;
+  prompt?: string;
+  mode?: 'read-only' | 'workspace-write';
+  model?: string;
+  reasoningEffort?: string;
+  catalogRevision?: string;
+  submissionKey?: string;
 }>;
 
 function coreOrchestrationCardValue(activity: any): Record<string, unknown> | undefined {
@@ -3744,8 +3782,27 @@ function hasCoreOrchestrationCardValue(activity: any): boolean {
 function isCoreOrchestrationCardSubmission(activity: any): activity is { value: CoreOrchestrationCardSubmission } {
   const value = coreOrchestrationCardValue(activity);
   if (!value || value.schemaVersion !== '1' || typeof value.action !== 'string'
-    || !CORE_ORCHESTRATION_CARD_ACTIONS.has(value.action)
-    || typeof value.jobId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(value.jobId)) return false;
+    || !CORE_ORCHESTRATION_CARD_ACTIONS.has(value.action)) return false;
+  if (value.action === 'orchestration.select-model' || value.action === 'orchestration.submit-selected') {
+    const allowed = value.action === 'orchestration.select-model'
+      ? new Set(['schemaVersion', 'action', 'prompt', 'mode', 'model', 'catalogRevision', 'submissionKey'])
+      : new Set(['schemaVersion', 'action', 'prompt', 'mode', 'model', 'reasoningEffort', 'catalogRevision', 'submissionKey']);
+    if (Object.keys(value).some((key) => !allowed.has(key))) return false;
+    return typeof value.prompt === 'string'
+      && value.prompt.trim().length > 0
+      && value.prompt.length <= 2_000
+      && (value.mode === 'read-only' || value.mode === 'workspace-write')
+      && typeof value.model === 'string'
+      && /^[a-z0-9][a-z0-9._-]{0,127}$/u.test(value.model)
+      && typeof value.catalogRevision === 'string'
+      && /^[a-f0-9]{64}$/u.test(value.catalogRevision)
+      && typeof value.submissionKey === 'string'
+      && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value.submissionKey)
+      && (value.action !== 'orchestration.submit-selected'
+        || (typeof value.reasoningEffort === 'string'
+          && ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(value.reasoningEffort)));
+  }
+  if (typeof value.jobId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(value.jobId)) return false;
   const allowed = value.action === 'orchestration.provide-input'
     ? new Set(['schemaVersion', 'action', 'jobId', 'input'])
     : value.action === 'orchestration.approve' || value.action === 'orchestration.cancel'
@@ -3777,7 +3834,7 @@ function coreOrchestrationErrorActivity(
       content: {
         type: 'AdaptiveCard',
         $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
-        version: '1.2',
+        version: '1.6',
         msteams: { width: 'Full' },
         body: [
           { type: 'TextBlock', text: 'Core 에이전트 작업', size: 'Large', weight: 'Bolder', wrap: true },
@@ -3811,6 +3868,17 @@ async function resolveCoreOrchestrationCommand(
   command: CoreOrchestrationChatCommand,
 ): Promise<CoreOrchestrationTeamsActivity> {
   const serverScope = createServerDerivedCoreScope(scope);
+  if (command.kind === 'select-submit') {
+    const catalog = await coreOrchestrationService.listCodexModelCatalog();
+    return catalog
+      ? createCoreOrchestrationModelSelectionActivity({
+          prompt: command.prompt,
+          mode: command.mode,
+          catalog,
+          submissionKey: crypto.randomUUID(),
+        }, coreOrchestrationCardOptions)
+      : coreOrchestrationErrorActivity('현재 배포된 Codex worker 모델 목록을 확인할 수 없습니다.');
+  }
   if (command.kind === 'submit') {
     const result = await coreOrchestrationService.submit(serverScope, {
       idempotencyKey: coreOrchestrationActivityIdempotencyKey(activity, scope),
@@ -3917,6 +3985,47 @@ async function handleCoreOrchestrationCardSubmission(activity: any, send: BotSen
     return;
   }
   const value = coreOrchestrationCardValue(activity)!;
+  if (value.action === 'orchestration.select-model' || value.action === 'orchestration.submit-selected') {
+    const scope = activityScope(activity);
+    if (!scope) {
+      await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity('인증된 Teams 사용자·대화·테넌트 정보가 필요합니다.'));
+      return;
+    }
+    try {
+      const serverScope = createServerDerivedCoreScope(scope);
+      const catalog = await coreOrchestrationService.listCodexModelCatalog();
+      if (!catalog || catalog.revision !== value.catalogRevision) {
+        await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity('Codex 모델 목록이 변경되었습니다. agent choose 명령으로 다시 선택하세요.'));
+        return;
+      }
+      if (value.action === 'orchestration.select-model') {
+        await sendCoreOrchestrationActivity(send, createCoreOrchestrationReasoningSelectionActivity({
+          prompt: String(value.prompt),
+          mode: value.mode as 'read-only' | 'workspace-write',
+          catalog,
+          model: String(value.model),
+          submissionKey: String(value.submissionKey),
+        }, coreOrchestrationCardOptions));
+        return;
+      }
+      const result = await coreOrchestrationService.submit(serverScope, {
+        idempotencyKey: `teams-core-card-v1:${String(value.submissionKey)}`,
+        prompt: String(value.prompt),
+        provider: 'codex',
+        mode: value.mode as 'read-only' | 'workspace-write',
+        model: String(value.model),
+        reasoningEffort: String(value.reasoningEffort) as CoreCodexReasoningEffort,
+        catalogRevision: String(value.catalogRevision),
+      });
+      await sendCoreOrchestrationActivity(send, createCoreOrchestrationJobActivity(result.job, coreOrchestrationCardOptions));
+    } catch (error) {
+      const message = error instanceof CoreOrchestrationValidationError
+        ? '선택한 모델 또는 추론 수준이 현재 Codex worker와 일치하지 않습니다. 다시 선택하세요.'
+        : 'Codex 모델 선택 작업을 처리하지 못했습니다.';
+      await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity(message));
+    }
+    return;
+  }
   if (value.action === 'orchestration.confirm-approve'
     || value.action === 'orchestration.confirm-cancel'
     || value.action === 'orchestration.dismiss-confirmation') {

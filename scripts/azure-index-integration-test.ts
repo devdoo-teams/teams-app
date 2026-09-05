@@ -284,6 +284,7 @@ function createMeasuredQueueDispatcher(queue: AzureAgentDispatchQueue): AgentExe
           status: 'completed',
           result: record.receipt?.result,
           providerExecutionId: record.receipt?.providerExecutionId,
+          ...(record.receipt?.tokenUsage ? { tokenUsage: record.receipt.tokenUsage } : {}),
         };
       }
       if (record.status === 'failed') return { status: 'failed', error: record.error?.message };
@@ -366,18 +367,31 @@ async function verifyQueueOnlyAgentService(): Promise<void> {
     workspaceReference: 'teams-core-worker-workspace',
     isolationReference: 'linux-read-only-required',
   }, 'server dispatch preserves read-only mode and its required Linux isolation reference');
+  assert.equal(dispatchedTasks[0]?.schemaVersion, 3, 'new queue submissions use the model-aware wire schema');
   assert.equal(runnerRuns, 0, 'queue mode never invokes the local CLI runner');
   assert.equal(workspacePreflights, 0, 'queue mode never performs local workspace/native preflight');
 
   observations.set(job.id, {
     status: 'completed',
     result: 'durable worker result',
-    providerExecutionId: 'worker-execution-1',
+    providerExecutionId: '11111111-1111-4111-8111-111111111111',
+    tokenUsage: {
+      source: 'codex.exec.jsonl.turn.completed.usage',
+      inputTokens: 100,
+      cachedInputTokens: 20,
+      outputTokens: 30,
+      reasoningOutputTokens: 10,
+    },
   });
   const completed = await service.observe(job.id, scope);
   assert.equal(completed?.status, 'completed');
   assert.equal(completed?.result, 'durable worker result');
-  assert.equal(completed?.threadId, undefined, 'provider execution identity must not be relabeled as a CLI conversation thread');
+  assert.equal(
+    completed?.threadId,
+    '11111111-1111-4111-8111-111111111111',
+    'the worker-reported Codex thread identity remains available for continuation and audit',
+  );
+  assert.equal(completed?.tokenUsage?.inputTokens, 100, 'durable worker token usage reaches the shared AgentJob');
 
   const cancellable = await service.submit({ prompt: 'cancel this task', mode: 'read-only', scope, notify: false });
   const cancelledJob = await service.cancelStrict(cancellable.id, scope, { notify: false });

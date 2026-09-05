@@ -34,6 +34,7 @@ export type CoreOrchestrationRouteService = Pick<CoreOrchestrationService,
   | 'retry'
   | 'provideInput'
   | 'listProviderFacts'
+  | 'listCodexModelCatalog'
 >;
 
 export type CoreOrchestrationRouteOptions = Readonly<{
@@ -83,9 +84,11 @@ export function createCoreOrchestrationRouter(options: CoreOrchestrationRouteOpt
 
   router.get('/jobs', asyncHandler(async (request, response) => {
     const jobs = options.service.list(scopeFor(options, request, response), listRequest(request));
+    const modelCatalog = await options.service.listCodexModelCatalog();
     response.set('Cache-Control', 'no-store').status(200).json({
       jobs,
       providers: options.service.listProviderFacts(),
+      ...(modelCatalog ? { modelCatalog } : {}),
     });
   }));
 
@@ -140,11 +143,24 @@ function scopeFor(
 }
 
 function submitRequest(value: unknown): CoreSubmitRequest {
-  const body = strictObject(value, ['idempotencyKey', 'prompt', 'provider', 'mode']);
+  const body = strictObject(value, [
+    'idempotencyKey',
+    'prompt',
+    'provider',
+    'mode',
+    'model',
+    'reasoningEffort',
+    'catalogRevision',
+  ]);
   if (typeof body.idempotencyKey !== 'string'
     || typeof body.prompt !== 'string'
     || (body.provider !== undefined && body.provider !== 'codex' && body.provider !== 'copilot')
-    || (body.mode !== 'read-only' && body.mode !== 'workspace-write')) {
+    || (body.mode !== 'read-only' && body.mode !== 'workspace-write')
+    || (body.model !== undefined && typeof body.model !== 'string')
+    || (body.reasoningEffort !== undefined && ![
+      'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra',
+    ].includes(String(body.reasoningEffort)))
+    || (body.catalogRevision !== undefined && typeof body.catalogRevision !== 'string')) {
     throw invalidRequest();
   }
   return {
@@ -152,6 +168,11 @@ function submitRequest(value: unknown): CoreSubmitRequest {
     prompt: body.prompt,
     ...(body.provider ? { provider: body.provider } : {}),
     mode: body.mode,
+    ...(body.model !== undefined ? { model: body.model } : {}),
+    ...(body.reasoningEffort !== undefined
+      ? { reasoningEffort: body.reasoningEffort as CoreSubmitRequest['reasoningEffort'] }
+      : {}),
+    ...(body.catalogRevision !== undefined ? { catalogRevision: body.catalogRevision as string } : {}),
   };
 }
 

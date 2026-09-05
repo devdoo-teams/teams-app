@@ -39,7 +39,7 @@ try {
 
   const compositionImport = spawnSync(process.execPath, ['--input-type=module', '--eval', [
     `const loaded = await import(${JSON.stringify(pathToFileURL(compositionPath).href)});`,
-    `if (!loaded.state || !loaded.legacyMigration || !loaded.executor) throw new Error('composition exports missing');`,
+    `if (!loaded.state || !loaded.legacyMigration || !loaded.executor || !loaded.modelCatalog) throw new Error('composition exports missing');`,
   ].join('\n')], {
     cwd: root,
     encoding: 'utf8',

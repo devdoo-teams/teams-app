@@ -9,13 +9,16 @@ import { AzureAgentDispatchQueue } from '../src/server/azure-agent-dispatch-queu
 import {
   AzureCodexWorker,
   createProductionAzureCodexWorker,
+  publishInstalledCodexModelCatalog,
   preflightLinuxCodexWorker,
   runAzureCodexWorkerLoop,
   type WorkerExecutionHandle,
+  type WorkerExecutionResult,
 } from '../src/worker/index.js';
 import { fileURLToPath } from 'node:url';
 
 import { CodexRunner } from '../src/server/codex-runner.js';
+import { parseCodexModelCatalogPayload } from '../src/server/codex-model-catalog.js';
 import type { AgentIsolationSpawnOptions } from '../src/server/agent-execution-policy.js';
 import { createWorkerExecutor } from '../src/worker/executor.js';
 import {
@@ -33,11 +36,23 @@ async function testWorkerCompletionDuplicateAndError(): Promise<void> {
   const worker = new AzureCodexWorker(fixture.queue, {
     start: async () => {
       executions += 1;
-      return handle(Promise.resolve({ result: 'worker result', providerExecutionId: 'exec-success' }));
+      return handle(Promise.resolve({
+        result: 'worker result',
+        providerExecutionId: 'exec-success',
+        tokenUsage: {
+          source: 'codex.exec.jsonl.turn.completed.usage',
+          inputTokens: 5,
+          cachedInputTokens: 2,
+          outputTokens: 3,
+          reasoningOutputTokens: 1,
+        },
+      }));
     },
   }, { visibilityTimeoutSeconds: 30, heartbeatIntervalMs: 5 });
   assert.equal(await worker.runOnce(), 'completed');
-  assert.equal((await fixture.queue.observe(reference(task('task-success'))))?.receipt?.result, 'worker result');
+  const completed = await fixture.queue.observe(reference(task('task-success')));
+  assert.equal(completed?.receipt?.result, 'worker result');
+  assert.equal(completed?.receipt?.tokenUsage?.inputTokens, 5, 'worker completion persists measured usage');
 
   fixture.client.inject(fixture.client.sent[0]);
   assert.equal(await worker.runOnce(), 'duplicate');
@@ -151,7 +166,39 @@ async function testProductionPreflightRunsBeforeExecutorAndFailsClosed(): Promis
     state: new MemoryState(),
     legacyMigration: { resolveExecution: async () => undefined },
     executor: { start: async () => handle(Promise.resolve({ result: 'x', providerExecutionId: 'y' })) },
+    modelCatalog: { read: async () => undefined, publish: async (catalog) => catalog },
   }), /AZURE_STORAGE_QUEUE_ENDPOINT|production worker configuration/i);
+}
+
+async function testInstalledCatalogIsPublishedFromTheVerifiedWorkerBoundary(): Promise<void> {
+  const catalog = parseCodexModelCatalogPayload({
+    models: [{
+      slug: 'gpt-5.6-sol',
+      display_name: 'GPT-5.6-Sol',
+      visibility: 'list',
+      default_reasoning_level: 'high',
+      supported_reasoning_levels: [{ effort: 'high' }],
+    }],
+  }, '2026-09-05T06:30:00.000Z');
+  const published: unknown[] = [];
+  const observed = await publishInstalledCodexModelCatalog({
+    codexBin: '/opt/teamsapp/bin/codex',
+    agentCodexHome: '/var/lib/teams-codex',
+    modelCatalog: {
+      read: async () => undefined,
+      publish: async (value) => {
+        published.push(value);
+        return value;
+      },
+    },
+    loadCatalog: async (options) => {
+      assert.equal(options.executable, '/opt/teamsapp/bin/codex');
+      assert.equal(options.codexHome, '/var/lib/teams-codex');
+      return catalog;
+    },
+  });
+  assert.deepEqual(observed, catalog);
+  assert.deepEqual(published, [catalog], 'worker publication uses only its verified executable and private home');
 }
 
 async function testWorkerCompositionPreservesModeAndPrivateCodexHome(): Promise<void> {
@@ -170,7 +217,7 @@ async function testWorkerCompositionPreservesModeAndPrivateCodexHome(): Promise<
       "printf '%s\\n' '{\"type\":\"turn.started\"}'",
       "printf '%s\\n' '{\"type\":\"item.started\",\"item\":{\"type\":\"command_execution\",\"command\":\"/usr/bin/git status --token must-not-persist\"}}'",
       "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"fixture result\"}}'",
-      "printf '%s\\n' '{\"type\":\"turn.completed\"}'",
+      "printf '%s\\n' '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":100,\"cached_input_tokens\":20,\"output_tokens\":30,\"reasoning_output_tokens\":10}}'",
     ].join('\n'), { mode: 0o700 });
     process.env.UNRELATED_CREDENTIAL = 'must-not-reach-child';
     const runner = new CodexRunner({
@@ -194,11 +241,38 @@ async function testWorkerCompositionPreservesModeAndPrivateCodexHome(): Promise<
         checkpoints.push({ message, tools: structuredClone([...tools]) });
       },
     };
-    const writeHandle = await executor.start(task('task-mode-write'), context);
-    assert.equal((await writeHandle.result).result, 'fixture result');
+    const catalogRevision = 'a'.repeat(64);
+    const selectedTask = {
+      ...task('task-mode-write'),
+      schemaVersion: 3 as const,
+      modelSelection: {
+        model: 'gpt-5.6-sol',
+        reasoningEffort: 'high' as const,
+        catalogRevision,
+      },
+    };
+    const writeHandle = await executor.start(selectedTask, context);
+    const writeResult = await writeHandle.result;
+    assert.equal(writeResult.result, 'fixture result');
+    assert.deepEqual(
+      (writeResult as unknown as { tokenUsage?: unknown }).tokenUsage,
+      {
+        source: 'codex.exec.jsonl.turn.completed.usage',
+        inputTokens: 100,
+        cachedInputTokens: 20,
+        outputTokens: 30,
+        reasoningOutputTokens: 10,
+      },
+      'measured Codex usage is returned to the durable completion boundary',
+    );
     assert.equal(spawnCalls.length, 1);
     assert.ok(spawnCalls[0].args.includes('--sandbox'));
     assert.ok(spawnCalls[0].args.includes('workspace-write'));
+    assert.deepEqual(
+      spawnCalls[0].args.slice(spawnCalls[0].args.indexOf('--model'), spawnCalls[0].args.indexOf('--model') + 4),
+      ['--model', 'gpt-5.6-sol', '--config', 'model_reasoning_effort="high"'],
+      'the selected installed model and reasoning effort reach the final Codex argv boundary',
+    );
     assert.equal(spawnCalls[0].options.env.CODEX_HOME, agentCodexHome);
     assert.equal(spawnCalls[0].options.env.UNRELATED_CREDENTIAL, undefined);
     assert.deepEqual(
@@ -299,7 +373,7 @@ function task(taskId: string) {
     },
   };
 }
-function handle(result: Promise<{ result: string; providerExecutionId: string }>): WorkerExecutionHandle {
+function handle(result: Promise<WorkerExecutionResult>): WorkerExecutionHandle {
   return { result, terminateProcessTree: async () => {}, cleanupProcessTree: async () => {} };
 }
 function reference(value: ReturnType<typeof task>): AgentDispatchTaskReference {
@@ -338,6 +412,7 @@ await testWorkerPersistsSafeToolObservations();
 await testCancellationCleansProcessTree();
 await testLinuxPreflightAndCloudInit();
 await testProductionPreflightRunsBeforeExecutorAndFailsClosed();
+await testInstalledCatalogIsPublishedFromTheVerifiedWorkerBoundary();
 await testWorkerCompositionPreservesModeAndPrivateCodexHome();
 await testUnsupportedReadOnlyPersistsExplicitFailureWithoutRunnerInvocation();
 await testWorkerLoopPollsUntilAbort();

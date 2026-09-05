@@ -6,7 +6,7 @@
 
 - UI: React 개인 탭 + `@microsoft/teams-js`
 - 대화: Microsoft Teams SDK Bot
-- 메시지 UI: Adaptive Cards 1.2 호환 subset
+- 메시지 UI: canonical Microsoft Teams 문서의 모바일 공식 범위인 Adaptive Cards 1.6의 제한된 subset
 - 서버: Express + 결정형 에이전트 작업 lifecycle
 - 실행: 인증된 Codex CLI 또는 명시적으로 구성된 provider runner
 - 상태: durable AgentJobStore와 선택적 durable queue/worker
@@ -49,7 +49,7 @@ Codex CLI 공식 계약에서 `codex exec --json`은 JSONL 실행 이벤트를 �
 ## 공식 Teams 호환성 기준
 
 - 개인 탭은 TeamsJS가 초기화되는 HTTPS `contentUrl`을 사용하고 `/tabs/home/` trailing slash를 유지한다.
-- Teams 모바일 호환성을 위해 Bot 카드는 Adaptive Cards 1.2 subset을 기준으로 한다.
+- Core 오케스트레이션 Bot 카드는 canonical Microsoft Teams `en-us` 문서의 모바일 공식 지원 범위인 Adaptive Cards 1.6으로 선언하고, 실제 요소도 검증된 제한적 subset만 사용한다. Teams가 지원하지 않는 `positive`/`destructive` action style은 사용하지 않는다. 지역화 문서가 canonical 문서와 다르면 실제 Teams 데스크톱·모바일 검증 전까지 계약 차이를 명시한다.
 - 프롬프트·도구 상세는 Teams가 지원하는 `Action.ShowCard`로 제공한다.
 - 현재 제품이 네이티브 장치 기능을 사용하지 않으므로 Teams 매니페스트에 장치 권한을 선언하지 않는다. 향후 권한이 필요한 기능은 별도 수락·구현·검증·버전으로 추가한다.
 - MCP는 서버 측 optional tool adapter이며 Teams 탭이나 모바일 UI를 대체하지 않는다.
@@ -151,6 +151,6 @@ weather/geolocation은 이번 제품에서 `N/A`가 아니라 **제거 계약**�
 - [Teams Adaptive Cards 참고](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/cards/cards-reference)
 - [Teams 카드 동작](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/cards/cards-actions)
 - [Teams 네이티브 장치 권한](https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/device-capabilities/native-device-permissions)
-- [OpenAI Codex CLI reference](https://developers.openai.com/codex/cli/reference/)
+- [OpenAI Codex CLI commands](https://learn.chatgpt.com/docs/developer-commands?surface=cli)
 - [GitHub Copilot streaming events](https://docs.github.com/en/copilot/how-tos/copilot-sdk/features/streaming-events)
 - [MCP in Teams SDK](https://learn.microsoft.com/en-us/microsoftteams/platform/teams-sdk/in-depth-guides/ai/mcp/overview)

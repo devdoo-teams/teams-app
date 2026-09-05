@@ -23,9 +23,16 @@ CopilotKit, OpenAI API, MCP, 로컬 모델과 Jira/Confluence/Bitbucket adapter�
 - command execution은 실행 파일 basename만 `cli`로 투영한다. 원문 command, 인수, 경로, tool input/output, 환경변수와 secret은 저장·표시하지 않는다.
 - `skill`과 `plugin`은 provider가 해당 분류와 이름을 명시한 경우에만 표시한다. command나 결과 문장에서 사용 여부를 추론하지 않는다.
 - provider가 식별자를 보고하지 않으면 `보고된 도구 없음`으로 표시한다. 이를 실제 도구 미사용으로 판정하지 않는다.
-- Adaptive Card 상세는 모바일 호환 기준인 version 1.2의 `Action.ShowCard`를 사용한다.
+- Core 오케스트레이션 Adaptive Card는 canonical Microsoft Teams `en-us` 문서의 모바일 공식 지원 범위인 version 1.6을 사용하고, 상세는 모바일 호환 요소인 `Action.ShowCard`로 제한한다. Teams가 지원하지 않는 `positive`/`destructive` action style은 사용하지 않는다. 지역화 문서가 canonical 문서와 다르면 `CONTRACT_DRIFT_BLOCKED`로 기록하고 실제 클라이언트 검증 전에는 확대 주장하지 않는다.
 
-근거 계약은 [Teams Adaptive Cards 참고](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/cards/cards-reference), [Teams 카드 동작](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/cards/cards-actions), [OpenAI Codex CLI reference](https://developers.openai.com/codex/cli/reference/), [GitHub Copilot streaming events](https://docs.github.com/en/copilot/how-tos/copilot-sdk/features/streaming-events)다. 공식 provider 이벤트가 보장하지 않는 provenance는 `UNVERIFIED`로 남긴다.
+근거 계약은 [Teams Adaptive Cards 참고](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/cards/cards-reference), [Teams 카드 동작](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/cards/cards-actions), [OpenAI Codex CLI commands](https://learn.chatgpt.com/docs/developer-commands?surface=cli), [OpenAI Codex configuration](https://learn.chatgpt.com/docs/config-file/config-reference), [GitHub Copilot streaming events](https://docs.github.com/en/copilot/how-tos/copilot-sdk/features/streaming-events)다. 공식 provider 이벤트가 보장하지 않는 provenance는 `UNVERIFIED`로 남긴다.
+
+### Codex 모델·추론·토큰 truth boundary
+
+- 선택 목록은 배포된 Linux worker가 자신의 검증된 `CODEX_BIN`과 격리된 `AGENT_CODEX_HOME`으로 실행한 `codex debug models` 결과만 사용한다. 서버나 UI가 모델·추론 수준을 임의로 하드코딩하지 않는다.
+- worker는 정규화한 카탈로그와 SHA-256 revision을 durable store에 게시하고, 서버는 제출 직전에 같은 revision과 해당 모델의 지원 추론 수준을 다시 검증한다. 선택값은 job identity와 idempotency hash에 포함하고 생성 후 변경하지 않는다.
+- Azure queue의 새 작업은 schema v3으로 선택값을 전달한다. worker와 queue reader는 배포 중 남아 있을 수 있는 v2 작업도 계속 수용하되, v2에 선택값을 끼워 넣은 payload는 거부한다.
+- 토큰 사용량은 `codex exec --json`의 terminal `turn.completed.usage`에 모든 필수 비음수 정수 필드가 있을 때만 job·queue receipt·탭·카드에 전달한다. 계정 잔여 quota는 Codex CLI가 제공하지 않으므로 계산하거나 추정하지 않고 `제공되지 않음`으로 표시한다.
 
 ### 공식 계약 우선 디버깅 체크포인트
 

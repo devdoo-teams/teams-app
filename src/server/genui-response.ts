@@ -6,10 +6,13 @@ import type { GenUiActionStore } from './genui-action-store.js';
 import type { Item } from './item-store.js';
 import type {
   CoreAgentToolCategory,
+  CoreCodexModelCatalog,
+  CoreOrchestrationMode,
   CoreOrchestrationJob,
   CoreProviderFact,
 } from '../shared/core-orchestration.js';
 import { isAgentTokenUsage, type AgentTokenUsage } from './agent-token-usage.js';
+import { assertCoreCodexModelCatalog } from './codex-model-catalog.js';
 import { redactSensitiveText } from './sensitive-text.js';
 import { normalizeCliCapability, type CliCapability } from './codex-capability.js';
 import {
@@ -55,7 +58,7 @@ export type GenUiStatusFacts = {
 type CoreOrchestrationAdaptiveCard = Readonly<{
   type: 'AdaptiveCard';
   $schema: 'http://adaptivecards.io/schemas/adaptive-card.json';
-  version: '1.2';
+  version: '1.6';
   msteams: Readonly<{ width: 'Full' }>;
   body: readonly Record<string, unknown>[];
   actions?: readonly Record<string, unknown>[];
@@ -101,14 +104,12 @@ function orchestrationAction(
   type: string,
   title: string,
   jobId: string,
-  style?: string,
   confirmation?: CoreOrchestrationCardOptions['confirmation'],
 ): Record<string, unknown> {
   return {
     type: 'Action.Submit',
     title,
     data: orchestrationPayload(type, jobId, confirmation),
-    ...(style ? { style } : {}),
   };
 }
 
@@ -145,7 +146,7 @@ function orchestrationDetailAction(job: CoreOrchestrationJob): Record<string, un
     card: {
       type: 'AdaptiveCard',
       $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
-      version: '1.2',
+      version: '1.6',
       body: [
         { type: 'TextBlock', text: '원본 프롬프트', weight: 'Bolder', wrap: true },
         { type: 'TextBlock', text: displayText(job.prompt, 2_000, '(작업 설명 없음)'), wrap: true },
@@ -162,11 +163,11 @@ function orchestrationActions(
 ): readonly Record<string, unknown>[] {
   let actions: readonly Record<string, unknown>[];
   if (job.status === 'queued' || job.status === 'running') {
-    actions = [orchestrationAction('orchestration.confirm-cancel', '취소', job.id, 'destructive')];
+    actions = [orchestrationAction('orchestration.confirm-cancel', '취소', job.id)];
   } else if (job.status === 'awaiting_approval') {
     actions = [
-      orchestrationAction('orchestration.confirm-approve', '승인', job.id, 'positive'),
-      orchestrationAction('orchestration.confirm-cancel', '취소', job.id, 'destructive'),
+      orchestrationAction('orchestration.confirm-approve', '승인', job.id),
+      orchestrationAction('orchestration.confirm-cancel', '취소', job.id),
     ];
   } else if (job.status === 'failed') {
     actions = [orchestrationAction('orchestration.retry', '다시 시도', job.id)];
@@ -177,7 +178,7 @@ function orchestrationActions(
       card: {
         type: 'AdaptiveCard',
         $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
-        version: '1.2',
+        version: '1.6',
         body: [{
           type: 'Input.Text',
           id: 'input',
@@ -209,7 +210,7 @@ function orchestrationActivity(card: CoreOrchestrationAdaptiveCard): CoreOrchest
   };
 }
 
-/** Attachment-only Teams 1.2 rendering for a durable Core job identity. */
+/** Attachment-only Teams mobile-safe 1.6 rendering for a durable Core job identity. */
 export function createCoreOrchestrationJobActivity(
   job: CoreOrchestrationJob,
   options?: CoreOrchestrationCardOptions,
@@ -219,7 +220,7 @@ export function createCoreOrchestrationJobActivity(
   return orchestrationActivity({
     type: 'AdaptiveCard',
     $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.2',
+    version: '1.6',
     msteams: { width: 'Full' },
     body: [
       { type: 'TextBlock', text: 'Core 에이전트 작업', size: 'Large', weight: 'Bolder', wrap: true },
@@ -230,6 +231,18 @@ export function createCoreOrchestrationJobActivity(
           { title: '상태', value: identifierText(job.status, 40, 'unknown') },
           { title: '권한', value: identifierText(job.mode, 40, 'unknown') },
           { title: 'Provider', value: identifierText(job.provider, 40, '미지정') },
+          ...(job.provider === 'codex' ? [
+            { title: '모델', value: identifierText(job.model, 128, 'Codex CLI 기본값') },
+            { title: '추론 수준', value: identifierText(job.reasoningEffort, 40, 'Codex CLI 기본값') },
+            ...(isAgentTokenUsage(job.tokenUsage) ? [
+              {
+                title: '사용 토큰',
+                value: `${formatTokenCount(job.tokenUsage.inputTokens + job.tokenUsage.outputTokens)} (입력 ${formatTokenCount(job.tokenUsage.inputTokens)} / 출력 ${formatTokenCount(job.tokenUsage.outputTokens)})`,
+              },
+              { title: '추론 출력', value: formatTokenCount(job.tokenUsage.reasoningOutputTokens) },
+            ] : []),
+            { title: '계정 잔여량', value: 'Codex CLI에서 제공되지 않음' },
+          ] : []),
         ],
       },
       { type: 'TextBlock', text: displayText(job.prompt, CORE_CARD_TEXT_LIMIT, '(작업 설명 없음)'), wrap: true },
@@ -252,7 +265,7 @@ export function createCoreOrchestrationConfirmationActivity(
   return orchestrationActivity({
     type: 'AdaptiveCard',
     $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.2',
+    version: '1.6',
     msteams: { width: 'Full' },
     body: [
       { type: 'TextBlock', text: isApproval ? '작업 승인 확인' : '작업 취소 확인', size: 'Large', weight: 'Bolder', wrap: true },
@@ -270,7 +283,6 @@ export function createCoreOrchestrationConfirmationActivity(
         isApproval ? 'orchestration.approve' : 'orchestration.cancel',
         isApproval ? '승인 확인' : '취소 확인',
         job.id,
-        isApproval ? 'positive' : 'destructive',
         options?.confirmation?.action === action ? options.confirmation : undefined,
       ),
       orchestrationAction('orchestration.dismiss-confirmation', '돌아가기', job.id),
@@ -286,7 +298,17 @@ export function createCoreOrchestrationListActivity(
 ): CoreOrchestrationTeamsActivity {
   const jobItems = jobs.slice(0, 10).map((job) => ({
     type: 'TextBlock',
-    text: `${identifierText(job.id, 200, 'unknown-job')} · ${identifierText(job.status, 40, 'unknown')}`,
+    text: [
+      identifierText(job.id, 200, 'unknown-job'),
+      identifierText(job.status, 40, 'unknown'),
+      ...(job.provider === 'codex' ? [
+        identifierText(job.model, 128, 'CLI 기본 모델'),
+        identifierText(job.reasoningEffort, 40, 'CLI 기본 추론'),
+        ...(isAgentTokenUsage(job.tokenUsage)
+          ? [`${formatTokenCount(job.tokenUsage.inputTokens + job.tokenUsage.outputTokens)} tokens`]
+          : []),
+      ] : []),
+    ].join(' · '),
     wrap: true,
   }));
   const providerFacts = providers.slice(0, 10).map((provider) => ({
@@ -296,7 +318,7 @@ export function createCoreOrchestrationListActivity(
   return orchestrationActivity({
     type: 'AdaptiveCard',
     $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
-    version: '1.2',
+    version: '1.6',
     msteams: { width: 'Full' },
     body: [
       { type: 'TextBlock', text: 'Core 에이전트 작업 목록', size: 'Large', weight: 'Bolder', wrap: true },
@@ -307,6 +329,118 @@ export function createCoreOrchestrationListActivity(
         : [{ type: 'TextBlock', text: '관찰된 provider 정보가 없습니다.', wrap: true }]),
     ],
     ...(tabAction(options) ? { actions: [tabAction(options)!] } : {}),
+  });
+}
+
+type CoreOrchestrationSelectionCardInput = Readonly<{
+  prompt: string;
+  mode: CoreOrchestrationMode;
+  catalog: CoreCodexModelCatalog;
+  submissionKey: string;
+}>;
+
+function selectionCardInput(input: CoreOrchestrationSelectionCardInput): Readonly<{
+  prompt: string;
+  mode: CoreOrchestrationMode;
+  catalog: CoreCodexModelCatalog;
+  submissionKey: string;
+}> {
+  const prompt = displayText(input.prompt, 2_000);
+  if (!prompt) throw new TypeError('model selection prompt is required');
+  if (input.mode !== 'read-only' && input.mode !== 'workspace-write') {
+    throw new TypeError('model selection mode is invalid');
+  }
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(input.submissionKey)) {
+    throw new TypeError('model selection submission key is invalid');
+  }
+  return {
+    prompt,
+    mode: input.mode,
+    catalog: assertCoreCodexModelCatalog(input.catalog),
+    submissionKey: input.submissionKey,
+  };
+}
+
+/** First step: choose one model observed from the installed worker CLI. */
+export function createCoreOrchestrationModelSelectionActivity(
+  input: CoreOrchestrationSelectionCardInput,
+  options?: CoreOrchestrationCardOptions,
+): CoreOrchestrationTeamsActivity {
+  const selected = selectionCardInput(input);
+  const firstModel = selected.catalog.models[0]!;
+  return orchestrationActivity({
+    type: 'AdaptiveCard',
+    $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.6',
+    msteams: { width: 'Full' },
+    body: [
+      { type: 'TextBlock', text: 'Codex 모델 선택', size: 'Large', weight: 'Bolder', wrap: true },
+      { type: 'TextBlock', text: selected.prompt, wrap: true, isSubtle: true },
+      {
+        type: 'Input.ChoiceSet',
+        id: 'model',
+        label: '모델',
+        style: 'compact',
+        isRequired: true,
+        value: firstModel.id,
+        choices: selected.catalog.models.map((model) => ({ title: model.label, value: model.id })),
+      },
+    ],
+    actions: withTabAction([{
+      type: 'Action.Submit',
+      title: '추론 수준 선택',
+      data: {
+        schemaVersion: '1',
+        action: 'orchestration.select-model',
+        prompt: selected.prompt,
+        mode: selected.mode,
+        catalogRevision: selected.catalog.revision,
+        submissionKey: selected.submissionKey,
+      },
+    }], options),
+  });
+}
+
+/** Second step: expose only reasoning levels supported by the chosen model. */
+export function createCoreOrchestrationReasoningSelectionActivity(
+  input: CoreOrchestrationSelectionCardInput & Readonly<{ model: string }>,
+  options?: CoreOrchestrationCardOptions,
+): CoreOrchestrationTeamsActivity {
+  const selected = selectionCardInput(input);
+  const model = selected.catalog.models.find((candidate) => candidate.id === input.model);
+  if (!model) throw new TypeError('selected model is not present in the observed catalog');
+  return orchestrationActivity({
+    type: 'AdaptiveCard',
+    $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.6',
+    msteams: { width: 'Full' },
+    body: [
+      { type: 'TextBlock', text: 'Codex 추론 수준 선택', size: 'Large', weight: 'Bolder', wrap: true },
+      { type: 'FactSet', facts: [{ title: '모델', value: model.label }] },
+      { type: 'TextBlock', text: selected.prompt, wrap: true, isSubtle: true },
+      {
+        type: 'Input.ChoiceSet',
+        id: 'reasoningEffort',
+        label: '추론 수준',
+        style: 'compact',
+        isRequired: true,
+        value: model.defaultReasoningEffort,
+        choices: model.reasoningEfforts.map((effort) => ({ title: effort, value: effort })),
+      },
+    ],
+    actions: withTabAction([{
+      type: 'Action.Submit',
+      title: selected.mode === 'workspace-write' ? '승인 대기 작업 만들기' : '작업 시작',
+      data: {
+        schemaVersion: '1',
+        action: 'orchestration.submit-selected',
+        prompt: selected.prompt,
+        mode: selected.mode,
+        model: model.id,
+        catalogRevision: selected.catalog.revision,
+        submissionKey: selected.submissionKey,
+      },
+    }], options),
   });
 }
 

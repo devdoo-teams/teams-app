@@ -140,7 +140,7 @@ const confirmation = {
 };
 const approveCard = createCoreOrchestrationConfirmationActivity(job('awaiting_approval'), 'approve', confirmation);
 assert.equal('text' in approveCard, false, 'confirmation remains attachment-only');
-assert.equal(approveCard.attachments[0].content.version, '1.2');
+assert.equal(approveCard.attachments[0].content.version, '1.6');
 assert.deepEqual(payloadActions(approveCard), [
   {
     schemaVersion: '1',

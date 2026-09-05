@@ -21,6 +21,17 @@ assert.deepEqual(parseCodexTokenUsage({
   reasoning_output_tokens: 0,
 }), expected, 'the four documented JSONL counters are normalized');
 
+assert.deepEqual(parseCodexTokenUsage({
+  input_tokens: 24_763,
+  cached_input_tokens: 24_448,
+  cache_write_input_tokens: 315,
+  output_tokens: 122,
+  reasoning_output_tokens: 0,
+}), {
+  ...expected,
+  cacheWriteInputTokens: 315,
+}, 'an exact cache-write counter is retained only when the CLI reports it');
+
 for (const invalid of [
   undefined,
   null,
@@ -29,6 +40,7 @@ for (const invalid of [
   { input_tokens: -1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 },
   { input_tokens: 1.5, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 },
   { input_tokens: Number.MAX_SAFE_INTEGER + 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 },
+  { input_tokens: 1, cached_input_tokens: 0, cache_write_input_tokens: -1, output_tokens: 1, reasoning_output_tokens: 0 },
 ]) {
   assert.equal(parseCodexTokenUsage(invalid), undefined, 'partial or unsafe JSONL usage is unavailable');
 }

@@ -10,6 +10,7 @@ import { QueueClient } from '@azure/storage-queue';
 
 import {
   AGENT_DISPATCH_SCHEMA_VERSION,
+  PREVIOUS_AGENT_DISPATCH_SCHEMA_VERSION,
   type AgentDispatchCheckpoint,
   type AgentDispatchCompletionReceipt,
   type AgentDispatchErrorReceipt,
@@ -24,6 +25,8 @@ import {
   isTerminalDispatchStatus,
 } from './queue/agent-dispatch-queue.js';
 import { mergeObservedToolUsage } from './agent-tool-observation.js';
+import { isAgentTokenUsage } from './agent-token-usage.js';
+import { assertSafeCodexModelSelection } from './codex-model-catalog.js';
 
 export type AgentDispatchRecord = {
   taskId: string;
@@ -431,12 +434,21 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
       'providerExecutionId',
       DIAGNOSTIC_FIELD_LIMITS.providerExecutionId,
     );
+    if (receipt.tokenUsage !== undefined && !isAgentTokenUsage(receipt.tokenUsage)) {
+      throw new TypeError('completion token usage is invalid');
+    }
+    const tokenUsage = receipt.tokenUsage ? Object.freeze({ ...receipt.tokenUsage }) : undefined;
     await this.terminalUpdate(lease, (record) => {
       if (record.cancellationRequested) throw new Error('cancelled dispatch cannot be completed');
       return {
         ...record,
         status: 'completed',
-        receipt: { result, providerExecutionId, completedAt: this.now() },
+        receipt: {
+          result,
+          providerExecutionId,
+          completedAt: this.now(),
+          ...(tokenUsage ? { tokenUsage } : {}),
+        },
         error: undefined,
       };
     });
@@ -555,7 +567,7 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
     if (!execution) throw new LegacyDispatchMigrationUnavailableError(legacyTask.taskId);
     const task = canonicalTask({
       ...legacyTask,
-      schemaVersion: AGENT_DISPATCH_SCHEMA_VERSION,
+      schemaVersion: PREVIOUS_AGENT_DISPATCH_SCHEMA_VERSION,
       execution: canonicalAgentDispatchExecution(execution),
     });
     const reference = canonicalTaskReference(task);
@@ -722,9 +734,14 @@ export function canonicalAgentTaskId(value: unknown): string {
 function canonicalTask(value: unknown): AgentDispatchTask {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('dispatch task must be an object');
   const task = value as Record<string, unknown>;
-  if (task.schemaVersion !== AGENT_DISPATCH_SCHEMA_VERSION) throw new TypeError('unknown dispatch schema version');
-  const normalized: AgentDispatchTask = {
-    schemaVersion: AGENT_DISPATCH_SCHEMA_VERSION,
+  if (
+    task.schemaVersion !== PREVIOUS_AGENT_DISPATCH_SCHEMA_VERSION
+    && task.schemaVersion !== AGENT_DISPATCH_SCHEMA_VERSION
+  ) throw new TypeError('unknown dispatch schema version');
+  if (task.schemaVersion === PREVIOUS_AGENT_DISPATCH_SCHEMA_VERSION && task.modelSelection !== undefined) {
+    throw new TypeError('schema v2 dispatch task contains an unsupported model selection');
+  }
+  const common = {
     taskId: canonicalAgentTaskId(task.taskId),
     idempotencyKey: requireText(task.idempotencyKey, 'idempotencyKey'),
     tenantId: requireText(task.tenantId, 'tenantId'),
@@ -735,6 +752,18 @@ function canonicalTask(value: unknown): AgentDispatchTask {
     createdAt: requireText(task.createdAt, 'createdAt'),
     execution: canonicalExecution(task.execution),
   };
+  const normalized: AgentDispatchTask = task.schemaVersion === PREVIOUS_AGENT_DISPATCH_SCHEMA_VERSION
+    ? {
+        schemaVersion: PREVIOUS_AGENT_DISPATCH_SCHEMA_VERSION,
+        ...common,
+      }
+    : {
+        schemaVersion: AGENT_DISPATCH_SCHEMA_VERSION,
+        ...common,
+        ...(task.modelSelection !== undefined
+          ? { modelSelection: assertSafeCodexModelSelection(task.modelSelection as never) }
+          : {}),
+      };
   if (Buffer.byteLength(JSON.stringify(normalized), 'utf8') > 48 * 1024) {
     throw new TypeError('dispatch task exceeds the bounded Queue Storage payload');
   }
@@ -929,6 +958,9 @@ function sanitizeRecordForResponse(value: AgentDispatchRecord): AgentDispatchRec
       prompt: value.task.prompt,
       createdAt: value.task.createdAt,
       execution: { ...value.task.execution },
+      ...(value.task.schemaVersion === AGENT_DISPATCH_SCHEMA_VERSION && value.task.modelSelection
+        ? { modelSelection: { ...value.task.modelSelection } }
+        : {}),
     },
     enqueued: value.enqueued,
     dequeueCount: value.dequeueCount,
@@ -965,6 +997,7 @@ function sanitizeRecordForResponse(value: AgentDispatchRecord): AgentDispatchRec
           DIAGNOSTIC_FIELD_LIMITS.providerExecutionId,
         ),
         completedAt: value.receipt.completedAt,
+        ...(value.receipt.tokenUsage ? { tokenUsage: { ...value.receipt.tokenUsage } } : {}),
       },
     } : {}),
     ...(value.error ? {

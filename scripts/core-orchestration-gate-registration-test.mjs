@@ -24,6 +24,8 @@ const task4Tests = [
   'scripts/core-orchestration-confirmation-chat-runtime-test.ts',
   'scripts/core-orchestration-confirmation-idempotency-test.tsx',
   'scripts/core-orchestration-runtime-composition-test.ts',
+  'scripts/codex-model-selection-test.ts',
+  'scripts/codex-worker-catalog-port-test.ts',
 ];
 
 for (const script of task4Tests) {

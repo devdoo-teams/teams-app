@@ -13,7 +13,11 @@ import {
   validateOrchestrationSubmission,
 } from '../src/client/OrchestrationPanel.js';
 import * as orchestrationPanelModule from '../src/client/OrchestrationPanel.js';
-import type { CoreOrchestrationJob, CoreProviderFact } from '../src/shared/core-orchestration.js';
+import type {
+  CoreCodexModelCatalog,
+  CoreOrchestrationJob,
+  CoreProviderFact,
+} from '../src/shared/core-orchestration.js';
 
 const provider: CoreProviderFact = {
   provider: 'codex',
@@ -21,6 +25,17 @@ const provider: CoreProviderFact = {
   capabilities: ['submit', 'cancel', 'input', 'approve', 'retry'],
   observedAt: '2026-09-03T00:59:00.000Z',
   source: 'runtime-probe',
+};
+const modelCatalog: CoreCodexModelCatalog = {
+  revision: 'a'.repeat(64),
+  observedAt: '2026-09-05T04:00:00.000Z',
+  source: 'codex-debug-models',
+  models: [{
+    id: 'gpt-5.6-sol',
+    label: 'GPT-5.6-Sol',
+    defaultReasoningEffort: 'low',
+    reasoningEfforts: ['low', 'high', 'ultra'],
+  }],
 };
 
 const pollingFactory = (orchestrationPanelModule as Record<string, unknown>).createOrchestrationPollingController;
@@ -86,7 +101,7 @@ const request = async (input: RequestInfo | URL, init: RequestInit = {}): Promis
     body: typeof init.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : undefined,
   });
   const json = path === `${apiBasePath}/jobs` && !init.method
-    ? { jobs: [task('running')], providers: [provider] }
+    ? { jobs: [task('running')], providers: [provider], modelCatalog }
     : path === `${apiBasePath}/jobs/task-1` && !init.method
       ? { job: task('input_required') }
       : path === `${apiBasePath}/jobs/task-1/input`
@@ -102,6 +117,7 @@ const client = createCoreOrchestrationClient(request);
 const listed = await client.listJobs();
 assert.equal(listed.jobs[0]?.id, 'task-1', 'list returns the durable task identity');
 assert.equal(listed.providers[0]?.availability, 'available', 'list returns measured provider availability');
+assert.equal(listed.modelCatalog?.models[0]?.id, 'gpt-5.6-sol');
 assert.deepEqual(requests.at(-1), { path: `${apiBasePath}/jobs`, method: 'GET', body: undefined });
 
 const detailed = await client.getJob('task-1');
@@ -113,6 +129,9 @@ const submitted = await client.submitJob({
   mode: 'read-only',
   prompt: 'Prepare the deployment evidence.',
   idempotencyKey: 'tab-submit-1',
+  model: 'gpt-5.6-sol',
+  reasoningEffort: 'high',
+  catalogRevision: modelCatalog.revision,
 });
 assert.equal(submitted.replayed, true, 'duplicate submission is represented without inventing a second task');
 assert.deepEqual(requests.at(-1), {
@@ -123,6 +142,9 @@ assert.deepEqual(requests.at(-1), {
     mode: 'read-only',
     prompt: 'Prepare the deployment evidence.',
     idempotencyKey: 'tab-submit-1',
+    model: 'gpt-5.6-sol',
+    reasoningEffort: 'high',
+    catalogRevision: modelCatalog.revision,
   },
 }, 'submit sends no client-controlled tenant, requester, or conversation scope');
 
@@ -200,6 +222,17 @@ assert.equal(
 );
 assert.equal(validateOrchestrationSubmission('Run it', 'codex', [provider]), '', 'valid input is accepted');
 assert.equal(
+  validateOrchestrationSubmission(
+    'Run it',
+    'codex',
+    [provider],
+    'gpt-5.6-sol',
+    'minimal',
+    modelCatalog,
+  ),
+  '선택한 모델이 해당 추론 수준을 지원하지 않습니다.',
+);
+assert.equal(
   orchestrationMutationNotice({
     status: 'unsupported',
     job: task('input_required'),
@@ -253,6 +286,9 @@ const baseProps = {
   prompt: '',
   providerId: 'codex',
   mode: 'read-only' as const,
+  modelCatalog,
+  modelId: 'gpt-5.6-sol',
+  reasoningEffort: 'high' as const,
   inputValue: '',
   busyAction: '',
   notice: '',
@@ -260,6 +296,8 @@ const baseProps = {
   onPromptChange: noop,
   onProviderChange: noop,
   onModeChange: noop,
+  onModelChange: noop,
+  onReasoningEffortChange: noop,
   onInputChange: noop,
   onSubmit: asyncNoop,
   onSelectTask: asyncNoop,
@@ -293,6 +331,8 @@ const empty = renderToStaticMarkup(<OrchestrationPanelView
 assert.match(empty, /아직 실행한 작업이 없습니다/);
 assert.match(empty, /작업 내용/);
 assert.match(empty, /실행 제공자/);
+assert.match(empty, /Codex 모델/);
+assert.match(empty, /추론 수준/);
 assert.match(empty, /자동 새로고침 3초/, 'the hub tells the user that progress is refreshed automatically');
 
 const approval = renderToStaticMarkup(<OrchestrationPanelView
@@ -357,6 +397,16 @@ const promptAndTools = renderToStaticMarkup(<OrchestrationPanelView
   jobs={[task('running')]}
   selectedJob={task('running', {
     prompt: '배포 상태를 공식 문서와 비교해줘',
+    model: 'gpt-5.6-sol',
+    reasoningEffort: 'high',
+    catalogRevision: modelCatalog.revision,
+    tokenUsage: {
+      source: 'codex.exec.jsonl.turn.completed.usage',
+      inputTokens: 1_200,
+      cachedInputTokens: 1_000,
+      outputTokens: 240,
+      reasoningOutputTokens: 80,
+    },
     tools: [
       { category: 'skill', name: 'systematic-debugging', observedAt: '2026-09-05T00:00:00.000Z' },
       { category: 'mcp', name: 'jira/search_issues', observedAt: '2026-09-05T00:00:01.000Z' },
@@ -368,6 +418,24 @@ const promptAndTools = renderToStaticMarkup(<OrchestrationPanelView
 assert.match(promptAndTools, /프롬프트:<\/strong> 배포 상태를 공식 문서와 비교해줘/);
 assert.match(promptAndTools, /스킬 · systematic-debugging/);
 assert.match(promptAndTools, /MCP · jira\/search_issues/);
+assert.match(promptAndTools, /gpt-5.6-sol/);
+assert.match(promptAndTools, /high/);
+assert.match(promptAndTools, /입력 1,200/);
+assert.match(promptAndTools, /계정 잔여량: 제공되지 않음/);
+
+const copilotDetail = renderToStaticMarkup(<OrchestrationPanelView
+  {...baseProps}
+  phase="ready"
+  jobs={[task('running', { provider: 'copilot' })]}
+  selectedJob={task('running', { provider: 'copilot' })}
+  error=""
+  mobile={false}
+/>);
+assert.doesNotMatch(
+  copilotDetail,
+  /CLI 기본값|계정 잔여량|토큰 사용량/u,
+  'non-Codex detail must not imply Codex model or token telemetry',
+);
 
 const error = renderToStaticMarkup(<OrchestrationPanelView
   {...baseProps}

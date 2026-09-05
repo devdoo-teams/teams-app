@@ -1,12 +1,8 @@
+import type { CoreAgentTokenUsage } from '../shared/core-orchestration.js';
+
 export const CODEX_TOKEN_USAGE_SOURCE = 'codex.exec.jsonl.turn.completed.usage' as const;
 
-export type AgentTokenUsage = Readonly<{
-  source: typeof CODEX_TOKEN_USAGE_SOURCE;
-  inputTokens: number;
-  cachedInputTokens: number;
-  outputTokens: number;
-  reasoningOutputTokens: number;
-}>;
+export type AgentTokenUsage = CoreAgentTokenUsage;
 
 type TokenUsageRecord = Record<string, unknown>;
 
@@ -14,6 +10,7 @@ const CANONICAL_TOKEN_USAGE_KEYS = new Set([
   'source',
   'inputTokens',
   'cachedInputTokens',
+  'cacheWriteInputTokens',
   'outputTokens',
   'reasoningOutputTokens',
 ]);
@@ -37,17 +34,20 @@ export function parseCodexTokenUsage(value: unknown): AgentTokenUsage | undefine
   const cachedInputTokens = value.cached_input_tokens;
   const outputTokens = value.output_tokens;
   const reasoningOutputTokens = value.reasoning_output_tokens;
+  const cacheWriteInputTokens = value.cache_write_input_tokens;
   if (
     !isTokenCount(inputTokens)
     || !isTokenCount(cachedInputTokens)
     || !isTokenCount(outputTokens)
     || !isTokenCount(reasoningOutputTokens)
+    || (cacheWriteInputTokens !== undefined && !isTokenCount(cacheWriteInputTokens))
   ) return undefined;
 
   return {
     source: CODEX_TOKEN_USAGE_SOURCE,
     inputTokens,
     cachedInputTokens,
+    ...(cacheWriteInputTokens !== undefined ? { cacheWriteInputTokens } : {}),
     outputTokens,
     reasoningOutputTokens,
   };
@@ -59,6 +59,7 @@ export function isAgentTokenUsage(value: unknown): value is AgentTokenUsage {
   return value.source === CODEX_TOKEN_USAGE_SOURCE
     && isTokenCount(value.inputTokens)
     && isTokenCount(value.cachedInputTokens)
+    && (value.cacheWriteInputTokens === undefined || isTokenCount(value.cacheWriteInputTokens))
     && isTokenCount(value.outputTokens)
     && isTokenCount(value.reasoningOutputTokens);
 }

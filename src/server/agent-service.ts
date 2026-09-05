@@ -17,6 +17,11 @@ import { GitService, type GitWorkspaceSnapshot } from './git-service.js';
 import { diagnoseRemoteAgentResult, formatRemoteTroubleshooting } from './remote-troubleshooting.js';
 import { mergeObservedToolUsage, observeCodexToolUsage } from './agent-tool-observation.js';
 import type { CoreAgentToolUsage } from '../shared/core-orchestration.js';
+import type {
+  CoreAgentTokenUsage,
+  CoreCodexModelSelection,
+  CoreCodexReasoningEffort,
+} from '../shared/core-orchestration.js';
 
 export type AgentNotificationKind = 'progress' | 'result' | 'error' | 'cancelled';
 export type AgentNotificationPhase =
@@ -52,6 +57,7 @@ export type AgentExecutionObservation = Readonly<{
   providerExecutionId?: string;
   error?: string;
   tools?: readonly CoreAgentToolUsage[];
+  tokenUsage?: CoreAgentTokenUsage;
 }>;
 
 /**
@@ -255,6 +261,9 @@ export class AgentService {
     threadId?: string;
     notify?: boolean;
     onProgress?: ProgressListener;
+    model?: string;
+    reasoningEffort?: CoreCodexReasoningEffort;
+    catalogRevision?: string;
   }): Promise<AgentJob> {
     const prompt = normalizeAgentPrompt(input.prompt);
     const provider = input.provider ?? this.defaultProvider;
@@ -322,6 +331,7 @@ export class AgentService {
       provider: this.providerForJob(previous),
       parentJobId: previous.id,
       threadId: previous.threadId,
+      ...(jobSelection(previous) ?? {}),
       notify: options.notify,
       onProgress: options.onProgress,
     });
@@ -541,6 +551,7 @@ export class AgentService {
       provider: this.providerForJob(previous),
       parentJobId: previous.id,
       threadId: previous.threadId,
+      ...(jobSelection(previous) ?? {}),
       notify: options.notify,
       onProgress: options.onProgress,
     });
@@ -591,6 +602,8 @@ export class AgentService {
     if (status === 'running' && !job.startedAt) update.startedAt = new Date().toISOString();
     if (status === 'completed') {
       update.result = observation.result;
+      update.threadId = observation.providerExecutionId;
+      if (observation.tokenUsage) update.tokenUsage = observation.tokenUsage;
       update.error = undefined;
       update.finishedAt = new Date().toISOString();
     } else if (status === 'failed') {
@@ -801,6 +814,7 @@ export class AgentService {
             jobId: started.id,
           },
           environmentOverrides: executionWorkspace?.environmentOverrides,
+          ...(jobSelection(started) ? { selection: jobSelection(started) } : {}),
           onEvent: (event) => this.handleEvent(started, progressState!.generation, event),
         });
         // A cancellation can reject the runner before this execute loop reaches
@@ -1226,6 +1240,16 @@ export class AgentService {
 
 function isTerminalJob(job: AgentJob): boolean {
   return job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled';
+}
+
+function jobSelection(job: AgentJob): CoreCodexModelSelection | undefined {
+  return job.model && job.reasoningEffort && job.catalogRevision
+    ? {
+        model: job.model,
+        reasoningEffort: job.reasoningEffort,
+        catalogRevision: job.catalogRevision,
+      }
+    : undefined;
 }
 
 function isTerminalStatus(status: AgentJob['status']): boolean {

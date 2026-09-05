@@ -15,13 +15,16 @@ assert.match(source, /coreOrchestrationService\.get/u, 'status must use the same
 assert.match(source, /coreOrchestrationService\.list/u, 'list must use the same application service as the tab');
 assert.match(source, /coreOrchestrationService\[command\.kind\]/u, 'cancel/approve/retry must dispatch through the same application service as the tab');
 assert.match(source, /coreOrchestrationService\.provideInput/u, 'input must use the same application service as the tab');
+assert.match(source, /coreOrchestrationService\.listCodexModelCatalog/u, 'model selection must use the deployed worker catalog');
+assert.match(source, /createCoreOrchestrationModelSelectionActivity/u, 'Teams chat must render the measured model catalog');
+assert.match(source, /createCoreOrchestrationReasoningSelectionActivity/u, 'Teams chat must limit reasoning choices to the selected model');
 assert.match(source, /isCoreOrchestrationCardSubmission/u, 'orchestration card submissions must be recognized before generic GenUI actions');
 assert.match(source, /handleCoreOrchestrationCardSubmission/u, 'orchestration card submissions must use a dedicated authenticated handler');
 assert.match(source, /coreOrchestrationActivityIdempotencyKey/u, 'chat submissions must derive a stable activity idempotency key');
 assert.match(source, /sendCoreOrchestrationActivity/u, 'Core responses must use an attachment-only send boundary');
 assert.match(source, /if \(coreCommand\)[\s\S]*handleCoreOrchestrationChatCommand/u, 'explicit Core commands must be handled before legacy/natural language routing');
 
-for (const action of ['cancel', 'approve', 'retry', 'provide-input']) {
+for (const action of ['cancel', 'approve', 'retry', 'provide-input', 'select-model', 'submit-selected']) {
   assert.match(source, new RegExp(`orchestration\\.${action}`), `card action ${action} must be wired`);
 }
 

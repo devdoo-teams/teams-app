@@ -161,7 +161,7 @@ function assertCard(body: any, expected: string): Record<string, any> {
   assert.ok(message && !Object.hasOwn(message, 'text'), 'response must be attachment-only');
   const card = message.attachments?.[0]?.content;
   assert.equal(card?.type, 'AdaptiveCard');
-  assert.equal(card?.version, '1.2');
+  assert.equal(card?.version, '1.6', 'canonical Microsoft Teams documentation supports mobile through 1.6');
   assert.match(JSON.stringify(card), new RegExp(expected, 'u'));
   return card;
 }

@@ -20,6 +20,7 @@ import {
 import { CodexRunner, reapChildProcess, type CodexRunEvent } from './codex-runner.js';
 import { redactCliDiagnostics } from './cli-diagnostics.js';
 import { isAgentTokenUsage, parseCodexTokenUsage, type AgentTokenUsage } from './agent-token-usage.js';
+import type { CoreCodexModelSelection } from '../shared/core-orchestration.js';
 import {
   ghcpCliCommandFromEnvironment,
   GHCP_SECRET_ENV_VARS,
@@ -66,6 +67,7 @@ export type CliAgentRunOptions = Readonly<{
   isolationLease?: AgentIsolationLease;
   subject?: AgentIsolationSubject;
   environmentOverrides?: Record<string, string>;
+  selection?: CoreCodexModelSelection;
   onEvent?: (event: CliAgentLifecycleEvent) => Promise<void> | void;
 }>;
 
@@ -336,6 +338,7 @@ export class CliAgentRunner {
         isolationLease: runOptions.isolationLease,
         subject: runOptions.subject,
         environmentOverrides: runOptions.environmentOverrides,
+        selection: runOptions.selection,
         timeoutMs: normalizedTimeout(runOptions.timeoutMs),
         signal: runOptions.signal,
         onEvent: async (event) => {

@@ -3,8 +3,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import type { CoreAgentToolUsage } from '../shared/core-orchestration.js';
+import type { CoreAgentTokenUsage, CoreAgentToolUsage } from '../shared/core-orchestration.js';
 import { mergeObservedToolUsage } from '../server/agent-tool-observation.js';
+import { loadCodexModelCatalog } from '../server/codex-model-catalog.js';
+import type { CoreCodexModelCatalog } from '../shared/core-orchestration.js';
+import type { CodexWorkerCatalogPort } from '../server/storage/codex-worker-catalog-port.js';
 
 import type {
   AgentDispatchQueue,
@@ -21,6 +24,7 @@ import {
 export type WorkerExecutionResult = Readonly<{
   result: string;
   providerExecutionId: string;
+  tokenUsage?: CoreAgentTokenUsage;
 }>;
 
 export type WorkerExecutionHandle = Readonly<{
@@ -168,10 +172,29 @@ export type ProductionAzureCodexWorkerOptions = {
   state: AgentDispatchStatePort;
   legacyMigration: ServerOwnedLegacyDispatchMigration;
   executor: WorkerExecutionPort;
+  modelCatalog: CodexWorkerCatalogPort;
   createDefaultAzureCredential?: ProductionAzureQueueClientOptions['createDefaultAzureCredential'];
   createQueueClient?: ProductionAzureQueueClientOptions['createQueueClient'];
   platform?: NodeJS.Platform;
 };
+
+export async function publishInstalledCodexModelCatalog(options: Readonly<{
+  codexBin: string;
+  agentCodexHome: string;
+  modelCatalog: CodexWorkerCatalogPort;
+  loadCatalog?: (input: Readonly<{
+    executable: string;
+    codexHome: string;
+  }>) => Promise<CoreCodexModelCatalog>;
+}>): Promise<CoreCodexModelCatalog> {
+  requireAbsolute(options.codexBin, 'CODEX_BIN');
+  requireAbsolute(options.agentCodexHome, 'AGENT_CODEX_HOME');
+  const catalog = await (options.loadCatalog ?? loadCodexModelCatalog)({
+    executable: options.codexBin,
+    codexHome: options.agentCodexHome,
+  });
+  return options.modelCatalog.publish(catalog);
+}
 
 export function createProductionAzureCodexWorker(options: ProductionAzureCodexWorkerOptions): AzureCodexWorker {
   const agentCodexHome = requiredEnvironment(options.env, 'AGENT_CODEX_HOME');
@@ -194,13 +217,20 @@ export function createProductionAzureCodexWorker(options: ProductionAzureCodexWo
   return new AzureCodexWorker(queue, options.executor, {
     visibilityTimeoutSeconds,
     heartbeatIntervalMs,
-    preflight: () => preflightLinuxCodexWorker({
-      platform: options.platform,
-      agentCodexHome,
-      codexBin,
-      codexBinSha256,
-      managedIdentityClientId,
-    }),
+    preflight: async () => {
+      await preflightLinuxCodexWorker({
+        platform: options.platform,
+        agentCodexHome,
+        codexBin,
+        codexBinSha256,
+        managedIdentityClientId,
+      });
+      await publishInstalledCodexModelCatalog({
+        codexBin,
+        agentCodexHome,
+        modelCatalog: options.modelCatalog,
+      });
+    },
   });
 }
 
@@ -220,6 +250,7 @@ export type ProductionWorkerComposition = Readonly<{
   state: AgentDispatchStatePort;
   legacyMigration: ServerOwnedLegacyDispatchMigration;
   executor: WorkerExecutionPort;
+  modelCatalog: CodexWorkerCatalogPort;
 }>;
 
 export async function startProductionAzureCodexWorker(options: {
@@ -231,20 +262,26 @@ export async function startProductionAzureCodexWorker(options: {
   requireAbsolute(modulePath, 'TEAMS_WORKER_COMPOSITION_MODULE');
   const loadComposition = options.loadComposition ?? (async (absolutePath) => {
     const loaded = await import(pathToFileURL(absolutePath).href) as Partial<ProductionWorkerComposition>;
-    if (!loaded.state || !loaded.legacyMigration || !loaded.executor) {
-      throw new Error('worker composition module must export state, legacyMigration, and executor');
+    if (!loaded.state || !loaded.legacyMigration || !loaded.executor || !loaded.modelCatalog) {
+      throw new Error('worker composition module must export state, legacyMigration, executor, and modelCatalog');
     }
-    return { state: loaded.state, legacyMigration: loaded.legacyMigration, executor: loaded.executor };
+    return {
+      state: loaded.state,
+      legacyMigration: loaded.legacyMigration,
+      executor: loaded.executor,
+      modelCatalog: loaded.modelCatalog,
+    };
   });
   const composition = await loadComposition(path.resolve(modulePath));
-  if (!composition?.state || !composition?.legacyMigration || !composition?.executor) {
-    throw new Error('worker composition module must provide state, legacyMigration, and executor');
+  if (!composition?.state || !composition?.legacyMigration || !composition?.executor || !composition?.modelCatalog) {
+    throw new Error('worker composition module must provide state, legacyMigration, executor, and modelCatalog');
   }
   const worker = createProductionAzureCodexWorker({
     env: options.env,
     state: composition.state,
     legacyMigration: composition.legacyMigration,
     executor: composition.executor,
+    modelCatalog: composition.modelCatalog,
   });
   await runAzureCodexWorkerLoop(worker, { signal: options.signal });
 }

@@ -1,6 +1,7 @@
 import { apiFetch, type ApiOperationRequest } from './auth.js';
 import type {
   CoreOrchestrationJob,
+  CoreCodexModelCatalog,
   CoreProviderFact,
   CoreProvideInputResult,
   CoreSubmitRequest,
@@ -10,6 +11,7 @@ import type {
 export type CoreOrchestrationJobList = {
   jobs: CoreOrchestrationJob[];
   providers: CoreProviderFact[];
+  modelCatalog?: CoreCodexModelCatalog;
 };
 
 export type CoreOrchestrationJobResult = {
@@ -129,6 +131,11 @@ export function createCoreOrchestrationClient(
           prompt: input.prompt,
           ...(input.provider ? { provider: input.provider } : {}),
           mode: input.mode,
+          ...(input.model ? {
+            model: input.model,
+            reasoningEffort: input.reasoningEffort,
+            catalogRevision: input.catalogRevision,
+          } : {}),
         }, signal),
       );
     },

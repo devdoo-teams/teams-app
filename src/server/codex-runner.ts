@@ -23,6 +23,8 @@ import { redactCliDiagnostics } from './cli-diagnostics.js';
 import { CODEX_READ_ONLY_PERMISSION_ARGS } from './codex-permission-profile-isolation-provider.js';
 import { redactSensitiveText, redactSensitiveValue } from './sensitive-text.js';
 import { isAgentTokenUsage, parseCodexTokenUsage, type AgentTokenUsage } from './agent-token-usage.js';
+import { assertSafeCodexModelSelection } from './codex-model-catalog.js';
+import type { CoreCodexModelSelection } from '../shared/core-orchestration.js';
 
 export interface CodexRunEvent {
   type?: string;
@@ -105,6 +107,39 @@ const CODEX_CHILD_ENV_ALLOWLIST = [
   'SSL_CERT_DIR',
   'NODE_EXTRA_CA_CERTS',
 ] as const;
+
+export function buildCodexExecArguments(options: Readonly<{
+  prefixArgs: readonly string[];
+  mode: AgentJobMode;
+  workspace: string;
+  enrichedPrompt: string;
+  threadId?: string;
+  selection?: CoreCodexModelSelection;
+}>): string[] {
+  if (options.threadId && !CODEX_THREAD_ID_PATTERN.test(options.threadId)) {
+    throw new Error('Invalid Codex thread ID.');
+  }
+  const selection = options.selection ? assertSafeCodexModelSelection(options.selection) : undefined;
+  const args = [
+    ...options.prefixArgs,
+    'exec',
+    '--json',
+    ...(options.mode === 'read-only'
+      ? CODEX_READ_ONLY_PERMISSION_ARGS
+      : ['--sandbox', options.mode]),
+    '--cd',
+    options.workspace,
+    ...(selection ? [
+      '--model',
+      selection.model,
+      '--config',
+      `model_reasoning_effort="${selection.reasoningEffort}"`,
+    ] : []),
+  ];
+  if (options.threadId) args.push('resume', options.threadId, '--', options.enrichedPrompt);
+  else args.push('--', options.enrichedPrompt);
+  return args;
+}
 
 export class CodexTerminalProtocolError extends Error {
   readonly code = 'CODEX_TERMINAL_PROTOCOL_INVALID' as const;
@@ -218,6 +253,7 @@ export class CodexRunner {
     timeoutMs?: number;
     signal?: AbortSignal;
     onEvent?: (event: CodexRunEvent) => Promise<void> | void;
+    selection?: CoreCodexModelSelection;
   }): Promise<CodexRunResult> {
     if (options.signal?.aborted) throw new Error('Codex 작업이 취소되었습니다.');
     if (options.threadId && !CODEX_THREAD_ID_PATTERN.test(options.threadId)) {
@@ -250,21 +286,14 @@ export class CodexRunner {
     const prefixArgs = this.runnerOptions.command?.prefixArgs
       ?? (process.env.CODEX_SCRIPT ? [process.env.CODEX_SCRIPT] : []);
     const enrichedPrompt = `${REMOTE_AGENT_GUIDANCE}\n\nUSER REQUEST:\n${options.prompt}`;
-    const args = [
-      ...prefixArgs,
-      'exec',
-      '--json',
-      ...(options.mode === 'read-only'
-        ? CODEX_READ_ONLY_PERMISSION_ARGS
-        : ['--sandbox', options.mode]),
-      '--cd',
-      options.workspace,
-    ];
-    if (options.threadId) {
-      args.push('resume', options.threadId, '--', enrichedPrompt);
-    } else {
-      args.push('--', enrichedPrompt);
-    }
+    const args = buildCodexExecArguments({
+      prefixArgs,
+      mode: options.mode,
+      workspace: options.workspace,
+      enrichedPrompt,
+      ...(options.threadId ? { threadId: options.threadId } : {}),
+      ...(options.selection ? { selection: options.selection } : {}),
+    });
 
     const environment = codexChildEnvironment(process.env, options.environmentOverrides);
     const spawnOptions: AgentIsolationSpawnOptions = {

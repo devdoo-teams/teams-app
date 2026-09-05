@@ -11,6 +11,8 @@ import {
   CoreOrchestrationService,
   createServerDerivedCoreScope,
 } from '../src/server/core-orchestration-service.js';
+import { parseCodexModelCatalogPayload } from '../src/server/codex-model-catalog.js';
+import type { CoreCodexReasoningEffort } from '../src/shared/core-orchestration.js';
 import {
   CoreOrchestrationIdempotencyConflictError,
   CoreOrchestrationValidationError,
@@ -27,6 +29,13 @@ const measuredProviderFacts = () => [{
   observedAt: '2026-09-04T00:00:00.000Z',
   source: 'runtime-observation' as const,
 }];
+const modelCatalog = parseCodexModelCatalogPayload([{
+  slug: 'gpt-5.6-sol',
+  display_name: 'GPT-5.6-Sol',
+  visibility: 'list',
+  default_reasoning_level: 'low',
+  supported_reasoning_levels: [{ effort: 'low' }, { effort: 'high' }],
+}], '2026-09-05T04:00:00.000Z');
 
 let submitCalls = 0;
 let executionLaunches = 0;
@@ -38,6 +47,9 @@ const agentService = {
     scope: AgentJobScope;
     idempotencyKey?: string;
     requestHash?: string;
+    model?: string;
+    reasoningEffort?: CoreCodexReasoningEffort;
+    catalogRevision?: string;
   }): Promise<AgentJob> => {
     submitCalls += 1;
     const job = await store.create({
@@ -47,6 +59,11 @@ const agentService = {
       scope: input.scope,
       idempotencyKey: input.idempotencyKey,
       requestHash: input.requestHash,
+      ...(input.model ? {
+        model: input.model,
+        reasoningEffort: input.reasoningEffort,
+        catalogRevision: input.catalogRevision,
+      } : {}),
     });
     executionLaunches += 1;
     return job;
@@ -68,6 +85,11 @@ const agentService = {
       scope: scoped,
       parentJobId: previous.id,
       threadId: previous.threadId,
+      ...(previous.model ? {
+        model: previous.model,
+        reasoningEffort: previous.reasoningEffort,
+        catalogRevision: previous.catalogRevision,
+      } : {}),
     });
   },
 };
@@ -77,6 +99,7 @@ const service = new CoreOrchestrationService({
   jobStore: store,
   defaultProvider: 'codex',
   observeProviderFacts: measuredProviderFacts,
+  observeCodexModelCatalog: async () => modelCatalog,
 });
 const scope = createServerDerivedCoreScope({
   tenantId: 'tenant-a',
@@ -112,6 +135,36 @@ const canonicalA = canonicalRequestHash({ prompt: 'same', provider: 'codex', mod
 const canonicalB = canonicalRequestHash({ mode: 'read-only', provider: 'codex', prompt: 'same' });
 assert.equal(canonicalA, canonicalB, 'request hash is independent of object insertion order');
 assert.match(first.requestHash, /^[a-f0-9]{64}$/u);
+
+const selected = await service.submit(scope, {
+  idempotencyKey: 'selected-model',
+  prompt: 'inspect with selected model',
+  provider: 'codex',
+  mode: 'read-only',
+  model: 'gpt-5.6-sol',
+  reasoningEffort: 'high',
+  catalogRevision: modelCatalog.revision,
+});
+assert.equal(selected.job.model, 'gpt-5.6-sol');
+assert.equal(selected.job.reasoningEffort, 'high');
+assert.equal(selected.job.catalogRevision, modelCatalog.revision);
+assert.deepEqual(await service.listCodexModelCatalog(), modelCatalog);
+await assert.rejects(service.submit(scope, {
+  idempotencyKey: 'stale-model',
+  prompt: 'reject stale catalog',
+  provider: 'codex',
+  mode: 'read-only',
+  model: 'gpt-5.6-sol',
+  reasoningEffort: 'high',
+  catalogRevision: '0'.repeat(64),
+}), CoreOrchestrationValidationError);
+await assert.rejects(service.submit(scope, {
+  idempotencyKey: 'partial-model',
+  prompt: 'reject partial selection',
+  provider: 'codex',
+  mode: 'read-only',
+  model: 'gpt-5.6-sol',
+}), CoreOrchestrationValidationError);
 
 const otherConversation = createServerDerivedCoreScope({
   ...scope,

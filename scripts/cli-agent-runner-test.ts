@@ -455,6 +455,11 @@ try {
     prompt: 'inspect the repository with Codex',
     workspace: root,
     mode: 'workspace-write',
+    selection: {
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'high',
+      catalogRevision: 'a'.repeat(64),
+    },
     timeoutMs: 1_000,
     onEvent: (event) => { codexEvents.push(event); },
   });
@@ -472,6 +477,11 @@ try {
   ]);
   const codexArgs = JSON.parse(await fs.readFile(argvPath, 'utf8')) as string[];
   assert.deepEqual(codexArgs.slice(0, 4), ['exec', '--json', '--sandbox', 'workspace-write']);
+  assert.deepEqual(
+    codexArgs.slice(codexArgs.indexOf('--model'), codexArgs.indexOf('--model') + 4),
+    ['--model', 'gpt-5.6-sol', '--config', 'model_reasoning_effort="high"'],
+    'the provider-neutral local Codex path preserves the validated selection',
+  );
 
   const codexProgressResult = await runner.run({
     provider: 'codex',

@@ -6,6 +6,8 @@ import {
   type CoreOrchestrationClient,
 } from './core-orchestration-client.js';
 import type {
+  CoreCodexModelCatalog,
+  CoreCodexReasoningEffort,
   CoreOrchestrationJob,
   CoreOrchestrationMode,
   CoreOrchestrationProvider,
@@ -41,6 +43,9 @@ type SubmissionIdentity = Readonly<{
   prompt: string;
   provider: CoreOrchestrationProvider;
   mode: CoreOrchestrationMode;
+  model?: string;
+  reasoningEffort?: CoreCodexReasoningEffort;
+  catalogRevision?: string;
 }>;
 
 function submissionFingerprint(input: SubmissionIdentity): string {
@@ -48,6 +53,11 @@ function submissionFingerprint(input: SubmissionIdentity): string {
     prompt: input.prompt.trim(),
     provider: input.provider,
     mode: input.mode,
+    ...(input.model ? {
+      model: input.model,
+      reasoningEffort: input.reasoningEffort,
+      catalogRevision: input.catalogRevision,
+    } : {}),
   });
 }
 
@@ -89,6 +99,9 @@ export function validateOrchestrationSubmission(
   prompt: string,
   providerId: string,
   providers: readonly CoreProviderFact[],
+  modelId = '',
+  reasoningEffort = '',
+  modelCatalog?: CoreCodexModelCatalog,
 ): string {
   if (!prompt.trim()) return '작업 내용을 입력하세요.';
   if (!providerId.trim()) return '실행 제공자를 선택하세요.';
@@ -98,7 +111,18 @@ export function validateOrchestrationSubmission(
     return '현재 사용할 수 없는 제공자입니다.';
   }
   if (providerId !== 'codex' && providerId !== 'copilot') return '등록되지 않은 제공자입니다.';
+  if (providerId === 'codex' && modelCatalog) {
+    const model = modelCatalog.models.find((candidate) => candidate.id === modelId);
+    if (!model) return 'Codex 모델을 선택하세요.';
+    if (!model.reasoningEfforts.includes(reasoningEffort as CoreCodexReasoningEffort)) {
+      return '선택한 모델이 해당 추론 수준을 지원하지 않습니다.';
+    }
+  }
   return '';
+}
+
+function formatTokenCount(value: number): string {
+  return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
 export type OrchestrationBusyController = {
@@ -177,6 +201,9 @@ export type OrchestrationPanelViewProps = {
   prompt: string;
   providerId: string;
   mode: CoreOrchestrationMode;
+  modelCatalog?: CoreCodexModelCatalog;
+  modelId: string;
+  reasoningEffort: CoreCodexReasoningEffort | '';
   inputValue: string;
   busyAction: string;
   error: string;
@@ -188,6 +215,8 @@ export type OrchestrationPanelViewProps = {
   onPromptChange: (value: string) => void;
   onProviderChange: (value: string) => void;
   onModeChange: (value: CoreOrchestrationMode) => void;
+  onModelChange: (value: string) => void;
+  onReasoningEffortChange: (value: CoreCodexReasoningEffort) => void;
   onInputChange: (value: string) => void;
   onSubmit: () => void | Promise<void>;
   onSelectTask: (jobId: string) => void | Promise<void>;
@@ -224,6 +253,7 @@ export function orchestrationMutationNotice(
 
 export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
   const selectedProvider = props.providers.find((provider) => provider.provider === props.selectedJob?.provider);
+  const selectedModel = props.modelCatalog?.models.find((model) => model.id === props.modelId);
   const submitBusy = props.busyAction === 'submit';
   const selectedBusy = props.selectedJob ? props.busyAction.endsWith(`:${props.selectedJob.id}`) : false;
   const canCancel = props.selectedJob
@@ -290,6 +320,40 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
             {provider.provider}: {provider.availability === 'unknown' ? '가용성 확인 필요' : '현재 사용할 수 없음'}
           </p>
         ))}
+        {props.providerId === 'codex' ? props.modelCatalog ? (
+          <>
+            <label>
+              Codex 모델
+              <select
+                aria-label="Codex 모델"
+                disabled={props.phase === 'loading' || submitBusy}
+                onChange={(event) => props.onModelChange(event.currentTarget.value)}
+                value={props.modelId}
+              >
+                {props.modelCatalog.models.map((model) => (
+                  <option key={model.id} value={model.id}>{model.label}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              추론 수준
+              <select
+                aria-label="추론 수준"
+                disabled={props.phase === 'loading' || submitBusy || !selectedModel}
+                onChange={(event) => props.onReasoningEffortChange(
+                  event.currentTarget.value as CoreCodexReasoningEffort,
+                )}
+                value={props.reasoningEffort}
+              >
+                {(selectedModel?.reasoningEfforts ?? []).map((effort) => (
+                  <option key={effort} value={effort}>{effort}</option>
+                ))}
+              </select>
+            </label>
+          </>
+        ) : (
+          <p className="panel-description">Codex 모델 카탈로그를 확인할 수 없어 CLI 기본값을 사용합니다.</p>
+        ) : null}
         <label>
           실행 모드
           <select
@@ -358,6 +422,24 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
           <p><strong>상태:</strong> {statusLabels[props.selectedJob.status]}</p>
           <p><strong>작업 ID:</strong> {props.selectedJob.id}</p>
           <p><strong>프롬프트:</strong> {props.selectedJob.prompt}</p>
+          {props.selectedJob.provider === 'codex' ? (
+            <>
+              <p><strong>모델:</strong> {props.selectedJob.model ?? 'CLI 기본값'}</p>
+              <p><strong>추론 수준:</strong> {props.selectedJob.reasoningEffort ?? 'CLI 기본값'}</p>
+              {props.selectedJob.tokenUsage ? (
+                <p>
+                  <strong>토큰 사용량:</strong>{' '}
+                  입력 {formatTokenCount(props.selectedJob.tokenUsage.inputTokens)} · 캐시 입력{' '}
+                  {formatTokenCount(props.selectedJob.tokenUsage.cachedInputTokens)}
+                  {props.selectedJob.tokenUsage.cacheWriteInputTokens !== undefined
+                    ? ` · 캐시 쓰기 ${formatTokenCount(props.selectedJob.tokenUsage.cacheWriteInputTokens)}`
+                    : ''}
+                  {' '}· 출력 {formatTokenCount(props.selectedJob.tokenUsage.outputTokens)} · 추론 출력{' '}
+                  {formatTokenCount(props.selectedJob.tokenUsage.reasoningOutputTokens)} · 계정 잔여량: 제공되지 않음
+                </p>
+              ) : <p><strong>토큰 사용량:</strong> 실행 완료 전 또는 제공되지 않음 · 계정 잔여량: 제공되지 않음</p>}
+            </>
+          ) : null}
           <div>
             <strong>제공자가 보고한 도구:</strong>
             {(props.selectedJob.tools?.length ?? 0) > 0 ? (
@@ -482,8 +564,11 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
   const [phase, setPhase] = useState<PanelPhase>('loading');
   const [jobs, setJobs] = useState<CoreOrchestrationJob[]>([]);
   const [providers, setProviders] = useState<CoreProviderFact[]>([]);
+  const [modelCatalog, setModelCatalog] = useState<CoreCodexModelCatalog | undefined>();
   const [selectedJob, setSelectedJob] = useState<CoreOrchestrationJob | null>(null);
   const [providerId, setProviderId] = useState('');
+  const [modelId, setModelId] = useState('');
+  const [reasoningEffort, setReasoningEffort] = useState<CoreCodexReasoningEffort | ''>('');
   const [mode, setMode] = useState<CoreOrchestrationMode>('read-only');
   const [prompt, setPrompt] = useState('');
   const [inputValue, setInputValue] = useState('');
@@ -517,6 +602,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
       if (controller.signal.aborted) return;
       setJobs(result.jobs);
       setProviders(result.providers);
+      setModelCatalog(result.modelCatalog);
       setSelectedJob((current) => current ? result.jobs.find((job) => job.id === current.id) ?? null : null);
       setProviderId((current) => {
         const retained = result.providers.find((provider) => provider.provider === current);
@@ -548,6 +634,22 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
       loadController.current?.abort();
     };
   }, [load]);
+
+  useEffect(() => {
+    setModelId((current) => {
+      if (!modelCatalog) return '';
+      return modelCatalog.models.some((model) => model.id === current)
+        ? current
+        : modelCatalog.models[0]?.id ?? '';
+    });
+  }, [modelCatalog]);
+
+  useEffect(() => {
+    const selected = modelCatalog?.models.find((model) => model.id === modelId);
+    setReasoningEffort((current) => selected?.reasoningEfforts.includes(current as CoreCodexReasoningEffort)
+      ? current
+      : selected?.defaultReasoningEffort ?? '');
+  }, [modelCatalog, modelId]);
 
   const runMutation = useCallback(async (
     slot: string,
@@ -585,13 +687,25 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
   }, [busy, load, updateJob]);
 
   const submit = useCallback(async () => {
-    const validation = validateOrchestrationSubmission(prompt, providerId, providers);
+    const validation = validateOrchestrationSubmission(
+      prompt,
+      providerId,
+      providers,
+      modelId,
+      reasoningEffort,
+      modelCatalog,
+    );
     setValidationError(validation);
     if (validation) return;
     const identity = {
       prompt: prompt.trim(),
       provider: providerId as CoreOrchestrationProvider,
       mode,
+      ...(providerId === 'codex' && modelCatalog && modelId && reasoningEffort ? {
+        model: modelId,
+        reasoningEffort,
+        catalogRevision: modelCatalog.revision,
+      } : {}),
     };
     const idempotencyKey = submissionKeys.current.keyFor(identity);
     const outcome = await runMutation('submit', () => client.submitJob({
@@ -601,7 +715,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     if (outcome === 'success' || outcome === 'definitive-failure') {
       submissionKeys.current.complete(identity, idempotencyKey);
     }
-  }, [client, mode, prompt, providerId, providers, runMutation]);
+  }, [client, mode, modelCatalog, modelId, prompt, providerId, providers, reasoningEffort, runMutation]);
 
   const selectJob = useCallback(async (jobId: string) => {
     const slot = `detail:${jobId}`;
@@ -650,15 +764,24 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     lastUpdatedAt={lastUpdatedAt}
     mobile={isMobile}
     mode={mode}
+    modelCatalog={modelCatalog}
+    modelId={modelId}
     notice={notice}
     pendingConfirmation={pendingConfirmation}
     onApprove={approve}
     onCancel={cancel}
     onInputChange={(value) => { setInputValue(value); setValidationError(''); }}
     onModeChange={(value) => { setMode(value); setValidationError(''); }}
+    onModelChange={(value) => {
+      setModelId(value);
+      const model = modelCatalog?.models.find((candidate) => candidate.id === value);
+      setReasoningEffort(model?.defaultReasoningEffort ?? '');
+      setValidationError('');
+    }}
     onPromptChange={(value) => { setPrompt(value); setValidationError(''); }}
     onProvideInput={provideInput}
     onProviderChange={(value) => { setProviderId(value); setValidationError(''); }}
+    onReasoningEffortChange={(value) => { setReasoningEffort(value); setValidationError(''); }}
     onRequestConfirmation={(kind, jobId) => setPendingConfirmation({ kind, jobId })}
     onDismissConfirmation={() => setPendingConfirmation(null)}
     onReload={load}
@@ -669,6 +792,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     prompt={prompt}
     providerId={providerId}
     providers={providers}
+    reasoningEffort={reasoningEffort}
     selectedJob={selectedJob}
     validationError={validationError}
   />;

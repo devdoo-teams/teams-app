@@ -12,6 +12,7 @@ const token = 'mp259-runtime-token-0123456789abcdef';
 
 await verifyUnknownRuntimeFailsClosed();
 await verifyMeasuredRuntimeComposesCapabilitiesAndInputResume();
+await verifyMeasuredCodexModelSelectionRoundTrip();
 
 console.log('core-orchestration-runtime-composition-test: PASS');
 
@@ -143,12 +144,113 @@ printf '%s\\n' \
   }
 }
 
+async function verifyMeasuredCodexModelSelectionRoundTrip(): Promise<void> {
+  const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mp290-codex-selection-'));
+  try {
+    const executable = path.join(fixtureRoot, 'codex-fixture');
+    const codexHome = path.join(fixtureRoot, 'codex-home');
+    const argvLog = path.join(fixtureRoot, 'argv.json');
+    await fs.mkdir(codexHome, { mode: 0o700 });
+    await fs.writeFile(executable, `#!${process.execPath}
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === 'login' && args[1] === 'status') {
+  console.log('Logged in using ChatGPT');
+  process.exit(0);
+}
+if (args[0] === 'debug' && args[1] === 'models') {
+  console.log(JSON.stringify({ models: [{
+    slug: 'gpt-5.6-sol',
+    display_name: 'GPT-5.6-Sol',
+    visibility: 'list',
+    default_reasoning_level: 'low',
+    supported_reasoning_levels: [{ effort: 'low' }, { effort: 'high' }],
+  }] }));
+  process.exit(0);
+}
+if (args[0] === 'exec') {
+  fs.writeFileSync(${JSON.stringify(argvLog)}, JSON.stringify(args));
+  console.log(JSON.stringify({ type: 'thread.started', thread_id: '11111111-1111-4111-8111-111111111111' }));
+  console.log(JSON.stringify({ type: 'turn.started' }));
+  console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: '선택된 Codex 모델 실행 완료' } }));
+  console.log(JSON.stringify({
+    type: 'turn.completed',
+    usage: { input_tokens: 120, cached_input_tokens: 20, output_tokens: 30, reasoning_output_tokens: 10 },
+  }));
+  process.exit(0);
+}
+console.error('unsupported Codex fixture command');
+process.exit(2);
+`, { mode: 0o700 });
+
+    await withRuntime({
+      provider: 'codex',
+      measuredCodexRuntime: true,
+      extraEnv: {
+        CODEX_BIN: executable,
+        AGENT_CODEX_HOME: codexHome,
+        TEAMS_TEST_PROCESS_ISOLATION: 'true',
+      },
+    }, async (origin) => {
+      const baseUrl = new URL(origin).origin;
+      const modelResponse = await teamsPost(baseUrl, teamsActivity('agent choose 저장소를 점검해줘', 'choose'));
+      const modelCard = teamsCard(modelResponse.body, 'Codex 모델 선택');
+      const modelInput = modelCard.body?.find((item: any) => item.type === 'Input.ChoiceSet' && item.id === 'model');
+      assert.deepEqual(modelInput?.choices, [{ title: 'GPT-5.6-Sol', value: 'gpt-5.6-sol' }]);
+      const modelAction = modelCard.actions?.find((action: any) => action.data?.action === 'orchestration.select-model');
+      assert.ok(modelAction?.data, 'model card must include the server-bound catalog revision');
+
+      const reasoningResponse = await teamsPost(baseUrl, teamsActivity('', 'select-model', {
+        ...modelAction.data,
+        model: 'gpt-5.6-sol',
+      }));
+      const reasoningCard = teamsCard(reasoningResponse.body, 'Codex 추론 수준 선택');
+      const reasoningInput = reasoningCard.body?.find((item: any) => item.type === 'Input.ChoiceSet' && item.id === 'reasoningEffort');
+      assert.deepEqual(reasoningInput?.choices, [
+        { title: 'low', value: 'low' },
+        { title: 'high', value: 'high' },
+      ]);
+      const submitAction = reasoningCard.actions?.find((action: any) => action.data?.action === 'orchestration.submit-selected');
+      assert.ok(submitAction?.data, 'reasoning card must preserve the same immutable model selection identity');
+
+      const submitted = await teamsPost(baseUrl, teamsActivity('', 'submit-selected', {
+        ...submitAction.data,
+        reasoningEffort: 'high',
+      }));
+      const submittedCard = teamsCard(submitted.body, 'gpt-5.6-sol');
+      const jobId = cardFact(submittedCard, '작업 ID');
+      assert.equal(cardFact(submittedCard, '추론 수준'), 'high');
+
+      const completedCard = await waitForCompletedTeamsJob(baseUrl, jobId);
+      assert.equal(cardFact(completedCard, '상태'), 'completed');
+      assert.equal(cardFact(completedCard, '사용 토큰'), '150 (입력 120 / 출력 30)');
+      assert.equal(cardFact(completedCard, '추론 출력'), '10');
+      assert.equal(cardFact(completedCard, '계정 잔여량'), 'Codex CLI에서 제공되지 않음');
+
+      const argv = JSON.parse(await fs.readFile(argvLog, 'utf8')) as string[];
+      assert.deepEqual(argv.slice(argv.indexOf('--model'), argv.indexOf('--model') + 2), ['--model', 'gpt-5.6-sol']);
+      assert.deepEqual(argv.slice(argv.indexOf('--config'), argv.indexOf('--config') + 2), [
+        '--config',
+        'model_reasoning_effort="high"',
+      ]);
+    });
+  } finally {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  }
+}
+
 async function withRuntime(
-  options: { provider: 'codex' | 'copilot'; measuredInputRuntime?: boolean; extraEnv?: NodeJS.ProcessEnv },
+  options: {
+    provider: 'codex' | 'copilot';
+    measuredInputRuntime?: boolean;
+    measuredCodexRuntime?: boolean;
+    extraEnv?: NodeJS.ProcessEnv;
+  },
   verify: (origin: string) => Promise<void>,
 ): Promise<void> {
   const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), `mp259-${options.provider}-runtime-`));
   await fs.chmod(runtimeRoot, 0o700);
+  await fs.mkdir(path.join(runtimeRoot, 'workspace'), { mode: 0o700 });
   const port = await freePort();
   const origin = `http://127.0.0.1:${port}/api/core-orchestration`;
   const sourcePath = path.join(root, 'src/server/index.ts');
@@ -169,6 +271,21 @@ for (const runtime of Object.values(providerRunners)) {
       };
     },
     async resumeInput(job) { return job; },
+  });
+}
+${marker}`);
+  }
+  if (options.measuredCodexRuntime) {
+    const marker = 'const AZURE_CORE_SUBMISSION_FACT_MAX_AGE_MS = 30_000;';
+    assert.ok(source.includes(marker), 'Codex runtime fixture insertion point must remain stable');
+    source = source.replace(marker, `
+if (coreProviderCapabilities) {
+  Object.assign(coreProviderCapabilities, {
+    codex: {
+      state: 'available', executable: 'present', probe: 'passed',
+      authentication: 'authenticated', login: 'authenticated',
+      entitlement: 'allowed', reason: 'verified',
+    },
   });
 }
 ${marker}`);
@@ -239,11 +356,76 @@ ${marker}`);
     child.stdout?.on('data', (chunk) => { output += chunk.toString(); });
     child.stderr?.on('data', (chunk) => { output += chunk.toString(); });
     await waitForHealth(`http://127.0.0.1:${port}`, child, () => output);
-    await verify(origin);
+    try {
+      await verify(origin);
+    } catch (error) {
+      const message = error instanceof Error ? error.stack ?? error.message : String(error);
+      throw new Error(`${message}\n\nSERVER OUTPUT:\n${output.slice(-4_000)}`);
+    }
   } finally {
     if (child) await stop(child);
     await fs.rm(runtimeRoot, { recursive: true, force: true });
   }
+}
+
+function teamsActivity(text: string, id: string, value?: unknown): Record<string, unknown> {
+  return {
+    type: 'message',
+    id: `mp290-${id}`,
+    timestamp: new Date().toISOString(),
+    serviceUrl: 'http://localhost',
+    channelId: 'msteams',
+    from: { id: 'local-user', aadObjectId: 'local-user' },
+    conversation: { id: 'mp290-conversation', conversationType: 'personal', tenantId: 'local-tenant' },
+    channelData: { tenant: { id: 'local-tenant' } },
+    recipient: { id: 'bot' },
+    text,
+    ...(value === undefined ? {} : { value }),
+  };
+}
+
+async function teamsPost(baseUrl: string, body: unknown): Promise<{ status: number; body: any }> {
+  const response = await fetch(`${baseUrl}/api/messages`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-teams-local-access-token': token,
+    },
+    body: JSON.stringify(body),
+  });
+  const text = await response.text();
+  return { status: response.status, body: text ? JSON.parse(text) : undefined };
+}
+
+function teamsCard(body: any, expected: string): Record<string, any> {
+  const message = body?.activities?.[0];
+  assert.ok(message && !Object.hasOwn(message, 'text'), 'Core Teams response must be attachment-only');
+  const card = message.attachments?.[0]?.content;
+  assert.equal(card?.type, 'AdaptiveCard');
+  assert.equal(card?.version, '1.6', 'canonical Microsoft Teams documentation supports mobile through 1.6');
+  assert.match(JSON.stringify(card), new RegExp(expected, 'u'));
+  return card;
+}
+
+function cardFact(card: Record<string, any>, title: string): string {
+  const value = card.body
+    ?.filter((item: any) => item.type === 'FactSet')
+    .flatMap((item: any) => item.facts ?? [])
+    .find((fact: any) => fact.title === title)?.value;
+  assert.equal(typeof value, 'string', `card fact ${title} must be present`);
+  return value;
+}
+
+async function waitForCompletedTeamsJob(baseUrl: string, jobId: string): Promise<Record<string, any>> {
+  const deadline = Date.now() + 5_000;
+  let lastCard: Record<string, any> | undefined;
+  while (Date.now() < deadline) {
+    const response = await teamsPost(baseUrl, teamsActivity(`agent status ${jobId}`, `status-${Date.now()}`));
+    lastCard = teamsCard(response.body, jobId);
+    if (cardFact(lastCard, '상태') === 'completed') return lastCard;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.fail(`selected Codex job did not complete: ${JSON.stringify(lastCard)}`);
 }
 
 async function api(

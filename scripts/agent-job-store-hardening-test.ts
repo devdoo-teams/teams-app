@@ -248,6 +248,24 @@ try {
     /token usage/i,
     'an in-memory mutation cannot persist malformed token usage',
   );
+  await assert.rejects(
+    () => currentStore.update('task-current-1', scope, {
+      tokenUsage: {
+        source: 'codex.exec.jsonl.turn.completed.usage',
+        inputTokens: 99,
+        cachedInputTokens: 0,
+        outputTokens: 1,
+        reasoningOutputTokens: 0,
+      },
+    }),
+    /token usage.*immutable/i,
+    'a terminal provider receipt cannot rewrite already persisted token usage',
+  );
+  await assert.rejects(
+    () => currentStore.update('task-current-1', scope, { tokenUsage: undefined }),
+    /token usage.*immutable/i,
+    'a terminal provider receipt cannot erase already persisted token usage',
+  );
 
   await fs.rm(currentPath);
   await currentStore.initialize();

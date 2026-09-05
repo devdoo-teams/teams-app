@@ -9,6 +9,7 @@ import {
   type CoreOrchestrationRouteService,
 } from '../src/server/core-orchestration-route.js';
 import type { ServerDerivedCoreScope } from '../src/server/core-orchestration-service.js';
+import { parseCodexModelCatalogPayload } from '../src/server/codex-model-catalog.js';
 import {
   CoreOrchestrationIdempotencyConflictError,
   CoreOrchestrationValidationError,
@@ -18,6 +19,13 @@ import {
 type Snapshot = Readonly<{ status: number; body: string; headers: http.IncomingHttpHeaders }>;
 
 const now = '2026-09-03T00:00:00.000Z';
+const modelCatalog = parseCodexModelCatalogPayload([{
+  slug: 'gpt-5.6-sol',
+  display_name: 'GPT-5.6-Sol',
+  visibility: 'list',
+  default_reasoning_level: 'low',
+  supported_reasoning_levels: [{ effort: 'low' }, { effort: 'high' }],
+}], now);
 const jobs = new Map<string, CoreOrchestrationJob>();
 const idempotency = new Map<string, { hash: string; job: CoreOrchestrationJob }>();
 let nextId = 1;
@@ -26,8 +34,22 @@ function scopeKey(scope: ServerDerivedCoreScope): string {
   return `${scope.tenantId}/${scope.requesterId}/${scope.conversationId}`;
 }
 
-function requestHash(request: { prompt: string; provider?: string; mode: string }): string {
-  return JSON.stringify([request.prompt, request.provider ?? '', request.mode]);
+function requestHash(request: {
+  prompt: string;
+  provider?: string;
+  mode: string;
+  model?: string;
+  reasoningEffort?: string;
+  catalogRevision?: string;
+}): string {
+  return JSON.stringify([
+    request.prompt,
+    request.provider ?? '',
+    request.mode,
+    request.model ?? '',
+    request.reasoningEffort ?? '',
+    request.catalogRevision ?? '',
+  ]);
 }
 
 function jobKey(scope: ServerDerivedCoreScope, id: string): string {
@@ -53,6 +75,11 @@ const service: CoreOrchestrationRouteService = {
       mode: request.mode,
       status: request.mode === 'workspace-write' ? 'awaiting_approval' : 'queued',
       progress: [],
+      ...(request.model ? {
+        model: request.model,
+        reasoningEffort: request.reasoningEffort,
+        catalogRevision: request.catalogRevision,
+      } : {}),
       createdAt: now,
     };
     jobs.set(jobKey(scope, job.id), job);
@@ -93,6 +120,9 @@ const service: CoreOrchestrationRouteService = {
       observedAt: now,
       source: 'runtime-probe',
     }];
+  },
+  async listCodexModelCatalog() {
+    return modelCatalog;
   },
 };
 
@@ -154,6 +184,18 @@ try {
   const first = JSON.parse(submitted.body) as { job: CoreOrchestrationJob; replayed: boolean };
   assert.equal(first.replayed, false);
 
+  const selected = await request('POST', '/jobs', {
+    idempotencyKey: 'route-selected-model',
+    prompt: 'inspect repository with selected model',
+    provider: 'codex',
+    mode: 'read-only',
+    model: 'gpt-5.6-sol',
+    reasoningEffort: 'high',
+    catalogRevision: modelCatalog.revision,
+  }, auth);
+  assert.equal(selected.status, 201);
+  assert.equal(JSON.parse(selected.body).job.model, 'gpt-5.6-sol');
+
   const replayed = await request('POST', '/jobs', {
     idempotencyKey: 'route-submit-1',
     prompt: 'inspect repository',
@@ -191,6 +233,7 @@ try {
   assert.deepEqual(JSON.parse(listed.body).providers[0], {
     provider: 'codex', availability: 'unknown', capabilities: ['submit'], observedAt: now, source: 'runtime-probe',
   }, 'the list wire DTO includes the same measured provider facts as the provider endpoint');
+  assert.deepEqual(JSON.parse(listed.body).modelCatalog, modelCatalog);
   assert.equal((await request('GET', '/jobs?limit=0', undefined, auth)).status, 400);
   assert.equal((await request('GET', '/jobs?limit=2&scope=attacker', undefined, auth)).status, 400);
 

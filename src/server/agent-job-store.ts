@@ -9,6 +9,8 @@ import {
   mergeObservedToolUsage,
 } from './agent-tool-observation.js';
 import type { CoreAgentToolCategory, CoreAgentToolUsage } from '../shared/core-orchestration.js';
+import type { CoreCodexModelSelection, CoreCodexReasoningEffort } from '../shared/core-orchestration.js';
+import { assertSafeCodexModelSelection } from './codex-model-catalog.js';
 
 export type AgentJobMode = 'read-only' | 'workspace-write';
 export type AgentJobStatus =
@@ -77,6 +79,10 @@ export interface AgentJob {
   progress: string[];
   /** Safe, argument-free tool observations. Legacy in-memory fixtures may omit it. */
   tools?: CoreAgentToolUsage[];
+  /** Immutable exact-Codex selection; omitted for legacy/CLI-default jobs. */
+  model?: string;
+  reasoningEffort?: CoreCodexReasoningEffort;
+  catalogRevision?: string;
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;
@@ -199,8 +205,12 @@ export class AgentJobStore {
     threadId?: string;
     idempotencyKey?: string;
     requestHash?: string;
+    model?: string;
+    reasoningEffort?: CoreCodexReasoningEffort;
+    catalogRevision?: string;
   }): Promise<AgentJob> {
     validateIdempotencyInput(input.idempotencyKey, input.requestHash);
+    const selection = readSelectionInput(input);
     const job: AgentJob = {
       id: `task-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`,
       prompt: input.prompt,
@@ -215,6 +225,7 @@ export class AgentJobStore {
       threadId: input.threadId,
       progress: [],
       tools: [],
+      ...(selection ?? {}),
       createdAt: new Date().toISOString(),
     };
 
@@ -314,8 +325,19 @@ export class AgentJobStore {
       if ('provider' in patch && patch.provider !== this.jobs[index].provider) {
         throw new Error('agent job provider identity is immutable');
       }
-      if ('tokenUsage' in patch && patch.tokenUsage !== undefined && !isAgentTokenUsage(patch.tokenUsage)) {
-        throw new Error('agent job token usage is invalid');
+      for (const field of ['model', 'reasoningEffort', 'catalogRevision'] as const) {
+        if (field in patch && patch[field] !== this.jobs[index][field]) {
+          throw new Error('agent job Codex model selection is immutable');
+        }
+      }
+      if ('tokenUsage' in patch) {
+        if (patch.tokenUsage !== undefined && !isAgentTokenUsage(patch.tokenUsage)) {
+          throw new Error('agent job token usage is invalid');
+        }
+        const previousTokenUsage = this.jobs[index].tokenUsage;
+        if (previousTokenUsage !== undefined && !sameTokenUsage(previousTokenUsage, patch.tokenUsage)) {
+          throw new Error('agent job token usage is immutable');
+        }
       }
       if (updated.status === 'completed' && (!updated.result || !updated.result.trim())) {
         throw new Error('completed jobs must contain a result');
@@ -612,6 +634,12 @@ function loadJob(
   let error = readOptionalText(value, 'error', MAX_AGENT_ERROR_LENGTH, index, legacy);
   const progress = readProgress(value, index, legacy);
   const tools = readTools(value, index);
+  let selection: CoreCodexModelSelection | undefined;
+  try {
+    selection = readSelectionInput(value);
+  } catch (error) {
+    throw invalidJob(index, error instanceof Error ? error.message : 'Codex model selection is invalid');
+  }
   const createdAt = readTimestamp(value.createdAt, 'createdAt', index, legacy);
   const startedAt = readOptionalTimestamp(value, 'startedAt', index, legacy);
   const finishedAt = readOptionalTimestamp(value, 'finishedAt', index, legacy);
@@ -666,6 +694,7 @@ function loadJob(
     ...(error.value ? { error: error.value } : {}),
     progress: progress.value,
     tools: tools.value,
+    ...(selection ?? {}),
     createdAt: createdAt.value,
     ...(startedAt.value ? { startedAt: startedAt.value } : {}),
     ...(finishedAt.value ? { finishedAt: finishedAt.value } : {}),
@@ -674,10 +703,39 @@ function loadJob(
   return { job, migrated };
 }
 
+function readSelectionInput(value: Readonly<{
+  model?: unknown;
+  reasoningEffort?: unknown;
+  catalogRevision?: unknown;
+}>): CoreCodexModelSelection | undefined {
+  const present = [value.model, value.reasoningEffort, value.catalogRevision]
+    .filter((field) => field !== undefined).length;
+  if (present === 0) return undefined;
+  if (present !== 3) throw new Error('agent job Codex model selection must be complete');
+  return assertSafeCodexModelSelection({
+    model: value.model as string,
+    reasoningEffort: value.reasoningEffort as CoreCodexReasoningEffort,
+    catalogRevision: value.catalogRevision as string,
+  });
+}
+
 function readTokenUsage(value: JobRecord, index: number): AgentTokenUsage | undefined {
   if (!hasOwn(value, 'tokenUsage') || value.tokenUsage === undefined) return undefined;
   if (!isAgentTokenUsage(value.tokenUsage)) throw invalidJob(index, 'token usage is invalid');
   return { ...value.tokenUsage };
+}
+
+function sameTokenUsage(
+  left: AgentTokenUsage,
+  right: AgentTokenUsage | undefined,
+): boolean {
+  return right !== undefined
+    && left.source === right.source
+    && left.inputTokens === right.inputTokens
+    && left.cachedInputTokens === right.cachedInputTokens
+    && left.cacheWriteInputTokens === right.cacheWriteInputTokens
+    && left.outputTokens === right.outputTokens
+    && left.reasoningOutputTokens === right.reasoningOutputTokens;
 }
 
 function readTools(value: JobRecord, index: number): LoadedValue<CoreAgentToolUsage[]> {

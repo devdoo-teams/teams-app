@@ -18,6 +18,8 @@ import type {
   CoreProvideInputResult,
   CoreSubmitRequest,
   CoreSubmitResult,
+  CoreCodexModelCatalog,
+  CoreCodexModelSelection,
 } from '../shared/core-orchestration.js';
 import {
   CoreOrchestrationIdempotencyConflictError,
@@ -25,6 +27,11 @@ import {
   CoreOrchestrationProviderUnavailableError,
   CoreOrchestrationValidationError,
 } from '../shared/core-orchestration.js';
+import {
+  assertCoreCodexModelSelection,
+  assertSafeCodexModelSelection,
+  CodexModelCatalogError,
+} from './codex-model-catalog.js';
 
 const SERVER_SCOPE = Symbol('server-derived-core-orchestration-scope');
 const MAX_LIST_LIMIT = 100;
@@ -56,6 +63,9 @@ export interface CoreAgentServicePort {
     scope: AgentJobScope;
     idempotencyKey?: string;
     requestHash?: string;
+    model?: string;
+    reasoningEffort?: CoreCodexModelSelection['reasoningEffort'];
+    catalogRevision?: string;
   }): Promise<AgentJob>;
   get(id: string, scope: AgentJobScope): AgentJob | undefined;
   getForPrincipal?(
@@ -112,6 +122,7 @@ export type CoreOrchestrationServiceOptions = Readonly<{
     scope: ServerDerivedCoreScope;
   }>) => CoreProviderFact | undefined | Promise<CoreProviderFact | undefined>;
   inputResume?: CoreInputResumePort;
+  observeCodexModelCatalog?: () => CoreCodexModelCatalog | undefined | Promise<CoreCodexModelCatalog | undefined>;
 }>;
 
 export class CoreOrchestrationService {
@@ -121,7 +132,9 @@ export class CoreOrchestrationService {
     assertServerScope(scope);
     assertNoClientScope(request);
     const normalized = normalizeSubmitRequest(request);
-    const requestHash = canonicalRequestHash(normalized);
+    const provider = normalized.provider ?? this.defaultProvider();
+    const submission = await this.validateModelSelection(provider, normalized);
+    const requestHash = canonicalRequestHash(submission);
     return withSubmissionLock(this.options.jobStore, scope, request.idempotencyKey, async () => {
       try {
         const existing = this.options.jobStore.resolveIdempotentSubmission(
@@ -131,10 +144,9 @@ export class CoreOrchestrationService {
         );
         if (existing) return { job: toCoreJob(existing), replayed: true, requestHash };
 
-        const provider = normalized.provider ?? this.defaultProvider();
         await this.assertProviderCapability(scope, provider, 'submit');
         const job = await this.options.agentService.submit({
-          ...normalized,
+          ...submission,
           provider,
           scope,
           idempotencyKey: request.idempotencyKey,
@@ -239,6 +251,34 @@ export class CoreOrchestrationService {
 
   listProviderFacts(): CoreProviderFact[] {
     return (this.options.observeProviderFacts?.() ?? []).map(validateProviderFact);
+  }
+
+  async listCodexModelCatalog(): Promise<CoreCodexModelCatalog | undefined> {
+    const catalog = await this.options.observeCodexModelCatalog?.();
+    return catalog ? cloneModelCatalog(catalog) : undefined;
+  }
+
+  private async validateModelSelection(
+    provider: CoreOrchestrationProvider,
+    request: Omit<CoreSubmitRequest, 'idempotencyKey'>,
+  ): Promise<Omit<CoreSubmitRequest, 'idempotencyKey'>> {
+    const selection = selectionFromRequest(request);
+    if (!selection) return request;
+    if (provider !== 'codex') {
+      throw new CoreOrchestrationValidationError('Codex model selection requires the codex provider.');
+    }
+    const catalog = await this.listCodexModelCatalog();
+    if (!catalog) {
+      throw new CoreOrchestrationValidationError('The deployed Codex worker model catalog is unavailable.');
+    }
+    try {
+      return { ...request, ...assertCoreCodexModelSelection(catalog, selection) };
+    } catch (error) {
+      if (error instanceof CodexModelCatalogError) {
+        throw new CoreOrchestrationValidationError(error.message);
+      }
+      throw error;
+    }
   }
 
   private async mutate(
@@ -411,11 +451,37 @@ function normalizeSubmitRequest(request: CoreSubmitRequest): Omit<CoreSubmitRequ
   if (request.provider !== undefined && request.provider !== 'codex' && request.provider !== 'copilot') {
     throw new CoreOrchestrationValidationError('provider is invalid.');
   }
+  let selection: CoreCodexModelSelection | undefined;
+  try {
+    selection = selectionFromRequest(request);
+  } catch (error) {
+    if (error instanceof CodexModelCatalogError) {
+      throw new CoreOrchestrationValidationError(error.message);
+    }
+    throw error;
+  }
   return {
     prompt: request.prompt.trim(),
     ...(request.provider ? { provider: request.provider } : {}),
     mode: request.mode,
+    ...(selection ?? {}),
   };
+}
+
+function selectionFromRequest(value: Readonly<{
+  model?: unknown;
+  reasoningEffort?: unknown;
+  catalogRevision?: unknown;
+}>): CoreCodexModelSelection | undefined {
+  const fields = [value.model, value.reasoningEffort, value.catalogRevision];
+  const present = fields.filter((field) => field !== undefined).length;
+  if (present === 0) return undefined;
+  if (present !== fields.length) {
+    throw new CoreOrchestrationValidationError(
+      'Codex model selection must include model, reasoningEffort, and catalogRevision.',
+    );
+  }
+  return assertSafeCodexModelSelection(value as CoreCodexModelSelection);
 }
 
 function normalizeJobId(value: unknown): string {
@@ -456,9 +522,27 @@ function toCoreJob(job: AgentJob): CoreOrchestrationJob {
     ...(job.error ? { error: job.error } : {}),
     progress: [...job.progress],
     tools: (job.tools ?? []).map((usage) => ({ ...usage })),
+    ...(job.model ? { model: job.model } : {}),
+    ...(job.reasoningEffort ? { reasoningEffort: job.reasoningEffort } : {}),
+    ...(job.catalogRevision ? { catalogRevision: job.catalogRevision } : {}),
+    ...(job.tokenUsage ? { tokenUsage: { ...job.tokenUsage } } : {}),
     createdAt: job.createdAt,
     ...(job.startedAt ? { startedAt: job.startedAt } : {}),
     ...(job.finishedAt ? { finishedAt: job.finishedAt } : {}),
+  };
+}
+
+function cloneModelCatalog(catalog: CoreCodexModelCatalog): CoreCodexModelCatalog {
+  return {
+    revision: catalog.revision,
+    observedAt: catalog.observedAt,
+    source: catalog.source,
+    models: catalog.models.map((model) => ({
+      id: model.id,
+      label: model.label,
+      defaultReasoningEffort: model.defaultReasoningEffort,
+      reasoningEfforts: [...model.reasoningEfforts],
+    })),
   };
 }
 

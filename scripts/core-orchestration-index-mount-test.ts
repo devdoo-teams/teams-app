@@ -70,6 +70,7 @@ const service: CoreOrchestrationRouteService = {
       source: 'runtime-observation',
     }];
   },
+  async listCodexModelCatalog() { return undefined; },
 };
 
 const app = express();

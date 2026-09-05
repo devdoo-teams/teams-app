@@ -51,12 +51,19 @@ export function createWorkerExecutor(options: {
           conversationId: task.conversationId,
           jobId: task.taskId,
         },
+        ...(task.schemaVersion === 3 && task.modelSelection
+          ? { selection: task.modelSelection }
+          : {}),
         onEvent: async (event) => {
           if (event.type) await context.checkpoint(event.type, observeCodexToolUsage(event));
         },
       }).then((outcome) => {
         if (!outcome.threadId) throw new Error('Codex worker completed without a provider execution ID.');
-        return { result: outcome.finalMessage, providerExecutionId: outcome.threadId };
+        return {
+          result: outcome.finalMessage,
+          providerExecutionId: outcome.threadId,
+          ...(outcome.tokenUsage ? { tokenUsage: outcome.tokenUsage } : {}),
+        };
       }).finally(() => context.signal.removeEventListener('abort', propagateAbort));
       return {
         result,

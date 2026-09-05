@@ -29,6 +29,7 @@ type ApprovalToolArgs = {
 
 export type CoreOrchestrationChatCommand =
   | Readonly<{ kind: 'submit'; mode: 'read-only' | 'workspace-write'; prompt: string }>
+  | Readonly<{ kind: 'select-submit'; mode: 'read-only'; prompt: string }>
   | Readonly<{ kind: 'status' | 'cancel' | 'approve' | 'retry'; jobId: string }>
   | Readonly<{ kind: 'list' }>
   | Readonly<{ kind: 'provide-input'; jobId: string; input: string }>;
@@ -41,7 +42,7 @@ const CORE_ORCHESTRATION_JOB_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
  * authenticated Teams activity; no client-controlled scope is accepted here.
  */
 export function parseCoreOrchestrationChatCommand(input: string): CoreOrchestrationChatCommand | undefined {
-  const match = /^(?:agent|에이전트)\s+(run|write|status|list|cancel|approve|retry|input)(?:\s+([\s\S]+))?$/i.exec(input.trim());
+  const match = /^(?:agent|에이전트)\s+(run|write|choose|선택|status|list|cancel|approve|retry|input)(?:\s+([\s\S]+))?$/i.exec(input.trim());
   if (!match) return undefined;
   const operation = match[1]!.toLowerCase();
   const argument = match[2]?.trim() ?? '';
@@ -54,6 +55,10 @@ export function parseCoreOrchestrationChatCommand(input: string): CoreOrchestrat
       mode: operation === 'write' ? 'workspace-write' : 'read-only',
       prompt: safeText(argument, 2_000),
     };
+  }
+  if (operation === 'choose' || operation === '선택') {
+    if (!argument || argument.length > 2_000) return undefined;
+    return { kind: 'select-submit', mode: 'read-only', prompt: safeText(argument, 2_000) };
   }
 
   const separator = argument.indexOf(' ');
@@ -72,6 +77,7 @@ export function coreOrchestrationCommandHelp(): string {
   return [
     'agent run <작업>',
     'agent write <쓰기 작업>',
+    'agent choose <모델·추론 수준을 선택할 읽기 작업>',
     'agent status <작업 ID>',
     'agent list',
     'agent cancel <작업 ID>',
