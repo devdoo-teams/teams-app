@@ -202,10 +202,17 @@ stages:
                       test "$(git rev-parse HEAD)" = "$commit"
                       test -z "$(git status --porcelain=v1 --untracked-files=no)"
                       npm ci --ignore-scripts --no-audit --no-fund
-                      az bicep install
-                      bicep_config_dir="${AZURE_CONFIG_DIR:-$HOME/.azure}"
-                      export BICEP_BIN="${bicep_config_dir}/bin/bicep"
+                      az --version
+                      az bicep version
+                      if command -v bicep >/dev/null 2>&1; then
+                        export BICEP_BIN="$(command -v bicep)"
+                      else
+                        bicep_config_dir="${AZURE_CONFIG_DIR:-$HOME/.azure}"
+                        export BICEP_BIN="${bicep_config_dir}/bin/bicep"
+                      fi
                       test -x "$BICEP_BIN"
+                      export PATH="$(dirname "$BICEP_BIN"):$PATH"
+                      "$BICEP_BIN" --version
                       npm run test:azure-core
                       npm run build:worker
 

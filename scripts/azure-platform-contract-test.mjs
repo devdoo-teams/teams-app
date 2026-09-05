@@ -596,7 +596,23 @@ try {
   assert.ok(deployScript?.includes('--template-file infra/azure/main.bicep'), 'deployment must execute the compiled main.bicep contract');
   assert.ok(deployScript?.includes('scripts/azure-deployment-contract.mjs outputs'), 'deployment must consume validated Bicep outputs');
   assert.ok(deployScript?.includes('npm run test:azure-core'), 'Azure deployment must run the single bounded Azure Core regression gate');
-  assert.ok(deployScript?.includes('az bicep install'), 'Azure deployment must install the official Bicep CLI before the Azure Core gate');
+  assert.equal(
+    deployScript?.includes('az bicep install'),
+    false,
+    'Azure deployment must not blindly reinstall Bicep after Azure CLI already used it for deployment',
+  );
+  assert.ok(deployScript?.includes('az --version'), 'Azure deployment must retain the hosted Azure CLI version in the task log');
+  assert.ok(deployScript?.includes('az bicep version'), 'Azure deployment must validate the official Azure CLI Bicep integration');
+  assert.ok(deployScript?.includes('command -v bicep'), 'Azure deployment must prefer the CI PATH Bicep selected by Azure CLI');
+  assert.ok(
+    deployScript?.includes('bicep_config_dir="${AZURE_CONFIG_DIR:-$HOME/.azure}"'),
+    'Azure deployment must fall back to the task-local Azure CLI managed Bicep path',
+  );
+  assert.ok(
+    deployScript?.includes('export PATH="$(dirname "$BICEP_BIN"):$PATH"'),
+    'Azure deployment must expose the verified Bicep directory to Azure CLI child processes',
+  );
+  assert.ok(deployScript?.includes('"$BICEP_BIN" --version'), 'Azure deployment must execute the resolved Bicep binary before the Azure Core gate');
   assert.ok(deployScript?.includes('npm run build:worker'), 'deployment must build the worker from the exact attested source commit');
   assert.ok(deployScript?.includes('git checkout --detach "$commit"'), 'worker build must check out the exact attested commit');
   assert.ok(deployScript?.includes('version: 24.19.0') || JSON.stringify(deploySteps).includes('24.19.0'), 'worker archive must carry the pinned Node runtime');
