@@ -2,16 +2,30 @@
 
 이 문서는 Teams 앱 변경 요청의 종료 조건을 정의한다. 로컬 화면이 열리고 `npm test`가 통과한 것만으로는 완료가 아니다.
 
-## 현시점 구현 기준: Teams Core 우선
+## 현시점 구현 기준: agent-only Teams Core
 
-현재 MVP의 필수 경로는 Microsoft Teams SDK + TypeScript/React 개인 탭 + Express/결정형 서버 + Adaptive Cards 동작이다. CopilotKit, OpenAI API, MCP, 로컬 모델은 선택 provider로 격리하며 API 키나 추가 모델 인증이 없다는 이유로 Teams Core 기능을 만들거나 검증하지 못했다고 보고하지 않는다. MCP/MCP Apps는 Teams 모바일 UI의 대체재가 아니다. 현재 Jira/Confluence/Bitbucket optional registry는 실제 REST 계약을 검증하는 서버 adapter로 구현되어 있지만, 공개 provider connector·자격증명·MCP host 왕복 증거가 없으면 배포 완료나 Teams Core 완료로 보고하지 않는다. 단계별 범위는 [`docs/api-free-teams-roadmap.md`](api-free-teams-roadmap.md)에 고정한다.
+현재 필수 제품 경로는 Microsoft Teams SDK Bot + TypeScript/React `업무 허브` 개인 탭 + Express 에이전트 lifecycle + Adaptive Cards다. Core 사용자 표면은 에이전트 작업의 시작·조회·승인·입력·취소·재시도, durable 이력·진행·결과, 원본 프롬프트와 provider가 보고한 도구 확인으로 제한한다. 일반 업무 CRUD, 날씨, 위치 조회는 제품 범위가 아니며 날씨 API·명령·위젯과 geolocation 요청은 제거 상태를 유지한다. 매니페스트에는 현재 사용하지 않는 장치 `devicePermissions`를 선언하지 않는다.
 
-1. Teams Core에서 사용자 화면·서버 동작·오류/재시도·권한 대체 경로를 최소 기능으로 구현한다.
-2. 명령어·카드·탭 링크·API·런타임을 테스트하고, 실제 Teams 화면에서 해당 단위의 전·후 상태를 확인한다.
-3. 새 버전·새 ZIP·커밋·공개 전환·기존 탭 재사용·전수 UI 증거를 완료한다.
-4. Core가 안정된 뒤에만 선택 provider를 별도 기능 플래그와 별도 릴리스로 추가한다.
+CopilotKit, OpenAI API, MCP, 로컬 모델과 Jira/Confluence/Bitbucket adapter는 선택 provider로 격리한다. API 키나 추가 provider 인증이 없어도 agent-only Core를 구현·검증할 수 있어야 하며, MCP/MCP Apps를 Teams 모바일 UI로 간주하지 않는다. 공개 connector·자격증명·실제 host 왕복 증거가 없으면 optional 기능 또는 Core 배포 완료로 보고하지 않는다. 단계별 범위는 [`docs/api-free-teams-roadmap.md`](api-free-teams-roadmap.md)에 고정한다.
 
-따라서 선택 provider가 설정되지 않은 상태는 Core의 실패가 아니라 `OPTIONAL_PROVIDER_NOT_CONFIGURED`로 분리한다. Core 응답이 저장된 값을 단순히 되돌리는지 여부는 실제 작업 mutation, 상태 변화, 오류, 재시작 보존을 통해 검증한다.
+1. durable 에이전트 lifecycle과 최소 업무허브를 먼저 구현한다.
+2. `help`와 `agent ...` 명령, 작업 카드, `프롬프트·도구` ShowCard, 탭 링크와 실제 API·런타임을 테스트한다.
+3. 작업 이력·진행은 3초 non-overlapping polling으로 갱신한다. 이는 push/streaming 증거가 아니다.
+4. 새 버전·새 ZIP·커밋·공개 전환·기존 탭 재사용·전수 UI 증거를 같은 release identity로 완료한다.
+5. Core가 안정된 뒤에만 선택 provider를 별도 기능 플래그와 별도 릴리스 증거로 추가한다.
+
+선택 provider가 설정되지 않은 상태는 Core 실패가 아니라 `OPTIONAL_PROVIDER_NOT_CONFIGURED`다. Core 완료는 실제 작업 mutation, 상태 변화, 오류, durable 저장, 재시작 복구, Teams 채팅·탭 read-back으로 검증한다.
+
+### 프롬프트·도구 truth boundary
+
+- 채팅 카드와 업무허브 상세는 durable job에 저장된 원본 프롬프트를 표시한다.
+- 도구 이력은 provider가 구조화된 이벤트로 명시한 `skill`, `plugin`, `mcp`, `cli`, `builtin` 식별자만 표시한다.
+- command execution은 실행 파일 basename만 `cli`로 투영한다. 원문 command, 인수, 경로, tool input/output, 환경변수와 secret은 저장·표시하지 않는다.
+- `skill`과 `plugin`은 provider가 해당 분류와 이름을 명시한 경우에만 표시한다. command나 결과 문장에서 사용 여부를 추론하지 않는다.
+- provider가 식별자를 보고하지 않으면 `보고된 도구 없음`으로 표시한다. 이를 실제 도구 미사용으로 판정하지 않는다.
+- Adaptive Card 상세는 모바일 호환 기준인 version 1.2의 `Action.ShowCard`를 사용한다.
+
+근거 계약은 [Teams Adaptive Cards 참고](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/cards/cards-reference), [Teams 카드 동작](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/cards/cards-actions), [OpenAI Codex CLI reference](https://developers.openai.com/codex/cli/reference/), [GitHub Copilot streaming events](https://docs.github.com/en/copilot/how-tos/copilot-sdk/features/streaming-events)다. 공식 provider 이벤트가 보장하지 않는 provenance는 `UNVERIFIED`로 남긴다.
 
 ### 공식 계약 우선 디버깅 체크포인트
 
@@ -40,7 +54,7 @@ provider registry 변경은 다음 순서를 추가로 따른다.
 
 - 모바일에서 확인 가능한 갤러리는 Bot Framework 메시지의 `attachmentLayout: "carousel"`과 카드별 Adaptive Card attachment를 사용한다. 한 메시지에는 최대 10개의 카드만 넣고, 카드 내부 여러 이미지는 Adaptive Card `ImageSet`으로 표현한다.
 - 이미지 URL은 Teams 클라이언트가 접근할 수 있는 공개 HTTPS URL만 허용하며, 스키마에서 HTTP·데이터 URI·6개 초과 이미지를 거부한다. 각 이미지에는 접근성용 `altText`를 필수로 넣는다.
-- Teams의 기본 명령 버튼과 기본 탭 링크를 합쳐 공식 권장 한도인 6개를 넘기지 않는다. 따라서 카드에는 5개 명령 버튼과 탭 링크를 제공하고 `collaboration`과 `carousel`은 텍스트 명령으로 제공한다. 카드 렌더링만 통과하고 실제 명령 왕복·이미지 로드·탭 이동을 확인하지 않은 상태는 완료로 기록하지 않는다.
+- agent-only Core 카드는 현재 작업 상태에 필요한 action, `프롬프트·도구` ShowCard, 업무허브 링크만 제공한다. 카드 렌더링만 통과하고 실제 명령 왕복·ShowCard·탭 이동을 확인하지 않은 상태는 완료로 기록하지 않는다.
 - Adaptive Card 기반 Loop 컴포넌트는 현재 Teams 모바일 및 macOS 클라이언트에서 사용할 수 없으므로 모바일 MVP의 필수 경로가 아니다. Loop가 필요한 별도 기능은 메시지 확장·링크 언퍼링·Universal Actions와 클라이언트 지원 여부를 별도 검증한 후에만 제안한다.
 
 ## 인앱 브라우저 세션과 업로드 대상 보존 원칙
@@ -197,7 +211,7 @@ Core 서버 번들은 Teams SDK·Express 등 필수 런타임을 포함하고 Co
 | `PORTAL_UPLOAD_UNVERIFIED` | 새 ZIP 업로드/게시 버전을 아직 화면에서 확인하지 못함 |
 | `INSTALLED_VERSION_UNVERIFIED` | 실제 Teams 설치본이 ZIP 버전인지 확인하지 못함 |
 | `DESKTOP_UNVERIFIED` | Teams 데스크톱 접근성 트리·스크린샷·왕복을 확인하지 못함 |
-| `MOBILE_UNVERIFIED` | iOS WebView·위치 권한·모바일 왕복을 확인하지 못함 |
+| `MOBILE_UNVERIFIED` | iOS/Android WebView·ShowCard·탭 polling·모바일 왕복을 확인하지 못함 |
 
 화면이 잠겨 있으면 `COMMAND_ONLY` 단계는 진행하고, 네이티브 UI 단계만 해당 상태로 보류한다. 잠금 해제·비밀번호·Auth 앱 승인·파일 선택을 자동화하거나 우회하지 않는다.
 
@@ -320,8 +334,8 @@ npm run release:update -- complete
 (기본 `com.microsoft.teams2`), 최신 AX 트리·스크린샷·런타임 결과를 기록하며 브라우저 탭
 필드는 요구하지 않는다. 모바일 증거는 `verificationMode: "user-confirmed-mobile"`와
 `userConfirmed: true`, 현재 사용자 스크린샷 및 설치 버전/런타임 identity를 요구하며,
-브라우저 탭 필드 없이 등록한다. 모바일 권한·GPS는 사용자의 현재 증거 없이는 통과로
-판정하지 않는다. `release:update`의 브라우저 명령은 화면을 자동 조작하지 않는 handoff이며,
+브라우저 탭 필드 없이 등록한다. 모바일 `Action.ShowCard`, 탭 레이아웃과 polling 갱신은
+사용자의 현재 증거 없이는 통과로 판정하지 않는다. `release:update`의 브라우저 명령은 화면을 자동 조작하지 않는 handoff이며,
 부모 오케스트레이터가 이미 로그인된 인앱 브라우저 탭에서만 수행한다.
 
 `status`는 현재 identity·다음 단계·마지막 활동 시각을 출력한다. 프로세스가 비정상 종료되어
@@ -477,7 +491,7 @@ commit을 남기고 포털 업로드를 진행하지 않는다.
 
 - 실제 사용자 기능 추가 또는 재현된 버그 수정이 있는 경우에만 Teams 앱 버전을 올린다. 읽기 전용 감사·코드 리뷰·문서·증거 갱신·릴리스 상태 bookkeeping·실패한 재시도만으로는 버전을 올리거나 새 ZIP을 만들지 않는다. 버그 수정 버전은 재현/회귀 테스트, 구현 테스트, 해당 Core 검증이 모두 통과한 뒤에만 만든다.
 - `npm run check:deployment`, `npm run validate:manifest`, `npm run package:app`를 실행한다.
-- 생성된 ZIP을 열어 실제 `manifest.json`의 버전, 앱 ID, 도메인, `devicePermissions`를 확인한다.
+- 생성된 ZIP을 열어 실제 `manifest.json`의 버전, 앱 ID, 도메인과 `devicePermissions` 부재를 확인한다. agent-only Core는 장치 권한을 사용하지 않으므로 권한이 나타나면 패키징을 중단한다.
 - ZIP의 SHA-256을 기록한다. 이전 ZIP을 재사용하거나 “패키지를 만들었다”고 추정하지 않는다.
 - `npm run test:package-determinism`으로 같은 입력의 ZIP SHA-256이 항상 같은지 확인한다. 릴리스 루프 package 단계 이후에는 ZIP을 다시 생성하지 않고, 기록된 절대 경로의 동일 파일만 업로드한다.
 
@@ -538,16 +552,16 @@ Entra SSO는 패키지 업로드 성공만으로 완료된 것으로 보지 않�
 
 - 공개 HTTPS 탭 URL이 새 UI를 제공하는지 확인한다.
 - Teams 데스크톱 앱을 독립 검증 호스트로 사용한다. `node_repl`의 Computer Use와 `@oai/sky`로 기존 로그인 창을 열고, 접근성 트리와 전·후 스크린샷을 수집한다. 사용자가 모바일 스크린샷을 제공하지 않아도 이 단계는 반드시 수행한다.
-- 데스크톱에서 대상 `업무 허브` 채팅, 실제 Bot 답장, 카드 전용 렌더링, 카드와 top-level 텍스트 중복 여부, `업무 허브` 개인 탭, 변경된 UI와 핵심 버튼을 직접 확인한다. 탭 전환이나 메시지 전송 후에는 최신 접근성 트리를 다시 읽어 stale element index를 사용하지 않는다.
-- 공개 검증 후 작업을 사용자에게 넘겨, 사용자가 배포된 Teams 앱(우선 모바일 Teams)에서 `status`, `list`, `help`, 변경 기능 또는 이번 요청에 해당하는 실제 메시지를 직접 보낸다. 사용자는 모바일 스크린샷을 보낼 필요가 없으며, 데스크톱 Teams에서 같은 대화의 수신 답장을 확인할 수 있다.
+- 데스크톱에서 대상 `업무 허브` 채팅, 실제 Bot 답장, 카드 전용 렌더링, 카드와 top-level 텍스트 중복 여부, `프롬프트·도구` ShowCard, `업무 허브` 개인 탭, durable 이력·진행·상세를 직접 확인한다. 탭 전환이나 메시지 전송 후에는 최신 접근성 트리를 다시 읽어 stale element index를 사용하지 않는다.
+- 공개 검증 후 작업을 사용자에게 넘겨, 사용자가 배포된 Teams 앱(우선 모바일 Teams)에서 `help`, `agent run`, `agent status`, `agent list`와 이번 요청에 해당하는 실제 메시지를 직접 보낸다. 사용자는 모바일 스크린샷을 보낼 필요가 없으며, 데스크톱 Teams에서 같은 대화의 수신 답장을 확인할 수 있다.
 - 실제 Teams 앱 정보 화면의 설치 버전이 이번 ZIP/manifest 버전과 일치하는지 별도로 확인한다. 설치본이 이전 버전이면 앱 업데이트 전파를 기다리거나 기존 설치를 제거 후 최신 패키지로 다시 추가한 뒤에만 SSO·UI 결과를 판정한다.
 - 사용자가 같은 배포 앱에서 받은 Bot 답장, Adaptive Card/GenUI, 승인·취소 결과, 필요한 proactive 진행·완료 메시지를 확인한다. API 호출·로컬 테스트·오케스트레이터가 만든 합성 Activity는 이 사용자 확인을 대체하지 않는다.
 - Adaptive Card Activity에는 카드와 동일한 요약을 top-level `text`로 중복 포함하지 않는다. 카드 렌더링 경로는 attachment-only이고, text-only Activity는 legacy 또는 카드 전송 실패 fallback으로만 허용한다.
 - 장시간 작업이면 진행 메시지, 승인·취소 경계, proactive 완료 메시지까지 확인한다.
 - Codex CLI가 정상 종료되어도 실제 최종 `agent_message`가 없으면 성공/완료 메시지를 보내지 않는다. `completed` 상태에는 비어 있지 않은 결과가 필요하며, 누락 시 실패·차단 상태로 남긴다.
 - 커밋 카드는 `committed=true`와 실제 Git hash를 동시에 확인할 때만 완료로 표시한다. 읽기 전용 작업, 기록된 소유 경로가 없는 작업, 변경 파일이 없는 작업은 오류 카드로 표시하고 완료로 포장하지 않는다.
-- AgentJobStore와 업무 저장소는 mutation 직렬화·원자적 저장·실패 롤백을 통과해야 한다. 파일 저장 실패 뒤 메모리 목록이 바뀐 상태로 남으면 런타임 검증을 중단한다.
-- 모바일 기능은 데스크톱 확인과 별도로 분리한다. 데스크톱에서는 모바일 스크린샷 없이도 Bot·탭·카드의 일반 동작을 확인할 수 있지만, iOS WebView 레이아웃, Teams 모바일 앱 권한, iPhone GPS는 데스크톱으로 증명할 수 없다. 이 항목은 `MOBILE_UNVERIFIED`로 보고하고 모바일 통과로 표현하지 않는다.
+- AgentJobStore는 mutation 직렬화·원자적 저장·실패 롤백을 통과해야 한다. 파일 저장 실패 뒤 메모리 작업 상태가 바뀐 채 남으면 런타임 검증을 중단한다.
+- 모바일 기능은 데스크톱 확인과 별도로 분리한다. 데스크톱에서는 모바일 스크린샷 없이도 Bot·탭·카드의 일반 동작을 확인할 수 있지만, iOS/Android WebView 레이아웃과 모바일 `Action.ShowCard`·탭 전환 동작은 데스크톱으로 증명할 수 없다. 이 항목은 실제 모바일 확인 전까지 `MOBILE_UNVERIFIED`로 남긴다.
 
 ### 6.1 실사용 UI 전수 검증 매트릭스 — 필수
 
@@ -563,10 +577,12 @@ runtimeEvidence / result(PASS|FAIL|BLOCKED|N/A)
 
 필수 분기에는 초기·로딩·성공·빈 상태·오류·권한 거부·인증 만료·재시도·승인 필요·승인 완료·취소·중복 클릭·잘못된 입력·경계값·모바일 대체 안내가 포함된다. 기능에 해당하지 않는 분기는 `N/A`와 근거를 남긴다.
 
-- 채팅: 프롬프트 보기 열기, 프롬프트 항목별 선택, 명령 전송, 봇 회신, 카드/텍스트 중복 여부, 탭 링크를 각각 캡처한다.
-- Adaptive Card: 모든 기본 명령 버튼(`help`, `weather`, `status`, `list`)을 각각 실행하고, 버튼 표시·서버 도달·회신 카드·실패/재전송 결과를 개별 캡처한다. `Action.Execute`와 호환 fallback은 별도 분기로 확인한다.
-- 탭: 서비스 정상/인증/저장소 표시, 업무 추가·수정·완료·삭제, 새로고침·필터·빈 목록·오류, 위치 사용·위치 권한 허용·거부·재시도, 날씨 정상/실패 UI를 각각 캡처한다.
-- 작업: read-only 실행·진행·완료·실패, write 승인·취소·재시도, 잘못된 작업 ID, 중복 승인·취소, proactive 진행·완료 메시지를 각각 캡처한다.
+- 채팅: `help`와 `agent ...` 명령 전송, 봇 회신, 카드/텍스트 중복 여부, 작업 ID, 업무허브 링크를 각각 캡처한다.
+- Adaptive Card: 작업 상태 카드와 `프롬프트·도구` `Action.ShowCard`를 열기 전·후로 캡처한다. 승인·취소·재시도·추가 입력처럼 해당 상태에서 노출되는 action은 버튼 표시, 서버 도달, 회신, 중복 실행을 각각 확인한다.
+- 탭: 서비스·인증·저장소 상태, 초기 로딩, 빈 이력, 제출, 3초 polling 갱신, 진행·완료·실패, 오류·재시도, 작업 선택과 상세를 각각 캡처한다. 상세의 원본 프롬프트와 provider-reported tools가 같은 durable job과 일치해야 한다.
+- 도구 증거: `skill|plugin|mcp|cli|builtin` category와 제한된 이름만 표시되는지 확인한다. provider가 이름을 보고하지 않은 경우의 안내도 캡처하고 이를 도구 미사용으로 판정하지 않는다. raw command·arguments·path·secret이 보이면 실패다.
+- 작업: read-only 실행·진행·완료·실패, write 승인·취소·재시도·추가 입력, 잘못된 작업 ID, 중복 승인·취소, proactive 진행·완료 메시지를 각각 캡처한다.
+- 제거 계약: 날씨 API·명령·위젯, geolocation 요청, 매니페스트 `devicePermissions`가 없어야 한다. 어느 표면에서든 다시 나타나면 회귀 실패로 기록한다.
 - Teams WebView에서는 브라우저 `window.confirm`/`window.prompt`를 삭제·승인·취소 확인 수단으로 사용하지 않는다. 확인이 필요한 mutation은 인라인 확인/취소 컨트롤로 제공하고, 확인 상태 렌더링과 실제 서버 결과를 별도 증거로 남긴다.
 
 클릭·입력·탭 전환 후에는 반드시 최신 접근성 트리를 다시 읽고, 새 `element_index`를 사용한다. 스크린샷에 대상 컨트롤과 결과가 실제로 보이지 않거나 현재 공개 버전이 식별되지 않으면 통과가 아니다. API·로컬 하네스·사용자가 준 과거 스크린샷은 이 매트릭스의 행을 대체하지 않는다. 매트릭스가 모두 `PASS`이거나 근거 있는 `N/A`가 되기 전에는 `DESKTOP_READY`/`MOBILE_READY`를 등록하지 않는다.
