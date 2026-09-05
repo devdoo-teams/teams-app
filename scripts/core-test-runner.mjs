@@ -1,9 +1,11 @@
 import { execFileSync, spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { isFullCommitOid } from './fileprovider-git-clean.mjs';
 import { resolveCoreTestWorkspace } from './core-test-workspace.mjs';
+import { createChildTestEnvironment } from './child-test-environment.mjs';
 
 const moduleRunner = 'scripts/run-module-test.mjs';
 const coreBuildSteps = [
@@ -12,6 +14,7 @@ const coreBuildSteps = [
 ];
 const plainTests = [
   'scripts/core-test-runner-test.mjs',
+  'scripts/core-orchestration-gate-registration-test.mjs',
   'scripts/core-test-workspace-test.mjs',
   'scripts/core-optional-boundary-test.mjs',
   'scripts/server-build-mode-test.mjs',
@@ -31,6 +34,8 @@ const plainTests = [
   'scripts/package-app-determinism-test.mjs',
   'scripts/package-app-atomic-test.mjs',
   'scripts/release-gate-timeout-test.mjs',
+  'scripts/azure-core-test-runner-test.mjs',
+  'scripts/azure-core-test-runner.mjs',
   'scripts/core-runtime-smoke.mjs',
   'scripts/runtime-dist-test.mjs',
   'scripts/core-bundle-boundary-test.mjs',
@@ -42,9 +47,26 @@ const runtimeTests = [
   'scripts/teams-a2a-chat-regression-test.ts',
   'scripts/teams-a2a-outbound-restart-regression-test.ts',
   'scripts/a2a-index-integration-test.mjs',
+  'scripts/core-orchestration-teams-chat-runtime-test.ts',
+  'scripts/core-orchestration-confirmation-chat-runtime-test.ts',
 ];
 const tsTests = [
+  'scripts/core-orchestration-service-test.ts',
+  'scripts/core-orchestration-cross-surface-test.ts',
+  'scripts/core-orchestration-provider-gate-test.ts',
+  'scripts/core-orchestration-route-test.ts',
+  'scripts/client-orchestration-panel-test.tsx',
+  'scripts/client-app-orchestration-integration-test.tsx',
+  'scripts/agent-only-hub-contract-test.mjs',
+  'scripts/agent-tool-observation-test.ts',
+  'scripts/core-orchestration-chat-card-test.ts',
+  'scripts/core-orchestration-teams-chat-wiring-test.ts',
+  'scripts/core-orchestration-confirmation-idempotency-test.tsx',
+  'scripts/core-orchestration-runtime-composition-test.ts',
   'scripts/status-card-test.ts',
+  'scripts/agent-token-usage-test.ts',
+  'scripts/codex-model-selection-test.ts',
+  'scripts/codex-worker-catalog-port-test.ts',
   'scripts/genui-contract-test.ts',
   'scripts/teams-tab-link-test.ts',
   'scripts/deterministic-response-engine-test.ts',
@@ -65,12 +87,7 @@ const tsTests = [
   'scripts/genui-action-store-test.ts',
   'scripts/item-store-hardening-test.ts',
   'scripts/item-store-ownership-test.ts',
-  'scripts/client-item-mutation-test.ts',
   'scripts/client-auth-expired-test.ts',
-  'scripts/client-work-item-load-test.ts',
-  'scripts/client-work-item-render-test.ts',
-  'scripts/client-location-test.ts',
-  'scripts/weather-service-test.ts',
   'scripts/a2a-core-contract-test.ts',
   'scripts/a2a-official-contract-audit-test.ts',
   'scripts/a2a-role-catalog-test.ts',
@@ -90,6 +107,11 @@ const tsTests = [
   'scripts/a2a-agent-authorization-policy-test.ts',
   'scripts/a2a-remote-client-test.ts',
   'scripts/a2a-remote-agent-adapter-test.ts',
+  'scripts/provider-runtime-adapter-test.ts',
+  'scripts/provider-lifecycle-runner-test.ts',
+  'scripts/hermes-a2a-adapter-test.ts',
+  'scripts/hermes-a2a-production-agent-test.ts',
+  'scripts/hermes-a2a-registration-test.ts',
   'scripts/a2a-remote-roster-test.ts',
   'scripts/a2a-collaboration-plan-test.ts',
   'scripts/a2a-production-collaboration-test.ts',
@@ -329,7 +351,15 @@ export function createCoreTestInvocations({
   if (!isFullCommitOid(sourceCommit)) {
     throw new Error('sourceCommit must be one full immutable Git OID for every Core child test');
   }
-  const childEnv = { ...env, TEAMS_SOURCE_COMMIT: sourceCommit };
+  const childEnv = createChildTestEnvironment(env, {
+    overrides: { TEAMS_SOURCE_COMMIT: sourceCommit },
+  });
+  const optionalRouteMountTests = [
+    'scripts/core-orchestration-route-mount-integration-test.ts',
+    'scripts/core-orchestration-route-mount-test.ts',
+    'scripts/core-orchestration-index-mount-test.ts',
+    'scripts/core-orchestration-index-integration-test.ts',
+  ].filter((script) => existsSync(path.resolve(sourceCwd, script)));
   return [
     ...coreBuildSteps.map(([script, ...args]) => ({
       kind: 'build',
@@ -353,7 +383,7 @@ export function createCoreTestInvocations({
       cwd: rootCwd,
       env: childEnv,
     })),
-    ...tsTests.map((script) => ({
+    ...[...tsTests, ...optionalRouteMountTests].map((script) => ({
       kind: 'source',
       command: process.execPath,
       args: ['--import', 'tsx/esm', moduleRunner, script],

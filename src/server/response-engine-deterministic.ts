@@ -1,10 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
 import type { AgentJob } from './agent-job-store.js';
-import {
-  formatWeatherMessage,
-  type WeatherResponse,
-} from './weather-service.js';
 import { redactSensitiveText, redactSensitiveValue } from './sensitive-text.js';
 import {
   GENUI_SCHEMA_VERSION,
@@ -25,22 +21,71 @@ type TaskToolArgs = {
   done: number;
 };
 
-type WeatherToolArgs = {
-  location: string;
-  temperature: number;
-  apparentTemperature: number;
-  humidity: number;
-  windSpeed: number;
-  precipitation: number;
-  condition: string;
-  source: string;
-};
-
 type ApprovalToolArgs = {
   jobId: string;
   prompt: string;
   action: 'approve' | 'cancel';
 };
+
+export type CoreOrchestrationChatCommand =
+  | Readonly<{ kind: 'submit'; mode: 'read-only' | 'workspace-write'; prompt: string }>
+  | Readonly<{ kind: 'select-submit'; mode: 'read-only'; prompt: string }>
+  | Readonly<{ kind: 'status' | 'cancel' | 'approve' | 'retry'; jobId: string }>
+  | Readonly<{ kind: 'list' }>
+  | Readonly<{ kind: 'provide-input'; jobId: string; input: string }>;
+
+const CORE_ORCHESTRATION_JOB_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
+
+/**
+ * Parse the explicit Teams chat namespace used by the Core orchestration
+ * facade. The caller must derive tenant/requester/conversation scope from the
+ * authenticated Teams activity; no client-controlled scope is accepted here.
+ */
+export function parseCoreOrchestrationChatCommand(input: string): CoreOrchestrationChatCommand | undefined {
+  const match = /^(?:agent|에이전트)\s+(run|write|choose|선택|status|list|cancel|approve|retry|input)(?:\s+([\s\S]+))?$/i.exec(input.trim());
+  if (!match) return undefined;
+  const operation = match[1]!.toLowerCase();
+  const argument = match[2]?.trim() ?? '';
+
+  if (operation === 'list') return argument ? undefined : { kind: 'list' };
+  if (operation === 'run' || operation === 'write') {
+    if (!argument || argument.length > 2_000) return undefined;
+    return {
+      kind: 'submit',
+      mode: operation === 'write' ? 'workspace-write' : 'read-only',
+      prompt: safeText(argument, 2_000),
+    };
+  }
+  if (operation === 'choose' || operation === '선택') {
+    if (!argument || argument.length > 2_000) return undefined;
+    return { kind: 'select-submit', mode: 'read-only', prompt: safeText(argument, 2_000) };
+  }
+
+  const separator = argument.indexOf(' ');
+  const jobId = (separator === -1 ? argument : argument.slice(0, separator)).trim();
+  if (!CORE_ORCHESTRATION_JOB_ID.test(jobId)) return undefined;
+  if (operation === 'input') {
+    const providedInput = separator === -1 ? '' : argument.slice(separator + 1).trim();
+    if (!providedInput || providedInput.length > 2_000) return undefined;
+    return { kind: 'provide-input', jobId, input: safeText(providedInput, 2_000) };
+  }
+  if (separator !== -1) return undefined;
+  return { kind: operation as 'status' | 'cancel' | 'approve' | 'retry', jobId };
+}
+
+export function coreOrchestrationCommandHelp(): string {
+  return [
+    'agent run <작업>',
+    'agent write <쓰기 작업>',
+    'agent choose <모델·추론 수준을 선택할 읽기 작업>',
+    'agent status <작업 ID>',
+    'agent list',
+    'agent cancel <작업 ID>',
+    'agent approve <작업 ID>',
+    'agent retry <작업 ID>',
+    'agent input <작업 ID> <입력>',
+  ].join('\n');
+}
 
 function contextValue(input: ResponseEngineInput, keyword: string): unknown {
   const context = input.request.context.find((entry) => entry.description.toLowerCase().includes(keyword));
@@ -50,29 +95,6 @@ function contextValue(input: ResponseEngineInput, keyword: string): unknown {
   } catch {
     return undefined;
   }
-}
-
-function isWeather(value: unknown): value is WeatherResponse {
-  const weather = value as WeatherResponse | undefined;
-  return Boolean(
-    weather?.location?.name
-      && Number.isFinite(weather.location.latitude)
-      && Number.isFinite(weather.location.longitude)
-      && weather.current,
-  );
-}
-
-function compactWeather(weather: WeatherResponse): WeatherToolArgs {
-  return {
-    location: weather.location.name,
-    temperature: weather.current.temperature,
-    apparentTemperature: weather.current.apparentTemperature,
-    humidity: weather.current.humidity,
-    windSpeed: weather.current.windSpeed,
-    precipitation: weather.current.precipitation,
-    condition: weather.current.condition,
-    source: weather.source === 'demo' ? '데모' : 'Open-Meteo',
-  };
 }
 
 function compactTasks(input: ResponseEngineInput): TaskToolArgs {
@@ -206,7 +228,7 @@ export class DeterministicResponseEngine implements ResponseEngine {
 
     const normalized = prompt.toLowerCase();
     if (/^(help|도움|사용법|명령)/i.test(normalized)) {
-      const text = '업무 허브 명령\n\n- 현재 업무 목록 보여줘\n- 현재 위치 날씨 보여줘\n- Codex 작업 상태 알려줘\n- 저장소를 분석해줘\n- write로 파일 변경 작업을 요청하면 승인 카드가 표시됩니다.';
+      const text = `에이전트 업무 허브 명령\n\n${coreOrchestrationCommandHelp()}\n\n읽기 작업은 agent run, 변경 작업은 승인 후 실행되는 agent write를 사용하세요.`;
       return output({ text, envelope: envelope({ kind: 'answer', id: 'help', title: '업무 허브 명령 안내', text }), toolCalls });
     }
 
@@ -219,50 +241,6 @@ export class DeterministicResponseEngine implements ResponseEngine {
         envelope: envelope({
           kind: 'task-list', id: 'workspace-list', title: '업무 목록', text,
           sections: [{ type: 'list', title: '업무', items: tasks.items.map((item) => ({ id: item.id, label: item.title, status: item.status })) }],
-        }),
-        toolCalls,
-      });
-    }
-
-    if (/(날씨|weather)/i.test(normalized)) {
-      const contextWeather = contextValue(input, '날씨');
-      if (!isWeather(contextWeather)) {
-        const text = '현재 위치 날씨를 확인하려면 Teams 탭에서 “내 위치 사용”을 눌러 위치 권한을 허용한 뒤 다시 요청하세요. 결정형 모드는 위치를 추측하지 않습니다.';
-        return output({
-          text,
-          envelope: envelope({
-            kind: 'answer',
-            id: 'weather-location-required',
-            title: '현재 위치 날씨',
-            text,
-            sections: [{ type: 'status', title: '위치 권한 필요', status: 'ready', description: text }],
-          }),
-          toolCalls,
-        });
-      }
-      const weather = contextWeather;
-      const text = `${formatWeatherMessage(weather, weather.source === 'demo')}\n\n탭의 “내 위치 사용” 버튼을 누르면 Teams 모바일 위치 권한으로 실시간 위치를 갱신할 수 있습니다.`;
-      emitTool({ name: 'showWeatherCard', args: compactWeather(weather) as unknown as Record<string, unknown>, result: text, weather });
-      return output({
-        text,
-        envelope: envelope({
-          kind: 'weather', id: `weather-${weather.location.latitude}-${weather.location.longitude}`, title: '현재 위치 날씨', text,
-          sections: [{
-            type: 'weather',
-            location: weather.location.name,
-            latitude: weather.location.latitude,
-            longitude: weather.location.longitude,
-            timezone: weather.location.timezone,
-            temperature: weather.current.temperature,
-            apparentTemperature: weather.current.apparentTemperature,
-            humidity: weather.current.humidity,
-            windSpeed: weather.current.windSpeed,
-            precipitation: weather.current.precipitation,
-            condition: weather.current.condition,
-            icon: weather.current.icon,
-            source: weather.source,
-            observedAt: weather.current.time,
-          }],
         }),
         toolCalls,
       });

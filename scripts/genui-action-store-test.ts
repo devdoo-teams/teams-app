@@ -96,17 +96,10 @@ try {
   const personalTabUrl = 'https://teams.microsoft.com/l/entity/9b20fd94-2ac9-4423-ac1f-ff528ab245c1/home?webUrl=https%3A%2F%2Fexample.com%2Ftabs%2Fhome&label=%EC%97%85%EB%AC%B4%20%ED%97%88%EB%B8%8C';
   const configuredFactory = new GenUiResponseFactory(store, { openTabUrl: personalTabUrl });
   const helpCard = configuredFactory.help();
-  assert.equal(helpCard.actions.length, 6);
+  assert.equal(helpCard.actions.length, 1);
   assert.equal(helpCard.actions.at(-1)?.action, 'open-tab');
-  assert.deepEqual(
-    helpCard.actions.slice(0, -1).map((action) => action.action),
-    ['command', 'command', 'command', 'command', 'command'],
-    'help card keeps five command buttons plus the default tab link within the Teams action budget',
-  );
-  assert.deepEqual(
-    helpCard.actions.slice(0, -1).map((action) => action.entityId),
-    ['help', 'weather', 'status', 'list', 'work'],
-  );
+  assert.equal(helpCard.actions.some((action) => action.action === 'command'), false,
+    'the minimal help card exposes no legacy task, weather, or collaboration command palette');
   assert.equal(helpCard.actions.at(-1)?.entityId, 'home');
   assert.equal(helpCard.metadata.openTabUrl, personalTabUrl);
 
@@ -189,6 +182,34 @@ try {
   });
   assert.equal(jobStatusCard.actions.at(-1)?.action, 'open-tab', 'job status cards include the default tab action');
   assert.equal(jobStatusCard.prompt, '실제 작업 상태', 'job status cards carry a bounded prompt for mobile prompt view');
+
+  const usageCard = await configuredFactory.jobStatus({
+    id: 'task-usage-1',
+    prompt: '토큰 사용량 표시',
+    provider: 'codex',
+    mode: 'read-only',
+    status: 'completed',
+    conversationId: 'conversation-1',
+    requesterId: 'user-1',
+    tenantId: 'tenant-1',
+    result: '완료 결과',
+    tokenUsage: {
+      source: 'codex.exec.jsonl.turn.completed.usage',
+      inputTokens: 21_460,
+      cachedInputTokens: 21_248,
+      outputTokens: 5,
+      reasoningOutputTokens: 0,
+    },
+    progress: [],
+    createdAt: new Date().toISOString(),
+  });
+  const usageCardJson = JSON.stringify(usageCard);
+  assert.match(usageCardJson, /입력 토큰/);
+  assert.match(usageCardJson, /21,460 \(캐시 21,248 포함\)/);
+  assert.match(usageCardJson, /출력 토큰/);
+  assert.match(usageCardJson, /추론 출력/);
+  assert.match(usageCardJson, /계정 잔여량/);
+  assert.match(usageCardJson, /제공되지 않음/, 'account remaining quota is explicit instead of inferred');
 
   const incompleteJobStatusCard = await configuredFactory.jobStatus({
     id: 'task-missing-result',

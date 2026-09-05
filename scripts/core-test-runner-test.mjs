@@ -4,6 +4,41 @@ import { EventEmitter } from 'node:events';
 const runnerUrl = new URL('./core-test-runner.mjs', import.meta.url);
 const { createCoreTestInvocations, createProcessTreeTerminator, runProcessWithTimeout } = await import(runnerUrl.href);
 const SOURCE_COMMIT = '0123456789abcdef0123456789abcdef01234567';
+const HOSTILE_PARENT_ENV = {
+  PATH: '/fixture/bin',
+  HOME: '/fixture/home',
+  TMPDIR: '/fixture/tmp',
+  LANG: 'ko_KR.UTF-8',
+  LC_CREDENTIAL: 'host-locale-shaped-secret',
+  CI: 'true',
+  TEAMS_TEST_TIMEOUT_MS: '5000',
+  TEAMS_FILEPROVIDER_SERVER_REUSE: '1',
+  BICEP_BIN: '/host/bin/bicep',
+  CODEX_HOME: '/host/codex-home',
+  CODEX_BIN: '/host/bin/codex',
+  CODEX_BIN_SHA256: 'host-codex-digest',
+  CODEX_API_KEY: 'host-codex-secret',
+  GHCP_BIN: '/host/bin/copilot',
+  GHCP_SCRIPT: '/host/ghcp-fixture.mjs',
+  GH_TOKEN: 'host-gh-secret',
+  GITHUB_TOKEN: 'host-github-secret',
+  A2A_STORE_PATH: '/host/data/a2a.json',
+  A2A_OUTBOUND_STORE_PATH: '/host/data/a2a-outbound.json',
+  TEAMS_A2A_AGENT_PROVIDERS: 'copilot',
+  TEAMS_A2A_REMOTE_AGENT_BEARER_TOKEN: 'host-a2a-secret',
+  TEAMS_AGENT_CLI_PROVIDER: 'copilot',
+  TEAMS_AGENT_DISPATCH_MODE: 'azure-queue',
+  TEAMS_OPTIONAL_RUNTIME: 'true',
+  AZURE_CLIENT_ID: 'host-client-id',
+  AZURE_CLIENT_SECRET: 'host-client-secret',
+  AZURE_TENANT_ID: 'host-tenant-id',
+  AZURE_SUBSCRIPTION_ID: 'host-subscription-id',
+  AZURE_STORAGE_QUEUE_ENDPOINT: 'https://host.queue.core.windows.net/dispatch',
+  AZURE_STORAGE_CONNECTION_STRING: 'host-storage-secret',
+  AZURE_COSMOS_ENDPOINT: 'https://host.documents.azure.com/',
+  AZURE_COSMOS_KEY: 'host-cosmos-secret',
+  OPENAI_API_KEY: 'host-openai-secret',
+};
 
 async function assertProcessReaped(pid, label, timeoutMs = 2_000) {
   const deadline = Date.now() + timeoutMs;
@@ -26,7 +61,7 @@ async function assertProcessReaped(pid, label, timeoutMs = 2_000) {
     rootCwd: '/repo',
     sourceCwd: '/tmp/pinned-source',
     sourceCommit: SOURCE_COMMIT,
-    env: { EXISTING: 'value' },
+    env: HOSTILE_PARENT_ENV,
   });
   assert.ok(invocations.length > 2);
   const clientBuild = invocations.find(({ args }) => args.includes('scripts/build-client.mjs'));
@@ -41,8 +76,8 @@ async function assertProcessReaped(pid, label, timeoutMs = 2_000) {
   const a2aRuntimeContract = invocations.find(({ args }) => args.includes('scripts/teams-a2a-chat-regression-test.ts'));
   const a2aIndexRuntimeContract = invocations.find(({ args }) => args.includes('scripts/a2a-index-integration-test.mjs'));
   const outboundStoreContract = invocations.find(({ args }) => args.includes('scripts/teams-a2a-outbound-store-test.ts'));
-  const sourceContract = invocations.find(({ args }) => args.includes('scripts/client-item-mutation-test.ts'));
-  const renderContract = invocations.find(({ args }) => args.includes('scripts/client-work-item-render-test.ts'));
+  const sourceContract = invocations.find(({ args }) => args.includes('scripts/agent-only-hub-contract-test.mjs'));
+  const renderContract = invocations.find(({ args }) => args.includes('scripts/client-app-orchestration-integration-test.tsx'));
   assert.equal(clientBuild.kind, 'build', 'Core tests must build the client from the pinned release source');
   assert.deepEqual(clientBuild.args, ['scripts/build-client.mjs', '--core']);
   assert.equal(serverBuild.kind, 'build', 'Core tests must build the server from the pinned release source');
@@ -78,17 +113,35 @@ async function assertProcessReaped(pid, label, timeoutMs = 2_000) {
   assert.equal(a2aIndexRuntimeContract.kind, 'runtime', 'A2A index integration must execute against the compiled release bundle');
   assert.equal(a2aIndexRuntimeContract.cwd, '/repo', 'A2A index integration executes beside the commit-bound dist output');
   assert.equal(outboundStoreContract.cwd, '/tmp/pinned-source', 'Teams A2A outbound store test executes the pinned source tree');
-  assert.equal(sourceContract.cwd, '/tmp/pinned-source', 'TypeScript behavior tests execute the pinned source tree');
-  assert.equal(renderContract.cwd, '/tmp/pinned-source', 'client render tests execute the pinned source tree');
+  assert.equal(sourceContract.cwd, '/tmp/pinned-source', 'agent-only source contract tests execute the pinned source tree');
+  assert.equal(renderContract.cwd, '/tmp/pinned-source', 'agent-hub render tests execute the pinned source tree');
   assert.equal(
     invocations.filter(({ kind }) => kind === 'source').every(({ cwd }) => cwd === '/tmp/pinned-source'),
     true,
   );
+  const expectedChildEnv = {
+    PATH: HOSTILE_PARENT_ENV.PATH,
+    HOME: HOSTILE_PARENT_ENV.HOME,
+    TMPDIR: HOSTILE_PARENT_ENV.TMPDIR,
+    LANG: HOSTILE_PARENT_ENV.LANG,
+    CI: HOSTILE_PARENT_ENV.CI,
+    TEAMS_TEST_TIMEOUT_MS: HOSTILE_PARENT_ENV.TEAMS_TEST_TIMEOUT_MS,
+    TEAMS_FILEPROVIDER_SERVER_REUSE: HOSTILE_PARENT_ENV.TEAMS_FILEPROVIDER_SERVER_REUSE,
+    TEAMS_SOURCE_COMMIT: SOURCE_COMMIT,
+  };
+  assert.equal(invocations.every(({ env }) => env.TEAMS_SOURCE_COMMIT === SOURCE_COMMIT), true);
   assert.equal(
-    invocations.every(({ env }) => env.TEAMS_SOURCE_COMMIT === SOURCE_COMMIT && env.EXISTING === 'value'),
+    invocations.every(({ env }) => Object.keys(env).every((key) => key in expectedChildEnv)),
     true,
-    'every Core child test must receive the one release-pinned source OID',
+    'Core child tests must not inherit provider, cloud, storage, dispatch, or credential configuration',
   );
+  for (const { env } of invocations) {
+    assert.deepEqual(
+      env,
+      expectedChildEnv,
+      'every Core child test must receive only standard runtime and explicit harness controls',
+    );
+  }
 }
 
 {

@@ -167,6 +167,12 @@ try {
       external: coreBuild
         ? [
           ...optionalExternalPackages,
+          './optional-runtime-loader.js',
+          './response-engine-local.js',
+          './response-engine-openai.js',
+          './response-engine-grok.js',
+          './local-model-url.js',
+          './providers/optional-provider-runtime.js',
           './mcp-genui.js',
           './mcp-provider-tools.js',
           './copilot-agent.js',

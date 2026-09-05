@@ -146,7 +146,6 @@ try {
       TEAMS_AGENT_GLOBAL_LIMIT: '4',
       TEAMS_AGENT_TENANT_LIMIT: '4',
       COPILOTKIT_DETERMINISTIC_MODE: 'true',
-      WEATHER_MODE: 'demo',
       TEAMS_OPERATOR_REQUESTER_ALLOWLIST: `${scope.tenantId}/${scope.requesterId}`,
       MCP_PUBLIC_ENABLED: '',
       TEAMS_OPTIONAL_RUNTIME: '',
@@ -173,19 +172,30 @@ try {
     /Recovered a missing Teams completion intent after restart/u,
   );
 
-  const persisted = new TeamsA2AOutboundStore(a2aOutboundStorePath);
-  await persisted.initialize();
-  const recovered = persisted.getIntent(outbound.intent.id, scope);
+  const recovered = await waitForTerminalIntent(
+    a2aOutboundStorePath,
+    outbound.intent.id,
+    scope,
+    4_000,
+  );
   assert.equal(recovered?.status, 'connector-accepted');
   assert.equal(recovered?.attempts, 1);
+  const persisted = new TeamsA2AOutboundStore(a2aOutboundStorePath);
+  await persisted.initialize();
   const repairedIntent = await persisted.createOrGetCompletionIntent({
     parentTaskId: missingIntentParent.id,
     scope: repairedScope,
     payloadSha256: completionIntentFingerprint(missingIntentParent.id, repairedScope),
   });
   assert.equal(repairedIntent.created, false, 'startup recovery must persist the repaired intent before delivery');
-  assert.equal(repairedIntent.intent.status, 'connector-accepted');
-  assert.equal(repairedIntent.intent.attempts, 1);
+  const settledRepairedIntent = await waitForTerminalIntent(
+    a2aOutboundStorePath,
+    repairedIntent.intent.id,
+    repairedScope,
+    4_000,
+  );
+  assert.equal(settledRepairedIntent.status, 'connector-accepted');
+  assert.equal(settledRepairedIntent.attempts, 1);
 
   await delay(250);
   const duplicate = await requestJson(baseUrl, `/api/debug/agent-outbox/${scope.conversationId}`);
@@ -210,6 +220,25 @@ function completionIntentFingerprint(parentTaskId: string, intentScope: typeof s
     parentTaskId,
     scope: intentScope,
   }), 'utf8').digest('hex');
+}
+
+async function waitForTerminalIntent(
+  filePath: string,
+  intentId: string,
+  intentScope: typeof scope,
+  timeoutMs: number,
+) {
+  const deadline = Date.now() + timeoutMs;
+  let latestStatus = 'missing';
+  while (Date.now() < deadline) {
+    const store = new TeamsA2AOutboundStore(filePath);
+    await store.initialize();
+    const intent = store.getIntent(intentId, intentScope);
+    latestStatus = intent?.status ?? 'missing';
+    if (intent && intent.status !== 'queued' && intent.status !== 'dispatching') return intent;
+    await delay(25);
+  }
+  throw new Error(`Timed out waiting for terminal outbound intent ${intentId}; latest status: ${latestStatus}`);
 }
 
 async function createCompletedTask(

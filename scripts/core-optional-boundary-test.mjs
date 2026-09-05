@@ -53,6 +53,7 @@ assert.deepEqual(preflight, [
   ['core-source-check', 'typecheck:core', 17],
   ['core-build', 'build:core', 17],
   ['server-build-determinism', 'test:server-build-determinism', 17],
+  ['azure-core', 'test:azure-core', 17],
   ['core-test', 'test:core', 17],
   ['deployment', 'check:deployment', 17],
 ]);

@@ -12,7 +12,6 @@ import { z } from 'zod';
 import type { AgentJob } from './agent-job-store.js';
 import type { AgentService } from './agent-service.js';
 import type { Item, ItemStore } from './item-store.js';
-import type { WeatherResponse } from './weather-service.js';
 import { redactSensitiveValue } from './sensitive-text.js';
 
 // This is the shared application contract. It is intentionally imported rather
@@ -33,12 +32,6 @@ import { RESPONSE_MODES, responseModeLabel } from '../shared/response-mode.js';
 
 export const MCP_GENUI_RESOURCE_URI = 'ui://teams-workspace/v1/genui.html';
 export const MCP_GENUI_RESOURCE_MIME_TYPE = 'text/html;profile=mcp-app';
-
-type WeatherLookup = (
-  latitude: number,
-  longitude: number,
-  options?: { demo?: boolean },
-) => Promise<WeatherResponse>;
 
 type ItemStoreReader = Pick<ItemStore, 'list' | 'summary'>;
 type AgentServiceReader = Pick<AgentService, 'getLocalOnly' | 'listLocalOnly' | 'countActiveLocalOnly'>;
@@ -61,7 +54,6 @@ export type McpPrincipalResolver = (
 export interface McpGenUiDependencies {
   itemStore: ItemStoreReader;
   agentService: AgentServiceReader;
-  getWeather: WeatherLookup;
 }
 
 export interface McpGenUiServerOptions extends McpGenUiDependencies {
@@ -107,7 +99,7 @@ export type McpGenUiRouter = Router & {
   close(): Promise<void>;
 };
 
-type EnvelopeKind = Extract<GenUiKind, 'task-list' | 'weather' | 'job-status' | 'result' | 'error'>;
+type EnvelopeKind = Extract<GenUiKind, 'task-list' | 'job-status' | 'result' | 'error'>;
 
 type EnvelopeInput = {
   kind: EnvelopeKind;
@@ -126,12 +118,6 @@ type EnvelopeInput = {
 
 const workspaceInputSchema = z.object({
   limit: z.number().int().min(1).max(20).optional(),
-});
-
-const weatherInputSchema = z.object({
-  latitude: z.number().min(-90).max(90),
-  longitude: z.number().min(-180).max(180),
-  demo: z.boolean().optional(),
 });
 
 const jobInputSchema = z.object({
@@ -305,37 +291,6 @@ function workspaceEnvelope(deps: McpGenUiDependencies, limit = 8, responseMode?:
   });
 }
 
-function weatherEnvelope(weather: WeatherResponse, responseMode?: GenUiResponseMode): GenUiEnvelopeV1 {
-  const { current, location } = weather;
-  return createEnvelope({
-    kind: 'weather',
-    id: `weather-${location.latitude.toFixed(4)}-${location.longitude.toFixed(4)}`,
-    title: '현재 위치 날씨',
-    summary: `${location.name} · ${current.temperature.toFixed(1)}°C · ${current.condition}`,
-    sections: [
-      {
-        type: 'weather',
-        location: location.name,
-        latitude: location.latitude,
-        longitude: location.longitude,
-        timezone: location.timezone,
-        temperature: current.temperature,
-        apparentTemperature: current.apparentTemperature,
-        humidity: current.humidity,
-        windSpeed: current.windSpeed,
-        precipitation: current.precipitation,
-        condition: current.condition,
-        icon: current.icon,
-        source: weather.source,
-        observedAt: current.time,
-      },
-    ],
-    fallbackText: `${location.name}\n${current.temperature.toFixed(1)}°C · ${current.condition}\n체감 ${current.apparentTemperature.toFixed(1)}°C · 습도 ${Math.round(current.humidity)}% · 바람 ${current.windSpeed.toFixed(1)}km/h`,
-    metadata: { source: weather.source, deterministic: true },
-    responseMode,
-  });
-}
-
 function jobEnvelope(job: AgentJob | undefined, limit = 8, responseMode?: GenUiResponseMode): GenUiEnvelopeV1 {
   if (!job) {
     return createEnvelope({
@@ -436,34 +391,6 @@ function registerTools(server: McpServer, options: McpGenUiServerOptions): void 
       },
     );
   }
-
-  registerAppTool(
-    server,
-    'get_weather',
-    {
-      title: 'Get weather',
-      description: 'Use this when the user supplies device coordinates or explicitly provided coordinates and asks for current weather. Do not infer GPS, a city, or a default location in this tool.',
-      inputSchema: weatherInputSchema,
-      outputSchema: GenUiEnvelopeV1BaseSchema,
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        openWorldHint: true,
-        idempotentHint: true,
-      },
-      _meta: { ui: { visibility: ['model'] } },
-    },
-    async ({ latitude, longitude, demo }) => {
-      try {
-        const weather = await options.getWeather(latitude, longitude, { demo });
-        const envelope = weatherEnvelope(weather, responseMode);
-        return resultForEnvelope(envelope);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : '날씨 정보를 가져오지 못했습니다.';
-        return errorResult(`날씨 조회에 실패했습니다. 위치와 네트워크를 확인하세요. (${message})`);
-      }
-    },
-  );
 
   if (options.includeWorkspaceTools !== false) {
     registerAppTool(

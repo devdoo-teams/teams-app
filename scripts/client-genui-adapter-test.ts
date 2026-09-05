@@ -2,26 +2,22 @@ import { strict as assert } from 'node:assert';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
+import * as toolAdapters from '../src/client/genui/tool-adapters.js';
 import {
   createApprovalResultEnvelope,
   createApprovalToolEnvelope,
   createTaskToolEnvelope,
-  createWeatherToolEnvelope,
   getGenAiBadgeLabel,
 } from '../src/client/genui/tool-adapters.js';
 import { GenUiEnvelopeV1Schema } from '../src/shared/genui.js';
 import { GenUiCard } from '../src/client/genui/GenUiCard.js';
 
-const weatherParameters = {
-  location: '서울',
-  temperature: 22,
-  apparentTemperature: 22.8,
-  humidity: 58,
-  windSpeed: 9.4,
-  precipitation: 0,
-  condition: '맑음',
-  source: 'open-meteo',
-};
+assert.equal(
+  'createWeatherToolEnvelope' in toolAdapters,
+  false,
+  'optional client adapters do not expose removed weather functionality',
+);
+
 const taskParameters = {
   items: [
     { id: 1, title: '첫 업무', status: 'open' as const },
@@ -36,37 +32,6 @@ const approvalParameters = {
   prompt: '테스트 승인 경계',
   action: 'approve' as const,
 };
-
-const weatherLoading = createWeatherToolEnvelope(weatherParameters, 'inProgress');
-assert.equal(weatherLoading.status, 'loading');
-assert.equal(weatherLoading.kind, 'weather');
-assert.deepEqual(weatherLoading.actions, []);
-assert.equal(createWeatherToolEnvelope(weatherParameters, 'executing').status, 'loading');
-
-const weatherComplete = createWeatherToolEnvelope(weatherParameters, 'complete', '도구 응답');
-assert.equal(GenUiEnvelopeV1Schema.parse(weatherComplete).status, 'ready');
-assert.equal(weatherComplete.sections.length, 2);
-const malformedWeather = createWeatherToolEnvelope({ ...weatherParameters, temperature: Number.NaN }, 'complete');
-assert.equal(malformedWeather.kind, 'error');
-assert.equal(malformedWeather.status, 'error');
-assert.equal(malformedWeather.sections[0]?.type, 'status');
-
-const partialWeather = GenUiEnvelopeV1Schema.parse({
-  schemaVersion: '1',
-  kind: 'weather',
-  status: 'ready',
-  id: 'partial-weather',
-  correlationId: 'partial-weather',
-  title: '부분 날씨 데이터',
-  sections: [{ type: 'weather', humidity: 58, windSpeed: 9.4 }],
-  actions: [],
-  citations: [],
-  aiGenerated: false,
-  fallbackText: '부분 날씨 데이터',
-});
-const partialWeatherMarkup = renderToStaticMarkup(React.createElement(GenUiCard, { envelope: partialWeather }));
-assert.match(partialWeatherMarkup, /58%/, 'partial weather data still renders available humidity');
-assert.match(partialWeatherMarkup, /9\.4km\/h/, 'partial weather data still renders available wind');
 
 const duplicateSectionIds = GenUiEnvelopeV1Schema.parse({
   schemaVersion: '1',
@@ -156,20 +121,6 @@ assert.equal(approvalResult.kind, 'result');
 assert.equal(approvalResult.status, 'complete');
 assert.equal(approvalResult.actions.length, 0);
 assert.equal(GenUiEnvelopeV1Schema.parse(approvalResult).kind, 'result');
-
-const adversarialWeather = createWeatherToolEnvelope({
-  location: '위'.repeat(10_000),
-  temperature: Number.MAX_VALUE,
-  apparentTemperature: Number.NEGATIVE_INFINITY,
-  humidity: 1_000,
-  windSpeed: -5,
-  precipitation: -1,
-  condition: '상태'.repeat(1_000),
-  source: '출처'.repeat(1_000),
-}, 'complete');
-assert.equal(GenUiEnvelopeV1Schema.safeParse(adversarialWeather).success, true);
-assert.equal(adversarialWeather.kind, 'error');
-assert.equal(adversarialWeather.status, 'error');
 
 const adversarialTasks = createTaskToolEnvelope({
   items: [{ id: 1.5, title: '업무'.repeat(1_000), status: 'open' }],

@@ -2,6 +2,15 @@ import crypto from 'node:crypto';
 
 import { atomicWriteJson, readAtomicJsonStore } from './atomic-file.js';
 import type { CliAgentProvider } from './cli-agent-runner.js';
+import { isAgentTokenUsage, type AgentTokenUsage } from './agent-token-usage.js';
+import {
+  MAX_AGENT_TOOL_NAME_LENGTH,
+  MAX_OBSERVED_AGENT_TOOLS,
+  mergeObservedToolUsage,
+} from './agent-tool-observation.js';
+import type { CoreAgentToolCategory, CoreAgentToolUsage } from '../shared/core-orchestration.js';
+import type { CoreCodexModelSelection, CoreCodexReasoningEffort } from '../shared/core-orchestration.js';
+import { assertSafeCodexModelSelection } from './codex-model-catalog.js';
 
 export type AgentJobMode = 'read-only' | 'workspace-write';
 export type AgentJobStatus =
@@ -22,6 +31,8 @@ export const MAX_AGENT_COMMIT_MESSAGE_LENGTH = 2_000;
 export const MAX_AGENT_PROGRESS_ENTRIES = 100;
 export const MAX_AGENT_CHANGED_PATH_LENGTH = 512;
 export const MAX_AGENT_CHANGED_PATHS = 256;
+export const MAX_AGENT_IDEMPOTENCY_KEY_LENGTH = 200;
+export const AGENT_REQUEST_HASH_LENGTH = 64;
 
 const AGENT_JOB_STATUSES: readonly AgentJobStatus[] = [
   'queued',
@@ -33,6 +44,7 @@ const AGENT_JOB_STATUSES: readonly AgentJobStatus[] = [
 ];
 const AGENT_JOB_MODES: readonly AgentJobMode[] = ['read-only', 'workspace-write'];
 const AGENT_JOB_PROVIDERS: readonly CliAgentProvider[] = ['codex', 'copilot'];
+const AGENT_TOOL_CATEGORIES: readonly CoreAgentToolCategory[] = ['skill', 'plugin', 'mcp', 'cli', 'builtin'];
 // Preserve the whitespace characters used by normal multi-line Codex output
 // while rejecting the remaining C0/C1 control range in persisted records.
 const CONTROL_CHARACTERS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
@@ -54,22 +66,51 @@ export interface AgentJob {
   requesterId: string;
   /** Missing only on legacy records; scoped access deliberately rejects them. */
   tenantId?: string;
+  idempotencyKey?: string;
+  requestHash?: string;
   parentJobId?: string;
   threadId?: string;
   result?: string;
+  tokenUsage?: AgentTokenUsage;
   commitHash?: string;
   commitMessage?: string;
   changedPaths?: string[];
   error?: string;
   progress: string[];
+  /** Safe, argument-free tool observations. Legacy in-memory fixtures may omit it. */
+  tools?: CoreAgentToolUsage[];
+  /** Immutable exact-Codex selection; omitted for legacy/CLI-default jobs. */
+  model?: string;
+  reasoningEffort?: CoreCodexReasoningEffort;
+  catalogRevision?: string;
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;
 }
 
+export class AgentJobIdempotentReplayError extends Error {
+  constructor(readonly job: AgentJob) {
+    super(`Agent job idempotent replay: ${job.id}`);
+    this.name = 'AgentJobIdempotentReplayError';
+  }
+}
+
+export class AgentJobIdempotencyConflictError extends Error {
+  constructor(readonly idempotencyKey: string) {
+    super(`Agent job idempotency key conflict: ${idempotencyKey}`);
+    this.name = 'AgentJobIdempotencyConflictError';
+  }
+}
+
 export type AgentJobStoreOptions = Readonly<{
   legacyProvider?: CliAgentProvider;
+  durableLedger?: AgentJobDurableLedger;
 }>;
+
+export interface AgentJobDurableLedger {
+  load(): Promise<unknown>;
+  persist(previousJobs: readonly AgentJob[], nextJobs: readonly AgentJob[]): Promise<void>;
+}
 
 export class AgentJobStore {
   private jobs: AgentJob[] = [];
@@ -110,23 +151,33 @@ export class AgentJobStore {
       try {
         let nextJobs: AgentJob[];
         let requiresPersistence = false;
-        try {
-          const raw = await readAtomicJsonStore(this.filePath);
-          const parsed = JSON.parse(raw) as unknown;
-          const loaded = loadJobs(parsed, this.filePath, this.options.legacyProvider);
+        if (this.options.durableLedger) {
+          const loaded = loadJobs(
+            await this.options.durableLedger.load(),
+            'durable AgentJob ledger',
+            this.options.legacyProvider,
+          );
           nextJobs = loaded.jobs.map(cloneAgentJob);
           requiresPersistence = loaded.migrated;
-        } catch (error: any) {
-          if (error?.code !== 'ENOENT') throw error;
-          nextJobs = [];
-          requiresPersistence = true;
+        } else {
+          try {
+            const raw = await readAtomicJsonStore(this.filePath);
+            const parsed = JSON.parse(raw) as unknown;
+            const loaded = loadJobs(parsed, this.filePath, this.options.legacyProvider);
+            nextJobs = loaded.jobs.map(cloneAgentJob);
+            requiresPersistence = loaded.migrated;
+          } catch (error: any) {
+            if (error?.code !== 'ENOENT') throw error;
+            nextJobs = [];
+            requiresPersistence = true;
+          }
         }
 
         // Initialization shares the mutation queue. Readers continue seeing
         // the last durable snapshot, and migrated/new-store state is published
         // only after its atomic write succeeds.
         if (requiresPersistence) {
-          await this.writeAtomicJson(this.filePath, nextJobs.map(cloneAgentJob));
+          await this.persistJobs(previousJobs, nextJobs);
         }
         this.jobs = nextJobs;
         this.initialized = true;
@@ -152,7 +203,14 @@ export class AgentJobStore {
     scope: AgentJobScope;
     parentJobId?: string;
     threadId?: string;
+    idempotencyKey?: string;
+    requestHash?: string;
+    model?: string;
+    reasoningEffort?: CoreCodexReasoningEffort;
+    catalogRevision?: string;
   }): Promise<AgentJob> {
+    validateIdempotencyInput(input.idempotencyKey, input.requestHash);
+    const selection = readSelectionInput(input);
     const job: AgentJob = {
       id: `task-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`,
       prompt: input.prompt,
@@ -162,13 +220,27 @@ export class AgentJobStore {
       conversationId: input.scope.conversationId,
       requesterId: input.scope.requesterId,
       tenantId: input.scope.tenantId,
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey, requestHash: input.requestHash } : {}),
       parentJobId: input.parentJobId,
       threadId: input.threadId,
       progress: [],
+      tools: [],
+      ...(selection ?? {}),
       createdAt: new Date().toISOString(),
     };
 
     return this.enqueueMutation(() => {
+      if (input.idempotencyKey) {
+        const existing = this.jobs.find((candidate) =>
+          matchesScope(candidate, input.scope) && candidate.idempotencyKey === input.idempotencyKey,
+        );
+        if (existing) {
+          if (existing.requestHash === input.requestHash) {
+            throw new AgentJobIdempotentReplayError(cloneAgentJob(existing));
+          }
+          throw new AgentJobIdempotencyConflictError(input.idempotencyKey);
+        }
+      }
       this.jobs = [job, ...this.jobs];
       return cloneAgentJob(job);
     });
@@ -190,10 +262,24 @@ export class AgentJobStore {
   ): AgentJob | undefined {
     const job = this.jobs.find((candidate) =>
       candidate.id === id
-      && candidate.tenantId === principal.tenantId
-      && candidate.requesterId === principal.requesterId,
+      && matchesPrincipal(candidate, principal),
     );
     return job ? cloneAgentJob(job) : undefined;
+  }
+
+  /**
+   * List jobs owned by an authenticated principal across its server-owned
+   * surface conversations. The stored conversation remains part of every
+   * returned job and must be used for subsequent mutations.
+   */
+  listForPrincipal(
+    principal: Pick<AgentJobScope, 'tenantId' | 'requesterId'>,
+    limit = 10,
+  ): AgentJob[] {
+    return this.jobs
+      .filter((job) => matchesPrincipal(job, principal))
+      .slice(0, limit)
+      .map(cloneAgentJob);
   }
 
   list(scope: AgentJobScope, limit = 10): AgentJob[] {
@@ -201,6 +287,20 @@ export class AgentJobStore {
       .filter((job) => matchesScope(job, scope))
       .slice(0, limit)
       .map(cloneAgentJob);
+  }
+
+  resolveIdempotentSubmission(
+    scope: AgentJobScope,
+    idempotencyKey: string,
+    requestHash: string,
+  ): AgentJob | undefined {
+    validateIdempotencyInput(idempotencyKey, requestHash);
+    const job = this.jobs.find((candidate) =>
+      matchesScope(candidate, scope) && candidate.idempotencyKey === idempotencyKey,
+    );
+    if (!job) return undefined;
+    if (job.requestHash !== requestHash) throw new AgentJobIdempotencyConflictError(idempotencyKey);
+    return cloneAgentJob(job);
   }
 
   latestCompletedWithThread(scope: AgentJobScope): AgentJob | undefined {
@@ -225,6 +325,20 @@ export class AgentJobStore {
       if ('provider' in patch && patch.provider !== this.jobs[index].provider) {
         throw new Error('agent job provider identity is immutable');
       }
+      for (const field of ['model', 'reasoningEffort', 'catalogRevision'] as const) {
+        if (field in patch && patch[field] !== this.jobs[index][field]) {
+          throw new Error('agent job Codex model selection is immutable');
+        }
+      }
+      if ('tokenUsage' in patch) {
+        if (patch.tokenUsage !== undefined && !isAgentTokenUsage(patch.tokenUsage)) {
+          throw new Error('agent job token usage is invalid');
+        }
+        const previousTokenUsage = this.jobs[index].tokenUsage;
+        if (previousTokenUsage !== undefined && !sameTokenUsage(previousTokenUsage, patch.tokenUsage)) {
+          throw new Error('agent job token usage is immutable');
+        }
+      }
       if (updated.status === 'completed' && (!updated.result || !updated.result.trim())) {
         throw new Error('completed jobs must contain a result');
       }
@@ -242,6 +356,23 @@ export class AgentJobStore {
       if (job.progress.at(-1) === message) return cloneAgentJob(job);
 
       const updated = { ...job, progress: [...job.progress.slice(-7), message] };
+      this.jobs = this.jobs.map((candidate, jobIndex) => jobIndex === index ? updated : candidate);
+      return cloneAgentJob(updated);
+    });
+  }
+
+  async appendToolUsage(
+    id: string,
+    scope: AgentJobScope,
+    observations: readonly CoreAgentToolUsage[],
+  ): Promise<AgentJob | undefined> {
+    return this.enqueueMutation(() => {
+      const index = this.jobs.findIndex((job) => job.id === id && matchesScope(job, scope));
+      if (index === -1) return undefined;
+      const job = this.jobs[index];
+      const tools = mergeObservedToolUsage(job.tools ?? [], observations);
+      if (tools.length === (job.tools?.length ?? 0)) return cloneAgentJob(job);
+      const updated = { ...job, tools };
       this.jobs = this.jobs.map((candidate, jobIndex) => jobIndex === index ? updated : candidate);
       return cloneAgentJob(updated);
     });
@@ -308,7 +439,7 @@ export class AgentJobStore {
       }
       this.jobs = previousJobs;
       try {
-        await this.writeAtomicJson(this.filePath, nextJobs);
+        await this.persistJobs(previousJobs, nextJobs);
       } catch (error) {
         this.jobs = previousJobs;
         throw error;
@@ -323,6 +454,13 @@ export class AgentJobStore {
   private writeAtomicJson(filePath: string, value: unknown): Promise<void> {
     return (this.testOnlyWriteAtomicJson ?? atomicWriteJson)(filePath, value);
   }
+
+  private persistJobs(previousJobs: readonly AgentJob[], nextJobs: readonly AgentJob[]): Promise<void> {
+    if (this.options.durableLedger) {
+      return this.options.durableLedger.persist(previousJobs, nextJobs);
+    }
+    return this.writeAtomicJson(this.filePath, nextJobs.map(cloneAgentJob));
+  }
 }
 
 function matchesScope(job: AgentJob, scope: AgentJobScope): boolean {
@@ -334,11 +472,22 @@ function matchesScope(job: AgentJob, scope: AgentJobScope): boolean {
     && job.tenantId === scope.tenantId;
 }
 
+function matchesPrincipal(
+  job: AgentJob,
+  principal: Pick<AgentJobScope, 'tenantId' | 'requesterId'>,
+): boolean {
+  return typeof job.tenantId === 'string'
+    && job.requesterId === principal.requesterId
+    && job.tenantId === principal.tenantId;
+}
+
 function cloneAgentJob(job: AgentJob): AgentJob {
   return {
     ...job,
     progress: [...job.progress],
+    ...(job.tools ? { tools: job.tools.map((usage) => ({ ...usage })) } : {}),
     ...(job.changedPaths ? { changedPaths: [...job.changedPaths] } : {}),
+    ...(job.tokenUsage ? { tokenUsage: { ...job.tokenUsage } } : {}),
   };
 }
 
@@ -367,11 +516,39 @@ function loadJobs(
   const loaded = value.map((record, index) => loadJob(record, index, ids, legacyProvider));
   const jobs = loaded.map((entry) => entry.job);
   validateParentScopes(jobs);
+  validateIdempotencyScopes(jobs);
 
   return {
     jobs,
     migrated: loaded.some((entry) => entry.migrated),
   };
+}
+
+function validateIdempotencyInput(idempotencyKey?: string, requestHash?: string): void {
+  if (Boolean(idempotencyKey) !== Boolean(requestHash)) {
+    throw new Error('agent job idempotencyKey and requestHash must be present together');
+  }
+  if (!idempotencyKey) return;
+  if (idempotencyKey.length > MAX_AGENT_IDEMPOTENCY_KEY_LENGTH
+    || idempotencyKey.trim() !== idempotencyKey
+    || CONTROL_CHARACTERS.test(idempotencyKey)) {
+    CONTROL_CHARACTERS.lastIndex = 0;
+    throw new Error('agent job idempotencyKey is invalid');
+  }
+  CONTROL_CHARACTERS.lastIndex = 0;
+  if (!requestHash || !/^[a-f0-9]{64}$/u.test(requestHash)) {
+    throw new Error('agent job requestHash must be a lowercase SHA-256 digest');
+  }
+}
+
+function validateIdempotencyScopes(jobs: readonly AgentJob[]): void {
+  const keys = new Set<string>();
+  for (const [index, job] of jobs.entries()) {
+    if (!job.idempotencyKey) continue;
+    const key = JSON.stringify([job.tenantId, job.requesterId, job.conversationId, job.idempotencyKey]);
+    if (keys.has(key)) throw invalidJob(index, 'idempotencyKey must be unique within its scope');
+    keys.add(key);
+  }
 }
 
 function loadJob(
@@ -417,6 +594,23 @@ function loadJob(
   const tenantId = hasOwn(value, 'tenantId')
     ? readRequiredText(value.tenantId, 'tenantId', MAX_AGENT_SCOPE_VALUE_LENGTH, index, false).value
     : undefined;
+  const idempotencyKey = readOptionalText(
+    value,
+    'idempotencyKey',
+    MAX_AGENT_IDEMPOTENCY_KEY_LENGTH,
+    index,
+    legacy,
+  );
+  const requestHash = readOptionalText(value, 'requestHash', AGENT_REQUEST_HASH_LENGTH, index, legacy);
+  if (Boolean(idempotencyKey.value) !== Boolean(requestHash.value)) {
+    throw invalidJob(index, 'idempotencyKey and requestHash must be present together');
+  }
+  if (idempotencyKey.value && idempotencyKey.value.trim() !== idempotencyKey.value) {
+    throw invalidJob(index, 'idempotencyKey must not contain surrounding whitespace');
+  }
+  if (requestHash.value && !/^[a-f0-9]{64}$/u.test(requestHash.value)) {
+    throw invalidJob(index, 'requestHash must be a lowercase SHA-256 digest');
+  }
 
   const parentJobId = readOptionalText(
     value,
@@ -427,6 +621,7 @@ function loadJob(
   );
   const threadId = readOptionalText(value, 'threadId', MAX_AGENT_JOB_ID_LENGTH, index, legacy);
   const result = readOptionalText(value, 'result', MAX_AGENT_RESULT_LENGTH, index, legacy);
+  const tokenUsage = readTokenUsage(value, index);
   const commitHash = readOptionalText(value, 'commitHash', MAX_AGENT_JOB_ID_LENGTH, index, legacy);
   const commitMessage = readOptionalText(
     value,
@@ -438,6 +633,13 @@ function loadJob(
   const changedPaths = readChangedPaths(value, index, legacy);
   let error = readOptionalText(value, 'error', MAX_AGENT_ERROR_LENGTH, index, legacy);
   const progress = readProgress(value, index, legacy);
+  const tools = readTools(value, index);
+  let selection: CoreCodexModelSelection | undefined;
+  try {
+    selection = readSelectionInput(value);
+  } catch (error) {
+    throw invalidJob(index, error instanceof Error ? error.message : 'Codex model selection is invalid');
+  }
   const createdAt = readTimestamp(value.createdAt, 'createdAt', index, legacy);
   const startedAt = readOptionalTimestamp(value, 'startedAt', index, legacy);
   const finishedAt = readOptionalTimestamp(value, 'finishedAt', index, legacy);
@@ -456,6 +658,8 @@ function loadJob(
     prompt.migrated,
     conversationId.migrated,
     requesterId.migrated,
+    idempotencyKey.migrated,
+    requestHash.migrated,
     parentJobId.migrated,
     threadId.migrated,
     result.migrated,
@@ -464,6 +668,7 @@ function loadJob(
     changedPaths.migrated,
     error.migrated,
     progress.migrated,
+    tools.migrated,
     createdAt.migrated,
     startedAt.migrated,
     finishedAt.migrated,
@@ -478,20 +683,83 @@ function loadJob(
     conversationId: conversationId.value,
     requesterId: requesterId.value,
     ...(tenantId ? { tenantId } : {}),
+    ...(idempotencyKey.value ? { idempotencyKey: idempotencyKey.value, requestHash: requestHash.value } : {}),
     ...(parentJobId.value ? { parentJobId: parentJobId.value } : {}),
     ...(threadId.value ? { threadId: threadId.value } : {}),
     ...(result.value ? { result: result.value } : {}),
+    ...(tokenUsage ? { tokenUsage } : {}),
     ...(commitHash.value ? { commitHash: commitHash.value } : {}),
     ...(commitMessage.value ? { commitMessage: commitMessage.value } : {}),
     ...(changedPaths.value ? { changedPaths: changedPaths.value } : {}),
     ...(error.value ? { error: error.value } : {}),
     progress: progress.value,
+    tools: tools.value,
+    ...(selection ?? {}),
     createdAt: createdAt.value,
     ...(startedAt.value ? { startedAt: startedAt.value } : {}),
     ...(finishedAt.value ? { finishedAt: finishedAt.value } : {}),
   };
 
   return { job, migrated };
+}
+
+function readSelectionInput(value: Readonly<{
+  model?: unknown;
+  reasoningEffort?: unknown;
+  catalogRevision?: unknown;
+}>): CoreCodexModelSelection | undefined {
+  const present = [value.model, value.reasoningEffort, value.catalogRevision]
+    .filter((field) => field !== undefined).length;
+  if (present === 0) return undefined;
+  if (present !== 3) throw new Error('agent job Codex model selection must be complete');
+  return assertSafeCodexModelSelection({
+    model: value.model as string,
+    reasoningEffort: value.reasoningEffort as CoreCodexReasoningEffort,
+    catalogRevision: value.catalogRevision as string,
+  });
+}
+
+function readTokenUsage(value: JobRecord, index: number): AgentTokenUsage | undefined {
+  if (!hasOwn(value, 'tokenUsage') || value.tokenUsage === undefined) return undefined;
+  if (!isAgentTokenUsage(value.tokenUsage)) throw invalidJob(index, 'token usage is invalid');
+  return { ...value.tokenUsage };
+}
+
+function sameTokenUsage(
+  left: AgentTokenUsage,
+  right: AgentTokenUsage | undefined,
+): boolean {
+  return right !== undefined
+    && left.source === right.source
+    && left.inputTokens === right.inputTokens
+    && left.cachedInputTokens === right.cachedInputTokens
+    && left.cacheWriteInputTokens === right.cacheWriteInputTokens
+    && left.outputTokens === right.outputTokens
+    && left.reasoningOutputTokens === right.reasoningOutputTokens;
+}
+
+function readTools(value: JobRecord, index: number): LoadedValue<CoreAgentToolUsage[]> {
+  if (!hasOwn(value, 'tools')) return { value: [], migrated: true };
+  if (!Array.isArray(value.tools)) throw invalidJob(index, 'tools must be an array');
+  if (value.tools.length > MAX_OBSERVED_AGENT_TOOLS) {
+    throw invalidJob(index, `tools must contain ${MAX_OBSERVED_AGENT_TOOLS} entries or fewer`);
+  }
+  const tools: CoreAgentToolUsage[] = [];
+  const seen = new Set<string>();
+  for (const [toolIndex, raw] of value.tools.entries()) {
+    if (!isRecord(raw)) throw invalidJob(index, `tools[${toolIndex}] must be an object`);
+    const category = readEnum(raw.category, `tools[${toolIndex}].category`, AGENT_TOOL_CATEGORIES, index);
+    const name = readText(raw.name, `tools[${toolIndex}].name`, MAX_AGENT_TOOL_NAME_LENGTH, index, false, true).value;
+    if (!/^[a-z0-9][a-z0-9._:+-]*(?:\/[a-z0-9][a-z0-9._:+-]*)?$/iu.test(name)) {
+      throw invalidJob(index, `tools[${toolIndex}].name is invalid`);
+    }
+    const observedAt = readTimestamp(raw.observedAt, `tools[${toolIndex}].observedAt`, index, false).value;
+    const key = `${category}:${name}`;
+    if (seen.has(key)) throw invalidJob(index, 'tools entries must be unique');
+    seen.add(key);
+    tools.push({ category, name, observedAt });
+  }
+  return { value: tools, migrated: false };
 }
 
 function readChangedPaths(

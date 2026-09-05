@@ -117,17 +117,6 @@ function itemElements(items: GenUiItem[]): AdaptiveCardElement[] {
   });
 }
 
-function weatherIcon(icon: string | undefined): string {
-  switch (icon) {
-    case 'rain': return '🌧️';
-    case 'cloud': return '☁️';
-    case 'fog': return '🌫️';
-    case 'snow': return '❄️';
-    case 'storm': return '⛈️';
-    default: return '☀️';
-  }
-}
-
 const STATUS_PRESENTATION: Record<GenUiState, {
   label: string;
   color: 'Accent' | 'Good' | 'Warning' | 'Attention';
@@ -154,35 +143,6 @@ function renderStatusBadge(status: GenUiState): AdaptiveCardElement {
   };
 }
 
-function weatherElements(section: Extract<GenUiSection, { type: 'weather' }>): AdaptiveCardElement[] {
-  const temperature = section.temperature === undefined ? undefined : `${section.temperature.toFixed(1)}°C`;
-  const details: GenUiFact[] = [];
-  if (section.apparentTemperature !== undefined) details.push({ label: '체감', value: section.apparentTemperature, unit: '°C' });
-  if (section.humidity !== undefined) details.push({ label: '습도', value: section.humidity, unit: '%' });
-  if (section.windSpeed !== undefined) details.push({ label: '바람', value: section.windSpeed, unit: 'km/h' });
-  if (section.precipitation !== undefined) details.push({ label: '강수', value: section.precipitation, unit: 'mm' });
-
-  return [
-    {
-      type: 'ColumnSet',
-      columns: [
-        { type: 'Column', width: 'auto', items: [textBlock(weatherIcon(section.icon), { size: 'ExtraLarge' })] },
-        {
-          type: 'Column',
-          width: 'stretch',
-          items: [
-            ...(temperature ? [textBlock(temperature, { size: 'ExtraLarge', weight: 'Bolder', color: 'Accent' })] : []),
-            ...(section.condition ? [textBlock(section.condition, { isSubtle: true })] : []),
-          ],
-        },
-      ],
-      spacing: 'Small',
-    },
-    ...(details.length > 0 ? [factSet(details)] : []),
-    ...(section.location ? [textBlock(`${section.location}${section.source ? ` · ${section.source}` : ''}`, { isSubtle: true })] : []),
-  ];
-}
-
 function sectionElements(section: GenUiSection, canonicalStatus?: GenUiState): AdaptiveCardElement[] {
   switch (section.type) {
     case 'text':
@@ -197,8 +157,6 @@ function sectionElements(section: GenUiSection, canonicalStatus?: GenUiState): A
       ];
     case 'stats':
       return [factSet(section.stats)];
-    case 'weather':
-      return weatherElements(section);
     case 'list':
       return section.items.length > 0 ? itemElements(section.items) : [textBlock('표시할 항목이 없습니다.', { isSubtle: true })];
     case 'progress':
@@ -460,14 +418,6 @@ function sectionText(section: GenUiSection, canonicalStatus?: GenUiState): strin
       ].filter((value): value is string => Boolean(value));
     case 'stats':
       return section.stats.map((fact) => `${fact.label}: ${scalarText(fact.value)}${fact.unit ? ` ${fact.unit}` : ''}`);
-    case 'weather':
-      return [
-        section.location,
-        section.temperature === undefined ? undefined : `${section.temperature.toFixed(1)}°C${section.condition ? ` · ${section.condition}` : ''}`,
-        section.apparentTemperature === undefined ? undefined : `체감 ${section.apparentTemperature.toFixed(1)}°C`,
-        section.humidity === undefined ? undefined : `습도 ${Math.round(section.humidity)}%`,
-        section.windSpeed === undefined ? undefined : `바람 ${section.windSpeed.toFixed(1)}km/h`,
-      ].filter((value): value is string => Boolean(value));
     case 'list':
       return section.items.map((item) => `- ${item.label}${item.value === undefined ? '' : `: ${scalarText(item.value)}`}`);
     case 'progress':

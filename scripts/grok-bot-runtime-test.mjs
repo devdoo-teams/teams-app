@@ -180,7 +180,6 @@ try {
     AGENT_WORKSPACE: root,
     CODEX_BIN: process.execPath,
     CODEX_SCRIPT: path.join(root, 'scripts/fake-codex.mjs'),
-    WEATHER_MODE: 'demo',
     TEAMS_OPTIONAL_RUNTIME: 'true',
     XAI_API_KEY: xaiKey,
     XAI_LOOPBACK_TEST_KEY: loopbackKey,
@@ -245,6 +244,11 @@ try {
   assert.equal(xaiRequests.length, 1);
   assert.equal(xaiRequests[0].body.model, 'grok-runtime-model');
   assert.equal(xaiRequests[0].body.input.at(-1).role, 'user');
+  assert.deepEqual(
+    xaiRequests[0].body.tools.map((tool) => tool.name),
+    ['showTaskCard', 'workspaceApproval'],
+  );
+  assert.doesNotMatch(xaiRequests[0].body.instructions, /날씨|weather|현재 위치|Open-Meteo/i);
   assert.equal(xaiRequests[0].headers.authorization, `Bearer ${loopbackKey}`);
   assert.notEqual(xaiRequests[0].headers.authorization, `Bearer ${xaiKey}`);
 

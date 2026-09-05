@@ -51,7 +51,12 @@ import {
   ResponseEngineRouter,
   type ResponseEngineInput,
 } from './response-engine.js';
-import { DeterministicResponseEngine } from './response-engine-deterministic.js';
+import {
+  coreOrchestrationCommandHelp,
+  DeterministicResponseEngine,
+  parseCoreOrchestrationChatCommand,
+  type CoreOrchestrationChatCommand,
+} from './response-engine-deterministic.js';
 import { ResponseModeStore } from './response-mode-store.js';
 import {
   createResponseModeCardActivity,
@@ -59,9 +64,16 @@ import {
   parseResponseModeCardAction,
   type PublicResponseModeAvailability,
 } from './response-mode-card.js';
-import { formatWeatherMessage, getWeather } from './weather-service.js';
 import { GenUiActionStore, type GenUiActionName } from './genui-action-store.js';
-import { GenUiResponseFactory } from './genui-response.js';
+import {
+  GenUiResponseFactory,
+  createCoreOrchestrationConfirmationActivity,
+  createCoreOrchestrationJobActivity,
+  createCoreOrchestrationListActivity,
+  createCoreOrchestrationModelSelectionActivity,
+  createCoreOrchestrationReasoningSelectionActivity,
+  type CoreOrchestrationTeamsActivity,
+} from './genui-response.js';
 import {
   createA2AProviderFacts,
   type A2AProviderFact,
@@ -131,6 +143,8 @@ import {
   resolveA2ARemotePeerCredentials,
   type A2ARemotePeerCredential,
 } from './a2a-remote-roster.js';
+import { createConfiguredHermesA2AAgents } from './hermes-a2a-registration.js';
+import { FileProviderLifecycleStore } from './provider-lifecycle-runner.js';
 import { A2A_CAPABILITIES, A2A_ROLE_CATALOG } from './a2a-role-catalog.js';
 import { selectTeamsA2AChatRoles } from './a2a-collaboration-plan.js';
 import {
@@ -147,6 +161,46 @@ import {
   type McpAuthConfig,
 } from './mcp-auth-config.js';
 import { mountMcpAuthenticatedBoundary } from './mcp-authenticated-route.js';
+import { resolveAzureReleaseIdentity } from './azure-release-identity.js';
+import { createRuntimeStore } from './storage/runtime-store-factory.js';
+import { RuntimeStoreAgentJobLedger } from './storage/agent-job-durable-ledger.js';
+import {
+  type RuntimeStore,
+} from './storage/runtime-store.js';
+import {
+  createRuntimeStoreAgentDispatchStatePort,
+  createRuntimeStoreLegacyDispatchMigration,
+} from './storage/agent-dispatch-state-port.js';
+import { createRuntimeStoreCodexWorkerCatalogPort } from './storage/codex-worker-catalog-port.js';
+import type { AgentExecutionDispatcher, AgentExecutionObservation } from './agent-service.js';
+import {
+  createAgentDispatchSubmissionPort,
+  createAgentDispatchTaskFromJob,
+  createAgentDispatchTaskReferenceFromJob,
+} from './queue/agent-dispatch-queue.js';
+import {
+  AzureAgentDispatchQueue,
+  createProductionAzureQueueClient,
+} from './azure-agent-dispatch-queue.js';
+import {
+  CoreOrchestrationService,
+  createServerDerivedCoreScope,
+  type CoreInputResumeObservation,
+  type CoreInputResumePort,
+} from './core-orchestration-service.js';
+import { mountCoreOrchestrationRoutes } from './core-orchestration-route.js';
+import {
+  CoreOrchestrationProviderCapabilityError,
+  CoreOrchestrationProviderUnavailableError,
+  CoreOrchestrationValidationError,
+} from '../shared/core-orchestration.js';
+import { loadCodexModelCatalog } from './codex-model-catalog.js';
+import type {
+  CoreCodexReasoningEffort,
+  CoreOrchestrationJob,
+  CoreOrchestrationProvider,
+  CoreProviderFact,
+} from '../shared/core-orchestration.js';
 
 /**
  * Same-UID process fixture for token-protected loopback integration tests.
@@ -168,6 +222,47 @@ class UnsafeLoopbackTestIsolationProvider extends AgentIsolationProvider {
       spawn: (command, args, options) => spawn(command, [...args], options as any),
     });
   }
+}
+
+function createUnmigratedRuntimeCompatibilityStore(): RuntimeStore {
+  const unavailable = async (): Promise<never> => {
+    throw new Error('Shared runtime storage is not active while TEAMS_STORAGE_BACKEND=file.');
+  };
+  return { read: unavailable, list: unavailable, write: unavailable };
+}
+
+function createQueueExecutionDispatcher(
+  queue: AzureAgentDispatchQueue,
+): AgentExecutionDispatcher {
+  const submission = createAgentDispatchSubmissionPort(queue);
+  return {
+    kind: 'azure-queue',
+    async dispatch(job) {
+      await submission.enqueue(createAgentDispatchTaskFromJob(job));
+    },
+    async observe(job): Promise<AgentExecutionObservation | undefined> {
+      const record = await submission.observe(createAgentDispatchTaskReferenceFromJob(job));
+      if (!record) return undefined;
+      const tools = record.checkpoint?.tools;
+      if (record.status === 'leased') return { status: 'running', ...(tools?.length ? { tools } : {}) };
+      if (record.status === 'completed') {
+        return {
+          status: 'completed',
+          result: record.receipt?.result,
+          providerExecutionId: record.receipt?.providerExecutionId,
+          ...(record.receipt?.tokenUsage ? { tokenUsage: record.receipt.tokenUsage } : {}),
+          ...(tools?.length ? { tools } : {}),
+        };
+      }
+      if (record.status === 'failed') return { status: 'failed', error: record.error?.message, ...(tools?.length ? { tools } : {}) };
+      if (record.status === 'cancelled') return { status: 'cancelled', ...(tools?.length ? { tools } : {}) };
+      if (record.status === 'quarantined') return { status: 'quarantined', error: record.quarantineReason, ...(tools?.length ? { tools } : {}) };
+      return { status: 'queued', ...(tools?.length ? { tools } : {}) };
+    },
+    async cancel(job, reason) {
+      await submission.requestCancellation(createAgentDispatchTaskReferenceFromJob(job), reason);
+    },
+  };
 }
 
 const port = Number(process.env.PORT ?? 3978);
@@ -199,12 +294,23 @@ const agentAdmissionJournalPath = process.env.AGENT_ADMISSION_JOURNAL_PATH ?? pa
 const genUiActionStorePath = process.env.GENUI_ACTION_STORE_PATH ?? path.resolve(process.cwd(), 'data/genui-actions.json');
 const responseModeStorePath = process.env.RESPONSE_MODE_STORE_PATH ?? path.resolve(process.cwd(), 'data/response-modes.json');
 const providerMutationReplayStorePath = process.env.PROVIDER_MUTATION_REPLAY_STORE_PATH ?? path.resolve(process.cwd(), 'data/provider-mutation-replay.json');
+const providerLifecycleStorePath = process.env.PROVIDER_LIFECYCLE_STORE_PATH ?? path.resolve(process.cwd(), 'data/provider-lifecycle.json');
+const remoteA2ARoster = parseA2ARemotePeerRoster(process.env.TEAMS_A2A_REMOTE_AGENTS);
+const hermesA2ARoster = Object.freeze(remoteA2ARoster.filter((peer) => peer.kind === 'hermes'));
 const configuredAgentProvider = process.env.TEAMS_AGENT_CLI_PROVIDER?.trim() || 'codex';
 if (configuredAgentProvider !== 'codex' && configuredAgentProvider !== 'copilot') {
   throw new Error('TEAMS_AGENT_CLI_PROVIDER must be either codex or copilot.');
 }
 const agentProvider = configuredAgentProvider;
 const agentLabel = agentProvider === 'copilot' ? 'GitHub Copilot CLI' : 'Codex CLI';
+const storageBackend = process.env.TEAMS_STORAGE_BACKEND?.trim().toLowerCase() || 'file';
+const agentDispatchMode = process.env.TEAMS_AGENT_DISPATCH_MODE?.trim() || 'local';
+if (agentDispatchMode !== 'local' && agentDispatchMode !== 'azure-queue') {
+  throw new Error('TEAMS_AGENT_DISPATCH_MODE must be either local or azure-queue.');
+}
+const azureQueueDispatch = agentDispatchMode === 'azure-queue';
+const optionalRuntimeRequested = process.env.TEAMS_CORE_BUILD !== 'true'
+  && process.env.TEAMS_OPTIONAL_RUNTIME === 'true';
 const itemStore = new ItemStore(
   itemStorePath,
 );
@@ -254,21 +360,23 @@ const publishWorkItemChange = async (change: WorkItemChange): Promise<void> => {
 const workItemService = new WorkItemService(new WorkItemStore(workItemStorePath), {
   onChanged: publishWorkItemChange,
 });
-const agentJobStore = new AgentJobStore(
-  agentJobStorePath,
-  { legacyProvider: agentProvider },
-);
+let agentJobStore: AgentJobStore;
 const a2aStore = new A2AStore(a2aStorePath);
 const a2aOutboundStore = new TeamsA2AOutboundStore(a2aOutboundStorePath);
-const codexRunner = new ProviderNeutralAgentRunner({ provider: agentProvider });
+const providerLifecycleStore = hermesA2ARoster.length > 0 || optionalRuntimeRequested
+  ? new FileProviderLifecycleStore(providerLifecycleStorePath)
+  : undefined;
+const codexRunner = azureQueueDispatch
+  ? undefined
+  : new ProviderNeutralAgentRunner({ provider: agentProvider });
 const a2aAgentProviders = parseAgentProviders(
   process.env.TEAMS_A2A_AGENT_PROVIDERS,
   agentProvider,
 );
 const providerRunners: Partial<Record<CliAgentProvider, ProviderNeutralAgentRunner>> = {
-  [agentProvider]: codexRunner,
+  ...(codexRunner ? { [agentProvider]: codexRunner } : {}),
 };
-for (const configuredAgent of a2aAgentProviders) {
+for (const configuredAgent of azureQueueDispatch ? [] : a2aAgentProviders) {
   if (!providerRunners[configuredAgent.provider]) {
     providerRunners[configuredAgent.provider] = new ProviderNeutralAgentRunner({ provider: configuredAgent.provider });
   }
@@ -302,7 +410,12 @@ const operatorAllowlist = parseOperatorAllowlist(
 const unsafeTestProcessIsolation = safeLocal
   && process.env.NODE_ENV === 'test'
   && process.env.TEAMS_TEST_PROCESS_ISOLATION === 'true';
-const agentExecutionPolicy = unsafeTestProcessIsolation
+const agentExecutionPolicy = azureQueueDispatch
+  ? new AgentExecutionPolicy(agentWorkspace, {
+      canMutateScope: (scope) => isOperator(scope),
+      canReadScope: (scope) => isOperator(scope),
+    })
+  : unsafeTestProcessIsolation
   ? new AgentExecutionPolicy(agentWorkspace, {
       isolationProvider: new UnsafeLoopbackTestIsolationProvider(),
       canMutateScope: (scope) => isOperator(scope),
@@ -358,7 +471,9 @@ async function runA2ANativePreflight(policy: AgentExecutionPolicy): Promise<A2AW
   }
 }
 
-const legacyExecutionReadiness = baseExecutionReadiness.state === 'configured' && isProduction
+const legacyExecutionReadiness = azureQueueDispatch
+  ? { state: 'unavailable' as const, reason: 'external-worker-dispatch' as const }
+  : baseExecutionReadiness.state === 'configured' && isProduction
   && (await runA2ANativePreflight(agentExecutionPolicy)).state === 'unavailable'
   ? { state: 'unavailable' as const, reason: 'isolation-unavailable' as const }
   : baseExecutionReadiness;
@@ -374,7 +489,7 @@ const a2aCodexOrdinals = Object.freeze([
 ]);
 const a2aCodexProfileByOrdinal = new Map<number, A2ACodexExecutionProfile>();
 const a2aCodexProfileErrors = new Map<number, string>();
-if (isProduction && a2aCodexOrdinals.length > 0) {
+if (!azureQueueDispatch && isProduction && a2aCodexOrdinals.length > 0) {
   const resolvedProfiles = await Promise.all(a2aCodexOrdinals.map(async (ordinal) => {
     try {
       const [profile] = await createA2ACodexExecutionProfiles({ ordinals: [ordinal] });
@@ -415,7 +530,9 @@ for (const configuredAgent of a2aAgentProviders) {
   let policy: AgentExecutionPolicy | undefined;
   let unavailableReason: string | undefined;
 
-  if (!isProduction && unsafeTestProcessIsolation) {
+  if (azureQueueDispatch) {
+    unavailableReason = 'external-worker-dispatch';
+  } else if (!isProduction && unsafeTestProcessIsolation) {
     policy = new AgentExecutionPolicy(agentWorkspace, {
       isolationProvider: new UnsafeLoopbackTestIsolationProvider(),
       canMutateScope: (scope) => isOperator(scope),
@@ -527,6 +644,11 @@ const serverBuildIdentity = (() => {
     return unavailable;
   }
 })();
+const azureReleaseIdentity = resolveAzureReleaseIdentity(process.env, {
+  appVersion,
+  sourceCommit: serverBuildIdentity.sourceCommit,
+  serverBundleSha256: serverBuildIdentity.serverBundleSha256,
+});
 // The core artifact must not carry optional MCP/CopilotKit runtime graphs. A
 // normal source/optional build keeps MCP behind either the loopback-only local
 // gate or an explicit authenticated-provider contract; the `--core` bundle
@@ -535,33 +657,25 @@ const coreBuild = process.env.TEAMS_CORE_BUILD === 'true';
 // Optional CopilotKit/LLM runtime is explicitly opt-in in every environment.
 // The deterministic Teams Bot and tab must start without an OpenAI/API key and
 // must not load an optional provider graph merely because the process is local.
-const optionalRuntimeEnabled = process.env.TEAMS_CORE_BUILD !== 'true'
-  && process.env.TEAMS_OPTIONAL_RUNTIME === 'true';
+const optionalRuntimeEnabled = optionalRuntimeRequested;
 const genUiMode = process.env.TEAMS_GENUI_MODE === 'legacy' || process.env.TEAMS_GENUI_MODE === 'channels-shadow'
   ? process.env.TEAMS_GENUI_MODE
   : 'hybrid';
-const openAiConfigured = process.env.TEAMS_CORE_BUILD !== 'true'
-  && optionalRuntimeEnabled
-  && Boolean(process.env.OPENAI_API_KEY?.trim());
-const grokConfigured = process.env.TEAMS_CORE_BUILD !== 'true'
-  && optionalRuntimeEnabled
-  && Boolean(process.env.XAI_API_KEY?.trim());
+type OptionalRuntimeLoaderResult = import('./optional-runtime-loader.js').OptionalRuntimeLoaderResult;
+let optionalRuntime: OptionalRuntimeLoaderResult | undefined;
 let optionalResponseEngines: Array<import('./response-engine.js').ResponseEngine> = [];
 let localModelConfigured = false;
-if (process.env.TEAMS_CORE_BUILD !== 'true' && optionalRuntimeEnabled) {
-  const [{ LocalCompatibleResponseEngine }, { OpenAIResponseEngine }, { GrokResponseEngine }, { isLocalModelBaseUrlConfigured }] = await Promise.all([
-    import('./response-engine-local.js'),
-    import('./response-engine-openai.js'),
-    import('./response-engine-grok.js'),
-    import('./local-model-url.js'),
-  ]);
-  localModelConfigured = isLocalModelBaseUrlConfigured(process.env.LOCAL_MODEL_BASE_URL);
-  optionalResponseEngines = [
-    ...(localModelConfigured ? [new LocalCompatibleResponseEngine()] : []),
-    ...(openAiConfigured ? [new OpenAIResponseEngine()] : []),
-    ...(grokConfigured ? [new GrokResponseEngine()] : []),
-  ];
+if (optionalRuntimeEnabled) {
+  const { loadOptionalRuntime } = await import('./optional-runtime-loader.js');
+  optionalRuntime = await loadOptionalRuntime({
+    environment: process.env,
+    ...(providerLifecycleStore === undefined ? {} : { lifecycleStore: providerLifecycleStore }),
+  });
+  localModelConfigured = optionalRuntime.localModelConfigured;
+  optionalResponseEngines = [...optionalRuntime.responseEngines];
 }
+const openAiConfigured = optionalRuntime?.openAiConfigured === true;
+const grokConfigured = optionalRuntimeEnabled && optionalRuntime?.grokConfigured === true;
 type ChannelsShadowRenderer = typeof import('./copilot-channels-shadow.js')['renderChannelsShadow'];
 let renderChannelsShadow: ChannelsShadowRenderer | undefined;
 if (process.env.TEAMS_CORE_BUILD !== 'true' && optionalRuntimeEnabled && genUiMode === 'channels-shadow') {
@@ -575,6 +689,7 @@ const personalTabDeepLink = buildTeamsPersonalTabDeepLink({
   tabDomain: process.env.TAB_DOMAIN ?? '',
   tenantId: configuredTenantId || undefined,
 });
+const coreOrchestrationCardOptions = Object.freeze({ openTabUrl: personalTabDeepLink });
 const genUi = new GenUiResponseFactory(genUiActionStore, {
   openTabUrl: personalTabDeepLink,
   agentLabel,
@@ -585,11 +700,10 @@ const openAiModel = process.env.TEAMS_CORE_BUILD === 'true'
   : process.env.OPENAI_MODEL?.trim() || 'gpt-4o-mini';
 const grokModel = process.env.TEAMS_CORE_BUILD === 'true'
   ? 'deterministic'
-  : process.env.XAI_MODEL?.trim() || 'grok-4.6';
+  : optionalRuntime?.responseModel || process.env.XAI_MODEL?.trim() || 'grok-4.6';
 const localModelName = process.env.TEAMS_CORE_BUILD === 'true'
   ? 'local-model'
   : process.env.LOCAL_MODEL_NAME?.trim() || 'local-model';
-const weatherMode = process.env.WEATHER_MODE === 'demo' ? 'demo' : 'live';
 const responseProviders = {
   deterministic: true,
   openai: optionalRuntimeEnabled && openAiConfigured,
@@ -701,21 +815,18 @@ if (isProduction && skipAuth) {
   throw new Error('TEAMS_SKIP_AUTH must not be enabled in production.');
 }
 
-if (isProduction && weatherMode === 'demo') {
-  throw new Error('WEATHER_MODE=demo is forbidden in production.');
-}
-
 let storeProcessLease: StoreProcessLease | undefined;
 storeProcessLease = await acquireStoreProcessLease([
   itemStorePath,
   workItemStorePath,
   collaborationStorePath,
-  agentJobStorePath,
+  ...(azureQueueDispatch ? [] : [agentJobStorePath]),
   a2aStorePath,
   a2aOutboundStorePath,
   agentAdmissionJournalPath,
   genUiActionStorePath,
   responseModeStorePath,
+  ...(providerLifecycleStore ? [providerLifecycleStorePath] : []),
 ]);
 process.once('exit', () => storeProcessLease?.releaseSync());
 
@@ -726,6 +837,37 @@ await a2aStore.initialize();
 await a2aOutboundStore.initialize();
 await genUiActionStore.initialize();
 await responseModeStore.initialize();
+await providerLifecycleStore?.initialize();
+
+const runtimeStore = await createRuntimeStore({
+  env: process.env,
+  fileStore: createUnmigratedRuntimeCompatibilityStore(),
+});
+const codexWorkerCatalogPort = azureQueueDispatch
+  ? createRuntimeStoreCodexWorkerCatalogPort(runtimeStore)
+  : undefined;
+const agentJobDurableLedger = azureQueueDispatch
+  ? new RuntimeStoreAgentJobLedger(runtimeStore)
+  : undefined;
+agentJobStore = new AgentJobStore(
+  agentJobStorePath,
+  { legacyProvider: agentProvider, durableLedger: agentJobDurableLedger },
+);
+let agentExecutionDispatcher: AgentExecutionDispatcher | undefined;
+let azureAgentDispatchQueue: AzureAgentDispatchQueue | undefined;
+if (azureQueueDispatch) {
+  if (storageBackend !== 'cosmos') {
+    throw new Error('TEAMS_AGENT_DISPATCH_MODE=azure-queue requires TEAMS_STORAGE_BACKEND=cosmos.');
+  }
+  const queueClient = createProductionAzureQueueClient({ env: process.env });
+  const queue = new AzureAgentDispatchQueue(
+    queueClient,
+    createRuntimeStoreAgentDispatchStatePort(runtimeStore),
+    { legacyMigration: createRuntimeStoreLegacyDispatchMigration(runtimeStore) },
+  );
+  azureAgentDispatchQueue = queue;
+  agentExecutionDispatcher = createQueueExecutionDispatcher(queue);
+}
 
 const coreResponseEngine = new DeterministicResponseEngine();
 const configuredResponseEngines = [coreResponseEngine, ...optionalResponseEngines];
@@ -872,6 +1014,25 @@ function restScope(request: any, response: any): { scope?: AgentJobScope; status
   };
 }
 
+function coreOrchestrationRestScope(_request: any, response: any): AgentJobScope | undefined {
+  const claims = asRecord(response.locals?.user) as UserClaims | undefined;
+  const requesterId = nonEmptyString(claims?.requesterId) ?? nonEmptyString(claims?.oid) ?? nonEmptyString(claims?.sub);
+  const tenantId = nonEmptyString(claims?.tid);
+  if (skipAuth && !claims) {
+    const local = localRestScope();
+    return {
+      ...local,
+      conversationId: deriveServerOwnedRestConversationId(local),
+    };
+  }
+  if (!requesterId || !tenantId) return undefined;
+  return {
+    requesterId,
+    tenantId,
+    conversationId: deriveServerOwnedRestConversationId({ tenantId, requesterId }),
+  };
+}
+
 function restPrincipal(request: any, response: any): { principal?: { requesterId: string; tenantId: string }; status?: number; error?: string } {
   const claims = asRecord(response.locals?.user) as UserClaims | undefined;
   const requesterId = nonEmptyString(claims?.requesterId) ?? nonEmptyString(claims?.oid) ?? nonEmptyString(claims?.sub);
@@ -991,7 +1152,7 @@ function envelopeText(envelope: GenUiEnvelopeV1): string {
 }
 
 async function buildStatusEnvelope(): Promise<GenUiEnvelopeV1> {
-  const capabilities = await probeCliCapabilities();
+  const capabilities = azureQueueDispatch ? unknownCliCapabilities() : await probeCliCapabilities();
   return genUi.status({
     teamsSdk: Boolean(teamsApp),
     environment: isProduction ? 'production' : 'local',
@@ -1393,7 +1554,7 @@ if (teamsApp && loopbackOnly) {
 
 if (safeLocal) {
   // Static tab assets and policy pages are intentionally public. Everything
-  // else, including health, Bot, MCP, CopilotKit, data, weather, and debug
+  // else, including health, Bot, MCP, CopilotKit, data, and debug
   // routes, requires both a direct loopback connection and the explicit local
   // access secret. The gate is before body parsing so rejected requests cannot
   // make the JSON parser process attacker-controlled bodies.
@@ -1440,7 +1601,6 @@ const remoteA2ABearerToken = process.env.TEAMS_A2A_REMOTE_AGENT_BEARER_TOKEN?.tr
 if (Boolean(remoteA2AEndpoint) !== Boolean(remoteA2ABearerToken)) {
   throw new Error('TEAMS_A2A_REMOTE_AGENT_ENDPOINT and TEAMS_A2A_REMOTE_AGENT_BEARER_TOKEN must be configured together.');
 }
-const remoteA2ARoster = parseA2ARemotePeerRoster(process.env.TEAMS_A2A_REMOTE_AGENTS);
 if ((remoteA2AEndpoint || remoteA2ABearerToken) && remoteA2ARoster.length > 0) {
   throw new Error('Use either the legacy single A2A remote configuration or TEAMS_A2A_REMOTE_AGENTS, not both.');
 }
@@ -1458,7 +1618,7 @@ const configuredRemoteA2AAgent = remoteA2AEndpoint && remoteA2ABearerToken
   : undefined;
 const remoteA2ARosterCredentials: A2ARemotePeerCredential[] = [];
 const remoteA2ARosterFailures: A2AConfiguredRemoteAgentFailure[] = [];
-for (const peer of remoteA2ARoster) {
+for (const peer of remoteA2ARoster.filter((entry) => entry.kind !== 'hermes')) {
   try {
     const credential = resolveA2ARemotePeerCredentials([peer], process.env)[0];
     if (!credential) throw new Error('A2A remote peer credential was not resolved.');
@@ -1488,9 +1648,18 @@ const configuredRemoteA2ABatch = await createConfiguredA2ARemoteAgents(
     telemetry: a2aTelemetry,
   })),
 );
+const configuredHermesA2ABatch = providerLifecycleStore
+  ? await createConfiguredHermesA2AAgents({
+      peers: hermesA2ARoster,
+      store: providerLifecycleStore,
+      authorizationPolicyFor: createA2ARemoteAuthorizationPolicy,
+      environment: process.env,
+    })
+  : { agents: [], failures: [] };
 const a2aRemoteInitializationFailures: readonly A2AConfiguredRemoteAgentFailure[] = Object.freeze([
   ...remoteA2ARosterFailures,
   ...configuredRemoteA2ABatch.failures,
+  ...configuredHermesA2ABatch.failures,
 ]);
 const coreA2ARoles = Object.freeze(A2A_ROLE_CATALOG.map((role) => role.id));
 
@@ -1520,6 +1689,11 @@ function a2aProviderFacts(): A2AProviderFact[] {
     } : undefined,
   );
   facts.push(...configuredRemoteA2ABatch.agents.map((agent) => unverifiedRemoteA2AProviderFact({
+    provider: 'remote',
+    agentId: agent.agentId,
+    providerId: agent.providerId,
+  })));
+  facts.push(...configuredHermesA2ABatch.agents.map((agent) => unverifiedRemoteA2AProviderFact({
     provider: 'remote',
     agentId: agent.agentId,
     providerId: agent.providerId,
@@ -1565,6 +1739,7 @@ const a2aAgents = [
   }),
   ...(configuredRemoteA2AAgent ? [configuredRemoteA2AAgent] : []),
   ...configuredRemoteA2ABatch.agents,
+  ...configuredHermesA2ABatch.agents,
 ];
 a2aProductionRuntime = mountA2AProductionRuntime(http, {
   publicOrigin: a2aPublicOrigin,
@@ -1608,11 +1783,27 @@ a2aProductionRuntime = mountA2AProductionRuntime(http, {
   telemetry: a2aTelemetry,
 });
 
-http.use(express.json());
+const globalJsonParser = express.json();
+http.use((request: any, response: any, next: any) => {
+  const requestPath = typeof request.originalUrl === 'string'
+    ? request.originalUrl.split('?', 1)[0]
+    : typeof request.url === 'string'
+      ? request.url.split('?', 1)[0]
+      : '';
+  // Core orchestration owns an auth-first parser inside its router. Do not let
+  // the process-wide parser reject malformed JSON before the Teams identity
+  // middleware can establish the authenticated scope.
+  if (requestPath === '/api/core-orchestration' || requestPath.startsWith('/api/core-orchestration/')) {
+    next();
+    return;
+  }
+  globalJsonParser(request, response, next);
+});
 
 http.get('/api/health', async (_request: any, response: any) => {
   let cliCapabilities: CliCapabilities;
   try {
+    if (azureQueueDispatch) throw new Error('CLI probing belongs to the external Linux worker.');
     cliCapabilities = await probeCliCapabilities();
   } catch {
     // A capability probe is diagnostic only. If the runner itself fails, keep
@@ -1620,6 +1811,23 @@ http.get('/api/health', async (_request: any, response: any) => {
     // turning health into an implicit login or provider-availability claim.
     cliCapabilities = unknownCliCapabilities();
   }
+  const dispatchHealth = azureQueueDispatch && azureAgentDispatchQueue
+    ? await azureAgentDispatchQueue.readHealth({
+        taskReference: agentService.listLocalOnly(1)
+          .filter((job) => Boolean(job.tenantId))
+          .map(createAgentDispatchTaskReferenceFromJob)[0],
+      })
+    : {
+        liveness: { state: 'alive' as const },
+        configuration: { state: 'configured' as const },
+        dependencies: {
+          queue: { state: 'unverified' as const },
+          state: { state: 'reachable' as const },
+        },
+        workerHeartbeat: { state: 'observed' as const, source: 'local-process' },
+        readiness: { state: 'ready' as const },
+        executionBoundary: 'local-process' as const,
+      };
 
   response.json({
     ok: true,
@@ -1627,13 +1835,42 @@ http.get('/api/health', async (_request: any, response: any) => {
     version: appVersion,
     sourceCommit: serverBuildIdentity.sourceCommit,
     serverBundleSha256: serverBuildIdentity.serverBundleSha256,
+    ...(azureReleaseIdentity ? { azureReleaseIdentity } : {}),
     environment: process.env.NODE_ENV ?? 'development',
     auth: safeLocal ? 'local-bypass' : teamsApp ? 'teams-authenticated' : 'not-configured',
     userAuth: safeLocal ? 'local-bypass' : userAuthConfigured && userAuthValidator ? 'entra-sso' : 'not-configured',
     bot: teamsApp ? 'teams-sdk' : safeLocal ? 'local-handler' : 'not-configured',
     outbound: teamsApp ? (skipOutbound ? 'disabled' : 'teams-sdk') : safeLocal ? 'local-outbox' : 'not-configured',
     cliCapabilities,
-    storage: 'file-json-single-process',
+    storage: {
+      backend: storageBackend === 'cosmos' ? 'cosmos-configured' : 'file-json-single-process',
+      agentJobs: {
+        backend: azureQueueDispatch ? 'cosmos-runtime-store' : 'file-json-single-process',
+        migration: azureQueueDispatch ? 'durable-ledger-active' : 'not-migrated',
+        readiness: azureQueueDispatch ? 'configured-unverified' : 'local-process',
+      },
+      authoritativeStores: [
+        'ItemStore',
+        'WorkItemStore',
+        'CollaborationStore',
+        'AgentJobStore',
+        'A2AStore',
+        'TeamsA2AOutboundStore',
+        'AgentAdmissionController',
+        'GenUiActionStore',
+        'ResponseModeStore',
+        'ProviderLifecycleStore',
+        'ProviderMutationReplayStore',
+      ],
+      migrated: 0,
+      total: 11,
+      horizontalSafe: false,
+    },
+    dispatch: {
+      mode: agentDispatchMode,
+      localCli: !azureQueueDispatch,
+      ...dispatchHealth,
+    },
     copilotKit: optionalRuntimeEnabled ? 'enabled' : 'disabled',
     copilotKitRuntime: optionalRuntimeEnabled ? '/api/copilotkit' : 'disabled',
     genAI: process.env.COPILOTKIT_DETERMINISTIC_MODE === 'true'
@@ -1649,8 +1886,11 @@ http.get('/api/health', async (_request: any, response: any) => {
       model: (grokConfigured ? grokModel : openAiModel).slice(0, 120),
     },
     responseProviders,
+    optionalRuntime: {
+      enabled: optionalRuntimeEnabled,
+      providers: optionalRuntime?.providerRuntime.facts ?? [],
+    },
     responseModeDefault: defaultResponseMode,
-    weatherMode,
     genUiMode,
     genUi: 'adaptive-cards',
     channelsShadow: genUiMode === 'channels-shadow'
@@ -1833,44 +2073,6 @@ http.get('/api/items/:id', (request: any, response: any) => {
   }
 
   response.json({ item });
-});
-
-http.use(
-  '/api/weather',
-  createUserAuthMiddleware({
-    allowUnauthenticated: skipAuth,
-    validator: userAuthValidator,
-    configuredTenantId: configuredTenantId || undefined,
-    acceptedAudiences: acceptedUserAudiences,
-  }),
-);
-
-http.get('/api/weather', async (request: any, response: any) => {
-  const latitude = Number(request.query?.latitude);
-  const longitude = Number(request.query?.longitude);
-  const demo = request.query?.mode === 'demo';
-
-  if (demo && isProduction) {
-    response.status(400).json({ error: 'demo weather is disabled in production' });
-    return;
-  }
-
-  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
-    response.status(400).json({ error: 'latitude must be between -90 and 90' });
-    return;
-  }
-
-  if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
-    response.status(400).json({ error: 'longitude must be between -180 and 180' });
-    return;
-  }
-
-  try {
-    response.json(await getWeather(latitude, longitude, { demo }));
-  } catch (error) {
-    console.error('Weather lookup failed', error);
-    response.status(502).json({ error: '날씨 정보를 가져오지 못했습니다.' });
-  }
 });
 
 // The manifest uses the origin root as its developer/static-tab website URL.
@@ -2382,9 +2584,215 @@ agentService = new AgentService(
     agentLabel,
     defaultProvider: agentProvider,
     providerRunners,
+    executionDispatcher: agentExecutionDispatcher,
   },
 );
 await agentService.initialize();
+
+const coreProviderCapabilities = !azureQueueDispatch
+  ? await probeCliCapabilities().catch(() => unknownCliCapabilities())
+  : undefined;
+const AZURE_CORE_SUBMISSION_FACT_MAX_AGE_MS = 30_000;
+let latestAzureCoreProviderFact: CoreProviderFact | undefined;
+type MeasuredInputResumeRuntime = ProviderNeutralAgentRunner & Readonly<{
+  observeInputResume?: (
+    job: AgentJob,
+    scope: AgentJobScope,
+  ) => CoreInputResumeObservation | Promise<CoreInputResumeObservation>;
+  resumeInput?: (
+    job: AgentJob,
+    scope: AgentJobScope,
+    input: unknown,
+  ) => Promise<AgentJob>;
+}>;
+
+function measuredCoreRuntime(
+  provider: CliAgentProvider,
+): { runtime: MeasuredInputResumeRuntime; availability: 'available' } | undefined {
+  const availability = provider === 'copilot'
+    ? coreProviderCapabilities?.ghcp.state
+    : coreProviderCapabilities?.codex.state;
+  const runtime = providerRunners[provider] as MeasuredInputResumeRuntime | undefined;
+  return availability === 'available' && runtime
+    ? { runtime, availability }
+    : undefined;
+}
+
+function measuredCoreProviderCapabilities(provider: CliAgentProvider): string[] {
+  const measured = measuredCoreRuntime(provider);
+  if (!measured) return [];
+  const { runtime } = measured;
+  const capabilities: string[] = [];
+  if (typeof agentService.approve === 'function' && typeof runtime.run === 'function') capabilities.push('approve');
+  if (typeof agentService.cancelStrict === 'function' && typeof runtime.cancel === 'function') capabilities.push('cancel');
+  if (typeof runtime.observeInputResume === 'function' && typeof runtime.resumeInput === 'function') capabilities.push('input');
+  if (typeof agentService.retry === 'function' && typeof runtime.run === 'function') capabilities.push('retry');
+  if (typeof agentService.submit === 'function' && typeof runtime.run === 'function') capabilities.push('submit');
+  return capabilities;
+}
+
+function composeMeasuredInputResumePort(): CoreInputResumePort | undefined {
+  const providers = (Object.keys(providerRunners) as CliAgentProvider[])
+    .filter((provider) => measuredCoreProviderCapabilities(provider).includes('input'));
+  if (providers.length === 0) return undefined;
+  return {
+    async observe(job, scope) {
+      const provider = job.provider ?? agentProvider;
+      const measured = measuredCoreRuntime(provider);
+      if (!measured
+        || typeof measured.runtime.observeInputResume !== 'function'
+        || typeof measured.runtime.resumeInput !== 'function') {
+        return {
+          supported: false,
+          awaitingInput: false,
+          source: 'runtime-probe',
+          observedAt: new Date().toISOString(),
+          reason: 'provider-input-unsupported',
+        };
+      }
+      return measured.runtime.observeInputResume.call(measured.runtime, job, scope);
+    },
+    async resume(job, scope, input) {
+      const provider = job.provider ?? agentProvider;
+      const measured = measuredCoreRuntime(provider);
+      if (!measured || typeof measured.runtime.resumeInput !== 'function') {
+        throw new Error('Provider input resume is not available from a measured runtime.');
+      }
+      return measured.runtime.resumeInput.call(measured.runtime, job, scope, input);
+    },
+  };
+}
+
+function azureCoreProviderFact(
+  provider: CoreProviderFact['provider'],
+  availability: CoreProviderFact['availability'],
+  observedAt: string,
+  capabilities: readonly string[] = [],
+): CoreProviderFact {
+  return {
+    provider,
+    availability,
+    capabilities,
+    observedAt,
+    source: 'runtime-observation',
+  };
+}
+
+function measuredAzureCoreCapabilities(): string[] {
+  if (!azureAgentDispatchQueue || agentExecutionDispatcher?.kind !== 'azure-queue') return [];
+  const capabilities: string[] = [];
+  if (typeof agentService.approve === 'function') capabilities.push('approve');
+  if (typeof agentService.cancelStrict === 'function') capabilities.push('cancel');
+  if (typeof agentService.retry === 'function') capabilities.push('retry');
+  if (typeof agentService.submit === 'function') capabilities.push('submit');
+  return capabilities;
+}
+
+function currentAzureCoreProviderFact(): CoreProviderFact {
+  const current = latestAzureCoreProviderFact;
+  if (!current) {
+    return azureCoreProviderFact(agentProvider, 'unknown', new Date().toISOString());
+  }
+  if (current.availability !== 'available') return current;
+  const observedAt = Date.parse(current.observedAt);
+  const now = Date.now();
+  if (!Number.isFinite(observedAt)
+    || observedAt > now
+    || now - observedAt > AZURE_CORE_SUBMISSION_FACT_MAX_AGE_MS) {
+    return azureCoreProviderFact(current.provider, 'unavailable', current.observedAt);
+  }
+  return current;
+}
+
+async function observeAzureCoreProviderFact(input: Readonly<{
+  provider: CoreOrchestrationProvider;
+}>): Promise<CoreProviderFact | undefined> {
+  if (input.provider !== agentProvider || !azureAgentDispatchQueue) return undefined;
+  const capabilities = measuredAzureCoreCapabilities();
+  if (!capabilities.includes('submit')) {
+    const unavailable = azureCoreProviderFact(input.provider, 'unavailable', new Date().toISOString());
+    latestAzureCoreProviderFact = unavailable;
+    return unavailable;
+  }
+
+  try {
+    const health = await azureAgentDispatchQueue.readHealth();
+    if (health.submissionReadiness.state === 'ready') {
+      const available = azureCoreProviderFact(
+        input.provider,
+        'available',
+        health.submissionReadiness.observedAt,
+        capabilities,
+      );
+      latestAzureCoreProviderFact = available;
+      return available;
+    }
+  } catch {
+    // Queue/Cosmos observation errors are provider unavailability, never readiness.
+  }
+
+  const unavailable = azureCoreProviderFact(
+    input.provider,
+    'unavailable',
+    new Date().toISOString(),
+  );
+  latestAzureCoreProviderFact = unavailable;
+  return unavailable;
+}
+
+function observeCoreProviderFacts(): CoreProviderFact[] {
+  if (azureQueueDispatch) return [currentAzureCoreProviderFact()];
+  return [...new Set(Object.keys(providerRunners).concat(agentProvider))]
+    .map((provider) => {
+      const capability = provider === 'copilot'
+        ? coreProviderCapabilities?.ghcp
+        : coreProviderCapabilities?.codex;
+      return {
+        provider,
+        availability: capability?.state ?? 'unknown',
+        capabilities: measuredCoreProviderCapabilities(provider as CliAgentProvider),
+        observedAt: new Date().toISOString(),
+        source: 'runtime-probe' as const,
+      };
+    });
+}
+
+let localCodexModelCatalog: ReturnType<typeof loadCodexModelCatalog> | undefined;
+
+async function observeCoreCodexModelCatalog() {
+  if (codexWorkerCatalogPort) return codexWorkerCatalogPort.read();
+  if (agentProvider !== 'codex') return undefined;
+  const executable = process.env.CODEX_BIN?.trim();
+  const codexHome = process.env.AGENT_CODEX_HOME?.trim();
+  if (!executable || !codexHome || !path.isAbsolute(executable) || !path.isAbsolute(codexHome)) return undefined;
+  try {
+    localCodexModelCatalog ??= loadCodexModelCatalog({ executable, codexHome });
+    return await localCodexModelCatalog;
+  } catch {
+    localCodexModelCatalog = undefined;
+    return undefined;
+  }
+}
+
+const coreOrchestrationService = new CoreOrchestrationService({
+  agentService,
+  jobStore: agentJobStore,
+  defaultProvider: agentProvider,
+  inputResume: composeMeasuredInputResumePort(),
+  observeProviderFacts: observeCoreProviderFacts,
+  observeCodexModelCatalog: observeCoreCodexModelCatalog,
+  ...(azureQueueDispatch ? { observeProviderFact: observeAzureCoreProviderFact } : {}),
+});
+mountCoreOrchestrationRoutes(http, {
+  service: coreOrchestrationService,
+  authenticate: createUserAuthMiddleware({
+    allowUnauthenticated: skipAuth,
+    validator: userAuthValidator,
+    configuredTenantId: configuredTenantId || undefined,
+    acceptedAudiences: acceptedUserAudiences,
+  }),
+  resolveAuthenticatedScope: coreOrchestrationRestScope,
+});
 
 // Each ready production A2A identity owns a distinct AgentService/runner
 // pair. The job store and admission controller remain shared so limits and
@@ -2481,7 +2889,6 @@ if (mcpEnabled) {
   mcpRouter = createMcpGenUiRouter({
     itemStore,
     agentService,
-    getWeather,
     ...(providerTools ? { providerTools } : {}),
     ...(providerToolsForPrincipal ? { providerToolsForPrincipal } : {}),
     ...(authenticatedMcpConfig.enabled
@@ -2808,43 +3215,8 @@ function isGenUiCommand(value: string): value is GenUiCommand {
   return GENUI_COMMANDS.includes(value as GenUiCommand);
 }
 
-async function resolveGenUiCommand(activity: any, command: GenUiCommand): Promise<GenUiEnvelopeV1> {
-  if (command === 'help') return genUi.help();
-  if (command === 'weather') return genUi.weatherUnavailable();
-
-  const scope = activityScope(activity);
-  if (!scope) return genUi.error('작업 명령에는 사용자·대화·테넌트 정보가 필요합니다.', 'command-scope-missing');
-
-  return itemStore.runWithScope(itemScopeFromAgentScope(scope), async () => {
-    await itemStore.ensureScope();
-    if (command === 'status') {
-      return buildStatusEnvelope();
-    }
-    if (command === 'work') {
-      const items = workItemService.recent({
-        tenantId: scope.tenantId,
-        requesterId: scope.requesterId,
-        conversationId: scope.conversationId,
-      }, 8);
-      const text = items.length === 0
-        ? '탭 업무가 없습니다. 업무 허브 탭에서 첫 업무를 추가하세요.'
-        : `탭 업무 ${items.length}개\n\n${items.map((item) => `- ${item.title} · ${item.status}${item.dueDate ? ` · 기한 ${item.dueDate}` : ''}`).join('\n')}`;
-      return genUi.answer(text, 'work-items-command');
-    }
-    if (command === 'collaboration') {
-      const collaborationScope = {
-        tenantId: scope.tenantId,
-        requesterId: scope.requesterId,
-        conversationId: scope.conversationId,
-      };
-      const subscriptions = collaborationService.listSubscriptions(collaborationScope);
-      const digest = collaborationService.weeklyDigest(collaborationScope);
-      const text = `팔로우 ${subscriptions.length}개 · 이번 주 업데이트 ${digest.totalCount}건\n\n${digest.entries.slice(0, 5).map((entry) => `- ${entry.title} · ${entry.count}건`).join('\n') || '새 업데이트가 없습니다.'}`;
-      return genUi.answer(text, 'collaboration-digest-command');
-    }
-    const jobs = agentService.list(scope, 5);
-    return genUi.list(itemStore.list(), jobs);
-  });
+async function resolveGenUiCommand(_activity: any, _command: GenUiCommand): Promise<GenUiEnvelopeV1> {
+  return genUi.help();
 }
 
 function mutationConflictEnvelope(error: unknown, fallbackId = 'agent-mutation-error'): GenUiEnvelopeV1 {
@@ -2986,7 +3358,7 @@ async function resolveGenUiAction(activity: any): Promise<GenUiEnvelopeV1> {
         ? genUi.cancelled(job)
         : genUi.error(`작업 ${payload.entityId}을 찾을 수 없습니다.`, `action-${payload.entityId}`);
     } else if (payload.action === 'refresh') {
-      const job = agentService.get(payload.entityId, scope);
+      const job = await agentService.observe(payload.entityId, scope);
       if (job?.status === 'awaiting_approval') {
         envelope = await genUi.approval(job);
       } else {
@@ -3361,6 +3733,423 @@ function teamsBotResponseRequest(activity: any, scope: AgentJobScope, prompt: st
   } as ResponseEngineInput['request'];
 }
 
+const CORE_ORCHESTRATION_CARD_ACTIONS = new Set([
+  'orchestration.confirm-cancel',
+  'orchestration.confirm-approve',
+  'orchestration.dismiss-confirmation',
+  'orchestration.cancel',
+  'orchestration.approve',
+  'orchestration.retry',
+  'orchestration.provide-input',
+  'orchestration.select-model',
+  'orchestration.submit-selected',
+]);
+
+type CoreOrchestrationCardSubmission = Readonly<{
+  action:
+    | 'orchestration.confirm-cancel'
+    | 'orchestration.confirm-approve'
+    | 'orchestration.dismiss-confirmation'
+    | 'orchestration.cancel'
+    | 'orchestration.approve'
+    | 'orchestration.retry'
+    | 'orchestration.provide-input'
+    | 'orchestration.select-model'
+    | 'orchestration.submit-selected';
+  jobId?: string;
+  input?: string;
+  confirmationToken?: string;
+  correlationId?: string;
+  prompt?: string;
+  mode?: 'read-only' | 'workspace-write';
+  model?: string;
+  reasoningEffort?: string;
+  catalogRevision?: string;
+  submissionKey?: string;
+}>;
+
+function coreOrchestrationCardValue(activity: any): Record<string, unknown> | undefined {
+  const direct = asRecord(activity?.value);
+  const nested = asRecord(asRecord(direct?.action)?.data);
+  return nested ?? direct;
+}
+
+function hasCoreOrchestrationCardValue(activity: any): boolean {
+  const action = coreOrchestrationCardValue(activity)?.action;
+  return typeof action === 'string' && action.startsWith('orchestration.');
+}
+
+function isCoreOrchestrationCardSubmission(activity: any): activity is { value: CoreOrchestrationCardSubmission } {
+  const value = coreOrchestrationCardValue(activity);
+  if (!value || value.schemaVersion !== '1' || typeof value.action !== 'string'
+    || !CORE_ORCHESTRATION_CARD_ACTIONS.has(value.action)) return false;
+  if (value.action === 'orchestration.select-model' || value.action === 'orchestration.submit-selected') {
+    const allowed = value.action === 'orchestration.select-model'
+      ? new Set(['schemaVersion', 'action', 'prompt', 'mode', 'model', 'catalogRevision', 'submissionKey'])
+      : new Set(['schemaVersion', 'action', 'prompt', 'mode', 'model', 'reasoningEffort', 'catalogRevision', 'submissionKey']);
+    if (Object.keys(value).some((key) => !allowed.has(key))) return false;
+    return typeof value.prompt === 'string'
+      && value.prompt.trim().length > 0
+      && value.prompt.length <= 2_000
+      && (value.mode === 'read-only' || value.mode === 'workspace-write')
+      && typeof value.model === 'string'
+      && /^[a-z0-9][a-z0-9._-]{0,127}$/u.test(value.model)
+      && typeof value.catalogRevision === 'string'
+      && /^[a-f0-9]{64}$/u.test(value.catalogRevision)
+      && typeof value.submissionKey === 'string'
+      && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value.submissionKey)
+      && (value.action !== 'orchestration.submit-selected'
+        || (typeof value.reasoningEffort === 'string'
+          && ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(value.reasoningEffort)));
+  }
+  if (typeof value.jobId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(value.jobId)) return false;
+  const allowed = value.action === 'orchestration.provide-input'
+    ? new Set(['schemaVersion', 'action', 'jobId', 'input'])
+    : value.action === 'orchestration.approve' || value.action === 'orchestration.cancel'
+      ? new Set(['schemaVersion', 'action', 'jobId', 'confirmationToken', 'correlationId'])
+    : new Set(['schemaVersion', 'action', 'jobId']);
+  if (Object.keys(value).some((key) => !allowed.has(key))) return false;
+  if (value.action === 'orchestration.provide-input') {
+    return typeof value.input === 'string' && value.input.trim().length > 0 && value.input.length <= 2_000;
+  }
+  if (value.action === 'orchestration.approve' || value.action === 'orchestration.cancel') {
+    return Boolean(
+      nonEmptyString(value.confirmationToken, 512)
+        && nonEmptyString(value.correlationId, MAX_AGENT_SCOPE_VALUE_LENGTH),
+    );
+  }
+  return true;
+}
+
+function coreOrchestrationErrorActivity(
+  message: string,
+  options = coreOrchestrationCardOptions,
+): CoreOrchestrationTeamsActivity {
+  const openTabUrl = options.openTabUrl;
+  return {
+    type: 'message',
+    attachmentLayout: 'list',
+    attachments: [{
+      contentType: 'application/vnd.microsoft.card.adaptive',
+      content: {
+        type: 'AdaptiveCard',
+        $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+        version: '1.6',
+        msteams: { width: 'Full' },
+        body: [
+          { type: 'TextBlock', text: 'Core 에이전트 작업', size: 'Large', weight: 'Bolder', wrap: true },
+          { type: 'TextBlock', text: message.slice(0, 400), wrap: true },
+        ],
+        ...(openTabUrl ? { actions: [{ type: 'Action.OpenUrl', title: '업무 허브 탭 열기', url: openTabUrl }] } : {}),
+      },
+    }],
+  };
+}
+
+async function sendCoreOrchestrationActivity(
+  send: BotSend,
+  activity: CoreOrchestrationTeamsActivity,
+): Promise<void> {
+  await send('', undefined, activity);
+}
+
+function coreOrchestrationActivityIdempotencyKey(activity: any, scope: AgentJobScope): string {
+  const source = nonEmptyString(activity?.id, 200) ?? JSON.stringify({
+    timestamp: nonEmptyString(activity?.timestamp, 80) ?? '',
+    text: nonEmptyString(activity?.text, 2_000) ?? '',
+  });
+  const digest = crypto.createHash('sha256').update(JSON.stringify({ scope, source }), 'utf8').digest('hex');
+  return `teams-core-chat-v1:${digest}`;
+}
+
+async function resolveCoreOrchestrationCommand(
+  activity: any,
+  scope: AgentJobScope,
+  command: CoreOrchestrationChatCommand,
+): Promise<CoreOrchestrationTeamsActivity> {
+  const serverScope = createServerDerivedCoreScope(scope);
+  if (command.kind === 'select-submit') {
+    const catalog = await coreOrchestrationService.listCodexModelCatalog();
+    return catalog
+      ? createCoreOrchestrationModelSelectionActivity({
+          prompt: command.prompt,
+          mode: command.mode,
+          catalog,
+          submissionKey: crypto.randomUUID(),
+        }, coreOrchestrationCardOptions)
+      : coreOrchestrationErrorActivity('현재 배포된 Codex worker 모델 목록을 확인할 수 없습니다.');
+  }
+  if (command.kind === 'submit') {
+    const result = await coreOrchestrationService.submit(serverScope, {
+      idempotencyKey: coreOrchestrationActivityIdempotencyKey(activity, scope),
+      prompt: command.prompt,
+      mode: command.mode,
+    });
+    return createCoreOrchestrationJobActivity(result.job, coreOrchestrationCardOptions);
+  }
+  if (command.kind === 'list') {
+    return createCoreOrchestrationListActivity(
+      coreOrchestrationService.list(serverScope, { limit: 20 }),
+      coreOrchestrationService.listProviderFacts(),
+      coreOrchestrationCardOptions,
+    );
+  }
+  if (command.kind === 'status') {
+    const job = coreOrchestrationService.get(serverScope, { jobId: command.jobId });
+    return job
+      ? createCoreOrchestrationJobActivity(job, coreOrchestrationCardOptions)
+      : coreOrchestrationErrorActivity('요청한 작업을 찾을 수 없습니다.');
+  }
+  if (command.kind === 'approve' || command.kind === 'cancel') {
+    const job = coreOrchestrationService.get(serverScope, { jobId: command.jobId });
+    if (!job) return coreOrchestrationErrorActivity('요청한 작업을 찾을 수 없습니다.');
+    if (!coreOrchestrationMutationAllowed(job.status, command.kind)) {
+      return coreOrchestrationErrorActivity(`현재 상태(${job.status})에서는 이 확인 요청을 진행할 수 없습니다.`);
+    }
+    return issueCoreOrchestrationConfirmation(job, command.kind, scope);
+  }
+  const request = { jobId: command.jobId };
+  if (command.kind === 'provide-input') {
+    const result = await coreOrchestrationService.provideInput(serverScope, { ...request, input: command.input });
+    if (!result) return coreOrchestrationErrorActivity('요청한 작업을 찾을 수 없습니다.');
+    if (result.status === 'unsupported') {
+      return coreOrchestrationErrorActivity('이 작업은 현재 추가 입력 재개를 지원하지 않습니다.');
+    }
+    return createCoreOrchestrationJobActivity(result.job, coreOrchestrationCardOptions);
+  }
+  const job = await coreOrchestrationService[command.kind](serverScope, request);
+  return job
+    ? createCoreOrchestrationJobActivity(job, coreOrchestrationCardOptions)
+    : coreOrchestrationErrorActivity('요청한 작업을 찾을 수 없습니다.');
+}
+
+function coreOrchestrationMutationAllowed(
+  status: CoreOrchestrationJob['status'],
+  action: 'approve' | 'cancel',
+): boolean {
+  return action === 'approve'
+    ? status === 'awaiting_approval'
+    : status === 'queued' || status === 'running' || status === 'awaiting_approval';
+}
+
+async function issueCoreOrchestrationConfirmation(
+  job: CoreOrchestrationJob,
+  action: 'approve' | 'cancel',
+  scope: AgentJobScope,
+): Promise<CoreOrchestrationTeamsActivity> {
+  const correlationId = crypto.randomUUID();
+  const token = await genUiActionStore.issue({
+    action,
+    entityId: job.id,
+    correlationId,
+    conversationId: scope.conversationId,
+    requesterId: scope.requesterId,
+    tenantId: scope.tenantId,
+  });
+  return createCoreOrchestrationConfirmationActivity(job, action, {
+    ...coreOrchestrationCardOptions,
+    confirmation: { action, token, correlationId },
+  });
+}
+
+async function handleCoreOrchestrationChatCommand(
+  activity: any,
+  send: BotSend,
+  command: CoreOrchestrationChatCommand,
+): Promise<void> {
+  const scope = activityScope(activity);
+  if (!scope) {
+    await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity('인증된 Teams 사용자·대화·테넌트 정보가 필요합니다.'));
+    return;
+  }
+  try {
+    await sendCoreOrchestrationActivity(send, await resolveCoreOrchestrationCommand(activity, scope, command));
+  } catch (error) {
+    const message = error instanceof AgentMutationAuthorizationError
+      ? '이 작업을 조회하거나 변경할 권한이 없습니다.'
+      : error instanceof CoreOrchestrationProviderUnavailableError
+        || error instanceof CoreOrchestrationProviderCapabilityError
+        ? '현재 측정된 실행 준비가 완료되지 않은 Core provider입니다.'
+      : error instanceof AgentExecutionUnavailableError
+        ? '현재 실행 가능한 Core provider가 없습니다.'
+        : error instanceof AgentCapacityError
+          ? '현재 실행 용량이 가득 찼습니다. 잠시 후 다시 시도하세요.'
+          : 'Core 에이전트 요청을 처리하지 못했습니다.';
+    await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity(message));
+  }
+}
+
+async function handleCoreOrchestrationCardSubmission(activity: any, send: BotSend): Promise<void> {
+  if (!isCoreOrchestrationCardSubmission(activity)) {
+    await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity('유효하지 않은 Core 에이전트 카드 요청입니다.'));
+    return;
+  }
+  const value = coreOrchestrationCardValue(activity)!;
+  if (value.action === 'orchestration.select-model' || value.action === 'orchestration.submit-selected') {
+    const scope = activityScope(activity);
+    if (!scope) {
+      await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity('인증된 Teams 사용자·대화·테넌트 정보가 필요합니다.'));
+      return;
+    }
+    try {
+      const serverScope = createServerDerivedCoreScope(scope);
+      const catalog = await coreOrchestrationService.listCodexModelCatalog();
+      if (!catalog || catalog.revision !== value.catalogRevision) {
+        await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity('Codex 모델 목록이 변경되었습니다. agent choose 명령으로 다시 선택하세요.'));
+        return;
+      }
+      if (value.action === 'orchestration.select-model') {
+        await sendCoreOrchestrationActivity(send, createCoreOrchestrationReasoningSelectionActivity({
+          prompt: String(value.prompt),
+          mode: value.mode as 'read-only' | 'workspace-write',
+          catalog,
+          model: String(value.model),
+          submissionKey: String(value.submissionKey),
+        }, coreOrchestrationCardOptions));
+        return;
+      }
+      const result = await coreOrchestrationService.submit(serverScope, {
+        idempotencyKey: `teams-core-card-v1:${String(value.submissionKey)}`,
+        prompt: String(value.prompt),
+        provider: 'codex',
+        mode: value.mode as 'read-only' | 'workspace-write',
+        model: String(value.model),
+        reasoningEffort: String(value.reasoningEffort) as CoreCodexReasoningEffort,
+        catalogRevision: String(value.catalogRevision),
+      });
+      await sendCoreOrchestrationActivity(send, createCoreOrchestrationJobActivity(result.job, coreOrchestrationCardOptions));
+    } catch (error) {
+      const message = error instanceof CoreOrchestrationValidationError
+        ? '선택한 모델 또는 추론 수준이 현재 Codex worker와 일치하지 않습니다. 다시 선택하세요.'
+        : 'Codex 모델 선택 작업을 처리하지 못했습니다.';
+      await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity(message));
+    }
+    return;
+  }
+  if (value.action === 'orchestration.confirm-approve'
+    || value.action === 'orchestration.confirm-cancel'
+    || value.action === 'orchestration.dismiss-confirmation') {
+    const scope = activityScope(activity);
+    if (!scope) {
+      await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity('인증된 Teams 사용자·대화·테넌트 정보가 필요합니다.'));
+      return;
+    }
+    try {
+      const job = coreOrchestrationService.get(createServerDerivedCoreScope(scope), { jobId: String(value.jobId) });
+      if (!job) {
+        await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity('요청한 작업을 찾을 수 없습니다.'));
+        return;
+      }
+      if (value.action === 'orchestration.dismiss-confirmation') {
+        await sendCoreOrchestrationActivity(send, createCoreOrchestrationJobActivity(job, coreOrchestrationCardOptions));
+        return;
+      }
+      const action = value.action === 'orchestration.confirm-approve' ? 'approve' : 'cancel';
+      const allowed = action === 'approve'
+        ? job.status === 'awaiting_approval'
+        : job.status === 'queued' || job.status === 'running' || job.status === 'awaiting_approval';
+      if (!allowed) {
+        await sendCoreOrchestrationActivity(
+          send,
+          coreOrchestrationErrorActivity(`현재 상태(${job.status})에서는 이 확인 요청을 진행할 수 없습니다.`),
+        );
+        return;
+      }
+      await sendCoreOrchestrationActivity(send, await issueCoreOrchestrationConfirmation(job, action, scope));
+      return;
+    } catch (error) {
+      const message = error instanceof AgentMutationAuthorizationError
+        ? '이 작업을 조회하거나 변경할 권한이 없습니다.'
+        : error instanceof CoreOrchestrationProviderUnavailableError
+          || error instanceof CoreOrchestrationProviderCapabilityError
+          ? '현재 측정된 실행 준비가 완료되지 않은 Core provider입니다.'
+        : 'Core 에이전트 확인 요청을 처리하지 못했습니다.';
+      await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity(message));
+      return;
+    }
+  }
+  if (value.action === 'orchestration.cancel' || value.action === 'orchestration.approve') {
+    const scope = activityScope(activity);
+    if (!scope) {
+      await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity('인증된 Teams 사용자·대화·테넌트 정보가 필요합니다.'));
+      return;
+    }
+    const action = value.action === 'orchestration.approve' ? 'approve' : 'cancel';
+    const confirmationToken = nonEmptyString(value.confirmationToken, 512);
+    const correlationId = nonEmptyString(value.correlationId, MAX_AGENT_SCOPE_VALUE_LENGTH);
+    if (!confirmationToken || !correlationId) {
+      await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity('유효하지 않은 확인 카드 액션입니다.'));
+      return;
+    }
+    try {
+      const serverScope = createServerDerivedCoreScope(scope);
+      const job = coreOrchestrationService.get(serverScope, { jobId: String(value.jobId) });
+      if (!job) {
+        await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity('요청한 작업을 찾을 수 없습니다.'));
+        return;
+      }
+      if (!coreOrchestrationMutationAllowed(job.status, action)) {
+        await sendCoreOrchestrationActivity(
+          send,
+          coreOrchestrationErrorActivity(`현재 상태(${job.status})에서는 이 확인 요청을 진행할 수 없습니다.`),
+        );
+        return;
+      }
+      const consumed = await genUiActionStore.consume({
+        token: confirmationToken,
+        action,
+        entityId: job.id,
+        correlationId,
+        conversationId: scope.conversationId,
+        requesterId: scope.requesterId,
+        tenantId: scope.tenantId,
+      });
+      if (!consumed.ok) {
+        await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity(actionRejectionMessage(consumed.reason)));
+        return;
+      }
+      const updated = await coreOrchestrationService[action](serverScope, { jobId: job.id });
+      await sendCoreOrchestrationActivity(
+        send,
+        updated
+          ? createCoreOrchestrationJobActivity(updated, coreOrchestrationCardOptions)
+          : coreOrchestrationErrorActivity('요청한 작업을 찾을 수 없습니다.'),
+      );
+    } catch (error) {
+      const message = error instanceof AgentMutationAuthorizationError
+        ? '이 작업을 조회하거나 변경할 권한이 없습니다.'
+        : 'Core 에이전트 확인 요청을 처리하지 못했습니다.';
+      await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity(message));
+    }
+    return;
+  }
+  const kind = String(value.action).slice('orchestration.'.length);
+  const command: CoreOrchestrationChatCommand = kind === 'provide-input'
+    ? { kind, jobId: String(value.jobId), input: String(value.input) }
+    : { kind: kind as 'cancel' | 'approve' | 'retry', jobId: String(value.jobId) };
+  await handleCoreOrchestrationChatCommand(activity, send, command);
+}
+
+async function handleCoreOrchestrationInvoke(activity: any): Promise<{
+  status: 200;
+  body: { statusCode: 200; type: 'application/vnd.microsoft.card.adaptive'; value: unknown };
+}> {
+  let rendered = coreOrchestrationErrorActivity('유효하지 않은 Core 에이전트 카드 요청입니다.');
+  const capture: BotSend = async (_text, _envelope, activityOverride) => {
+    if (activityOverride) rendered = activityOverride as CoreOrchestrationTeamsActivity;
+    return { state: 'connector-accepted' };
+  };
+  await handleCoreOrchestrationCardSubmission(activity, capture);
+  return {
+    status: 200,
+    body: {
+      statusCode: 200,
+      type: 'application/vnd.microsoft.card.adaptive',
+      value: rendered.attachments[0].content,
+    },
+  };
+}
+
 async function handleBotResponseEngine(
   activity: any,
   send: BotSend,
@@ -3415,13 +4204,22 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
   const normalizedText = userText.toLowerCase();
   const scope = activityScope(activity);
   const execute = async (): Promise<void> => {
+    const coreCommand = parseCoreOrchestrationChatCommand(userText);
+    if (coreCommand) {
+      await handleCoreOrchestrationChatCommand(activity, send, coreCommand);
+      return;
+    }
+    if (/^(?:agent|에이전트)\b/iu.test(userText)) {
+      await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity('지원하지 않거나 형식이 잘못된 Core 에이전트 명령입니다.'));
+      return;
+    }
     if (normalizedText === 'mode' || normalizedText === 'response-mode' || normalizedText === '응답 모드') {
       await handleResponseModeCommand(activity, send);
       return;
     }
 
     if (normalizedText === 'help') {
-      const responseText = '사용 가능한 명령: help, mode, carousel, weather [위도 경도], status, list, work, collaboration, a2a <협업 요청>, run <작업>, continue <작업 ID> <추가 요청>, write <작업>, approve <작업 ID>, commit <작업 ID> [메시지], cancel <작업 ID>';
+      const responseText = `사용 가능한 에이전트 명령:\n${coreOrchestrationCommandHelp()}`;
       const envelope = genUi.help();
       await send(responseText, envelope);
       return;
@@ -3431,38 +4229,6 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
       const responseText = '카드 갤러리를 보냅니다. Teams 메시지에서 카드를 좌우로 넘기고 카드 내부 이미지를 확인하세요.';
       const carouselActivity = genUiMode === 'legacy' ? undefined : createAdaptiveCardCarouselActivity(genUi.carousel());
       await send(responseText, undefined, carouselActivity);
-      return;
-    }
-
-    const weatherMatch = userText.match(/^(?:weather|날씨)(?:\s+([-+]?\d+(?:\.\d+)?)\s+([-+]?\d+(?:\.\d+)?))?$/i);
-    if (weatherMatch) {
-      const isExplicitLocation = Boolean(weatherMatch[1] && weatherMatch[2]);
-
-      if (!isExplicitLocation) {
-        const responseText = 'Bot 대화에는 현재 기기 위치가 자동으로 전달되지 않습니다. Teams 탭에서 “내 위치 사용”을 누르거나, weather 37.5665 126.978처럼 좌표를 함께 입력하세요.';
-        const envelope = genUi.weatherUnavailable();
-        await send(responseText, envelope);
-        return;
-      }
-
-      const latitude = Number(weatherMatch[1]);
-      const longitude = Number(weatherMatch[2]);
-
-      if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
-        const responseText = '위도는 -90~90, 경도는 -180~180 범위로 입력하세요. 예: weather 37.5665 126.978';
-        const envelope = genUi.invalidCoordinates();
-        await send(responseText, envelope);
-        return;
-      }
-
-      try {
-        const weather = await getWeather(latitude, longitude);
-        const responseText = formatWeatherMessage(weather);
-        await send(responseText, genUi.weather(weather));
-      } catch {
-        const responseText = '날씨 정보를 가져오지 못했습니다. 잠시 후 다시 시도하세요.';
-        await send(responseText, genUi.error(responseText, 'weather-error'));
-      }
       return;
     }
 
@@ -3718,7 +4484,7 @@ async function handleInstall(activity: any, send: BotSend): Promise<void> {
     ? '이 대화'
     : '개인 공간';
 
-  const text = `업무 허브가 ${scopeHint}에 추가되었습니다. 탭에서 업무와 현재 위치 날씨를 확인하고, help·날씨·status·list 명령으로 기능을 사용할 수 있습니다.`;
+  const text = `에이전트 업무 허브가 ${scopeHint}에 추가되었습니다. help 또는 agent list 명령으로 시작하세요.`;
   await send(text, genUi.install(scopeHint));
 }
 
@@ -3755,10 +4521,20 @@ if (teamsApp) {
       return;
     }
 
+    if (activity?.type === 'message' && hasCoreOrchestrationCardValue(activity)) {
+      const runtimeSend = createRuntimeBotSender(activity, send);
+      await handleCoreOrchestrationCardSubmission(activity, runtimeSend);
+      return;
+    }
+
     if (activity?.type === 'message' && hasGenUiActionValue(activity)) {
       const runtimeSend = createRuntimeBotSender(activity, send);
       await handleGenUiSubmit(activity, runtimeSend);
       return;
+    }
+
+    if (activity?.type === 'invoke' && hasCoreOrchestrationCardValue(activity)) {
+      return handleCoreOrchestrationInvoke(activity);
     }
 
     if (activity?.type === 'invoke' && hasGenUiActionValue(activity)) {
@@ -3771,6 +4547,9 @@ if (teamsApp) {
 
   for (const action of GENUI_CARD_ACTIONS) {
     teamsApp.on(`card.action.${action}`, async ({ activity }: any) => handleGenUiAction(activity));
+  }
+  for (const action of CORE_ORCHESTRATION_CARD_ACTIONS) {
+    teamsApp.on(`card.action.${action}`, async ({ activity }: any) => handleCoreOrchestrationInvoke(activity));
   }
 } else {
   http.post('/api/messages', async (request: any, response: any) => {
@@ -3788,12 +4567,27 @@ if (teamsApp) {
       return;
     }
 
+    if (request.body?.type === 'message' && hasCoreOrchestrationCardValue(request.body)) {
+      const messages: string[] = [];
+      const activities: unknown[] = [];
+      const send = createBotSender(undefined, messages, activities);
+      await handleCoreOrchestrationCardSubmission(request.body, send);
+      response.json({ messages, activities });
+      return;
+    }
+
     if (request.body?.type === 'message' && hasGenUiActionValue(request.body)) {
       const messages: string[] = [];
       const activities: unknown[] = [];
       const send = createBotSender(undefined, messages, activities);
       await handleGenUiSubmit(request.body, send);
       response.json({ messages, activities });
+      return;
+    }
+
+    if (request.body?.type === 'invoke' && hasCoreOrchestrationCardValue(request.body)) {
+      const invokeResponse = await handleCoreOrchestrationInvoke(request.body);
+      response.status(invokeResponse.status).json(invokeResponse.body);
       return;
     }
 

@@ -19,6 +19,8 @@ import {
 } from './agent-process-controller.js';
 import { CodexRunner, reapChildProcess, type CodexRunEvent } from './codex-runner.js';
 import { redactCliDiagnostics } from './cli-diagnostics.js';
+import { isAgentTokenUsage, parseCodexTokenUsage, type AgentTokenUsage } from './agent-token-usage.js';
+import type { CoreCodexModelSelection } from '../shared/core-orchestration.js';
 import {
   ghcpCliCommandFromEnvironment,
   GHCP_SECRET_ENV_VARS,
@@ -33,6 +35,11 @@ export type CliAgentLifecycleEvent = Readonly<{
   type: 'session.started' | 'turn.started' | 'tool.started' | 'agent.message' | 'turn.completed';
   sessionId?: string;
   message?: string;
+  tokenUsage?: AgentTokenUsage;
+  command?: string;
+  toolName?: string;
+  mcpServerName?: string;
+  mcpToolName?: string;
 }>;
 
 export type CliAgentRunResult = Readonly<{
@@ -40,6 +47,7 @@ export type CliAgentRunResult = Readonly<{
   sessionId?: string;
   finalResult: string;
   eventCount: number;
+  tokenUsage?: AgentTokenUsage;
 }>;
 
 export type CliAgentCommandSpec = Readonly<{
@@ -59,6 +67,7 @@ export type CliAgentRunOptions = Readonly<{
   isolationLease?: AgentIsolationLease;
   subject?: AgentIsolationSubject;
   environmentOverrides?: Record<string, string>;
+  selection?: CoreCodexModelSelection;
   onEvent?: (event: CliAgentLifecycleEvent) => Promise<void> | void;
 }>;
 
@@ -280,13 +289,22 @@ function normalizeCodexEvent(event: CodexRunEvent): CliAgentLifecycleEvent | und
   }
   if (event.type === 'turn.started') return { provider: 'codex', type: 'turn.started' };
   if (event.type === 'item.started' && event.item?.type === 'command_execution') {
-    return { provider: 'codex', type: 'tool.started' };
+    return { provider: 'codex', type: 'tool.started', command: event.item.command };
   }
   if (event.type === 'item.completed' && event.item?.type === 'agent_message') {
     const message = event.item.text?.trim();
     return message ? { provider: 'codex', type: 'agent.message', message } : undefined;
   }
-  if (event.type === 'turn.completed') return { provider: 'codex', type: 'turn.completed' };
+  if (event.type === 'turn.completed') {
+    const tokenUsage = isAgentTokenUsage(event.tokenUsage)
+      ? { ...event.tokenUsage }
+      : parseCodexTokenUsage(event.usage);
+    return {
+      provider: 'codex',
+      type: 'turn.completed',
+      ...(tokenUsage ? { tokenUsage } : {}),
+    };
+  }
   return undefined;
 }
 
@@ -320,6 +338,7 @@ export class CliAgentRunner {
         isolationLease: runOptions.isolationLease,
         subject: runOptions.subject,
         environmentOverrides: runOptions.environmentOverrides,
+        selection: runOptions.selection,
         timeoutMs: normalizedTimeout(runOptions.timeoutMs),
         signal: runOptions.signal,
         onEvent: async (event) => {
@@ -332,6 +351,7 @@ export class CliAgentRunner {
         sessionId: result.threadId,
         finalResult: result.finalMessage,
         eventCount: result.eventCount,
+        ...(result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
       };
     }
     if (runOptions.sessionId && !SESSION_ID_PATTERN.test(runOptions.sessionId)) {
@@ -474,7 +494,13 @@ export class CliAgentRunner {
       }
       if (type === 'tool.execution_start') {
         if (!turnStarted) return terminate(new Error('GitHub Copilot CLI tool ordering is invalid.'));
-        queueEvent({ provider: 'copilot', type: 'tool.started' });
+        queueEvent({
+          provider: 'copilot',
+          type: 'tool.started',
+          ...(typeof data.toolName === 'string' ? { toolName: data.toolName } : {}),
+          ...(typeof data.mcpServerName === 'string' ? { mcpServerName: data.mcpServerName } : {}),
+          ...(typeof data.mcpToolName === 'string' ? { mcpToolName: data.mcpToolName } : {}),
+        });
         return;
       }
       if (type === 'assistant.turn_end') {

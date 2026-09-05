@@ -79,8 +79,8 @@ for (const script of [
 }
 assert.match(
   artifactJob,
-  /devicePermissions[\s\S]*geolocation/,
-  'immutable artifact job must verify geolocation in the packaged manifest',
+  /devicePermissions[\s\S]*geolocation[\s\S]*false/,
+  'immutable artifact job must reject removed geolocation in the packaged manifest',
 );
 
 const containerStart = workflow.indexOf('\n  container:');

@@ -52,6 +52,7 @@ const LEGACY_GRANT_KEYS = new Set([
 
 export class GenUiActionStore {
   private grants: StoredActionGrant[] = [];
+  private mutationQueue: Promise<void> = Promise.resolve();
   private writeQueue: Promise<void> = Promise.resolve();
 
   constructor(
@@ -92,21 +93,29 @@ export class GenUiActionStore {
 
   async issue(input: Omit<GenUiActionGrant, 'expiresAt'>): Promise<string> {
     assertGrantScope(input);
-    const token = crypto.randomBytes(32).toString('base64url');
-    const grant: StoredActionGrant = {
-      action: input.action,
-      entityId: input.entityId,
-      correlationId: input.correlationId,
-      conversationId: input.conversationId,
-      requesterId: input.requesterId,
-      tenantId: input.tenantId,
-      expiresAt: new Date(Date.now() + this.ttlMs).toISOString(),
-      tokenHash: hashToken(token),
-    };
-    this.grants.push(grant);
-    await this.prune(false);
-    await this.persist();
-    return token;
+    return this.mutate(async () => {
+      const previous = this.grants.slice();
+      const token = crypto.randomBytes(32).toString('base64url');
+      const grant: StoredActionGrant = {
+        action: input.action,
+        entityId: input.entityId,
+        correlationId: input.correlationId,
+        conversationId: input.conversationId,
+        requesterId: input.requesterId,
+        tenantId: input.tenantId,
+        expiresAt: new Date(Date.now() + this.ttlMs).toISOString(),
+        tokenHash: hashToken(token),
+      };
+      this.grants.push(grant);
+      try {
+        await this.prune(false);
+        await this.persist();
+        return token;
+      } catch (error) {
+        this.grants.splice(0, this.grants.length, ...previous);
+        throw error;
+      }
+    });
   }
 
   async consume(input: {
@@ -120,31 +129,54 @@ export class GenUiActionStore {
   }): Promise<GenUiActionConsumeResult> {
     if (!isConsumableInput(input)) return { ok: false, reason: 'invalid' };
     const tokenHash = hashToken(input.token);
-    const grant = this.grants.find((candidate) => safeEqual(candidate.tokenHash, tokenHash));
+    return this.mutate(async () => {
+      const grant = this.grants.find((candidate) => safeEqual(candidate.tokenHash, tokenHash));
 
-    if (!grant) return { ok: false, reason: 'invalid' };
-    if (grant.consumedAt) return { ok: false, reason: 'consumed' };
-    if (Date.parse(grant.expiresAt) <= Date.now()) {
-      await this.prune();
-      return { ok: false, reason: 'expired' };
-    }
+      if (!grant) return { ok: false, reason: 'invalid' };
+      if (grant.consumedAt) return { ok: false, reason: 'consumed' };
+      if (Date.parse(grant.expiresAt) <= Date.now()) {
+        await this.prune();
+        return { ok: false, reason: 'expired' };
+      }
 
-    const matches = grant.action === input.action
-      && grant.entityId === input.entityId
-      && grant.correlationId === input.correlationId
-      && grant.conversationId === input.conversationId
-      && grant.requesterId === input.requesterId
-      && grant.tenantId === input.tenantId;
-    if (!matches) return { ok: false, reason: 'mismatch' };
+      const matches = grant.action === input.action
+        && grant.entityId === input.entityId
+        && grant.correlationId === input.correlationId
+        && grant.conversationId === input.conversationId
+        && grant.requesterId === input.requesterId
+        && grant.tenantId === input.tenantId;
+      if (!matches) return { ok: false, reason: 'mismatch' };
 
-    grant.consumedAt = new Date().toISOString();
-    await this.persist();
-    return { ok: true, grant: publicGrant(grant) };
+      const previousConsumedAt = grant.consumedAt;
+      grant.consumedAt = new Date().toISOString();
+      try {
+        await this.persist();
+        return { ok: true, grant: publicGrant(grant) };
+      } catch (error) {
+        if (previousConsumedAt === undefined) delete grant.consumedAt;
+        else grant.consumedAt = previousConsumedAt;
+        throw error;
+      }
+    });
   }
 
   private async prune(persist = true): Promise<void> {
+    const previous = this.grants.slice();
     const changed = pruneGrants(this.grants, Date.now(), this.ttlMs);
-    if (persist && changed) await this.persist();
+    if (persist && changed) {
+      try {
+        await this.persist();
+      } catch (error) {
+        this.grants.splice(0, this.grants.length, ...previous);
+        throw error;
+      }
+    }
+  }
+
+  private mutate<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.mutationQueue.then(operation);
+    this.mutationQueue = next.then(() => undefined, () => undefined);
+    return next;
   }
 
   private async persist(snapshot = this.grants): Promise<void> {

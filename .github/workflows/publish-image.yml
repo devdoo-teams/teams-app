@@ -39,12 +39,12 @@ jobs:
       id-token: write
     steps:
       - name: Check out the exact source commit
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.19.0
           cache: npm
@@ -100,6 +100,13 @@ jobs:
           const marker = JSON.parse(fs.readFileSync('dist/server/.teams-server-build-commit', 'utf8'));
           const serverBundleBytes = fs.readFileSync('dist/server/index.js');
           const bundleSha256 = sha256(serverBundleBytes);
+          const clientFiles = fs.readdirSync('dist/client', { recursive: true })
+            .filter((entry) => fs.statSync(`dist/client/${entry}`).isFile())
+            .sort();
+          const clientBundleSha256 = sha256(Buffer.concat(clientFiles.flatMap((entry) => [
+            Buffer.from(`${entry}\u0000`),
+            fs.readFileSync(`dist/client/${entry}`),
+          ])));
           if (
             marker.schemaVersion !== 3
             || marker.commit !== sourceCommit
@@ -109,14 +116,15 @@ jobs:
           ) {
             throw new Error('server build marker does not prove the exact clean Core source commit');
           }
-          if (manifest.version !== packageJson.version || manifest.devicePermissions?.includes('geolocation') !== true) {
-            throw new Error('packaged manifest version or geolocation permission is invalid');
+          if (manifest.version !== packageJson.version || manifest.devicePermissions?.includes('geolocation')) {
+            throw new Error('packaged manifest version or agent-only permissions are invalid');
           }
           const identity = {
             schema: 2,
             sourceCommit,
             version: packageJson.version,
             teamsPackageSha256: sha256(packageBytes),
+            clientBundleSha256,
             serverBundleSha256: bundleSha256,
             manifestSha256: sha256(manifestBytes),
             imageDigest: null,
@@ -142,7 +150,7 @@ jobs:
 
       - name: Build and publish the exact runtime image
         id: push
-        uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4 # v6
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: ./Dockerfile
@@ -177,46 +185,36 @@ jobs:
           identity.image = `${process.env.REGISTRY}/${process.env.IMAGE_NAME}`;
           identity.imageDigest = process.env.IMAGE_DIGEST;
           fs.writeFileSync(identityPath, `${JSON.stringify(identity, null, 2)}\n`);
+          const handoff = {
+            schemaVersion: 1,
+            source: 'github-actions',
+            commit: identity.sourceCommit,
+            version: identity.version,
+            image: identity.image,
+            imageDigest: identity.imageDigest,
+            teamsPackageSha256: identity.teamsPackageSha256,
+            clientBundleSha256: identity.clientBundleSha256,
+            serverBundleSha256: identity.serverBundleSha256,
+          };
+          fs.writeFileSync('dist/evidence/azure-release-receipt.json', `${JSON.stringify(handoff, null, 2)}\n`);
           NODE
 
       - name: Attest image provenance
-        if: github.event.repository.visibility == 'public'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
-      - name: Record provenance policy for private repository
-        if: github.event.repository.visibility != 'public'
-        run: |
-          set -euo pipefail
-          node --input-type=module <<'NODE'
-          import fs from 'node:fs';
-          const identityPath = 'dist/evidence/release-identity.json';
-          const identity = JSON.parse(fs.readFileSync(identityPath, 'utf8'));
-          identity.provenance = {
-            method: 'github-artifact-attestation',
-            state: 'unavailable',
-            reason: 'private-repository-plan',
-          };
-          fs.writeFileSync(identityPath, `${JSON.stringify(identity, null, 2)}\n`);
-          NODE
+      - name: Attest the Azure release receipt
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/evidence/azure-release-receipt.json
 
-      - name: Record provenance policy for public repository
-        if: github.event.repository.visibility == 'public'
-        run: |
-          set -euo pipefail
-          node --input-type=module <<'NODE'
-          import fs from 'node:fs';
-          const identityPath = 'dist/evidence/release-identity.json';
-          const identity = JSON.parse(fs.readFileSync(identityPath, 'utf8'));
-          identity.provenance = {
-            method: 'github-artifact-attestation',
-            state: 'attested',
-          };
-          fs.writeFileSync(identityPath, `${JSON.stringify(identity, null, 2)}\n`);
-          NODE
+      - name: Attest the Teams package bound by the receipt
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: appPackage/build/teams-sdk-mvp.zip
 
       - name: Upload immutable release identity
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -224,6 +222,7 @@ jobs:
           name: teams-runtime-identity-${{ github.sha }}
           path: |
             dist/evidence/release-identity.json
+            dist/evidence/azure-release-receipt.json
             appPackage/build/teams-sdk-mvp.zip
             dist/server/**
             dist/client/**

@@ -38,8 +38,8 @@ export function validateManifest(manifest, packageJson, { iconExists, packageLoc
     return 'Manifest home tab websiteUrl must use the public tab origin with a trailing slash so Teams does not depend on an HTTP redirect.';
   }
 
-  if (!manifest.devicePermissions?.includes('geolocation')) {
-    return 'Manifest must declare geolocation device permission.';
+  if (manifest.devicePermissions?.includes('geolocation')) {
+    return 'Manifest must not request the removed geolocation device permission.';
   }
 
   const missingValidDomains = ['${{TAB_DOMAIN}}', 'token.botframework.com']
@@ -62,8 +62,8 @@ export function validateManifest(manifest, packageJson, { iconExists, packageLoc
     return `Package lock version must match package version ${packageJson.version}, received top-level=${packageLockJson.version}, root=${lockRoot?.version}`;
   }
 
-  if (!manifest.bots?.[0]?.commandLists?.some((list) => list.commands?.some((command) => command.title === '날씨'))) {
-    return 'Manifest must expose the 날씨 Bot command.';
+  if (manifest.bots?.[0]?.commandLists?.some((list) => list.commands?.some((command) => /^(?:날씨|weather)$/iu.test(command.title)))) {
+    return 'Manifest must not expose the removed weather Bot command.';
   }
 
   if (!manifest.webApplicationInfo.id || !manifest.webApplicationInfo.resource) {

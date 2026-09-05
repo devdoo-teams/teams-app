@@ -2,7 +2,7 @@
 
 - Teams 앱 변경 요청은 아래의 필수 릴리스 워크플로우를 따른다. 구현만 끝내거나 로컬 테스트 결과만으로 완료 처리하지 않는다.
 - 현재 기술 제약에서는 `Teams Core`가 기준 제품이다. Microsoft Teams SDK + TypeScript/React 개인 탭 + Express/결정형 서버 + Adaptive Cards를 API 키 없이 먼저 구현한다. CopilotKit, OpenAI API, 로컬 모델, MCP는 Core 기능이 안정된 뒤 명시적 feature flag와 별도 검증으로만 추가하며, API 키가 없다는 이유로 Core 기능을 대체 응답·가짜 완료로 처리하지 않는다. 상세 단계는 [`docs/api-free-teams-roadmap.md`](docs/api-free-teams-roadmap.md)를 따른다.
-- MCP/MCP Apps는 Teams 모바일 UI 자체로 간주하지 않는다. Teams 탭은 TeamsJS/React WebView, Bot 응답은 Adaptive Cards 1.2 호환 subset을 기준으로 구현하고, MCP는 구체적인 서버 tool 연결이 확인된 뒤 서버 측 adapter로만 검토한다.
+- MCP/MCP Apps는 Teams 모바일 UI 자체로 간주하지 않는다. Teams 탭은 TeamsJS/React WebView를 사용한다. Core 오케스트레이션 Bot 카드는 canonical Microsoft Teams `en-us` 문서가 현재 Teams 모바일에 명시한 Adaptive Cards 1.6으로 선언하고, `FactSet`, `Input.ChoiceSet`, `Input.Text`, `Action.Submit`, `Action.ShowCard`, `Action.OpenUrl`의 제한된 subset만 사용한다. Teams가 지원하지 않는 `positive`/`destructive` action style은 넣지 않는다. 지역화 문서가 canonical 문서와 다르면 `CONTRACT_DRIFT_BLOCKED`로 기록하고 canonical 원문과 실제 클라이언트 검증을 우선한다. MCP는 구체적인 서버 tool 연결이 확인된 뒤 서버 측 adapter로만 검토한다.
 - 기본 `npm run build`와 기본 실행은 Core만 대상으로 한다. 선택 provider는 `build:optional`, `build:all`, `TEAMS_OPTIONAL_RUNTIME=true`처럼 명시적으로 요청한 경우에만 로드한다.
 - 소스·매니페스트·패키징·런타임 설정 변경은 Git diff를 확인하고 의미 있는 단위로 커밋한다. 완료 보고에는 해당 커밋 SHA를 포함한다.
 - 릴리스 루프의 clean 판정은 추적 파일 변경만 차단한다. 시작 시 발견된 미추적 파일은 `untrackedAtStart`로 기록하고 삭제·이동·업로드하지 않는다. 추적 파일 수정은 여전히 커밋 전 진행을 차단한다.
@@ -13,6 +13,16 @@
 - 인앱 브라우저의 탭 재사용은 자원 절약 게이트다. 작업 시작 시 ambient UI 상태와 현재 포커스 창에 열린 탭을 먼저 확인하고, 표면별로 기존 탭 하나를 선택해 끝까지 재사용한다. 기본 동작으로 `tabs.new`, 새 브라우저 창, 새 로그인 탭을 호출하지 않는다.
 - 브라우저 도구의 `tabs.list()`가 빈 목록을 반환하더라도 ambient UI 상태에 열린 탭이 표시되거나 사용자가 기존 탭을 열어 두었다고 말하면 “탭 없음”으로 판단하지 않는다. 이는 연결/노출 불일치로 분류하고 기존 포커스 탭에 재접속하거나 사용자에게 기존 탭 포커스를 요청한다. 이 경우 새 탭을 만들어 우회하지 않는다.
 - 인증·업로드·모바일 검증 중인 탭은 URL을 다시 `goto`하거나 새로고침하지 않는다. 같은 표면의 다른 단계는 현재 탭에서 이동하고, 탭 ID·URL·제목을 단계 시작/종료 시 비교해 동일 세션을 유지한다. 새 탭이 정말 필요하면 먼저 사용자에게 이유와 기존 탭 재사용이 불가능한 근거를 보고하고 명시적 승인을 받는다.
+
+## 공식 계약 우선 디버깅 게이트
+
+- 클라우드, Teams, Entra, GitHub, Azure DevOps, 외부 provider, SDK, CLI의 동작을 진단하거나 구현할 때 기억이나 추측을 계약으로 사용하지 않는다. 작업 시점의 공식 1차 문서와 설치된 도구의 `--version`/`--help`를 먼저 확인하고, 둘이 일치하는 옵션·상태·제약만 구현 근거로 사용한다.
+- 디버깅 기록은 `OFFICIAL CONTRACT`, `OBSERVED EVIDENCE`, `INFERENCE`, `FIXTURE`, `LIVE RESULT`를 분리한다. 공식 문서가 보장하지 않거나 실제로 관찰하지 않은 항목은 `UNVERIFIED`로 유지한다.
+- 순서는 `공식 문서 URL과 갱신일 확인 → 설치 버전과 로컬 help 확인 → 최소 비파괴 재현 → 정확한 실패 출력 보존 → RED 회귀 테스트 → 최소 수정 → 동일 명령 GREEN → 실제 read-back`으로 고정한다. 실패 원문을 확보하기 전에 설정·파라미터·권한을 추측 변경하지 않는다.
+- 공식 문서와 설치된 help가 충돌하거나 현재 버전의 계약을 확정할 수 없으면 `CONTRACT_DRIFT_BLOCKED`로 중단한다. 블로그, 검색 요약, 오래된 archive, fixture만으로 운영 결정을 내리지 않는다.
+- 반복 스크립트와 스킬은 재사용 전에 공식 계약 링크, 지원 도구 버전, fail-closed 조건, 금지 동작, focused test를 확인한다. 실제 실행에서 결함이 드러나면 우회하지 말고 스킬/스크립트 자체에 RED 테스트를 추가해 수정하고 압박 시나리오를 다시 통과시킨 뒤 재사용한다.
+- Azure ARM 변경 전 검증은 Microsoft의 현재 `az deployment group what-if` 계약을 따른다. `what-if`와 `create`를 혼동하지 않고, JSON 평가는 `--no-pretty-print`, 대상 구독은 `--subscription`, 검증은 설치 help가 정의한 `Provider` 계약을 사용한다. `bicep.use_binary_from_path=True`이면 검증된 Bicep 실행 파일의 디렉터리가 실제 Azure CLI 자식 `PATH`에 있는지 확인한다.
+- 완료/수정 보고에는 사용한 공식 문서 링크, 설치 도구 버전, help에서 확인한 핵심 옵션, 재현 명령, RED/GREEN 결과를 포함한다. 링크 없는 임의 추론은 배포 근거나 Jira 수락 증거로 사용하지 않는다.
 
 ## Teams 데스크톱 앱 독립 스크린샷 검증
 
@@ -52,17 +62,24 @@ Teams 앱 변경 요청에는 별도 예외 승인이 없는 한 다음 순서�
 
 `local-handler`, `local-outbox`, `local-bypass` 상태를 공개 완료 상태로 간주하지 않는다. 공개 health가 위 기준을 충족하지 않거나 Teams 응답이 확인되지 않으면 완료 메시지를 보내지 말고 `BLOCKER`로 보고한다. 순수 읽기 전용 진단으로 앱 산출물을 변경하지 않은 경우에만 패키지 업로드 절차를 생략할 수 있다.
 
-## 장기 프로세스·하위 에이전트 모니터링 체크포인트
+## 장기 프로세스·선택적 위임 체크포인트
 
 - 30초를 넘길 수 있는 명령·빌드·테스트·브라우저 작업은 무기한 대기로 실행하지 않는다. 호출 시 제한시간을 지정하고, 제한시간의 절반·종료 시점에 진행률과 마지막 로그를 확인한다.
 - 공개 서버·Dev Tunnel·업로드 세션·UI 검증을 서로 독립된 작업으로 취급한다. 한 작업이 대기하거나 잠겨도 다른 작업을 중단하지 않고, `ps`/포트/`/api/health`/최근 로그로 각 작업의 생존 여부를 따로 판정한다.
-- 하위 에이전트는 작업 ID별로 `pending_init`, `running`, `needs_attention`, `completed`, `errored`, `interrupted`를 기록한다. 에이전트가 필요하지 않은 단계에서는 새 에이전트를 만들지 않으며, 동일한 대기 상태를 반복 보고하지 않는다.
-- 하위 에이전트는 즉시 결과가 필요한 경우에만 제한된 대기를 사용하고, 그 외에는 부모 작업이 비중복 측면 작업을 진행한다. 동일 작업에 대한 중복 위임·중복 검증을 금지한다.
-- 독립적으로 실행할 감사·검증·구현 작업이 대기 중이면 쓰기 범위를 분리해 가용 하위 에이전트 슬롯까지 병렬 배정한다. 부모 오케스트레이터는 즉시 필요한 임계 경로를 직접 진행하고, 하위 에이전트 결과를 기다리며 같은 작업을 다시 수행하지 않는다.
-- `completed`/`errored`/`interrupted` 결과는 발견 즉시 회수·검토하고 해당 에이전트를 종료해 슬롯을 비운다. 대기열에 비중복 작업이 남아 있으면 확보된 슬롯을 가장 높은 우선순위 작업으로 즉시 다시 채우며, 병렬화할 일이 없을 때만 슬롯을 비워 둔다.
-- 두 번 연속 진행률·로그·상태 변화가 없으면 해당 작업을 `BLOCKED` 또는 `STALE_PROCESS_SUSPECTED`로 분리하고, 원인·PID·마지막 활동 시각·대체 가능한 다음 작업을 기록한다. 공개 서버나 사용자가 사용 중인 브라우저 세션은 근거 없이 종료하지 않는다.
-- `STALE_PROCESS_SUSPECTED` 하위 에이전트는 마지막 체크포인트를 요청하고도 변화가 없을 때 이전 상태를 회수해 종료한 뒤 더 좁은 범위로 재배정한다. 종료하지 않은 에이전트가 동시성 슬롯을 무기한 점유하게 두지 않는다.
+- 기본 실행자는 부모 오케스트레이터다. 하위 에이전트는 부모의 즉시 임계 경로와 독립적이고, 부모 작업과 중복되지 않으며, 명확한 별도 산출물이 있고, 사용자 입력·브라우저·부모 경로 쓰기 없이 끝낼 수 있고, 디스패치·모니터링·리뷰·정리 비용보다 예상 시간 절감이 큰 경우에만 만든다.
+- 하위 에이전트는 전용 `spawn_agent` 수명주기로만 만들고 `wait_agent`/`send_input`/`close_agent`로 관리한다. 별도 Codex 작업이나 새 스레드 생성 기능을 하위 에이전트 대용으로 사용하지 않는다. 전용 도구를 사용할 수 없으면 부모가 직접 수행한다.
+- 읽기 전용 감사·검토에는 새 worktree와 부모 저장소 report 쓰기를 허용하지 않는다. 최종 응답만 회수하며 ledger/report는 부모가 작성한다. 별도 worktree는 쓰기 집합이 분리된 독립 코드 구현에만 허용하고, 커밋을 검토해 통합하거나 폐기한 직후 제거한다.
+- 비핵심 위임 작업은 체크포인트를 한 번만 확인한다. 유효 결과가 없거나 불필요한 승인 요청이 발생하면 즉시 종료하고 부모가 직접 진행한다. 재위임은 실패 원인을 구체적으로 수정했고 여전히 시간 절감이 예상될 때만 한 번 허용한다. 릴리스 핵심 장기 작업만 실제 산출물 변화가 확인될 때 두 번째 체크포인트를 허용한다.
+- `completed`/`errored`/`interrupted` 결과는 즉시 회수·검토하고 `close_agent`로 닫는다. 플랫폼 상태만으로 성공 처리하지 않고, 필요했던 커밋·테스트·최종 응답이 모두 일치할 때만 산출물로 채택한다.
+- 공개 서버나 사용자가 사용 중인 브라우저 세션은 근거 없이 종료하지 않는다. 하위 작업 종료는 해당 agent/process/worktree에만 정확히 제한한다.
 - 모니터링 결과는 각 단계 보고에 `process`, `pid`, `elapsed`, `lastActivity`, `health`, `nextAction`을 포함한다. 이 기록이 없으면 장기 작업을 완료로 판정하지 않는다.
+
+## Git·worktree 단순성 게이트
+
+- 기본 상태는 원본 `/Users/doosansmacbookpro/Documents/TeamsApp` worktree 하나, `main`, 현재 통합 브랜치 하나다. 추가 worktree나 브랜치는 독립 코드 구현에 꼭 필요한 기간에만 만들며 읽기 전용 검토 때문에 만들지 않는다.
+- 하위 에이전트가 만든 detached worktree, 통합된 보조 브랜치, 숨은 stash를 작업 종료 후 남기지 않는다. 제거 전에는 정확한 경로의 clean 상태, 고유 커밋, 미추적 파일, 열린 PR, 현재 통합 브랜치 포함 여부를 읽기 전용으로 확인한다.
+- 현재 통합 브랜치에 포함되지 않은 고유 커밋이나 미추적 파일은 자동 삭제하지 않는다. 필요한 변경만 현재 브랜치에 명시적으로 통합하거나 사용자가 폐기를 지시한 범위를 증명한 뒤 제거한다.
+- 릴리스 전에는 `git worktree list --porcelain`, 로컬·원격 branch divergence, `git status`, `git stash list`를 확인한다. 설명되지 않은 추가 worktree, detached HEAD, 고유 dead branch, 숨은 stash가 있으면 릴리스 게이트를 중단한다.
 
 ## Teams Bot Codex 트러블슈팅 지침
 

@@ -50,27 +50,6 @@ const dependencies: McpGenUiServerOptions = {
     listLocalOnly: () => [],
     countActiveLocalOnly: () => 0,
   },
-  getWeather: async () => ({
-    source: 'demo',
-    location: {
-      name: '테스트 위치',
-      latitude: 37.5665,
-      longitude: 126.978,
-      timezone: 'Asia/Seoul',
-    },
-    current: {
-      time: '2026-08-08T00:00:00.000Z',
-      temperature: 22,
-      apparentTemperature: 22.8,
-      humidity: 58,
-      precipitation: 0,
-      weatherCode: 0,
-      isDay: true,
-      windSpeed: 9.4,
-      condition: '맑음',
-      icon: 'sun',
-    },
-  }),
   responseMode: publicResponseMode,
   widgetHtml: '<!doctype html><html><body>GenUI test widget</body></html>',
   sessionMode: 'stateful',
@@ -226,14 +205,6 @@ async function verifyStructuredResults(baseUrl: string, sessionId: string): Prom
   assert.equal(firstEnvelope.responseMode?.mode, 'deterministic', 'selected mode is carried only as safe structured content');
   assert.equal(firstEnvelope.responseMode?.label, '결정형', 'mode labels are canonicalized and never echo provider URLs');
   assert.equal(JSON.stringify(firstEnvelope).includes('provider.invalid'), false, 'provider URLs are absent from structured mode metadata');
-
-  const weather = await callTool(baseUrl, sessionId, 7, 'get_weather', {
-    latitude: 37.5665,
-    longitude: 126.978,
-    demo: true,
-  });
-  const weatherEnvelope = GenUiEnvelopeV1Schema.parse(weather.structuredContent);
-  assert.equal(weather.content?.[0]?.text, weatherEnvelope.fallbackText, 'weather fallback text is identical to structured fallback text');
 
   const job = await callTool(baseUrl, sessionId, 8, 'get_job_status', { jobId: 'job-mcp-secret' });
   const jobEnvelope = GenUiEnvelopeV1Schema.parse(job.structuredContent);

@@ -28,19 +28,15 @@ const validCard: A2ARemoteAgentCard = {
     extendedAgentCard: false,
   },
   securitySchemes: {
-    teamsOAuth: {
-      oauth2SecurityScheme: {
-        flows: {
-          authorizationCode: {
-            authorizationUrl: 'https://login.example.test/authorize',
-            tokenUrl: 'https://login.example.test/token',
-            scopes: { access_as_user: 'Delegated access.' },
-          },
-        },
+    teamsBearer: {
+      httpAuthSecurityScheme: {
+        description: 'Teams A2A bearer token.',
+        scheme: 'Bearer',
+        bearerFormat: 'JWT',
       },
     },
   },
-  securityRequirements: [{ teamsOAuth: ['access_as_user'] }],
+  securityRequirements: [{ schemes: { teamsBearer: [] } }],
   defaultInputModes: ['text/plain'],
   defaultOutputModes: ['text/plain'],
   skills: [{
@@ -67,14 +63,24 @@ const mockFetch: A2ARemoteFetch = async (input, init = {}) => {
 };
 
 await testHappyPath();
+await testLegacyBearerCardCompatibility();
 await testAdvertisedCapabilitiesDoNotBlockBaseRpc();
 await testDirectMessageResponse();
 await testMissingAuthenticationProvider();
 await testAuthenticationFailureIsSafe();
 await testInvalidCardSecurityMetadata();
+await testPreferredInterfaceMayPrecedeOtherBindings();
+await testFirstSupportedJsonRpcInterfaceIsSelected();
+await testUnsupportedTrailingInterfaceDoesNotInvalidateSelectedInterface();
+await testNoSupportedInterfaceFailsBeforeTokenResolution();
+await testSelectedInterfaceTenantIsAppliedToEveryRequest();
+await testOptionalCapabilitiesDefaultFalseAndInvalidTypesFail();
+await testAgentCardModesAndSkillsFollowProtoJson();
 await testUnsupportedProtocolAndSsrf();
+await testIpv6LiteralAndRedirectSsrfAreBlockedBeforeFollow();
 await testTimeout();
 await testAbortSignalPropagatesToRpc();
+await testJsonRpcResponseIdMustMatchRequest();
 await testJsonRpcErrorSerialization();
 
 console.log('a2a-remote-client-test: PASS');
@@ -144,6 +150,30 @@ async function testHappyPath(): Promise<void> {
     nextPageToken: '',
   });
   assert.deepEqual(await client.cancelTask('task-1'), completedTask);
+}
+
+async function testLegacyBearerCardCompatibility(): Promise<void> {
+  calls.length = 0;
+  nextResponse = (url, init) => {
+    if (url.pathname === '/.well-known/agent-card.json') {
+      return jsonResponse({
+        ...validCard,
+        securitySchemes: { legacyBearer: { type: 'http', scheme: 'bearer' } },
+        securityRequirements: [{ legacyBearer: [] }],
+      });
+    }
+    assert.equal(new Headers(init.headers).get('authorization'), 'Bearer legacy-token');
+    const request = JSON.parse(String(init.body)) as { id: string; method: string };
+    assert.equal(request.method, 'GetTask');
+    return jsonResponse({ jsonrpc: '2.0', id: request.id, result: completedTask });
+  };
+
+  const client = await createA2ARemoteClient('https://agent.example.test', {
+    fetch: mockFetch,
+    bearerTokenProvider: () => 'legacy-token',
+  });
+  assert.deepEqual(await client.getTask('task-1'), completedTask,
+    'the explicitly supported legacy HTTP bearer shape must remain interoperable');
 }
 
 async function testAdvertisedCapabilitiesDoNotBlockBaseRpc(): Promise<void> {
@@ -247,12 +277,267 @@ async function testAuthenticationFailureIsSafe(): Promise<void> {
 
 async function testInvalidCardSecurityMetadata(): Promise<void> {
   nextResponse = (url) => url.pathname === '/.well-known/agent-card.json'
-    ? jsonResponse({ ...validCard, securityRequirements: [{ missingScheme: [] }] })
+    ? jsonResponse({ ...validCard, securityRequirements: [{ schemes: { missingScheme: [] } }] })
     : jsonResponse({});
   await expectRemoteError(
     () => createA2ARemoteClient('https://agent.example.test', { fetch: mockFetch }),
     'INVALID_AGENT_CARD',
   );
+
+  nextResponse = (url) => url.pathname === '/.well-known/agent-card.json'
+    ? jsonResponse({
+      ...validCard,
+      securitySchemes: { teamsBearer: { httpAuthSecurityScheme: { bearerFormat: 'JWT' } } },
+    })
+    : jsonResponse({});
+  await expectRemoteError(
+    () => createA2ARemoteClient('https://agent.example.test', { fetch: mockFetch }),
+    'INVALID_AGENT_CARD',
+  );
+}
+
+async function testPreferredInterfaceMayPrecedeOtherBindings(): Promise<void> {
+  calls.length = 0;
+  nextResponse = (url, init) => {
+    if (url.pathname === '/.well-known/agent-card.json') {
+      return jsonResponse({
+        ...validCard,
+        supportedInterfaces: [
+          validCard.supportedInterfaces[0],
+          {
+            url: 'https://agent.example.test/a2a/http',
+            protocolBinding: 'HTTP+JSON',
+            protocolVersion: '1.0',
+          },
+        ],
+      });
+    }
+    assert.equal(url.pathname, '/a2a/v1', 'RPC must use the preferred first interface');
+    const request = JSON.parse(String(init.body)) as { id: string };
+    return jsonResponse({ jsonrpc: '2.0', id: request.id, result: completedTask });
+  };
+
+  const client = await createA2ARemoteClient('https://agent.example.test', {
+    fetch: mockFetch,
+    bearerTokenProvider: () => 'test-token',
+  });
+  assert.deepEqual(await client.getTask('task-1'), completedTask);
+}
+
+async function testFirstSupportedJsonRpcInterfaceIsSelected(): Promise<void> {
+  calls.length = 0;
+  nextResponse = (url, init) => {
+    if (url.pathname === '/.well-known/agent-card.json') {
+      return jsonResponse({
+        ...validCard,
+        supportedInterfaces: [
+          {
+            url: 'https://agent.example.test/a2a/http',
+            protocolBinding: 'HTTP+JSON',
+            protocolVersion: '1.0',
+            tenant: 'non-selected-tenant',
+          },
+          {
+            ...validCard.supportedInterfaces[0],
+            tenant: 'selected-tenant',
+          },
+        ],
+      });
+    }
+    assert.equal(url.pathname, '/a2a/v1');
+    assert.deepEqual(requestBody(init).params, {
+      tenant: 'selected-tenant',
+      id: 'task-1',
+      historyLength: 0,
+    });
+    const request = JSON.parse(String(init.body)) as { id: string };
+    return jsonResponse({ jsonrpc: '2.0', id: request.id, result: completedTask });
+  };
+
+  const client = await createA2ARemoteClient('https://agent.example.test', {
+    fetch: mockFetch,
+    bearerTokenProvider: () => 'test-token',
+  });
+  assert.equal(client.selectedInterface.url, 'https://agent.example.test/a2a/v1');
+  assert.equal(client.selectedInterface.tenant, 'selected-tenant');
+  assert.deepEqual(await client.getTask('task-1'), completedTask);
+}
+
+async function testUnsupportedTrailingInterfaceDoesNotInvalidateSelectedInterface(): Promise<void> {
+  calls.length = 0;
+  nextResponse = (url, init) => {
+    if (url.pathname === '/.well-known/agent-card.json') {
+      return jsonResponse({
+        ...validCard,
+        supportedInterfaces: [
+          validCard.supportedInterfaces[0],
+          {
+            url: 'wss://agent.example.test/a2a/custom',
+            protocolBinding: 'CUSTOM_WEBSOCKET',
+            protocolVersion: '2026-09',
+            officialExtension: { safelyIgnored: true },
+          },
+        ],
+      });
+    }
+    assert.equal(url.pathname, '/a2a/v1');
+    const request = JSON.parse(String(init.body)) as { id: string };
+    return jsonResponse({ jsonrpc: '2.0', id: request.id, result: completedTask });
+  };
+
+  const client = await createA2ARemoteClient('https://agent.example.test', {
+    fetch: mockFetch,
+    bearerTokenProvider: () => 'test-token',
+  });
+  assert.equal(client.selectedInterface.url, 'https://agent.example.test/a2a/v1');
+  assert.deepEqual(await client.getTask('task-1'), completedTask,
+    'a later unsupported custom binding must not invalidate the first supported interface');
+}
+
+async function testNoSupportedInterfaceFailsBeforeTokenResolution(): Promise<void> {
+  let tokenReads = 0;
+  nextResponse = (url) => url.pathname === '/.well-known/agent-card.json'
+    ? jsonResponse({
+      ...validCard,
+      supportedInterfaces: [
+        {
+          url: 'https://agent.example.test/a2a/http',
+          protocolBinding: 'HTTP+JSON',
+          protocolVersion: '1.0',
+        },
+        {
+          url: 'https://agent.example.test/a2a/grpc',
+          protocolBinding: 'GRPC',
+          protocolVersion: '1.0',
+        },
+      ],
+    })
+    : jsonResponse({});
+
+  await expectRemoteError(
+    () => createA2ARemoteClient('https://agent.example.test', {
+      fetch: mockFetch,
+      bearerTokenProvider: () => {
+        tokenReads += 1;
+        return 'must-not-be-read';
+      },
+    }),
+    'UNSUPPORTED_PROTOCOL',
+  );
+  assert.equal(tokenReads, 0, 'no supported interface must fail before bearer token resolution');
+}
+
+async function testSelectedInterfaceTenantIsAppliedToEveryRequest(): Promise<void> {
+  calls.length = 0;
+  const observed: Array<{ method: string; params: Record<string, unknown> }> = [];
+  nextResponse = (url, init) => {
+    if (url.pathname === '/.well-known/agent-card.json') {
+      return jsonResponse({
+        ...validCard,
+        supportedInterfaces: [{ ...validCard.supportedInterfaces[0], tenant: 'tenant-selected' }],
+      });
+    }
+    const request = JSON.parse(String(init.body)) as {
+      id: string;
+      method: string;
+      params: Record<string, unknown>;
+    };
+    observed.push({ method: request.method, params: request.params });
+    if (request.method === 'SendMessage') {
+      return jsonResponse({ jsonrpc: '2.0', id: request.id, result: { task: completedTask } });
+    }
+    if (request.method === 'ListTasks') {
+      return jsonResponse({ jsonrpc: '2.0', id: request.id, result: { tasks: [] } });
+    }
+    return jsonResponse({ jsonrpc: '2.0', id: request.id, result: completedTask });
+  };
+  const client = await createA2ARemoteClient('https://agent.example.test', {
+    fetch: mockFetch,
+    bearerTokenProvider: () => 'test-token',
+  });
+  await client.sendMessage({ messageId: 'message-tenant', parts: [{ text: 'tenant request' }] });
+  await client.getTask('task-1');
+  await client.listTasks();
+  await client.cancelTask('task-1');
+  assert.deepEqual(observed.map(({ method, params }) => [method, params.tenant]), [
+    ['SendMessage', 'tenant-selected'],
+    ['GetTask', 'tenant-selected'],
+    ['ListTasks', 'tenant-selected'],
+    ['CancelTask', 'tenant-selected'],
+  ]);
+
+  nextResponse = (url, init) => {
+    if (url.pathname === '/.well-known/agent-card.json') return jsonResponse(validCard);
+    assert.equal(Object.hasOwn(requestBody(init).params as Record<string, unknown>, 'tenant'), false,
+      'tenant must be omitted when the selected interface does not declare it');
+    const request = JSON.parse(String(init.body)) as { id: string };
+    return jsonResponse({ jsonrpc: '2.0', id: request.id, result: completedTask });
+  };
+  const tenantless = await createA2ARemoteClient('https://agent.example.test', {
+    fetch: mockFetch,
+    bearerTokenProvider: () => 'test-token',
+  });
+  await tenantless.getTask('task-1');
+}
+
+async function testOptionalCapabilitiesDefaultFalseAndInvalidTypesFail(): Promise<void> {
+  nextResponse = (url) => url.pathname === '/.well-known/agent-card.json'
+    ? jsonResponse({ ...validCard, capabilities: {} })
+    : jsonResponse({});
+  const client = await createA2ARemoteClient('https://agent.example.test', { fetch: mockFetch });
+  assert.deepEqual(client.card.capabilities, {
+    streaming: false,
+    pushNotifications: false,
+    extendedAgentCard: false,
+  });
+
+  for (const capabilities of [
+    { streaming: 'false' },
+    { pushNotifications: 0 },
+    { extendedAgentCard: null },
+  ]) {
+    nextResponse = (url) => url.pathname === '/.well-known/agent-card.json'
+      ? jsonResponse({ ...validCard, capabilities })
+      : jsonResponse({});
+    await expectRemoteError(
+      () => createA2ARemoteClient('https://agent.example.test', { fetch: mockFetch }),
+      'INVALID_AGENT_CARD',
+    );
+  }
+}
+
+async function testAgentCardModesAndSkillsFollowProtoJson(): Promise<void> {
+  const malformedCards = [
+    { ...validCard, defaultInputModes: ['text/plain', 7] },
+    { ...validCard, defaultOutputModes: [null] },
+    { ...validCard, skills: [{ name: 'missing required fields' }] },
+    { ...validCard, skills: [{ id: 7, name: 'n', description: 'd', tags: ['a'] }] },
+    { ...validCard, skills: [{ id: 'id', name: '', description: 'd', tags: ['a'] }] },
+    { ...validCard, skills: [{ id: 'id', name: 'n', description: 7, tags: ['a'] }] },
+    { ...validCard, skills: [{ id: 'id', name: 'n', description: 'd', tags: ['a', 7] }] },
+  ];
+  for (const malformedCard of malformedCards) {
+    nextResponse = (url) => url.pathname === '/.well-known/agent-card.json'
+      ? jsonResponse(malformedCard)
+      : jsonResponse({});
+    await expectRemoteError(
+      () => createA2ARemoteClient('https://agent.example.test', { fetch: mockFetch }),
+      'INVALID_AGENT_CARD',
+    );
+  }
+
+  nextResponse = (url) => url.pathname === '/.well-known/agent-card.json'
+    ? jsonResponse({
+      ...validCard,
+      officialFutureField: { enabled: true },
+      skills: [{
+        ...validCard.skills[0],
+        examples: ['A future official field must be accepted.'],
+      }],
+    })
+    : jsonResponse({});
+  const client = await createA2ARemoteClient('https://agent.example.test', { fetch: mockFetch });
+  assert.equal(client.card.skills[0].id, 'teams-core-tasks');
 }
 
 async function testUnsupportedProtocolAndSsrf(): Promise<void> {
@@ -277,6 +562,40 @@ async function testUnsupportedProtocolAndSsrf(): Promise<void> {
   );
 }
 
+async function testIpv6LiteralAndRedirectSsrfAreBlockedBeforeFollow(): Promise<void> {
+  for (const origin of [
+    'https://[::1]',
+    'https://[fc00::1]',
+    'https://[fd12:3456:789a::1]',
+    'https://[fe80::1]',
+  ]) {
+    calls.length = 0;
+    await expectRemoteError(
+      () => createA2ARemoteClient(origin, { fetch: mockFetch }),
+      'SSRF_BLOCKED',
+    );
+    assert.equal(calls.length, 0, `${origin} must be rejected before fetch`);
+  }
+
+  for (const location of [
+    'https://127.0.0.1/agent-card.json',
+    'https://[::1]/agent-card.json',
+    'https://[fd00::1]/agent-card.json',
+    'https://[fe80::1]/agent-card.json',
+  ]) {
+    calls.length = 0;
+    nextResponse = () => new Response(null, {
+      status: 302,
+      headers: { location },
+    });
+    await expectRemoteError(
+      () => createA2ARemoteClient('https://agent.example.test', { fetch: mockFetch }),
+      'SSRF_BLOCKED',
+    );
+    assert.equal(calls.length, 1, `private redirect ${location} must be rejected before follow`);
+  }
+}
+
 async function testTimeout(): Promise<void> {
   nextResponse = (_url, init) => new Promise<Response>((_resolve, reject) => {
     init.signal?.addEventListener('abort', () => {
@@ -296,7 +615,7 @@ async function testTimeout(): Promise<void> {
 
 async function testAbortSignalPropagatesToRpc(): Promise<void> {
   calls.length = 0;
-  let observedSignal: AbortSignal | undefined;
+  let observedSignal: AbortSignal | null | undefined;
   let fetchAbortObserved = false;
   let fetchStartedResolve!: () => void;
   const fetchStarted = new Promise<void>((resolve) => { fetchStartedResolve = resolve; });
@@ -332,6 +651,30 @@ async function testAbortSignalPropagatesToRpc(): Promise<void> {
     'aborting the parent signal must abort the in-flight remote request');
   assert.equal(observedSignal?.aborted, true,
     'the linked fetch signal must be aborted when the parent signal is canceled');
+}
+
+async function testJsonRpcResponseIdMustMatchRequest(): Promise<void> {
+  nextResponse = (url, init) => {
+    if (url.pathname === '/.well-known/agent-card.json') return jsonResponse(validCard);
+    const request = JSON.parse(String(init.body)) as { id: string };
+    return jsonResponse({
+      jsonrpc: '2.0',
+      id: `${request.id}-different`,
+      result: completedTask,
+    });
+  };
+  const client = await createA2ARemoteClient('https://agent.example.test', {
+    fetch: mockFetch,
+    bearerTokenProvider: () => 'test-token',
+  });
+  await expectRemoteError(() => client.getTask('task-1'), 'INVALID_RESPONSE');
+
+  nextResponse = (url, init) => {
+    if (url.pathname === '/.well-known/agent-card.json') return jsonResponse(validCard);
+    const request = JSON.parse(String(init.body)) as { id: string };
+    return jsonResponse({ jsonrpc: '2.0', id: 1, echoed: request.id, result: completedTask });
+  };
+  await expectRemoteError(() => client.getTask('task-1'), 'INVALID_RESPONSE');
 }
 
 async function testJsonRpcErrorSerialization(): Promise<void> {

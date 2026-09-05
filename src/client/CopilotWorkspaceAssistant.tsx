@@ -17,7 +17,6 @@ import {
   createApprovalResultEnvelope,
   createApprovalToolEnvelope,
   createTaskToolEnvelope,
-  createWeatherToolEnvelope,
   getGenAiBadgeLabel,
 } from './genui/tool-adapters.js';
 import {
@@ -25,25 +24,6 @@ import {
   GenUiEnvelopeV1Schema,
   type GenUiEnvelopeV1,
 } from '../shared/genui.js';
-
-type WeatherContext = {
-  source: 'open-meteo' | 'demo';
-  location: {
-    name: string;
-    latitude: number;
-    longitude: number;
-    timezone: string;
-  };
-  current: {
-    temperature: number;
-    apparentTemperature: number;
-    humidity: number;
-    precipitation: number;
-    windSpeed: number;
-    condition: string;
-    icon: string;
-  };
-};
 
 type WorkspaceItem = {
   id: number;
@@ -57,17 +37,6 @@ type WorkspaceHealth = {
   userAuth: string;
   genAI: 'openai-configured' | 'grok-configured' | 'not-configured' | 'deterministic-test';
 };
-
-const weatherToolSchema = z.object({
-  location: z.string(),
-  temperature: z.number(),
-  apparentTemperature: z.number(),
-  humidity: z.number(),
-  windSpeed: z.number(),
-  precipitation: z.number(),
-  condition: z.string(),
-  source: z.string(),
-});
 
 const taskToolSchema = z.object({
   items: z.array(z.object({
@@ -86,7 +55,6 @@ const approvalToolSchema = z.object({
   action: z.enum(['approve', 'cancel']),
 });
 
-type WeatherRenderProps = RenderToolProps<typeof weatherToolSchema>;
 type TaskRenderProps = RenderToolProps<typeof taskToolSchema>;
 type ApprovalRenderProps = RenderToolProps<typeof approvalToolSchema>;
 
@@ -116,11 +84,6 @@ function createApprovalConflictEnvelope(jobId: string, prompt: string, message: 
     fallbackText: safeMessage,
     metadata: { source: 'copilotkit-approval', deterministic: true },
   });
-}
-
-function WeatherToolCard({ status, parameters, result }: WeatherRenderProps) {
-  const envelope = createWeatherToolEnvelope(parameters, status, result);
-  return <GenUiCard envelope={envelope} theme="auto" className="copilot-tool-genui-card" />;
 }
 
 function TaskToolCard({ status, parameters }: TaskRenderProps) {
@@ -202,7 +165,6 @@ function ApprovalToolCard({ status, parameters }: ApprovalRenderProps) {
 }
 
 export type CopilotWorkspaceAssistantProps = {
-  weather: WeatherContext | null;
   items: WorkspaceItem[];
   summary: { total: number; open: number; done: number };
   health: WorkspaceHealth | null;
@@ -210,10 +172,6 @@ export type CopilotWorkspaceAssistantProps = {
 };
 
 export function CopilotWorkspaceAssistant(props: CopilotWorkspaceAssistantProps) {
-  useAgentContext({
-    description: '현재 Teams 업무 허브 날씨 위젯 상태',
-    value: props.weather ?? { status: 'location-not-resolved' },
-  });
   useAgentContext({
     description: '현재 Teams 업무 목록 요약',
     value: { items: props.items, summary: props.summary },
@@ -227,11 +185,6 @@ export function CopilotWorkspaceAssistant(props: CopilotWorkspaceAssistantProps)
     value: props.responseMode ?? { status: 'checking' },
   });
 
-  useRenderTool({
-    name: 'showWeatherCard',
-    parameters: weatherToolSchema,
-    render: (renderProps) => <WeatherToolCard {...renderProps} />,
-  }, []);
   useRenderTool({
     name: 'showTaskCard',
     parameters: taskToolSchema,
@@ -249,7 +202,7 @@ export function CopilotWorkspaceAssistant(props: CopilotWorkspaceAssistantProps)
         <div>
           <p className="eyebrow">GENAI · COPILOTKIT · AG-UI</p>
           <h2>업무 도우미</h2>
-          <p>모델이 선택한 도구 결과를 날씨·업무·승인 카드로 표시합니다.</p>
+          <p>모델이 선택한 도구 결과를 업무·승인 카드로 표시합니다.</p>
         </div>
         <div className="copilot-heading-badges">
           <span className="copilot-live-badge"><span aria-hidden="true" />{getGenAiBadgeLabel(props.health?.genAI)}</span>
@@ -261,9 +214,9 @@ export function CopilotWorkspaceAssistant(props: CopilotWorkspaceAssistantProps)
       <CopilotChat
         agentId="default"
         labels={{
-          chatInputPlaceholder: '업무나 날씨를 요청하세요…',
+          chatInputPlaceholder: '업무나 에이전트 작업을 요청하세요…',
           modalHeaderTitle: 'Teams 업무 도우미',
-          welcomeMessageText: '현재 업무, 위치 날씨, Codex 작업을 도와드릴게요.',
+          welcomeMessageText: '현재 업무와 Codex 에이전트 작업을 도와드릴게요.',
         }}
         className="copilot-chat"
       />

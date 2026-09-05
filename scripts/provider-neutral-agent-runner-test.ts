@@ -16,12 +16,23 @@ class FakeCliAgentRunner {
 
   async run(options: CliAgentRunOptions): Promise<CliAgentRunResult> {
     this.runOptions.push(options);
+    const tokenUsage = {
+      source: 'codex.exec.jsonl.turn.completed.usage' as const,
+      inputTokens: 21_460,
+      cachedInputTokens: 21_248,
+      outputTokens: 5,
+      reasoningOutputTokens: 0,
+    };
     const events: CliAgentLifecycleEvent[] = [
       { provider: options.provider, type: 'session.started', sessionId: '01922bb7-2085-7000-8000-000000000001' },
       { provider: options.provider, type: 'turn.started' },
       { provider: options.provider, type: 'tool.started' },
       { provider: options.provider, type: 'agent.message', message: 'provider-neutral result' },
-      { provider: options.provider, type: 'turn.completed' },
+      {
+        provider: options.provider,
+        type: 'turn.completed',
+        ...(options.provider === 'codex' ? { tokenUsage } : {}),
+      },
     ];
     for (const event of events) await options.onEvent?.(event);
     return {
@@ -29,6 +40,7 @@ class FakeCliAgentRunner {
       sessionId: '01922bb7-2085-7000-8000-000000000001',
       finalResult: 'provider-neutral result',
       eventCount: 5,
+      ...(options.provider === 'codex' ? { tokenUsage } : {}),
     };
   }
 
@@ -116,12 +128,28 @@ assert.deepEqual(events, [
   { type: 'turn.started' },
   { type: 'item.started', item: { type: 'command_execution' } },
   { type: 'item.completed', item: { type: 'agent_message', text: 'provider-neutral result' } },
-  { type: 'turn.completed' },
+  {
+    type: 'turn.completed',
+    tokenUsage: {
+      source: 'codex.exec.jsonl.turn.completed.usage',
+      inputTokens: 21_460,
+      cachedInputTokens: 21_248,
+      outputTokens: 5,
+      reasoningOutputTokens: 0,
+    },
+  },
 ]);
 assert.deepEqual(result, {
   threadId: '01922bb7-2085-7000-8000-000000000001',
   finalMessage: 'provider-neutral result',
   eventCount: 5,
+  tokenUsage: {
+    source: 'codex.exec.jsonl.turn.completed.usage',
+    inputTokens: 21_460,
+    cachedInputTokens: 21_248,
+    outputTokens: 5,
+    reasoningOutputTokens: 0,
+  },
 });
 
 assert.throws(

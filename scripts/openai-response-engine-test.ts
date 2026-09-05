@@ -187,26 +187,24 @@ async function main(): Promise<void> {
     assert.doesNotMatch(JSON.stringify(providerSecretResult), /abcdefghijklmnop|providerabcdefghijklmnop|url-secret|user:password/);
     assert.match(providerSecretResult.text, /\[REDACTED\]/);
 
-    const liveWeather = {
-      source: 'open-meteo',
-      location: { name: '서울', latitude: 37.5665, longitude: 126.978, timezone: 'Asia/Seoul' },
-      current: {
-        time: '2026-08-07T00:00:00Z', temperature: 25, apparentTemperature: 26,
-        humidity: 60, windSpeed: 8, precipitation: 0, condition: '맑음', icon: 'sun',
-      },
-    };
-    const weatherFetch = queueFetch([toolResponse('showWeatherCard'), textResponse('현재 위치 날씨를 확인했습니다.')]);
+    const weatherFetch = queueFetch([textResponse('날씨 기능은 제공하지 않습니다.')]);
     const weatherTools: string[] = [];
     const weather = await new OpenAIResponseEngine({ apiKey: 'weather-secret', fetchImpl: weatherFetch.fetch })
       .run(await createInput(itemStore, createAgentServiceFake(), '현재 날씨 알려줘', [
-        { description: '날씨 컨텍스트', value: JSON.stringify(liveWeather) },
+        { description: '날씨 컨텍스트', value: JSON.stringify({ source: 'open-meteo', secret: 'retired-weather-context' }) },
       ], (tool) => weatherTools.push(tool.name)));
-    assert.equal(weather.envelope.kind, 'weather');
+    assert.equal(weather.envelope.kind, 'answer');
     assert.equal(weather.envelope.aiGenerated, true);
-    assert.deepEqual(weatherTools, ['showWeatherCard']);
-    assert.equal(weatherFetch.calls.length, 2);
-    const weatherFollowUpRequest = JSON.parse(String(weatherFetch.calls[1]?.init?.body));
-    assert.equal(weatherFollowUpRequest.messages[0].role, 'system');
+    assert.deepEqual(weatherTools, []);
+    assert.equal(weatherFetch.calls.length, 1);
+    const weatherRequest = JSON.parse(String(weatherFetch.calls[0]?.init?.body));
+    assert.equal(weatherRequest.tool_choice, 'auto', 'retired weather prompts must not force a tool');
+    assert.deepEqual(
+      weatherRequest.tools.map((tool: any) => tool.function.name),
+      ['showTaskCard', 'workspaceApproval'],
+    );
+    assert.doesNotMatch(weatherRequest.messages[0].content, /날씨|weather|현재 위치|Open-Meteo/i);
+    assert.doesNotMatch(JSON.stringify(weatherRequest), /retired-weather-context/);
 
     const taskFetch = queueFetch([toolResponse('showTaskCard'), textResponse('업무 목록을 확인했습니다.')]);
     const taskTools: string[] = [];
@@ -243,11 +241,12 @@ async function main(): Promise<void> {
     assert.equal(partial.envelope.kind, 'error');
     assert.equal(partialService.submitted.length, 0, 'invalid tool calls must be rejected before side effects');
 
-    const missingWeatherFetch = queueFetch([toolResponse('showWeatherCard')]);
-    const missingWeather = await new OpenAIResponseEngine({ apiKey: 'location-secret', fetchImpl: missingWeatherFetch.fetch })
+    const retiredWeatherToolFetch = queueFetch([toolResponse('showWeatherCard')]);
+    const retiredWeatherTool = await new OpenAIResponseEngine({ apiKey: 'location-secret', fetchImpl: retiredWeatherToolFetch.fetch })
       .run(await createInput(itemStore, createAgentServiceFake(), '현재 날씨 알려줘'));
-    assert.equal(missingWeather.envelope.kind, 'error');
-    assert.match(missingWeather.text, /현재 위치 날씨 컨텍스트/);
+    assert.equal(retiredWeatherTool.envelope.kind, 'error');
+    assert.equal(retiredWeatherTool.envelope.metadata.errorCode, 'openai-invalid-tool');
+    assert.doesNotMatch(retiredWeatherTool.text, /내 위치|위치 권한/);
 
     for (const malformedArguments of ['{"unexpected":true}', '{not-json']) {
       const malformedFetch = queueFetch([toolResponse('showTaskCard', malformedArguments)]);
@@ -291,7 +290,7 @@ async function main(): Promise<void> {
     assert.equal(configuredFetch.calls[0]?.url, 'https://provider.example/v1/chat/completions');
     assert.equal(JSON.parse(String(configuredFetch.calls[0]?.init?.body)).model, 'test-model');
 
-    console.log('OpenAI response engine tests passed: no-key gate, plain output, validated weather/task/approval tools, malformed/unknown tools, timeout, and provider errors');
+    console.log('OpenAI response engine tests passed: no-key gate, weather-pruned task/approval tools, malformed/unknown tools, timeout, and provider errors');
   } finally {
     if (originalKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = originalKey;

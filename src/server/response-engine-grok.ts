@@ -14,7 +14,7 @@ import {
   type ResponseEngineOutput,
   type ResponseToolEvent,
 } from './response-engine.js';
-import { formatWeatherMessage, type WeatherResponse } from './weather-service.js';
+import { isOpaqueProviderCredentialReference } from './provider-runtime-adapter.js';
 
 const DEFAULT_BASE_URL = 'https://api.x.ai/v1';
 const XAI_PRODUCTION_HOST = 'api.x.ai';
@@ -23,7 +23,6 @@ const LOOPBACK_TEST_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
 const DEFAULT_MODEL = 'grok-4.6';
 const MAX_CONVERSATION_MESSAGES = 10;
 const MAX_MESSAGE_LENGTH = 4_000;
-const MAX_SYSTEM_CONTEXT_LENGTH = 2_000;
 const MAX_TOOL_ARGUMENTS_LENGTH = 4_000;
 const MAX_TOOL_CALLS = 3;
 const MAX_TOOL_ROUNDS = 3;
@@ -36,7 +35,12 @@ const MAX_HTTP_ATTEMPTS = 3;
 const RETRY_DELAYS_MS = [100, 200] as const;
 
 type GrokResponseEngineOptions = {
+  /** Legacy response-only injection. Durable providers must not use this. */
   apiKey?: string;
+  /** Server-owned opaque reference used by the optional runtime path. */
+  credentialReference?: string;
+  credentialPrincipal?: string;
+  resolveCredential?: (reference: string, principalId: string) => Promise<string>;
   baseUrl?: string;
   model?: string;
   timeoutMs?: number;
@@ -79,17 +83,6 @@ type ParsedGrokResponse = {
 
 type GrokToolChoice = 'auto' | 'required' | 'none' | { type: 'function'; function: { name: string } };
 
-type WeatherToolArgs = {
-  location: string;
-  temperature: number;
-  apparentTemperature: number;
-  humidity: number;
-  windSpeed: number;
-  precipitation: number;
-  condition: string;
-  source: string;
-};
-
 type TaskToolArgs = {
   items: Array<{ id: number; title: string; status: 'open' | 'done' }>;
   total: number;
@@ -104,7 +97,7 @@ type ApprovalToolArgs = {
 };
 
 class GrokProviderError extends Error {
-  constructor(readonly code: 'configuration' | 'invalid-url' | 'timeout' | 'network' | 'response' | 'tool' | 'tool-round-limit' | 'duplicate-tool-call' | 'location' | 'cancelled' | 'http-401' | 'http-403' | 'http-404' | 'http-422' | 'http-429' | 'http-5xx' | 'http-4xx' | 'http-other') {
+  constructor(readonly code: 'configuration' | 'invalid-url' | 'timeout' | 'network' | 'response' | 'tool' | 'tool-round-limit' | 'duplicate-tool-call' | 'cancelled' | 'http-401' | 'http-403' | 'http-404' | 'http-422' | 'http-429' | 'http-5xx' | 'http-4xx' | 'http-other') {
     super(code);
     this.name = 'GrokProviderError';
   }
@@ -167,45 +160,6 @@ function textContent(content: unknown): string {
     })
     .filter(Boolean)
     .join('\n');
-}
-
-function contextValue(input: ResponseEngineInput, keyword: string): unknown {
-  const context = input.request.context.find((entry) => entry.description.toLowerCase().includes(keyword));
-  if (!context) return undefined;
-  try {
-    return JSON.parse(context.value) as unknown;
-  } catch {
-    return undefined;
-  }
-}
-
-function isLiveWeather(value: unknown): value is WeatherResponse {
-  const weather = value as WeatherResponse | undefined;
-  return Boolean(
-    weather?.source === 'open-meteo'
-      && weather.location?.name
-      && Number.isFinite(weather.location.latitude)
-      && Number.isFinite(weather.location.longitude)
-      && weather.current
-      && Number.isFinite(weather.current.temperature)
-      && Number.isFinite(weather.current.apparentTemperature)
-      && Number.isFinite(weather.current.humidity)
-      && Number.isFinite(weather.current.windSpeed)
-      && Number.isFinite(weather.current.precipitation),
-  );
-}
-
-function compactWeather(weather: WeatherResponse): WeatherToolArgs {
-  return {
-    location: weather.location.name,
-    temperature: weather.current.temperature,
-    apparentTemperature: weather.current.apparentTemperature,
-    humidity: weather.current.humidity,
-    windSpeed: weather.current.windSpeed,
-    precipitation: weather.current.precipitation,
-    condition: weather.current.condition,
-    source: 'Open-Meteo',
-  };
 }
 
 function compactTasks(input: ResponseEngineInput): TaskToolArgs {
@@ -305,7 +259,6 @@ function providerErrorOutput(error: unknown): ResponseEngineOutput {
     if (error.code === 'tool') return errorOutput('Grok이 유효하지 않은 도구 요청을 반환했습니다. 요청을 다시 시도하세요.', 'grok-invalid-tool');
     if (error.code === 'tool-round-limit') return errorOutput('Grok 도구 처리 라운드가 제한을 초과했습니다. 요청을 다시 시도하세요.', 'grok-tool-round-limit');
     if (error.code === 'duplicate-tool-call') return errorOutput('Grok이 동일한 도구 요청을 반복했습니다. 요청을 다시 시도하세요.', 'grok-duplicate-tool-call');
-    if (error.code === 'location') return errorOutput('현재 위치 날씨 컨텍스트가 없습니다. 탭의 “내 위치 사용” 버튼을 눌러 위치 권한을 허용한 뒤 다시 시도하세요.', 'grok-location-required');
     if (error.code === 'http-401') return errorOutput('Grok 인증이 거부되었습니다. 서버의 XAI_API_KEY를 확인하세요.', 'grok-http-401');
     if (error.code === 'http-403') return errorOutput('Grok 사용 권한이 없습니다. xAI 팀 또는 API 키 권한을 확인하세요.', 'grok-http-403');
     if (error.code === 'http-404') return errorOutput('Grok 모델 또는 API 주소를 찾을 수 없습니다. 서버 설정을 확인하세요.', 'grok-http-404');
@@ -334,24 +287,15 @@ function getMessageHistory(input: ResponseEngineInput): GrokInputItem[] {
   return [{ role: 'user', content: boundedText(input.prompt) }];
 }
 
-function locationSystemContext(input: ResponseEngineInput): string {
-  const weather = contextValue(input, '날씨');
-  if (!isLiveWeather(weather)) return '없음';
-  return JSON.stringify(weather).slice(0, MAX_SYSTEM_CONTEXT_LENGTH);
-}
-
-function buildInstructions(input: ResponseEngineInput): string {
+function buildInstructions(): string {
   return [
     '너는 Teams 업무 허브의 Grok 업무 도우미다.',
-    '짧고 자연스러운 한국어로 답하고, 업무 목록·날씨·파일 변경 요청에는 제공된 도구를 사용한다.',
-    '날씨 도구는 현재 위치 컨텍스트가 있을 때만 사용한다. 위치 컨텍스트가 없으면 좌표를 추측하지 말고 탭의 “내 위치 사용”을 안내한다.',
+    '짧고 자연스러운 한국어로 답하고, 업무 목록·파일 변경 요청에는 제공된 도구를 사용한다.',
     '파일 변경은 반드시 workspaceApproval 도구를 사용해 승인 카드를 먼저 보여준다.',
-    `현재 위치 날씨 컨텍스트: ${locationSystemContext(input)}`,
   ].join('\n').slice(0, MAX_MESSAGE_LENGTH);
 }
 
 function forcedToolChoice(prompt: string): GrokToolChoice {
-  if (/(날씨|weather)/i.test(prompt)) return { type: 'function', function: { name: 'showWeatherCard' } };
   if (/(업무|할 일|task).*(목록|리스트|보여|확인)|^(list|업무 목록)$/i.test(prompt)) {
     return { type: 'function', function: { name: 'showTaskCard' } };
   }
@@ -427,7 +371,7 @@ function parseAssistant(payload: unknown): ParsedGrokResponse {
 }
 
 function parseArguments(toolCall: GrokToolCall): Record<string, unknown> {
-  if (!['showWeatherCard', 'showTaskCard', 'workspaceApproval'].includes(toolCall.name)) {
+  if (!['showTaskCard', 'workspaceApproval'].includes(toolCall.name)) {
     throw new GrokProviderError('tool');
   }
   let value: unknown;
@@ -437,7 +381,7 @@ function parseArguments(toolCall: GrokToolCall): Record<string, unknown> {
     throw new GrokProviderError('tool');
   }
   if (!isRecord(value)) throw new GrokProviderError('tool');
-  if (toolCall.name === 'showWeatherCard' || toolCall.name === 'showTaskCard') {
+  if (toolCall.name === 'showTaskCard') {
     if (Object.keys(value).length > 0) throw new GrokProviderError('tool');
     return {};
   }
@@ -448,33 +392,6 @@ function parseArguments(toolCall: GrokToolCall): Record<string, unknown> {
 }
 
 function toolEnvelope(tool: ResponseToolEvent, text: string, model: string): GenUiEnvelopeV1 {
-  if (tool.name === 'showWeatherCard' && tool.weather) {
-    const weather = tool.weather;
-    return responseEnvelope({
-      kind: 'weather',
-      id: `weather-${weather.location.latitude}-${weather.location.longitude}`,
-      title: '현재 위치 날씨',
-      text,
-      aiGenerated: true,
-      model,
-      sections: [{
-        type: 'weather',
-        location: weather.location.name,
-        latitude: weather.location.latitude,
-        longitude: weather.location.longitude,
-        timezone: weather.location.timezone,
-        temperature: weather.current.temperature,
-        apparentTemperature: weather.current.apparentTemperature,
-        humidity: weather.current.humidity,
-        windSpeed: weather.current.windSpeed,
-        precipitation: weather.current.precipitation,
-        condition: weather.current.condition,
-        icon: weather.current.icon,
-        source: weather.source,
-        observedAt: weather.current.time,
-      }],
-    });
-  }
   if (tool.name === 'showTaskCard') {
     const tasks = tool.args as unknown as TaskToolArgs;
     return responseEnvelope({
@@ -519,7 +436,7 @@ export class GrokResponseEngine implements ResponseEngine {
     if (input.isCancelled?.()) return cancelledOutput();
 
     try {
-      const config = this.readConfig();
+      const config = await this.readConfig();
       let responseInput: GrokRequestItem[] = getMessageHistory(input);
       let previousResponseId: string | undefined;
       let toolEvents: ResponseToolEvent[] = [];
@@ -555,9 +472,6 @@ export class GrokResponseEngine implements ResponseEngine {
           }
           batchCallIds.add(toolCall.callId);
           const args = parseArguments(toolCall);
-          if (toolCall.name === 'showWeatherCard' && !isLiveWeather(contextValue(input, '날씨'))) {
-            throw new GrokProviderError('location');
-          }
           return { toolCall, args };
         });
 
@@ -589,9 +503,35 @@ export class GrokResponseEngine implements ResponseEngine {
     return errorOutput('Grok 요청을 처리하지 못했습니다. 잠시 후 다시 시도하세요.', 'grok-request-error');
   }
 
-  private readConfig(): GrokConfig {
-    const configuredApiKey = (this.options.apiKey ?? process.env.XAI_API_KEY ?? '').trim();
-    const rawBaseUrl = (this.options.baseUrl ?? process.env.XAI_BASE_URL ?? DEFAULT_BASE_URL).trim().replace(/\/$/, '');
+  private async readConfig(): Promise<GrokConfig> {
+    let configuredApiKey: string;
+    const explicitCredentialReference = this.options.credentialReference;
+    if (explicitCredentialReference !== undefined) {
+      if (this.options.apiKey !== undefined
+        || !isOpaqueProviderCredentialReference(explicitCredentialReference)
+        || typeof this.options.credentialPrincipal !== 'string'
+        || !this.options.credentialPrincipal.trim()
+        || this.options.resolveCredential === undefined) {
+        throw new GrokProviderError('configuration');
+      }
+      try {
+        configuredApiKey = (await this.options.resolveCredential(
+          explicitCredentialReference,
+          this.options.credentialPrincipal,
+        )).trim();
+      } catch {
+        // Resolver diagnostics are server-owned and must not cross the
+        // response-engine boundary. The user receives only a stable code.
+        throw new GrokProviderError('configuration');
+      }
+    } else {
+      configuredApiKey = (this.options.apiKey ?? process.env.XAI_API_KEY ?? '').trim();
+    }
+    const rawBaseUrl = (
+      this.options.baseUrl
+      ?? (explicitCredentialReference === undefined ? process.env.XAI_BASE_URL : undefined)
+      ?? DEFAULT_BASE_URL
+    ).trim().replace(/\/$/, '');
     let baseUrl: URL;
     try {
       baseUrl = new URL(rawBaseUrl);
@@ -656,7 +596,7 @@ export class GrokResponseEngine implements ResponseEngine {
       max_output_tokens: 900,
     };
     if (previousResponseId) body.previous_response_id = previousResponseId;
-    else body.instructions = buildInstructions(input);
+    else body.instructions = buildInstructions();
 
     let lastRetryableError = new GrokProviderError('network');
     for (let attempt = 0; attempt < MAX_HTTP_ATTEMPTS; attempt += 1) {
@@ -731,19 +671,6 @@ export class GrokResponseEngine implements ResponseEngine {
     input: ResponseEngineInput,
     args: Record<string, unknown>,
   ): Promise<{ event: ResponseToolEvent; approvalEnvelope?: GenUiEnvelopeV1 }> {
-    if (toolCall.name === 'showWeatherCard') {
-      const contextWeather = contextValue(input, '날씨');
-      if (!isLiveWeather(contextWeather)) throw new GrokProviderError('location');
-      const weather = contextWeather;
-      return {
-        event: {
-          name: 'showWeatherCard',
-          args: safeProviderValue(compactWeather(weather)) as Record<string, unknown>,
-          result: safeProviderText(formatWeatherMessage(weather, false)),
-          weather,
-        },
-      };
-    }
     if (toolCall.name === 'showTaskCard') {
       const tasks = compactTasks(input);
       return {

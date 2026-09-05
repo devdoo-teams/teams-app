@@ -403,13 +403,18 @@ const configuredFetch: A2ARemoteFetch = async (input, init = {}) => {
   }
   const headers = new Headers(init.headers);
   assert.equal(headers.get('authorization'), 'Bearer configured-remote-token');
-  const body = JSON.parse(String(init.body)) as { method: string; params: Record<string, unknown> };
+  const body = JSON.parse(String(init.body)) as {
+    id: unknown;
+    method: string;
+    params: Record<string, unknown>;
+  };
+  assert.equal(typeof body.id, 'string', 'configured mock must receive a JSON-RPC request ID');
   assert.equal(body.method, 'SendMessage');
   assert.deepEqual(Object.keys(body.params).sort(), ['message'],
     'configured remote composition must emit only the official SendMessage request fields');
   return new Response(JSON.stringify({
     jsonrpc: '2.0',
-    id: 'rpc-1',
+    id: body.id,
     result: {
       task: {
         id: 'configured-remote-task',

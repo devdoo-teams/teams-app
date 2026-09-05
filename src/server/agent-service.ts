@@ -15,6 +15,13 @@ import type { CliAgentProvider } from './cli-agent-runner.js';
 import { redactCliDiagnostics } from './cli-diagnostics.js';
 import { GitService, type GitWorkspaceSnapshot } from './git-service.js';
 import { diagnoseRemoteAgentResult, formatRemoteTroubleshooting } from './remote-troubleshooting.js';
+import { mergeObservedToolUsage, observeCodexToolUsage } from './agent-tool-observation.js';
+import type { CoreAgentToolUsage } from '../shared/core-orchestration.js';
+import type {
+  CoreAgentTokenUsage,
+  CoreCodexModelSelection,
+  CoreCodexReasoningEffort,
+} from '../shared/core-orchestration.js';
 
 export type AgentNotificationKind = 'progress' | 'result' | 'error' | 'cancelled';
 export type AgentNotificationPhase =
@@ -43,6 +50,27 @@ type ReconciliationState = {
   durable: boolean;
   lastFailureCode: string;
 };
+
+export type AgentExecutionObservation = Readonly<{
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'quarantined';
+  result?: string;
+  providerExecutionId?: string;
+  error?: string;
+  tools?: readonly CoreAgentToolUsage[];
+  tokenUsage?: CoreAgentTokenUsage;
+}>;
+
+/**
+ * Durable execution boundary used by runtimes that submit work to an external
+ * worker. Implementations must not execute a CLI in the HTTP server process.
+ */
+export interface AgentExecutionDispatcher {
+  readonly kind: 'azure-queue';
+  dispatch(job: AgentJob): Promise<void>;
+  observe(job: AgentJob): Promise<AgentExecutionObservation | undefined>;
+  cancel(job: AgentJob, reason: string): Promise<void>;
+  close?(): Promise<void> | void;
+}
 
 export const MAX_AGENT_PROMPT_LENGTH = 2_000;
 
@@ -139,7 +167,7 @@ export class AgentService {
 
   constructor(
     private readonly store: AgentJobStore,
-    private readonly runner: CodexRunner,
+    runner: CodexRunner | undefined,
     private readonly workspace: string,
     private readonly notify: Notify,
     private readonly gitService: GitService,
@@ -152,13 +180,13 @@ export class AgentService {
       agentLabel?: string;
       defaultProvider?: CliAgentProvider;
       providerRunners?: Partial<Record<CliAgentProvider, CodexRunner>>;
+      executionDispatcher?: AgentExecutionDispatcher;
     } = {},
   ) {
     this.agentLabel = options.agentLabel?.trim() || 'Codex';
     this.defaultProvider = options.defaultProvider ?? 'codex';
-    const providerRunners = new Map<CliAgentProvider, CodexRunner>([
-      [this.defaultProvider, runner],
-    ]);
+    const providerRunners = new Map<CliAgentProvider, CodexRunner>();
+    if (runner && !options.executionDispatcher) providerRunners.set(this.defaultProvider, runner);
     for (const provider of ['codex', 'copilot'] as const) {
       const configuredRunner = options.providerRunners?.[provider];
       if (configuredRunner) providerRunners.set(provider, configuredRunner);
@@ -193,7 +221,23 @@ export class AgentService {
     const missingProvider = this.store.listLocalOnly(Number.MAX_SAFE_INTEGER).find((job) => !job.provider);
     if (missingProvider) throw new AgentProviderIdentityError(missingProvider);
     await this.admissionController.initialize();
-    await this.store.recoverInterruptedJobs();
+    if (this.options.executionDispatcher) {
+      await this.reconstructAdmissionFromStore();
+      for (const job of this.store.listLocalOnly(Number.MAX_SAFE_INTEGER)) {
+        const scope = scopeForJob(job);
+        if (!scope || job.status === 'awaiting_approval') continue;
+        const reconciled = await this.reconcileDurableObservation(job, scope);
+        if (reconciled && !isTerminalJob(job) && isTerminalJob(reconciled)) {
+          await this.finalizeAdmission(reconciled, scope);
+        }
+      }
+    } else {
+      await this.store.recoverInterruptedJobs();
+      await this.reconstructAdmissionFromStore();
+    }
+  }
+
+  private async reconstructAdmissionFromStore(): Promise<void> {
     await this.admissionController.reconstruct(
       this.store.listLocalOnly(Number.MAX_SAFE_INTEGER).flatMap((job) =>
         typeof job.tenantId === 'string' && job.tenantId
@@ -217,10 +261,13 @@ export class AgentService {
     threadId?: string;
     notify?: boolean;
     onProgress?: ProgressListener;
+    model?: string;
+    reasoningEffort?: CoreCodexReasoningEffort;
+    catalogRevision?: string;
   }): Promise<AgentJob> {
     const prompt = normalizeAgentPrompt(input.prompt);
     const provider = input.provider ?? this.defaultProvider;
-    this.runnerFor(provider);
+    if (!this.options.executionDispatcher) this.runnerFor(provider);
     if (input.mode === 'workspace-write') {
       this.assertMutationAllowed(input.scope);
     } else {
@@ -234,11 +281,13 @@ export class AgentService {
       let executionWorkspace: AgentExecutionWorkspace | undefined;
       let job: AgentJob;
       try {
-        executionWorkspace = await this.executionPolicy.prepareWorkspace(input.mode, input.scope, prompt);
+        if (!this.options.executionDispatcher) {
+          executionWorkspace = await this.executionPolicy.prepareWorkspace(input.mode, input.scope, prompt);
+        }
         job = await this.store.create({ ...input, prompt, provider });
         await admission.lease.bindJob(job.id);
         this.admissionLeases.set(job.id, admission.lease);
-        this.executionWorkspaces.set(job.id, executionWorkspace);
+        if (executionWorkspace) this.executionWorkspaces.set(job.id, executionWorkspace);
       } catch (error) {
         let disposed = true;
         try {
@@ -251,7 +300,11 @@ export class AgentService {
         throw error;
       }
       if (job.mode === 'read-only') {
-        this.launchExecution(job, input.notify !== false, input.onProgress);
+        if (this.options.executionDispatcher) {
+          await this.dispatchExternally(job, input.scope);
+        } else {
+          this.launchExecution(job, input.notify !== false, input.onProgress);
+        }
       }
       return job;
     } finally {
@@ -278,6 +331,7 @@ export class AgentService {
       provider: this.providerForJob(previous),
       parentJobId: previous.id,
       threadId: previous.threadId,
+      ...(jobSelection(previous) ?? {}),
       notify: options.notify,
       onProgress: options.onProgress,
     });
@@ -309,7 +363,7 @@ export class AgentService {
     const deadline = Date.now() + timeoutMs;
 
     while (Date.now() < deadline) {
-      const job = this.store.get(id, scope);
+      const job = await this.observe(id, scope);
       if (!job) throw new Error(`작업 ${id}을 찾을 수 없습니다.`);
 
       if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled' || job.status === 'awaiting_approval') {
@@ -348,7 +402,10 @@ export class AgentService {
       return refreshed;
     });
 
-    if (queued) this.launchExecution(queued, true);
+    if (queued) {
+      if (this.options.executionDispatcher) await this.dispatchExternally(queued, scope);
+      else this.launchExecution(queued, true);
+    }
     return queued;
   }
 
@@ -362,6 +419,7 @@ export class AgentService {
       closed.add(runner);
       runner.close?.();
     }
+    await this.options.executionDispatcher?.close?.();
     await Promise.allSettled([...this.executions]);
     for (const jobId of [...this.executionWorkspaces.keys()]) {
       try {
@@ -407,7 +465,13 @@ export class AgentService {
       const provider = this.providerForJob(job, options.provider);
       this.invalidateProgressState(job.id);
       cancelledWasRunning = job.status === 'running';
-      if (cancelledWasRunning) this.runnerFor(provider).cancel(id);
+      if (this.options.executionDispatcher) {
+        await this.options.executionDispatcher.cancel(job, 'cancellation requested by the Teams user');
+        const durable = await this.reconcileDurableObservation(job, scope);
+        if (durable && isTerminalJob(durable)) return durable;
+      } else if (cancelledWasRunning) {
+        this.runnerFor(provider).cancel(id);
+      }
       const refreshed = await this.store.update(id, scope, {
         status: 'cancelled',
         finishedAt: new Date().toISOString(),
@@ -423,7 +487,7 @@ export class AgentService {
     if (cancelledWasRunning) await this.executionByJob.get(id);
     if (cancelled) await this.finalizeAdmission(cancelled, scope);
 
-    if (options.notify && cancelled) {
+    if (options.notify && cancelled?.status === 'cancelled') {
       await this.notifyIfEnabled(cancelled, {
         kind: 'cancelled',
         phase: 'cancelled',
@@ -487,6 +551,7 @@ export class AgentService {
       provider: this.providerForJob(previous),
       parentJobId: previous.id,
       threadId: previous.threadId,
+      ...(jobSelection(previous) ?? {}),
       notify: options.notify,
       onProgress: options.onProgress,
     });
@@ -496,8 +561,75 @@ export class AgentService {
     return this.store.get(id, scope);
   }
 
+  /**
+   * Server-owned cross-surface reader. The principal dimensions come from
+   * authenticated request state; callers must use the returned job's stored
+   * conversation scope for any mutation.
+   */
+  getForPrincipal(
+    id: string,
+    principal: Pick<AgentJobScope, 'tenantId' | 'requesterId'>,
+  ): AgentJob | undefined {
+    return this.store.getForPrincipal(id, principal);
+  }
+
+  async observe(id: string, scope: AgentJobScope): Promise<AgentJob | undefined> {
+    const job = this.store.get(id, scope);
+    const dispatcher = this.options.executionDispatcher;
+    if (!job || !dispatcher || job.status === 'awaiting_approval') return job;
+
+    const refreshed = await this.reconcileDurableObservation(job, scope);
+    if (refreshed && !isTerminalJob(job) && isTerminalJob(refreshed)) {
+      await this.finalizeAdmission(refreshed, scope);
+    }
+    return refreshed;
+  }
+
+  private async reconcileDurableObservation(
+    job: AgentJob,
+    scope: AgentJobScope,
+  ): Promise<AgentJob | undefined> {
+    const dispatcher = this.options.executionDispatcher;
+    if (!dispatcher) return job;
+    const observation = await dispatcher.observe(job);
+    if (!observation) return job;
+    const status = observation.status === 'quarantined' ? 'failed' : observation.status;
+    if (isTerminalJob(job) && !isTerminalStatus(status)) return job;
+    const update: Partial<AgentJob> = { status };
+    if (observation.tools?.length) {
+      update.tools = mergeObservedToolUsage(job.tools ?? [], observation.tools);
+    }
+    if (status === 'running' && !job.startedAt) update.startedAt = new Date().toISOString();
+    if (status === 'completed') {
+      update.result = observation.result;
+      update.threadId = observation.providerExecutionId;
+      if (observation.tokenUsage) update.tokenUsage = observation.tokenUsage;
+      update.error = undefined;
+      update.finishedAt = new Date().toISOString();
+    } else if (status === 'failed') {
+      update.result = undefined;
+      update.error = observation.error ?? (observation.status === 'quarantined'
+        ? 'AZURE_DISPATCH_QUARANTINED: durable worker delivery was quarantined.'
+        : 'AZURE_DISPATCH_FAILED: durable worker execution failed.');
+      update.finishedAt = new Date().toISOString();
+    } else if (status === 'cancelled') {
+      update.result = undefined;
+      update.error = undefined;
+      update.finishedAt = new Date().toISOString();
+    }
+    return this.store.update(job.id, scope, update);
+  }
+
   list(scope: AgentJobScope, limit = 8): AgentJob[] {
     return this.store.list(scope, limit);
+  }
+
+  /** Server-owned cross-surface list for one validated tenant/requester. */
+  listForPrincipal(
+    principal: Pick<AgentJobScope, 'tenantId' | 'requesterId'>,
+    limit = 8,
+  ): AgentJob[] {
+    return this.store.listForPrincipal(principal, limit);
   }
 
   latestCompletedForConversation(scope: AgentJobScope): AgentJob | undefined {
@@ -569,7 +701,10 @@ export class AgentService {
   }
 
   private assertMutationAllowed(scope: AgentJobScope): void {
-    if (!this.executionPolicy.authorize(scope, 'workspace-write').allowed) {
+    const allowed = this.options.executionDispatcher
+      ? this.options.canMutateScope?.(scope) === true
+      : this.executionPolicy.authorize(scope, 'workspace-write').allowed;
+    if (!allowed) {
       throw new AgentMutationAuthorizationError(
         '운영자 권한이 필요합니다. 관리자에게 TEAMS_OPERATOR_REQUESTER_ALLOWLIST 설정을 요청하세요.',
       );
@@ -591,6 +726,12 @@ export class AgentService {
   }
 
   private assertReadAllowed(scope: AgentJobScope): void {
+    if (this.options.executionDispatcher) {
+      if (this.options.canReadScope?.(scope) === true) return;
+      throw new AgentMutationAuthorizationError(
+        `${this.agentLabel} 읽기 작업은 허용된 운영자만 실행할 수 있습니다.`,
+      );
+    }
     const decision = this.executionPolicy.authorize(scope, 'read-only');
     if (!decision.allowed && decision.reason === 'isolation-unavailable') {
       throw new AgentExecutionUnavailableError();
@@ -673,6 +814,7 @@ export class AgentService {
             jobId: started.id,
           },
           environmentOverrides: executionWorkspace?.environmentOverrides,
+          ...(jobSelection(started) ? { selection: jobSelection(started) } : {}),
           onEvent: (event) => this.handleEvent(started, progressState!.generation, event),
         });
         // A cancellation can reject the runner before this execute loop reaches
@@ -721,6 +863,7 @@ export class AgentService {
               status: 'completed',
               threadId: result.threadId,
               result: result.finalMessage,
+              ...(result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
               ...(changedPaths ? { changedPaths } : {}),
               finishedAt: new Date().toISOString(),
             });
@@ -893,7 +1036,18 @@ export class AgentService {
       return;
     }
 
-    if (event.type === 'item.started' && event.item?.type === 'command_execution') {
+    if (event.type === 'item.started'
+      && (event.item?.type === 'command_execution'
+        || event.item?.type === 'mcp_tool_call'
+        || event.item?.type === 'tool_call')) {
+      const observations = observeCodexToolUsage(event);
+      const scope = scopeForJob(job);
+      if (observations.length > 0 && scope) {
+        await this.withJobMutationLock(job.id, scope, async () => {
+          if (!this.isCurrentRunningProgress(job, state)) return;
+          await this.store.appendToolUsage(job.id, scope, observations);
+        });
+      }
       await this.flushPendingAgentMessage(job, state);
       await this.publishProgress(job, state, 'tools', 'tools', `${this.agentLabel}가 필요한 도구를 실행하고 있습니다.`, `${this.agentLabel}가 필요한 도구를 실행하고 있습니다.`);
       return;
@@ -1064,6 +1218,42 @@ export class AgentService {
     const compact = result.length > maxLength ? `${result.slice(0, maxLength)}\n\n(결과가 길어 일부만 표시되었습니다.)` : result;
     return `작업 ${id}이 완료되었습니다.\n\n${compact}`;
   }
+
+  private async dispatchExternally(job: AgentJob, scope: AgentJobScope): Promise<void> {
+    try {
+      await this.options.executionDispatcher!.dispatch(job);
+    } catch (error) {
+      const message = redactCliDiagnostics(error instanceof Error ? error.message : String(error), {
+        paths: [this.workspace, process.env.HOME, process.env.USERPROFILE],
+        maxChars: 4_000,
+      }) || 'Azure Queue dispatch failed.';
+      const failed = await this.store.update(job.id, scope, {
+        status: 'failed',
+        error: `AZURE_DISPATCH_FAILED: ${message}`,
+        finishedAt: new Date().toISOString(),
+      });
+      if (failed) await this.finalizeAdmission(failed, scope);
+      throw error;
+    }
+  }
+}
+
+function isTerminalJob(job: AgentJob): boolean {
+  return job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled';
+}
+
+function jobSelection(job: AgentJob): CoreCodexModelSelection | undefined {
+  return job.model && job.reasoningEffort && job.catalogRevision
+    ? {
+        model: job.model,
+        reasoningEffort: job.reasoningEffort,
+        catalogRevision: job.catalogRevision,
+      }
+    : undefined;
+}
+
+function isTerminalStatus(status: AgentJob['status']): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled';
 }
 
 function recordedChangedPaths(job: AgentJob): string[] | undefined {

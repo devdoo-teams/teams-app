@@ -231,15 +231,29 @@ async function main(): Promise<void> {
     assert.notEqual(loopbackHeaders.get('authorization'), 'Bearer real-xai-key-must-not-be-forwarded');
     assert.doesNotMatch(JSON.stringify(loopback), /real-xai-key-must-not-be-forwarded/);
 
-    const forcedWeatherFetch = queueFetch([messageResponse('날씨 도구를 확인했습니다.')]);
-    await new GrokResponseEngine({ apiKey: 'forced-tool-secret', fetchImpl: forcedWeatherFetch.fetch })
-      .run(await createInput(itemStore, createAgentServiceFake([]), '날씨 알려줘'));
-    const forcedWeatherRequest = JSON.parse(String(forcedWeatherFetch.calls[0]?.init?.body));
+    const retiredWeatherFetch = queueFetch([messageResponse('날씨 기능은 제공하지 않습니다.')]);
+    await new GrokResponseEngine({ apiKey: 'retired-weather-secret', fetchImpl: retiredWeatherFetch.fetch })
+      .run(await createInput(itemStore, createAgentServiceFake([]), '날씨 알려줘', [
+        { description: '날씨 컨텍스트', value: JSON.stringify({ source: 'open-meteo', secret: 'retired-weather-context' }) },
+      ]));
+    const retiredWeatherRequest = JSON.parse(String(retiredWeatherFetch.calls[0]?.init?.body));
+    assert.equal(retiredWeatherRequest.tool_choice, 'auto', 'retired weather prompts must not force a tool');
     assert.deepEqual(
-      forcedWeatherRequest.tool_choice,
-      { type: 'function', function: { name: 'showWeatherCard' } },
-      'Responses API forced tool choice must use the documented nested function.name shape',
+      retiredWeatherRequest.tools.map((tool: any) => tool.name),
+      ['showTaskCard', 'workspaceApproval'],
     );
+    assert.doesNotMatch(retiredWeatherRequest.instructions, /날씨|weather|현재 위치|Open-Meteo/i);
+    assert.doesNotMatch(JSON.stringify(retiredWeatherRequest), /retired-weather-context/);
+
+    const retiredToolCalls: Array<{ prompt: string; mode: string }> = [];
+    const retiredTool = await new GrokResponseEngine({
+      apiKey: 'retired-tool-secret',
+      fetchImpl: queueFetch([functionResponse('showWeatherCard')]).fetch,
+    }).run(await createInput(itemStore, createAgentServiceFake(retiredToolCalls), '날씨 알려줘'));
+    assert.equal(retiredTool.envelope.kind, 'error');
+    assert.equal(retiredTool.envelope.metadata.errorCode, 'grok-invalid-tool');
+    assert.equal(retiredToolCalls.length, 0);
+    assert.doesNotMatch(retiredTool.text, /내 위치|위치 권한/);
 
     const responseStatusCases = [
       { status: 'in_progress' },
@@ -545,7 +559,7 @@ async function main(): Promise<void> {
       .run(await createInput(itemStore, createAgentServiceFake([]), '환경 설정'));
     assert.equal(JSON.parse(String(configuredFetch.calls[0]?.init?.body)).model, 'grok-test-model');
 
-    console.log('PASS: xAI Responses API tool choice, response/item validation, bounded tool rounds, HTTP classification/retry redaction, mutation-safe retry, approval boundary, and no-key gate');
+    console.log('PASS: xAI Responses API weather-pruned tools, response/item validation, bounded tool rounds, HTTP classification/retry redaction, mutation-safe retry, approval boundary, and no-key gate');
   } finally {
     if (originalKey === undefined) delete process.env.XAI_API_KEY;
     else process.env.XAI_API_KEY = originalKey;

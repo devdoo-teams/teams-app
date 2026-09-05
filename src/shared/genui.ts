@@ -11,7 +11,6 @@ export const GENUI_SCHEMA_VERSION = '1' as const;
 
 export const GENUI_KINDS = [
   'answer',
-  'weather',
   'task-list',
   'job-status',
   'approval',
@@ -32,7 +31,6 @@ export const GENUI_SECTION_TYPES = [
   'text',
   'facts',
   'stats',
-  'weather',
   'list',
   'progress',
   'status',
@@ -50,7 +48,7 @@ export const GENUI_ACTIONS = [
 export const MAX_GENUI_CARD_ACTIONS = 6;
 
 /** Commands exposed as safe, payload-free quick actions on the help card. */
-export const GENUI_COMMANDS = ['help', 'weather', 'status', 'list', 'work', 'collaboration'] as const;
+export const GENUI_COMMANDS = ['help'] as const;
 
 export const GENUI_ACTION_PAYLOAD_KEYS = [
   'schemaVersion',
@@ -142,23 +140,6 @@ const GenUiStatsSectionSchema = SectionBaseSchema.extend({
   stats: z.array(GenUiFactSchema).max(24),
 }).strict();
 
-const GenUiWeatherSectionSchema = SectionBaseSchema.extend({
-  type: z.literal('weather'),
-  location: z.string().max(200).optional(),
-  latitude: z.number().finite().min(-90).max(90).optional(),
-  longitude: z.number().finite().min(-180).max(180).optional(),
-  timezone: z.string().max(120).optional(),
-  temperature: z.number().finite().optional(),
-  apparentTemperature: z.number().finite().optional(),
-  humidity: z.number().finite().min(0).max(100).optional(),
-  windSpeed: z.number().finite().min(0).optional(),
-  precipitation: z.number().finite().min(0).optional(),
-  condition: z.string().max(120).optional(),
-  icon: z.string().max(40).optional(),
-  source: z.string().max(120).optional(),
-  observedAt: z.string().max(120).optional(),
-}).strict();
-
 const GenUiListSectionSchema = SectionBaseSchema.extend({
   type: z.literal('list'),
   items: z.array(GenUiItemSchema).max(24),
@@ -178,7 +159,6 @@ export const GenUiSectionSchema = z.union([
   GenUiTextSectionSchema,
   GenUiFactsSectionSchema,
   GenUiStatsSectionSchema,
-  GenUiWeatherSectionSchema,
   GenUiListSectionSchema,
   GenUiProgressSectionSchema,
   GenUiStatusSectionSchema,

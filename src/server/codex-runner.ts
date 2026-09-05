@@ -22,6 +22,9 @@ import { diagnoseRemoteTroubleshooting, formatRemoteTroubleshooting } from './re
 import { redactCliDiagnostics } from './cli-diagnostics.js';
 import { CODEX_READ_ONLY_PERMISSION_ARGS } from './codex-permission-profile-isolation-provider.js';
 import { redactSensitiveText, redactSensitiveValue } from './sensitive-text.js';
+import { isAgentTokenUsage, parseCodexTokenUsage, type AgentTokenUsage } from './agent-token-usage.js';
+import { assertSafeCodexModelSelection } from './codex-model-catalog.js';
+import type { CoreCodexModelSelection } from '../shared/core-orchestration.js';
 
 export interface CodexRunEvent {
   type?: string;
@@ -30,15 +33,21 @@ export interface CodexRunEvent {
     text?: string;
     command?: string;
     message?: string;
+    name?: string;
+    server?: string;
   };
   thread_id?: string;
   error?: unknown;
+  usage?: unknown;
+  /** Canonical usage attached by provider-neutral adapters. */
+  tokenUsage?: AgentTokenUsage;
 }
 
 export interface CodexRunResult {
   threadId?: string;
   finalMessage: string;
   eventCount: number;
+  tokenUsage?: AgentTokenUsage;
 }
 
 type RunningCodexProcess = {
@@ -68,6 +77,10 @@ const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_STDOUT_BUFFER_CHARS = 64 * 1024;
 const MAX_STDERR_CHARS = 8 * 1024;
 const MAX_EVENT_COUNT = 10_000;
+// The updated CLI has been observed to emit one recoverable optional-provider
+// diagnostic after thread.started and before turn.started. Keep the exception
+// exactly as narrow as that evidence; every other error position remains fatal.
+const MAX_RECOVERABLE_PRE_TURN_ERROR_ITEMS = 1;
 const CODEX_THREAD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const CODEX_CHILD_ENV_ALLOWLIST = [
@@ -94,6 +107,39 @@ const CODEX_CHILD_ENV_ALLOWLIST = [
   'SSL_CERT_DIR',
   'NODE_EXTRA_CA_CERTS',
 ] as const;
+
+export function buildCodexExecArguments(options: Readonly<{
+  prefixArgs: readonly string[];
+  mode: AgentJobMode;
+  workspace: string;
+  enrichedPrompt: string;
+  threadId?: string;
+  selection?: CoreCodexModelSelection;
+}>): string[] {
+  if (options.threadId && !CODEX_THREAD_ID_PATTERN.test(options.threadId)) {
+    throw new Error('Invalid Codex thread ID.');
+  }
+  const selection = options.selection ? assertSafeCodexModelSelection(options.selection) : undefined;
+  const args = [
+    ...options.prefixArgs,
+    'exec',
+    '--json',
+    ...(options.mode === 'read-only'
+      ? CODEX_READ_ONLY_PERMISSION_ARGS
+      : ['--sandbox', options.mode]),
+    '--cd',
+    options.workspace,
+    ...(selection ? [
+      '--model',
+      selection.model,
+      '--config',
+      `model_reasoning_effort="${selection.reasoningEffort}"`,
+    ] : []),
+  ];
+  if (options.threadId) args.push('resume', options.threadId, '--', options.enrichedPrompt);
+  else args.push('--', options.enrichedPrompt);
+  return args;
+}
 
 export class CodexTerminalProtocolError extends Error {
   readonly code = 'CODEX_TERMINAL_PROTOCOL_INVALID' as const;
@@ -171,6 +217,8 @@ function sanitizeRunEvent(value: Record<string, unknown>): CodexRunEvent {
     if (typeof value.item.text === 'string') item.text = value.item.text;
     if (typeof value.item.command === 'string') item.command = value.item.command;
     if (typeof value.item.message === 'string') item.message = value.item.message;
+    if (typeof value.item.name === 'string') item.name = value.item.name;
+    if (typeof value.item.server === 'string') item.server = value.item.server;
     if (Object.keys(item).length > 0) event.item = item;
   }
 
@@ -179,6 +227,9 @@ function sanitizeRunEvent(value: Record<string, unknown>): CodexRunEvent {
   } else if (isRecord(value.error) && typeof value.error.message === 'string') {
     event.error = { message: value.error.message };
   }
+
+  const tokenUsage = parseCodexTokenUsage(value.usage);
+  if (tokenUsage) event.tokenUsage = tokenUsage;
 
   return redactSensitiveValue(event) as CodexRunEvent;
 }
@@ -202,6 +253,7 @@ export class CodexRunner {
     timeoutMs?: number;
     signal?: AbortSignal;
     onEvent?: (event: CodexRunEvent) => Promise<void> | void;
+    selection?: CoreCodexModelSelection;
   }): Promise<CodexRunResult> {
     if (options.signal?.aborted) throw new Error('Codex 작업이 취소되었습니다.');
     if (options.threadId && !CODEX_THREAD_ID_PATTERN.test(options.threadId)) {
@@ -234,21 +286,14 @@ export class CodexRunner {
     const prefixArgs = this.runnerOptions.command?.prefixArgs
       ?? (process.env.CODEX_SCRIPT ? [process.env.CODEX_SCRIPT] : []);
     const enrichedPrompt = `${REMOTE_AGENT_GUIDANCE}\n\nUSER REQUEST:\n${options.prompt}`;
-    const args = [
-      ...prefixArgs,
-      'exec',
-      '--json',
-      ...(options.mode === 'read-only'
-        ? CODEX_READ_ONLY_PERMISSION_ARGS
-        : ['--sandbox', options.mode]),
-      '--cd',
-      options.workspace,
-    ];
-    if (options.threadId) {
-      args.push('resume', options.threadId, '--', enrichedPrompt);
-    } else {
-      args.push('--', enrichedPrompt);
-    }
+    const args = buildCodexExecArguments({
+      prefixArgs,
+      mode: options.mode,
+      workspace: options.workspace,
+      enrichedPrompt,
+      ...(options.threadId ? { threadId: options.threadId } : {}),
+      ...(options.selection ? { selection: options.selection } : {}),
+    });
 
     const environment = codexChildEnvironment(process.env, options.environmentOverrides);
     const spawnOptions: AgentIsolationSpawnOptions = {
@@ -299,6 +344,8 @@ export class CodexRunner {
     let protocolState: ProtocolState = 'thread';
     let agentMessageCount = 0;
     const currentProtocolState = (): ProtocolState => protocolState;
+    let recoverablePreTurnErrorItemCount = 0;
+    let tokenUsage: AgentTokenUsage | undefined;
     let timeoutHandle: NodeJS.Timeout | undefined;
     let resolveTermination!: (error: Error) => void;
     const terminationPromise = new Promise<Error>((resolve) => { resolveTermination = resolve; });
@@ -334,9 +381,27 @@ export class CodexRunner {
         protocolFailure('Codex emitted an event after turn.completed.');
         return;
       }
-      if (isFailureType(type) || (type === 'item.completed' && event.item?.type === 'error')) {
+      if (isFailureType(type)) {
         const detail = redactCliDiagnostics(
           errorPayload(event.error) || errorPayload(event.item?.message),
+          { paths: [options.workspace, process.env.HOME, process.env.USERPROFILE] },
+        );
+        protocolFailure(detail ? `Codex reported a terminal failure: ${detail}` : 'Codex reported a terminal failure.');
+        return;
+      }
+      if (type === 'item.completed' && event.item?.type === 'error') {
+        const diagnostic = errorPayload(event.item.message);
+        const isBoundedPreTurnDiagnostic = protocolState === 'turn'
+          && !errorPayload(event.error)
+          && diagnostic.length > 0
+          && diagnostic.length <= MAX_STDERR_CHARS
+          && recoverablePreTurnErrorItemCount < MAX_RECOVERABLE_PRE_TURN_ERROR_ITEMS;
+        if (isBoundedPreTurnDiagnostic) {
+          recoverablePreTurnErrorItemCount += 1;
+          return;
+        }
+        const detail = redactCliDiagnostics(
+          errorPayload(event.error) || diagnostic,
           { paths: [options.workspace, process.env.HOME, process.env.USERPROFILE] },
         );
         protocolFailure(detail ? `Codex reported a terminal failure: ${detail}` : 'Codex reported a terminal failure.');
@@ -396,6 +461,9 @@ export class CodexRunner {
           protocolFailure('Codex must emit a non-empty final agent_message immediately before turn.completed.');
           return;
         }
+        tokenUsage = isAgentTokenUsage(event.tokenUsage)
+          ? { ...event.tokenUsage }
+          : parseCodexTokenUsage(event.usage);
         protocolState = 'completed';
         return;
       }
@@ -509,7 +577,12 @@ export class CodexRunner {
       if (currentProtocolState() !== 'completed' || agentMessageCount < 1 || !finalMessage) {
         throw new CodexTerminalProtocolError('Codex did not emit a non-empty final agent message followed by turn.completed.');
       }
-      return { threadId, finalMessage, eventCount };
+      return {
+        threadId,
+        finalMessage,
+        eventCount,
+        ...(tokenUsage ? { tokenUsage } : {}),
+      };
     } catch (error) {
       primaryError = asError(error);
       throw primaryError;

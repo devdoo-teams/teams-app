@@ -335,7 +335,7 @@ function makeCoreSourceAdapters(compileSource) {
     const fakeNpmProgram = path.join(fixtureRoot, 'fake-npm.cjs');
     fs.writeFileSync(
       fakeNpmProgram,
-      `const fs = require('node:fs');\nfs.appendFileSync(${JSON.stringify(invocationLog)}, process.argv.slice(2).join(' ') + '\\n');\n`,
+      `const fs = require('node:fs');\nfs.appendFileSync(${JSON.stringify(invocationLog)}, JSON.stringify({ args: process.argv.slice(2), env: Object.fromEntries(Object.entries(process.env).filter(([key]) => /^(?:TEAMS_|CODEX_|GHCP_|GH_TOKEN$|GITHUB_TOKEN$|A2A_|AZURE_|OPENAI_|BICEP_BIN$|PATH$|HOME$|TMPDIR$|LANG$|CI$)/.test(key))) }) + '\\n');\n`,
     );
     if (process.platform === 'win32') {
       fs.writeFileSync(path.join(fixtureRoot, 'npm.cmd'), `@node "%~dp0fake-npm.cjs" %*\r\n`);
@@ -351,17 +351,62 @@ function makeCoreSourceAdapters(compileSource) {
       env: {
         ...process.env,
         PATH: `${fixtureRoot}${path.delimiter}${process.env.PATH}`,
+        HOME: '/fixture/home',
+        TMPDIR: '/fixture/tmp',
+        LANG: 'ko_KR.UTF-8',
+        CI: 'true',
         TEAMS_SOURCE_COMMIT: PINNED_COMMIT,
         TEAMS_TEST_TIMEOUT_MS: '5000',
+        TEAMS_FILEPROVIDER_SERVER_REUSE: '1',
+        BICEP_BIN: '/host/bin/bicep',
+        CODEX_HOME: '/host/codex-home',
+        CODEX_BIN: '/host/bin/codex',
+        CODEX_BIN_SHA256: 'host-codex-digest',
+        GHCP_BIN: '/host/bin/copilot',
+        GH_TOKEN: 'host-gh-secret',
+        GITHUB_TOKEN: 'host-github-secret',
+        A2A_STORE_PATH: '/host/data/a2a.json',
+        A2A_OUTBOUND_STORE_PATH: '/host/data/a2a-outbound.json',
+        TEAMS_A2A_AGENT_PROVIDERS: 'copilot',
+        TEAMS_A2A_REMOTE_AGENT_BEARER_TOKEN: 'host-a2a-secret',
+        TEAMS_AGENT_CLI_PROVIDER: 'copilot',
+        TEAMS_AGENT_DISPATCH_MODE: 'azure-queue',
+        TEAMS_OPTIONAL_RUNTIME: 'true',
+        AZURE_CLIENT_ID: 'host-client-id',
+        AZURE_CLIENT_SECRET: 'host-client-secret',
+        AZURE_TENANT_ID: 'host-tenant-id',
+        AZURE_SUBSCRIPTION_ID: 'host-subscription-id',
+        AZURE_STORAGE_QUEUE_ENDPOINT: 'https://host.queue.core.windows.net/dispatch',
+        AZURE_STORAGE_CONNECTION_STRING: 'host-storage-secret',
+        AZURE_COSMOS_ENDPOINT: 'https://host.documents.azure.com/',
+        AZURE_COSMOS_KEY: 'host-cosmos-secret',
+        OPENAI_API_KEY: 'host-openai-secret',
       },
       encoding: 'utf8',
     });
     assert.equal(result.status, 0, result.stderr || result.stdout);
-    const invocations = fs.readFileSync(invocationLog, 'utf8').trim().split('\n');
+    const invocations = fs.readFileSync(invocationLog, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
     assert.ok(
-      invocations.includes('run test:fileprovider-runtime-deps'),
+      invocations.some(({ args }) => args.join(' ') === 'run test:fileprovider-runtime-deps'),
       'the default API-free runner must execute the FileProvider runtime dependency lifecycle contract',
     );
+    const expectedChildEnv = {
+      PATH: `${fixtureRoot}${path.delimiter}${process.env.PATH}`,
+      HOME: '/fixture/home',
+      TMPDIR: '/fixture/tmp',
+      LANG: 'ko_KR.UTF-8',
+      CI: 'true',
+      TEAMS_SOURCE_COMMIT: PINNED_COMMIT,
+      TEAMS_TEST_TIMEOUT_MS: '5000',
+      TEAMS_FILEPROVIDER_SERVER_REUSE: '1',
+    };
+    for (const { env } of invocations) {
+      assert.deepEqual(
+        env,
+        expectedChildEnv,
+        'API-free children must not inherit provider, cloud, storage, dispatch, or credential configuration',
+      );
+    }
   } finally {
     fs.rmSync(fixtureRoot, { recursive: true, force: true });
   }

@@ -4,8 +4,6 @@ import { registerHooks } from 'node:module';
 const teamsJsTestModule = `
 export const app = { initialize: async () => undefined, isInitialized: () => true };
 export const authentication = { getAuthToken: async () => 'test-token' };
-export const geoLocation = { isSupported: () => false };
-export const location = { isSupported: () => false };
 `;
 
 registerHooks({

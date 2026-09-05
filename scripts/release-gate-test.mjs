@@ -63,6 +63,7 @@ assert.deepEqual(
     ['core-source-check', 'typecheck:core', 123],
     ['core-build', 'build:core', 123],
     ['server-build-determinism', 'test:server-build-determinism', 123],
+    ['azure-core', 'test:azure-core', 123],
     ['core-test', 'test:core', 123],
     ['deployment', 'check:deployment', 123],
   ],
@@ -79,7 +80,6 @@ const validManifest = {
   id: expected.appId,
   staticTabs: [{ contentUrl: `https://${expected.tabDomain}/tabs/home/` }],
   validDomains: [expected.tabDomain, 'token.botframework.com'],
-  devicePermissions: ['geolocation'],
   webApplicationInfo: {
     id: expected.clientId,
     resource: expected.applicationIdUri,
@@ -197,7 +197,7 @@ assert.throws(
   /Bot client ID|resource/i,
 );
 assert.throws(
-  () => assertPackagedManifest({ ...validManifest, devicePermissions: [] }, expected),
+  () => assertPackagedManifest({ ...validManifest, devicePermissions: ['geolocation'] }, expected),
   /geolocation/,
 );
 assert.doesNotThrow(() => assertPublicHealth(validHealth, expected));

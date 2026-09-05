@@ -1,0 +1,304 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: githubReleaseCommit
+    displayName: Full GitHub release commit (deploy only)
+    type: string
+    default: ''
+  - name: azureDevOpsEnvironment
+    displayName: Azure DevOps environment name
+    type: string
+    default: teamsapp-canary
+  - name: azureDevOpsEnvironmentId
+    displayName: Azure DevOps environment resource ID with an approval check
+    type: string
+    default: ''
+  - name: rollback
+    displayName: Roll back the current traffic-serving revision
+    type: boolean
+    default: false
+  - name: codexArtifactUrl
+    displayName: Approved HTTPS URL of the Linux Codex executable
+    type: string
+    default: ''
+  - name: codexArtifactSha256
+    displayName: Approved SHA-256 of the Linux Codex executable
+    type: string
+    default: ''
+
+variables:
+  azureServiceConnection: teamsapp-azure-canary
+  azureSubscriptionId: 0e58c3cb-474d-4e70-978a-4939c586f867
+  azureResourceGroup: rg-teamsapp-canary
+  azureLocation: koreacentral
+  azureWorkloadName: teamsapp
+  githubRepository: devdoo-teams/teams-app
+  allowedGitHubRepositories: devdoo-teams/teams-app
+
+stages:
+  - stage: ValidateHandoff
+    displayName: Verify authenticated and attested GitHub handoff
+    condition: and(succeeded(), eq(${{ parameters.rollback }}, false))
+    jobs:
+      - job: ValidateReleaseArtifact
+        displayName: Resolve the release artifact by repository and commit
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - checkout: self
+          - bash: |
+              set -euo pipefail
+              test -n "$GITHUB_RELEASE_COMMIT"
+              printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ARTIFACT_USERNAME" --password-stdin
+              node scripts/azure-github-handoff.mjs "$GITHUB_REPOSITORY" "$GITHUB_RELEASE_COMMIT" "$(Pipeline.Workspace)/github-handoff"
+            displayName: Download, digest-check, extract, and attest GitHub artifact
+            env:
+              AZURE_RELEASE_ALLOWED_REPOSITORIES: $(allowedGitHubRepositories)
+              GITHUB_ARTIFACT_USERNAME: $(githubArtifactUsername)
+              GITHUB_RELEASE_COMMIT: ${{ parameters.githubReleaseCommit }}
+              GITHUB_REPOSITORY: $(githubRepository)
+              GITHUB_TOKEN: $(githubArtifactReadToken)
+          - task: PublishPipelineArtifact@1
+            displayName: Retain verified GitHub handoff and provenance
+            inputs:
+              targetPath: $(Pipeline.Workspace)/github-handoff
+              artifact: validated-github-handoff
+
+  - stage: ValidateApprovalConfiguration
+    displayName: Verify external Azure DevOps approval configuration
+    dependsOn: []
+    jobs:
+      - job: VerifyEnvironmentApproval
+        displayName: Query enabled approval check for the exact environment
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - checkout: self
+          - bash: |
+              set -euo pipefail
+              test -n "$AZURE_DEVOPS_ENVIRONMENT_ID"
+              node scripts/azure-approval-check.mjs \
+                "$SYSTEM_COLLECTION_URI" \
+                "$SYSTEM_TEAM_PROJECT" \
+                "$AZURE_DEVOPS_ENVIRONMENT_ID" \
+                "$AZURE_DEVOPS_ENVIRONMENT_NAME" \
+                "$(Pipeline.Workspace)/approval-preflight/approval-check-receipt.json"
+            displayName: Fail closed unless an operator approval check exists
+            env:
+              AZURE_DEVOPS_ENVIRONMENT_ID: ${{ parameters.azureDevOpsEnvironmentId }}
+              AZURE_DEVOPS_ENVIRONMENT_NAME: ${{ parameters.azureDevOpsEnvironment }}
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+              SYSTEM_COLLECTION_URI: $(System.CollectionUri)
+              SYSTEM_TEAM_PROJECT: $(System.TeamProject)
+          - task: PublishPipelineArtifact@1
+            displayName: Retain approval configuration receipt
+            inputs:
+              targetPath: $(Pipeline.Workspace)/approval-preflight
+              artifact: approval-configuration-receipt
+
+  - stage: DeployCanary
+    displayName: Provision and deploy immutable canary revision
+    dependsOn:
+      - ValidateHandoff
+      - ValidateApprovalConfiguration
+    condition: and(succeeded(), eq(${{ parameters.rollback }}, false))
+    jobs:
+      - deployment: DeployCanaryRevision
+        displayName: Deploy main.bicep with the verified release identity
+        environment: ${{ parameters.azureDevOpsEnvironment }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - download: current
+                  artifact: validated-github-handoff
+                - download: current
+                  artifact: approval-configuration-receipt
+                - task: UseNode@1
+                  displayName: Install the pinned worker Node runtime
+                  inputs:
+                    version: 24.19.0
+                - task: AzureCLI@2
+                  displayName: Provision from Bicep outputs, import digest, deploy, and verify
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      set -euo pipefail
+                      test "$(az account show --query id --output tsv)" = "$AZURE_SUBSCRIPTION_ID"
+                      test -n "$WORKER_ADMIN_SSH_PUBLIC_KEY"
+                      [[ "$CODEX_ARTIFACT_URL" =~ ^https://[^?#]+$ ]]
+                      [[ "$CODEX_ARTIFACT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+                      receipt="$(Pipeline.Workspace)/validated-github-handoff/dist/evidence/azure-release-receipt.json"
+                      provenance="$(Pipeline.Workspace)/validated-github-handoff/github-handoff-provenance.json"
+                      node scripts/azure-release-input.mjs "$receipt"
+                      commit="$(jq -er '.commit' "$receipt")"
+                      version="$(jq -er '.version' "$receipt")"
+                      source_image="$(jq -er '.image' "$receipt")"
+                      source_digest="$(jq -er '.imageDigest' "$receipt")"
+                      teams_package_sha="$(jq -er '.teamsPackageSha256' "$receipt")"
+                      client_sha="$(jq -er '.clientBundleSha256' "$receipt")"
+                      server_sha="$(jq -er '.serverBundleSha256' "$receipt")"
+                      test -n "$GHCR_IMPORT_USERNAME"
+                      test -n "$GHCR_IMPORT_TOKEN"
+
+                      az deployment group create \
+                        --name teamsapp-platform-foundation \
+                        --resource-group "$AZURE_RESOURCE_GROUP" \
+                        --template-file infra/azure/main.bicep \
+                        --parameters workloadName="$AZURE_WORKLOAD_NAME" location="$AZURE_LOCATION" enableCosmosFreeTier=true deployContainerApp=false deployWorkerVm=false \
+                        containerImage="${source_image}@${source_digest}" workerAdminSshPublicKey="$WORKER_ADMIN_SSH_PUBLIC_KEY" \
+                        releaseSourceCommit="$commit" releaseVersion="$version" releaseImageDigest="$source_digest" \
+                        releaseTeamsPackageSha256="$teams_package_sha" releaseClientBundleSha256="$client_sha" releaseServerBundleSha256="$server_sha" \
+                        --query properties.outputs --output json > "$(Agent.TempDirectory)/foundation-outputs.json"
+                      node scripts/azure-deployment-contract.mjs outputs "$(Agent.TempDirectory)/foundation-outputs.json" foundation > "$(Agent.TempDirectory)/foundation.json"
+                      registry_name="$(jq -er '.registryName' "$(Agent.TempDirectory)/foundation.json")"
+                      registry_server="$(jq -er '.registryLoginServer' "$(Agent.TempDirectory)/foundation.json")"
+                      worker_storage_account="$(jq -er '.workerArtifactStorageAccountName.value' "$(Agent.TempDirectory)/foundation-outputs.json")"
+                      worker_artifact_container="$(jq -er '.workerArtifactContainerName.value' "$(Agent.TempDirectory)/foundation-outputs.json")"
+                      worker_artifact_base_url="$(jq -er '.workerArtifactContainerUrl.value' "$(Agent.TempDirectory)/foundation-outputs.json")"
+
+                      git fetch --no-tags origin "$commit" --depth=1
+                      git checkout --detach "$commit"
+                      test "$(git rev-parse HEAD)" = "$commit"
+                      test -z "$(git status --porcelain=v1 --untracked-files=no)"
+                      npm ci --ignore-scripts --no-audit --no-fund
+                      az bicep install
+                      bicep_config_dir="${AZURE_CONFIG_DIR:-$HOME/.azure}"
+                      export BICEP_BIN="${bicep_config_dir}/bin/bicep"
+                      test -x "$BICEP_BIN"
+                      npm run test:azure-core
+                      npm run build:worker
+
+                      worker_stage="$(Agent.TempDirectory)/worker-runtime"
+                      rm -rf "$worker_stage"
+                      mkdir -p "$worker_stage/dist" "$worker_stage/bin"
+                      cp -R dist/worker "$worker_stage/dist/worker"
+                      cp infra/azure/scripts/install-worker-runtime.sh "$worker_stage/install-worker-runtime.sh"
+                      chmod 0500 "$worker_stage/install-worker-runtime.sh"
+                      node_root="$(dirname "$(dirname "$(command -v node)")")"
+                      cp -RL "$node_root" "$worker_stage/node"
+                      curl --proto '=https' --tlsv1.2 --fail --location --retry 4 --output "$worker_stage/bin/codex" "$CODEX_ARTIFACT_URL"
+                      printf '%s  %s\n' "$CODEX_ARTIFACT_SHA256" "$worker_stage/bin/codex" | sha256sum --check --strict
+                      chmod 0500 "$worker_stage/bin/codex"
+                      printf '{"schemaVersion":1,"commit":"%s","codexBinSha256":"%s"}\n' "$commit" "$CODEX_ARTIFACT_SHA256" > "$worker_stage/manifest.json"
+                      worker_archive="$(Agent.TempDirectory)/worker-runtime-${commit}.tar"
+                      tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner --format=posix -cf "$worker_archive" -C "$worker_stage" .
+                      worker_artifact_sha="$(sha256sum "$worker_archive" | awk '{print $1}')"
+                      worker_blob_name="${commit}/worker-runtime-${commit}.tar"
+                      if [[ "$(az storage blob exists --auth-mode login --account-name "$worker_storage_account" --container-name "$worker_artifact_container" --name "$worker_blob_name" --query exists --output tsv)" == true ]]; then
+                        existing_sha="$(az storage blob metadata show --auth-mode login --account-name "$worker_storage_account" --container-name "$worker_artifact_container" --name "$worker_blob_name" --query metadata.sha256 --output tsv)"
+                        test "$existing_sha" = "$worker_artifact_sha"
+                      else
+                        az storage blob upload \
+                          --auth-mode login \
+                          --account-name "$worker_storage_account" \
+                          --container-name "$worker_artifact_container" \
+                          --name "$worker_blob_name" \
+                          --file "$worker_archive" \
+                          --metadata sha256="$worker_artifact_sha" \
+                          --overwrite false \
+                          --output none
+                      fi
+                      worker_artifact_url="${worker_artifact_base_url}/${worker_blob_name}"
+
+                      image_tag="${commit:0:12}"
+                      az acr import --name "$registry_name" --source "${source_image}@${source_digest}" --image "teamsapp:${image_tag}" --username "$GHCR_IMPORT_USERNAME" --password "$GHCR_IMPORT_TOKEN" --force
+                      imported_digest="$(az acr repository show --name "$registry_name" --image "teamsapp:${image_tag}" --query digest --output tsv)"
+                      test "$imported_digest" = "$source_digest"
+                      deployed_image="${registry_server}/teamsapp@${imported_digest}"
+
+                      az deployment group create \
+                        --name teamsapp-platform-current \
+                        --resource-group "$AZURE_RESOURCE_GROUP" \
+                        --template-file infra/azure/main.bicep \
+                        --parameters workloadName="$AZURE_WORKLOAD_NAME" location="$AZURE_LOCATION" enableCosmosFreeTier=true deployContainerApp=true deployWorkerVm=true \
+                        containerImage="$deployed_image" workerAdminSshPublicKey="$WORKER_ADMIN_SSH_PUBLIC_KEY" \
+                        workerArtifactUrl="$worker_artifact_url" workerArtifactSha256="$worker_artifact_sha" codexBinSha256="$CODEX_ARTIFACT_SHA256" \
+                        releaseSourceCommit="$commit" releaseVersion="$version" releaseImageDigest="$source_digest" \
+                        releaseTeamsPackageSha256="$teams_package_sha" releaseClientBundleSha256="$client_sha" releaseServerBundleSha256="$server_sha" \
+                        --query properties.outputs --output json > "$(Agent.TempDirectory)/deployment-outputs.json"
+                      node scripts/azure-deployment-contract.mjs outputs "$(Agent.TempDirectory)/deployment-outputs.json" > "$(Agent.TempDirectory)/deployment.json"
+                      test "$(jq -er '.registryName' "$(Agent.TempDirectory)/deployment.json")" = "$registry_name"
+                      test "$(jq -er '.registryLoginServer' "$(Agent.TempDirectory)/deployment.json")" = "$registry_server"
+                      app_name="$(jq -er '.containerAppName' "$(Agent.TempDirectory)/deployment.json")"
+                      revision_name="$(jq -er '.containerAppRevisionName' "$(Agent.TempDirectory)/deployment.json")"
+                      fqdn="$(jq -er '.containerAppFqdn' "$(Agent.TempDirectory)/deployment.json")"
+                      az containerapp revision show --resource-group "$AZURE_RESOURCE_GROUP" --name "$app_name" --revision "$revision_name" --output json > "$(Agent.TempDirectory)/revision.json"
+                      curl --fail --retry 12 --retry-all-errors --retry-delay 5 --output "$(Agent.TempDirectory)/health.json" "https://${fqdn}/api/health"
+                      node scripts/azure-deployment-contract.mjs verify "$receipt" "$provenance" "$(Agent.TempDirectory)/revision.json" "$(Agent.TempDirectory)/health.json" "$registry_server"
+                  env:
+                    AZURE_LOCATION: $(azureLocation)
+                    AZURE_RESOURCE_GROUP: $(azureResourceGroup)
+                    AZURE_SUBSCRIPTION_ID: $(azureSubscriptionId)
+                    AZURE_WORKLOAD_NAME: $(azureWorkloadName)
+                    GHCR_IMPORT_USERNAME: $(githubArtifactUsername)
+                    GHCR_IMPORT_TOKEN: $(githubArtifactReadToken)
+                    WORKER_ADMIN_SSH_PUBLIC_KEY: $(workerAdminSshPublicKey)
+                    CODEX_ARTIFACT_URL: ${{ parameters.codexArtifactUrl }}
+                    CODEX_ARTIFACT_SHA256: ${{ parameters.codexArtifactSha256 }}
+
+  - stage: RollbackCanary
+    displayName: Roll back the current traffic-serving revision
+    dependsOn:
+      - ValidateApprovalConfiguration
+    condition: and(succeeded(), eq(${{ parameters.rollback }}, true))
+    jobs:
+      - deployment: RollbackCanaryRevision
+        displayName: Activate, verify, and route to the previous revision
+        environment: ${{ parameters.azureDevOpsEnvironment }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - download: current
+                  artifact: approval-configuration-receipt
+                - task: AzureCLI@2
+                  displayName: Select current/previous revisions and verify post-rollback identity
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      set -euo pipefail
+                      test "$(az account show --query id --output tsv)" = "$AZURE_SUBSCRIPTION_ID"
+                      az deployment group show --name teamsapp-platform-current --resource-group "$AZURE_RESOURCE_GROUP" --query properties.outputs --output json > "$(Agent.TempDirectory)/deployment-outputs.json"
+                      node scripts/azure-deployment-contract.mjs outputs "$(Agent.TempDirectory)/deployment-outputs.json" > "$(Agent.TempDirectory)/deployment.json"
+                      app_name="$(jq -er '.containerAppName' "$(Agent.TempDirectory)/deployment.json")"
+                      registry_server="$(jq -er '.registryLoginServer' "$(Agent.TempDirectory)/deployment.json")"
+                      app_fqdn="$(jq -er '.containerAppFqdn' "$(Agent.TempDirectory)/deployment.json")"
+                      az containerapp revision list --resource-group "$AZURE_RESOURCE_GROUP" --name "$app_name" --output json > "$(Agent.TempDirectory)/revisions.json"
+                      node scripts/azure-deployment-contract.mjs select-rollback "$(Agent.TempDirectory)/revisions.json" > "$(Agent.TempDirectory)/rollback.json"
+                      current_revision="$(jq -er '.currentRevision' "$(Agent.TempDirectory)/rollback.json")"
+                      previous_revision="$(jq -er '.previousRevision' "$(Agent.TempDirectory)/rollback.json")"
+                      az containerapp revision show --resource-group "$AZURE_RESOURCE_GROUP" --name "$app_name" --revision "$previous_revision" --output json > "$(Agent.TempDirectory)/previous-before.json"
+                      node scripts/azure-deployment-contract.mjs revision-identity "$(Agent.TempDirectory)/previous-before.json" > "$(Agent.TempDirectory)/previous-identity.json"
+                      previous_commit="$(jq -er '.commit' "$(Agent.TempDirectory)/previous-identity.json")"
+
+                      printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ARTIFACT_USERNAME" --password-stdin
+                      node scripts/azure-github-handoff.mjs "$GITHUB_REPOSITORY" "$previous_commit" "$(Agent.TempDirectory)/rollback-handoff"
+                      receipt="$(Agent.TempDirectory)/rollback-handoff/dist/evidence/azure-release-receipt.json"
+                      provenance="$(Agent.TempDirectory)/rollback-handoff/github-handoff-provenance.json"
+
+                      az containerapp revision activate --resource-group "$AZURE_RESOURCE_GROUP" --name "$app_name" --revision "$previous_revision" --output none
+                      az containerapp revision show --resource-group "$AZURE_RESOURCE_GROUP" --name "$app_name" --revision "$previous_revision" --output json > "$(Agent.TempDirectory)/previous-active.json"
+                      revision_fqdn="$(jq -er '.properties.fqdn' "$(Agent.TempDirectory)/previous-active.json")"
+                      curl --fail --retry 12 --retry-all-errors --retry-delay 5 --output "$(Agent.TempDirectory)/pre-traffic-health.json" "https://${revision_fqdn}/api/health"
+                      node scripts/azure-deployment-contract.mjs verify "$receipt" "$provenance" "$(Agent.TempDirectory)/previous-active.json" "$(Agent.TempDirectory)/pre-traffic-health.json" "$registry_server" pre-traffic
+
+                      az containerapp ingress traffic set --resource-group "$AZURE_RESOURCE_GROUP" --name "$app_name" --revision-weight "${previous_revision}=100" --output none
+                      az containerapp revision deactivate --resource-group "$AZURE_RESOURCE_GROUP" --name "$app_name" --revision "$current_revision" --output none
+                      az containerapp revision show --resource-group "$AZURE_RESOURCE_GROUP" --name "$app_name" --revision "$previous_revision" --output json > "$(Agent.TempDirectory)/previous-final.json"
+                      curl --fail --retry 12 --retry-all-errors --retry-delay 5 --output "$(Agent.TempDirectory)/post-rollback-health.json" "https://${app_fqdn}/api/health"
+                      node scripts/azure-deployment-contract.mjs verify "$receipt" "$provenance" "$(Agent.TempDirectory)/previous-final.json" "$(Agent.TempDirectory)/post-rollback-health.json" "$registry_server"
+                  env:
+                    AZURE_RELEASE_ALLOWED_REPOSITORIES: $(allowedGitHubRepositories)
+                    AZURE_RESOURCE_GROUP: $(azureResourceGroup)
+                    AZURE_SUBSCRIPTION_ID: $(azureSubscriptionId)
+                    GITHUB_ARTIFACT_USERNAME: $(githubArtifactUsername)
+                    GITHUB_REPOSITORY: $(githubRepository)
+                    GITHUB_TOKEN: $(githubArtifactReadToken)

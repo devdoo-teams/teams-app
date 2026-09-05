@@ -190,7 +190,6 @@ async function main(): Promise<void> {
       AGENT_WORKSPACE: root,
       CODEX_BIN: process.execPath,
       CODEX_SCRIPT: join(root, 'scripts/fake-codex.mjs'),
-      WEATHER_MODE: 'demo',
       COPILOTKIT_DETERMINISTIC_MODE: '',
       OPENAI_API_KEY: '',
       OPENAI_MODEL: '',

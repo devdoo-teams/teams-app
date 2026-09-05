@@ -1,0 +1,453 @@
+import { strict as assert } from 'node:assert';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+
+import {
+  CoreOrchestrationClientError,
+  createCoreOrchestrationClient,
+} from '../src/client/core-orchestration-client.js';
+import {
+  createOrchestrationBusyController,
+  orchestrationMutationNotice,
+  OrchestrationPanelView,
+  validateOrchestrationSubmission,
+} from '../src/client/OrchestrationPanel.js';
+import * as orchestrationPanelModule from '../src/client/OrchestrationPanel.js';
+import type {
+  CoreCodexModelCatalog,
+  CoreOrchestrationJob,
+  CoreProviderFact,
+} from '../src/shared/core-orchestration.js';
+
+const provider: CoreProviderFact = {
+  provider: 'codex',
+  availability: 'available',
+  capabilities: ['submit', 'cancel', 'input', 'approve', 'retry'],
+  observedAt: '2026-09-03T00:59:00.000Z',
+  source: 'runtime-probe',
+};
+const modelCatalog: CoreCodexModelCatalog = {
+  revision: 'a'.repeat(64),
+  observedAt: '2026-09-05T04:00:00.000Z',
+  source: 'codex-debug-models',
+  models: [{
+    id: 'gpt-5.6-sol',
+    label: 'GPT-5.6-Sol',
+    defaultReasoningEffort: 'low',
+    reasoningEfforts: ['low', 'high', 'ultra'],
+  }],
+};
+
+const pollingFactory = (orchestrationPanelModule as Record<string, unknown>).createOrchestrationPollingController;
+assert.equal(typeof pollingFactory, 'function', 'the agent hub exposes a bounded non-overlapping polling controller');
+
+{
+  const scheduled: Array<{ callback: () => Promise<void> | void; delay: number; token: number }> = [];
+  const cancelled: number[] = [];
+  let resolveRefresh!: () => void;
+  let refreshCalls = 0;
+  const controller = (pollingFactory as (options: Record<string, unknown>) => {
+    start: () => void;
+    stop: () => void;
+  })({
+    intervalMs: 3_000,
+    refresh: async () => {
+      refreshCalls += 1;
+      await new Promise<void>((resolve) => { resolveRefresh = resolve; });
+    },
+    schedule: (callback: () => Promise<void> | void, delay: number) => {
+      const token = scheduled.length + 1;
+      scheduled.push({ callback, delay, token });
+      return token;
+    },
+    cancel: (token: number) => { cancelled.push(token); },
+  });
+  controller.start();
+  assert.equal(scheduled.length, 1, 'start schedules one bounded refresh');
+  assert.equal(scheduled[0]?.delay, 3_000);
+  const firstTick = scheduled[0]!.callback();
+  assert.equal(refreshCalls, 1);
+  assert.equal(scheduled.length, 1, 'no second refresh is scheduled while the first one is unresolved');
+  resolveRefresh();
+  await firstTick;
+  assert.equal(scheduled.length, 2, 'the next refresh is scheduled only after the previous request settles');
+  controller.stop();
+  assert.deepEqual(cancelled, [2], 'stop cancels the outstanding timer');
+}
+
+function task(
+  status: CoreOrchestrationJob['status'],
+  overrides: Partial<CoreOrchestrationJob> = {},
+): CoreOrchestrationJob {
+  return {
+    id: 'task-1',
+    provider: 'codex',
+    prompt: 'Prepare the deployment evidence.',
+    mode: 'read-only',
+    status,
+    progress: [],
+    createdAt: '2026-09-03T01:00:00.000Z',
+    ...overrides,
+  };
+}
+
+const requests: Array<{ path: string; method: string; body?: Record<string, unknown> }> = [];
+const apiBasePath = '/api/core-orchestration';
+const request = async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
+  const path = String(input);
+  requests.push({
+    path,
+    method: init.method ?? 'GET',
+    body: typeof init.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : undefined,
+  });
+  const json = path === `${apiBasePath}/jobs` && !init.method
+    ? { jobs: [task('running')], providers: [provider], modelCatalog }
+    : path === `${apiBasePath}/jobs/task-1` && !init.method
+      ? { job: task('input_required') }
+      : path === `${apiBasePath}/jobs/task-1/input`
+        ? { status: 'accepted', job: task('running') }
+        : { job: task('running'), replayed: path === `${apiBasePath}/jobs`, requestHash: 'a'.repeat(64) };
+  return new Response(JSON.stringify(json), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
+};
+
+const client = createCoreOrchestrationClient(request);
+const listed = await client.listJobs();
+assert.equal(listed.jobs[0]?.id, 'task-1', 'list returns the durable task identity');
+assert.equal(listed.providers[0]?.availability, 'available', 'list returns measured provider availability');
+assert.equal(listed.modelCatalog?.models[0]?.id, 'gpt-5.6-sol');
+assert.deepEqual(requests.at(-1), { path: `${apiBasePath}/jobs`, method: 'GET', body: undefined });
+
+const detailed = await client.getJob('task-1');
+assert.equal(detailed.status, 'input_required', 'detail preserves the input-required state');
+assert.deepEqual(requests.at(-1), { path: `${apiBasePath}/jobs/task-1`, method: 'GET', body: undefined });
+
+const submitted = await client.submitJob({
+  provider: 'codex',
+  mode: 'read-only',
+  prompt: 'Prepare the deployment evidence.',
+  idempotencyKey: 'tab-submit-1',
+  model: 'gpt-5.6-sol',
+  reasoningEffort: 'high',
+  catalogRevision: modelCatalog.revision,
+});
+assert.equal(submitted.replayed, true, 'duplicate submission is represented without inventing a second task');
+assert.deepEqual(requests.at(-1), {
+  path: `${apiBasePath}/jobs`,
+  method: 'POST',
+  body: {
+    provider: 'codex',
+    mode: 'read-only',
+    prompt: 'Prepare the deployment evidence.',
+    idempotencyKey: 'tab-submit-1',
+    model: 'gpt-5.6-sol',
+    reasoningEffort: 'high',
+    catalogRevision: modelCatalog.revision,
+  },
+}, 'submit sends no client-controlled tenant, requester, or conversation scope');
+
+await client.cancelJob('task-1');
+assert.deepEqual(requests.at(-1), {
+  path: `${apiBasePath}/jobs/task-1/cancel`,
+  method: 'POST',
+  body: {},
+});
+
+await client.approveJob('task-1');
+assert.deepEqual(requests.at(-1), {
+  path: `${apiBasePath}/jobs/task-1/approve`,
+  method: 'POST',
+  body: {},
+});
+
+const provided = await client.provideInput('task-1', 'Use canary.');
+assert.equal(provided.status, 'accepted', 'provide-input consumes the shared result DTO directly');
+assert.equal(provided.job.id, 'task-1');
+assert.deepEqual(requests.at(-1), {
+  path: `${apiBasePath}/jobs/task-1/input`,
+  method: 'POST',
+  body: { input: 'Use canary.' },
+});
+
+const unsupportedClient = createCoreOrchestrationClient(async () => new Response(JSON.stringify({
+  status: 'unsupported',
+  job: task('input_required'),
+  reason: 'agent-service-does-not-support-input',
+}), { status: 501, headers: { 'content-type': 'application/json' } }));
+const unsupportedInput = await unsupportedClient.provideInput('task-1', 'continue');
+assert.equal(unsupportedInput.status, 'unsupported', 'a typed unsupported result remains consumable across HTTP 501');
+assert.equal(unsupportedInput.job.status, 'input_required');
+
+await client.retryJob('task-1');
+assert.deepEqual(requests.at(-1), {
+  path: `${apiBasePath}/jobs/task-1/retry`,
+  method: 'POST',
+  body: {},
+});
+
+const failingClient = createCoreOrchestrationClient(async () => new Response(JSON.stringify({
+  error: { code: 'ProviderUnavailable', message: 'The selected provider is unavailable.', retryable: false },
+}), { status: 503, headers: { 'content-type': 'application/json' } }));
+await assert.rejects(
+  () => failingClient.listJobs(),
+  (error: unknown) => error instanceof CoreOrchestrationClientError
+    && error.code === 'ProviderUnavailable'
+    && error.status === 503
+    && error.retryable === false,
+  'structured server failures retain safe code, status, and retryability',
+);
+
+assert.equal(
+  validateOrchestrationSubmission('', 'codex', [provider]),
+  '작업 내용을 입력하세요.',
+  'blank input is rejected before a request',
+);
+assert.equal(
+  validateOrchestrationSubmission('Run it', '', [provider]),
+  '실행 제공자를 선택하세요.',
+  'missing provider is rejected before a request',
+);
+assert.equal(
+  validateOrchestrationSubmission('Run it', 'offline', [{
+    provider: 'offline',
+    availability: 'unavailable',
+    capabilities: ['submit'],
+    observedAt: '2026-09-03T00:59:00.000Z',
+    source: 'runtime-probe',
+  }]),
+  '현재 사용할 수 없는 제공자입니다.',
+  'an unavailable provider cannot be submitted as live',
+);
+assert.equal(validateOrchestrationSubmission('Run it', 'codex', [provider]), '', 'valid input is accepted');
+assert.equal(
+  validateOrchestrationSubmission(
+    'Run it',
+    'codex',
+    [provider],
+    'gpt-5.6-sol',
+    'minimal',
+    modelCatalog,
+  ),
+  '선택한 모델이 해당 추론 수준을 지원하지 않습니다.',
+);
+assert.equal(
+  orchestrationMutationNotice({
+    status: 'unsupported',
+    job: task('input_required'),
+    reason: 'agent-service-does-not-support-input',
+  }, '추가 입력을 보냈습니다.'),
+  '현재 제공자는 탭에서 추가 입력 재개를 지원하지 않습니다.',
+  'an unsupported input response is never announced as success',
+);
+for (const reason of ['provider-input-unsupported', 'job-not-awaiting-input'] as const) {
+  assert.notEqual(
+    orchestrationMutationNotice({
+      status: 'unsupported',
+      job: task('input_required'),
+      reason,
+    }, '추가 입력을 보냈습니다.'),
+    '추가 입력을 보냈습니다.',
+    `${reason} is never announced as successful input delivery`,
+  );
+}
+assert.equal(
+  orchestrationMutationNotice({ job: task('running'), replayed: true }, '작업을 제출했습니다.'),
+  '같은 요청의 기존 작업을 표시합니다.',
+  'an idempotent replay is identified as the existing durable job',
+);
+
+{
+  const busy = createOrchestrationBusyController();
+  let resolveFirst!: () => void;
+  let calls = 0;
+  const first = busy.run('submit', async () => {
+    calls += 1;
+    await new Promise<void>((resolve) => { resolveFirst = resolve; });
+    return 'first';
+  });
+  const duplicate = await busy.run('submit', async () => {
+    calls += 1;
+    return 'duplicate';
+  });
+  assert.equal(duplicate, undefined, 'a duplicate click does not start a concurrent submission');
+  assert.equal(calls, 1, 'only the first in-flight operation executes');
+  assert.equal(busy.isBusy('submit'), true, 'the controller exposes its pending state');
+  resolveFirst();
+  assert.equal(await first, 'first');
+  assert.equal(busy.isBusy('submit'), false, 'the pending state is released after settlement');
+}
+
+const noop = () => undefined;
+const asyncNoop = async () => undefined;
+const baseProps = {
+  providers: [provider],
+  prompt: '',
+  providerId: 'codex',
+  mode: 'read-only' as const,
+  modelCatalog,
+  modelId: 'gpt-5.6-sol',
+  reasoningEffort: 'high' as const,
+  inputValue: '',
+  busyAction: '',
+  notice: '',
+  validationError: '',
+  onPromptChange: noop,
+  onProviderChange: noop,
+  onModeChange: noop,
+  onModelChange: noop,
+  onReasoningEffortChange: noop,
+  onInputChange: noop,
+  onSubmit: asyncNoop,
+  onSelectTask: asyncNoop,
+  onCancel: asyncNoop,
+  onApprove: asyncNoop,
+  onProvideInput: asyncNoop,
+  onRetryTask: asyncNoop,
+  onReload: asyncNoop,
+};
+
+const loading = renderToStaticMarkup(<OrchestrationPanelView
+  {...baseProps}
+  phase="loading"
+  jobs={[]}
+  selectedJob={null}
+  error=""
+  mobile={false}
+/>);
+assert.match(loading, /role="status"/);
+assert.match(loading, /aria-busy="true"/);
+assert.match(loading, /오케스트레이션 작업을 불러오는 중입니다/);
+
+const empty = renderToStaticMarkup(<OrchestrationPanelView
+  {...baseProps}
+  phase="ready"
+  jobs={[]}
+  selectedJob={null}
+  error=""
+  mobile={false}
+/>);
+assert.match(empty, /아직 실행한 작업이 없습니다/);
+assert.match(empty, /작업 내용/);
+assert.match(empty, /실행 제공자/);
+assert.match(empty, /Codex 모델/);
+assert.match(empty, /추론 수준/);
+assert.match(empty, /자동 새로고침 3초/, 'the hub tells the user that progress is refreshed automatically');
+
+const approval = renderToStaticMarkup(<OrchestrationPanelView
+  {...baseProps}
+  phase="ready"
+  jobs={[task('awaiting_approval', { mode: 'workspace-write' })]}
+  selectedJob={task('awaiting_approval', { mode: 'workspace-write' })}
+  error=""
+  mobile={false}
+/>);
+assert.match(approval, /승인 필요/);
+assert.match(approval, />승인<\/button>/);
+assert.match(approval, /계속하려면 승인이 필요합니다/);
+
+const inputRequired = renderToStaticMarkup(<OrchestrationPanelView
+  {...baseProps}
+  phase="ready"
+  jobs={[task('input_required')]}
+  selectedJob={task('input_required')}
+  error=""
+  mobile={false}
+/>);
+assert.match(inputRequired, /추가 입력이 필요합니다/);
+assert.match(inputRequired, /aria-label="추가 입력"/);
+assert.match(inputRequired, /입력 보내기/);
+
+const failed = renderToStaticMarkup(<OrchestrationPanelView
+  {...baseProps}
+  phase="ready"
+  jobs={[task('failed')]}
+  selectedJob={task('failed', { error: 'No terminal receipt.' })}
+  error=""
+  mobile={false}
+/>);
+assert.match(failed, /role="alert"/);
+assert.match(failed, /No terminal receipt/);
+assert.match(failed, /작업 다시 시도/);
+
+const unavailableAndMobile = renderToStaticMarkup(<OrchestrationPanelView
+  {...baseProps}
+  phase="ready"
+  providers={[provider, {
+    provider: 'hermes',
+    availability: 'unavailable',
+    capabilities: ['submit'],
+    observedAt: '2026-09-03T00:59:00.000Z',
+    source: 'runtime-observation',
+  }]}
+  jobs={[task('completed', { result: 'Evidence prepared.' })]}
+  selectedJob={task('completed', { result: 'Evidence prepared.' })}
+  error=""
+  mobile
+/>);
+assert.match(unavailableAndMobile, /<option disabled="" value="hermes">hermes \(사용 불가\)<\/option>/);
+assert.match(unavailableAndMobile, /hermes: 현재 사용할 수 없음/);
+assert.match(unavailableAndMobile, /Evidence prepared/);
+assert.match(unavailableAndMobile, /모바일에서 작업 제어가 원활하지 않으면 Teams 데스크톱 또는 웹 탭에서 계속하세요/);
+
+const promptAndTools = renderToStaticMarkup(<OrchestrationPanelView
+  {...baseProps}
+  phase="ready"
+  jobs={[task('running')]}
+  selectedJob={task('running', {
+    prompt: '배포 상태를 공식 문서와 비교해줘',
+    model: 'gpt-5.6-sol',
+    reasoningEffort: 'high',
+    catalogRevision: modelCatalog.revision,
+    tokenUsage: {
+      source: 'codex.exec.jsonl.turn.completed.usage',
+      inputTokens: 1_200,
+      cachedInputTokens: 1_000,
+      outputTokens: 240,
+      reasoningOutputTokens: 80,
+    },
+    tools: [
+      { category: 'skill', name: 'systematic-debugging', observedAt: '2026-09-05T00:00:00.000Z' },
+      { category: 'mcp', name: 'jira/search_issues', observedAt: '2026-09-05T00:00:01.000Z' },
+    ],
+  })}
+  error=""
+  mobile={false}
+/>);
+assert.match(promptAndTools, /프롬프트:<\/strong> 배포 상태를 공식 문서와 비교해줘/);
+assert.match(promptAndTools, /스킬 · systematic-debugging/);
+assert.match(promptAndTools, /MCP · jira\/search_issues/);
+assert.match(promptAndTools, /gpt-5.6-sol/);
+assert.match(promptAndTools, /high/);
+assert.match(promptAndTools, /입력 1,200/);
+assert.match(promptAndTools, /계정 잔여량: 제공되지 않음/);
+
+const copilotDetail = renderToStaticMarkup(<OrchestrationPanelView
+  {...baseProps}
+  phase="ready"
+  jobs={[task('running', { provider: 'copilot' })]}
+  selectedJob={task('running', { provider: 'copilot' })}
+  error=""
+  mobile={false}
+/>);
+assert.doesNotMatch(
+  copilotDetail,
+  /CLI 기본값|계정 잔여량|토큰 사용량/u,
+  'non-Codex detail must not imply Codex model or token telemetry',
+);
+
+const error = renderToStaticMarkup(<OrchestrationPanelView
+  {...baseProps}
+  phase="error"
+  jobs={[]}
+  selectedJob={null}
+  error="작업 목록을 불러오지 못했습니다."
+  mobile={false}
+/>);
+assert.match(error, /role="alert"/);
+assert.match(error, /작업 목록을 불러오지 못했습니다/);
+assert.match(error, />다시 시도<\/button>/);
+assert.doesNotMatch(error, /아직 실행한 작업이 없습니다/);
+
+console.log('Client orchestration panel tests passed');

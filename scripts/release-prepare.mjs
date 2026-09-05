@@ -1,7 +1,9 @@
 import crypto from 'node:crypto';
+import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
@@ -10,6 +12,9 @@ const VERSION_FILES = [
   'package-lock.json',
   'appPackage/manifest.json',
 ];
+const GIT_LINEAGE_TIMEOUT_MS = 30_000;
+const GIT_LINEAGE_MAX_COMMITS = 5_000;
+const execFileAsync = promisify(execFile);
 
 function releaseError(code, message) {
   const error = new Error(message);
@@ -44,6 +49,148 @@ export function assertReleaseVersionBumped(currentVersion, nextVersion) {
     );
   }
   return { current, next };
+}
+
+export function sanitizeGitEnvironment(environment = process.env) {
+  return Object.fromEntries(
+    Object.entries(environment).filter(([key]) => !key.toUpperCase().startsWith('GIT_')),
+  );
+}
+
+async function runGit(rootDir, args, { timeoutMs = GIT_LINEAGE_TIMEOUT_MS } = {}) {
+  const cleanEnvironment = sanitizeGitEnvironment();
+  try {
+    return await execFileAsync('git', args, {
+      cwd: rootDir,
+      encoding: 'utf8',
+      env: {
+        ...cleanEnvironment,
+        GIT_CEILING_DIRECTORIES: path.resolve(rootDir),
+        GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+        GIT_CONFIG_NOSYSTEM: '1',
+        GIT_TERMINAL_PROMPT: '0',
+      },
+      maxBuffer: 8 * 1024 * 1024,
+      timeout: timeoutMs,
+    });
+  } catch (cause) {
+    const detail = String(cause?.stderr || cause?.message || cause).trim();
+    throw releaseError('EGITLINEAGE', `failed to inspect Git release lineage: ${detail}`);
+  }
+}
+
+async function runWithinLineageDeadline({ deadline, timeoutMs, label, operation }) {
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) {
+    throw releaseError('EGITLINEAGE', `Git release lineage inspection exceeded ${timeoutMs}ms during ${label}`);
+  }
+  let timeout;
+  try {
+    return await Promise.race([
+      operation(),
+      new Promise((_, reject) => {
+        timeout = setTimeout(
+          () => reject(releaseError(
+            'EGITLINEAGE',
+            `Git release lineage inspection exceeded ${timeoutMs}ms during ${label}`,
+          )),
+          remainingMs,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function readGitReleaseVersionLineage(
+  rootDir = root,
+  { realpath = fs.realpath, timeoutMs = GIT_LINEAGE_TIMEOUT_MS } = {},
+) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw releaseError('EGITLINEAGE', `Git release lineage timeout must be positive: ${timeoutMs}`);
+  }
+  const deadline = Date.now() + timeoutMs;
+  const runLineageGit = (args) => {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      throw releaseError('EGITLINEAGE', `Git release lineage inspection exceeded ${timeoutMs}ms`);
+    }
+    return runGit(rootDir, args, { timeoutMs: remainingMs });
+  };
+
+  const { stdout: topLevelOutput } = await runLineageGit(['rev-parse', '--show-toplevel']);
+  const topLevel = path.resolve(topLevelOutput.trim());
+  const [topLevelRealPath, rootRealPath] = await runWithinLineageDeadline({
+    deadline,
+    timeoutMs,
+    label: 'canonical path resolution',
+    operation: () => Promise.all([
+      realpath(topLevel),
+      realpath(rootDir),
+    ]),
+  });
+  if (topLevelRealPath !== rootRealPath) {
+    throw releaseError('EGITLINEAGE', `release root must be the Git top level: ${rootDir} != ${topLevel}`);
+  }
+
+  const { stdout: commitOutput } = await runLineageGit([
+    'log',
+    '--all',
+    '--full-history',
+    '--format=%H',
+    '--diff-filter=AM',
+    '--',
+    'appPackage/manifest.json',
+  ]);
+  const commits = [...new Set(commitOutput.split(/\r?\n/).map((value) => value.trim()).filter(Boolean))];
+  if (commits.length === 0) {
+    throw releaseError('EGITLINEAGE', 'no committed Teams manifest was found across Git refs');
+  }
+  if (commits.length > GIT_LINEAGE_MAX_COMMITS) {
+    throw releaseError(
+      'EGITLINEAGE',
+      `Git release lineage contains ${commits.length} manifest commits; bounded maximum is ${GIT_LINEAGE_MAX_COMMITS}`,
+    );
+  }
+
+  const entries = [];
+  for (const commit of commits) {
+    const { stdout } = await runLineageGit(['show', `${commit}:appPackage/manifest.json`]);
+    let manifest;
+    try {
+      manifest = JSON.parse(stdout);
+    } catch (cause) {
+      throw releaseError('EGITLINEAGE', `cannot parse appPackage/manifest.json at ${commit}: ${cause.message}`);
+    }
+    const candidate = String(manifest?.version ?? '').trim();
+    if (!VERSION_PATTERN.test(candidate)) continue;
+    entries.push({ commit, version: candidate });
+  }
+  if (entries.length === 0) {
+    throw releaseError('EGITLINEAGE', 'no stable Teams manifest version was found across Git refs');
+  }
+
+  const highest = entries.reduce((best, entry) => (
+    compareReleaseVersions(entry.version, best.version) > 0 ? entry : best
+  ));
+  return {
+    highestVersion: highest.version,
+    highestCommit: highest.commit,
+    observedStableVersions: entries.length,
+  };
+}
+
+export function assertReleaseVersionAboveLineage(currentVersion, nextVersion, lineage) {
+  const result = assertReleaseVersionBumped(currentVersion, nextVersion);
+  const highest = parseReleaseVersion(lineage?.highestVersion, 'highest Git release version');
+  if (compareReleaseVersions(result.next, highest) <= 0) {
+    throw releaseError(
+      'EVERSIONRESERVED',
+      `next release version must be greater than every version observed across Git refs: ${result.next} <= ${highest} at ${lineage.highestCommit}`,
+    );
+  }
+  return { ...result, highestGitVersion: highest, highestGitCommit: lineage.highestCommit };
 }
 
 async function readJson(filePath) {
@@ -108,7 +255,12 @@ async function writeAtomically(filePath, contents) {
 
 export async function prepareReleaseVersion({ rootDir = root, nextVersion, dryRun = false } = {}) {
   const current = await readReleaseVersionSet(rootDir);
-  const { current: currentVersion, next } = assertReleaseVersionBumped(current.currentVersion, nextVersion);
+  const lineage = await readGitReleaseVersionLineage(rootDir);
+  const { current: currentVersion, next } = assertReleaseVersionAboveLineage(
+    current.currentVersion,
+    nextVersion,
+    lineage,
+  );
   const contents = {
     'package.json': replaceVersionFields(current.rawDocuments['package.json'], currentVersion, next, 1, 'package.json'),
     'package-lock.json': replaceVersionFields(current.rawDocuments['package-lock.json'], currentVersion, next, 2, 'package-lock.json'),
@@ -137,6 +289,8 @@ export async function prepareReleaseVersion({ rootDir = root, nextVersion, dryRu
     status: dryRun ? 'DRY_RUN' : 'READY',
     currentVersion,
     nextVersion: next,
+    highestGitVersion: lineage.highestVersion,
+    highestGitCommit: lineage.highestCommit,
     changedFiles: VERSION_FILES.map((relativePath) => path.join(rootDir, relativePath)),
     nextAction: dryRun
       ? 'Run release:prepare without --dry-run to update the three version files.'
@@ -177,11 +331,14 @@ if (isMainModule()) {
     if (options.json) console.log(JSON.stringify(result, null, 2));
     else console.log(`${result.status}: ${result.currentVersion} -> ${result.nextVersion}\n${result.nextAction}`);
   } catch (error) {
+    const lineageBlocked = error.code === 'EVERSIONRESERVED' || error.code === 'EGITLINEAGE';
     console.error(JSON.stringify({
       status: 'BLOCKED',
       phase: 'prepare',
       blocker: { code: error.code ?? 'EUNKNOWN', message: error.message },
-      nextAction: 'Fix the version input or version-file mismatch, then rerun release:prepare.',
+      nextAction: lineageBlocked
+        ? 'Refresh and inspect every remote branch, tag, and pull-request head; choose a version above the highest observed reservation, then rerun release:prepare.'
+        : 'Fix the version input or version-file mismatch, then rerun release:prepare.',
     }, null, 2));
     process.exitCode = 1;
   }

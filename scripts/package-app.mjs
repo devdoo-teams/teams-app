@@ -70,8 +70,8 @@ try {
   if (packagedManifest.version !== JSON.parse(manifest).version) {
     throw new Error('Packaged manifest version does not match the source manifest.');
   }
-  if (packagedManifest.devicePermissions?.includes('geolocation') !== true) {
-    throw new Error('Packaged manifest must declare geolocation device permission.');
+  if (packagedManifest.devicePermissions?.includes('geolocation')) {
+    throw new Error('Packaged manifest must not request the removed geolocation device permission.');
   }
   if (JSON.stringify(packagedManifest).includes('${{')) {
     throw new Error('Packaged manifest still contains unresolved environment placeholders.');
@@ -99,7 +99,7 @@ try {
   }
 
   const zipPath = path.join(buildDir, 'teams-sdk-mvp.zip');
-  console.log(`Teams app package created from ${sourceCommit}: ${zipPath} (manifest v${packagedManifest.version}, geolocation permission verified)`);
+  console.log(`Teams app package created from ${sourceCommit}: ${zipPath} (manifest v${packagedManifest.version}, agent-only permissions verified)`);
 } finally {
   if (stagingDir && fs.existsSync(stagingDir)) fs.rmSync(stagingDir, { recursive: true, force: true });
 }

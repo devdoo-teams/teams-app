@@ -11,6 +11,7 @@ import {
 
 export const CORE_SOURCE_CHECK_FILES = [
   'src/server/codex-capability.ts',
+  'src/server/agent-token-usage.ts',
   'src/server/cli-agent-runner.ts',
   'src/server/provider-neutral-agent-runner.ts',
   'src/server/cli-diagnostics.ts',
@@ -24,6 +25,13 @@ export const CORE_SOURCE_CHECK_FILES = [
   'src/server/a2a-production-runtime.ts',
   'src/server/a2a-route.ts',
   'src/server/a2a-store.ts',
+  'src/server/agent-service.ts',
+  'src/server/storage/runtime-store.ts',
+  'src/server/storage/cosmos-runtime-store.ts',
+  'src/server/storage/runtime-store-factory.ts',
+  'src/server/queue/agent-dispatch-queue.ts',
+  'src/server/azure-agent-dispatch-queue.ts',
+  'src/worker/index.ts',
   'src/server/index.ts',
   'src/server/genui-response.ts',
   'src/server/genui-teams.ts',

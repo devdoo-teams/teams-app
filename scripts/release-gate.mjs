@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +12,13 @@ import {
 } from './fileprovider-git-clean.mjs';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 import { parseServerBuildMarker } from './server-build-marker.mjs';
+import { validateAzureReleaseInput } from './azure-release-input.mjs';
+import {
+  assertNoSensitiveMaterial,
+  readMigrationBundle,
+  stableMigrationJson,
+  validateMigrationBundle,
+} from './azure-state-export.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const packagePath = path.join(root, 'appPackage', 'build', 'teams-sdk-mvp.zip');
@@ -28,6 +36,15 @@ const defaultTimeouts = {
 };
 
 const RELEASE_PROFILES = new Set(['core', 'optional']);
+const RELEASE_TARGETS = new Set(['local', 'azure']);
+
+export function resolveReleaseTarget(env = process.env) {
+  const target = String(env.TEAMS_RELEASE_TARGET ?? '').trim().toLowerCase() || 'local';
+  if (!RELEASE_TARGETS.has(target)) {
+    throw new Error('TEAMS_RELEASE_TARGET must be either local or azure.');
+  }
+  return target;
+}
 
 export function resolveReleaseProfile(env = process.env) {
   const configured = String(env.TEAMS_RELEASE_RUNTIME ?? '').trim().toLowerCase();
@@ -140,9 +157,9 @@ export function assertPackagedManifest(manifest, expected) {
     'packaged manifest validDomains must include token.botframework.com for Teams SSO redirect handling',
   );
   assert.equal(
-    manifest.devicePermissions?.includes('geolocation'),
-    true,
-    'packaged manifest must declare geolocation',
+    manifest.devicePermissions?.includes('geolocation') ?? false,
+    false,
+    'packaged manifest must not request removed geolocation',
   );
   assert.equal(
     manifest.webApplicationInfo?.id,
@@ -538,34 +555,877 @@ async function readExpectedServerBuildIdentity(expectedSourceCommit, expectedMod
   return assertServerBuildIdentity(marker, entryBytes, expectedSourceCommit, expectedMode);
 }
 
-export function createPreflightCommands(timeoutOverride, profile = 'core') {
+function azureGateError(message, code = 'AZURE_INTEGRATED_GATE_BLOCKED') {
+  const error = new Error(`Azure integrated preflight: ${message}`);
+  error.code = code;
+  error.releaseStatus = code === 'AZURE_LIVE_EVIDENCE_UNVERIFIED' ? 'UNVERIFIED' : 'BLOCKED';
+  return error;
+}
+
+function requireAzureConfiguration(env) {
+  const required = [
+    'AZURE_COSMOS_ENDPOINT',
+    'AZURE_COSMOS_DATABASE',
+    'AZURE_COSMOS_CONTAINER',
+    'AZURE_STORAGE_QUEUE_ENDPOINT',
+    'AZURE_CLIENT_ID',
+    'TEAMS_APP_ID',
+    'TAB_DOMAIN',
+    'CLIENT_ID',
+    'BOT_CLIENT_ID',
+    'APPLICATION_ID_URI',
+    'AZURE_DEVOPS_ENVIRONMENT_ID',
+    'AZURE_DEVOPS_ENVIRONMENT_NAME',
+  ];
+  if (env.TEAMS_STORAGE_BACKEND !== 'cosmos') {
+    throw azureGateError('TEAMS_STORAGE_BACKEND must be cosmos.');
+  }
+  if (env.TEAMS_AGENT_DISPATCH_MODE !== 'azure-queue') {
+    throw azureGateError('TEAMS_AGENT_DISPATCH_MODE must be azure-queue.');
+  }
+  const configuration = {
+    TEAMS_STORAGE_BACKEND: env.TEAMS_STORAGE_BACKEND,
+    TEAMS_AGENT_DISPATCH_MODE: env.TEAMS_AGENT_DISPATCH_MODE,
+  };
+  for (const name of required) {
+    const value = env[name]?.trim();
+    if (!value) throw azureGateError(`${name} is required.`);
+    configuration[name] = value;
+  }
+  for (const [name, value] of Object.entries(env)) {
+    if (value?.trim() && /COSMOS.*(?:KEY|CONNECTION.?STRING)|(?:KEY|CONNECTION.?STRING).*COSMOS/iu.test(name)) {
+      throw azureGateError(`key-based Cosmos setting ${name} is forbidden.`);
+    }
+  }
+  for (const name of ['AZURE_COSMOS_ENDPOINT', 'AZURE_STORAGE_QUEUE_ENDPOINT']) {
+    let url;
+    try {
+      url = new URL(configuration[name]);
+    } catch {
+      throw azureGateError(`${name} must be an HTTPS URL.`);
+    }
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) {
+      throw azureGateError(`${name} must be a credential-free HTTPS URL.`);
+    }
+  }
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(configuration.AZURE_CLIENT_ID)) {
+    throw azureGateError('AZURE_CLIENT_ID must be a UUID.');
+  }
+  for (const name of ['TEAMS_APP_ID', 'CLIENT_ID', 'BOT_CLIENT_ID']) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(configuration[name])) {
+      throw azureGateError(`${name} must be a UUID.`);
+    }
+  }
+  if (!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/iu.test(configuration.TAB_DOMAIN)) {
+    throw azureGateError('TAB_DOMAIN must be a public hostname.');
+  }
+  if (configuration.APPLICATION_ID_URI !== `api://${configuration.TAB_DOMAIN}/botid-${configuration.BOT_CLIENT_ID}`) {
+    throw azureGateError('APPLICATION_ID_URI must match the Teams bot and tab identity contract.');
+  }
+  return configuration;
+}
+
+function assertReleaseIdentity(actual, expected, label) {
+  if (!actual || typeof actual !== 'object' || Array.isArray(actual)) {
+    throw azureGateError(`${label} release identity is missing.`);
+  }
+  const mappings = {
+    commit: 'commit',
+    version: 'version',
+    imageDigest: 'imageDigest',
+    teamsPackageSha256: 'teamsPackageSha256',
+    clientBundleSha256: 'clientBundleSha256',
+    serverBundleSha256: 'serverBundleSha256',
+  };
+  for (const [actualField, expectedField] of Object.entries(mappings)) {
+    if (actual[actualField] !== expected[expectedField]) {
+      throw azureGateError(`${label} release identity ${actualField} does not match the immutable handoff receipt.`);
+    }
+  }
+}
+
+function assertExactObjectKeys(value, expectedKeys, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw azureGateError(`${label} must be an object.`, 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  const actualKeys = Object.keys(value).sort();
+  const wantedKeys = [...expectedKeys].sort();
+  if (stableMigrationJson(actualKeys) !== stableMigrationJson(wantedKeys)) {
+    throw azureGateError(`${label} contains missing or unknown fields.`, 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+}
+
+function attestationSha256(value) {
+  return crypto.createHash('sha256').update(stableMigrationJson(value)).digest('hex');
+}
+
+function assertNoFixtureEvidence(value, location, seen = new Set()) {
+  if (value === null || typeof value !== 'object') return;
+  if (seen.has(value)) throw azureGateError(`Cyclic evidence is invalid at ${location}.`, 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  seen.add(value);
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => assertNoFixtureEvidence(entry, `${location}[${index}]`, seen));
+  } else {
+    for (const [key, entry] of Object.entries(value)) {
+      const normalizedKey = key.replace(/[^a-z0-9]/giu, '').toLowerCase();
+      if (
+        ['evidenceclass', 'producerprovenance'].includes(normalizedKey)
+        && typeof entry === 'string'
+        && /(?:^|[-_])(fixture|local)(?:$|[-_])|local-contract/iu.test(entry)
+      ) {
+        throw azureGateError(
+          `Fixture/local-contract provenance at ${location}.${key} cannot satisfy the producer attestation gate.`,
+          'AZURE_LIVE_EVIDENCE_UNVERIFIED',
+        );
+      }
+      assertNoFixtureEvidence(entry, `${location}.${key}`, seen);
+    }
+  }
+  seen.delete(value);
+}
+
+function parseTrustedAttestationKey(trustedPublicKeys, keyId) {
+  const encoded = stableMigrationJson(trustedPublicKeys);
+  if (!trustedPublicKeys || typeof trustedPublicKeys !== 'object' || Array.isArray(trustedPublicKeys) || encoded.length > 64 * 1024) {
+    throw azureGateError(
+      'The protected verifier must provide a bounded public-key allowlist.',
+      'AZURE_LIVE_EVIDENCE_UNVERIFIED',
+    );
+  }
+  if (Object.keys(trustedPublicKeys).length < 1 || Object.keys(trustedPublicKeys).length > 16) {
+    throw azureGateError('The protected verifier public-key allowlist must contain between 1 and 16 keys.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  const trusted = Object.hasOwn(trustedPublicKeys, keyId) ? trustedPublicKeys[keyId] : undefined;
+  if (!trusted) {
+    throw azureGateError(`Release attestation key ${keyId || '<missing>'} is not in the trusted allowlist.`, 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  assertExactObjectKeys(trusted, ['publicKeyPem', 'issuer', 'subject', 'audience'], 'trusted release-attestation key');
+  if (![trusted.publicKeyPem, trusted.issuer, trusted.subject, trusted.audience].every((value) => typeof value === 'string' && value.trim())) {
+    throw azureGateError('The trusted release-attestation key entry is incomplete.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  let publicKey;
+  try {
+    publicKey = crypto.createPublicKey(trusted.publicKeyPem);
+  } catch {
+    throw azureGateError('The trusted release-attestation public key is invalid.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  if (publicKey.type !== 'public' || publicKey.asymmetricKeyType !== 'ed25519') {
+    throw azureGateError('The trusted release-attestation key must be an Ed25519 public key.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  return { trusted, publicKey };
+}
+
+function assertCanonicalAttestationTimestamp(value, label) {
+  let canonical;
+  try {
+    canonical = typeof value === 'string' && value ? new Date(value).toISOString() : '';
+  } catch {
+    canonical = '';
+  }
+  if (canonical !== value) {
+    throw azureGateError(`Release attestation ${label} must be a canonical timestamp.`, 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  return Date.parse(value);
+}
+
+const protectedAzureVerifierCapabilities = new WeakMap();
+const protectedAzureOperationalVerifierProviders = new WeakSet();
+
+/**
+ * @typedef {Readonly<{
+ *   configuration: Readonly<Record<string, string>>;
+ *   trustedPublicKeys: Readonly<Record<string, unknown>>;
+ *   expectedChallenge: Readonly<{releaseRunId: string; challengeId: string; nonce: string; attempt: number}>;
+ * }>} AzureOperationalVerifierPolicy
+ */
+
+/**
+ * Deployment-owned operational verifier capability. The evidence caller only
+ * supplies evidence to verify(); policy and replay state stay behind this
+ * boundary. Implementations must be registered by a protected deployment
+ * adapter, never reconstructed from evidence or ordinary environment input.
+ *
+ * @typedef {Readonly<{
+ *   kind: 'protected-operational-verifier';
+ *   getPolicy: () => AzureOperationalVerifierPolicy;
+ *   consumeChallenge: (challengeKey: string) => boolean;
+ * }>} AzureOperationalEvidenceVerifierProvider
+ */
+
+function immutableJsonClone(value) {
+  const clone = JSON.parse(stableMigrationJson(value));
+  const freeze = (candidate) => {
+    if (!candidate || typeof candidate !== 'object' || Object.isFrozen(candidate)) return candidate;
+    for (const entry of Object.values(candidate)) freeze(entry);
+    return Object.freeze(candidate);
+  };
+  return freeze(clone);
+}
+
+function requireExpectedReleaseChallenge(expectedChallenge) {
+  assertExactObjectKeys(expectedChallenge, ['releaseRunId', 'challengeId', 'nonce', 'attempt'], 'expected release challenge');
+  for (const name of ['releaseRunId', 'challengeId']) {
+    if (!/^[A-Za-z0-9._-]{8,128}$/u.test(expectedChallenge[name] ?? '')) {
+      throw azureGateError(`Expected release challenge ${name} is invalid.`, 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+    }
+  }
+  if (!/^[A-Za-z0-9_-]{16,128}$/u.test(expectedChallenge.nonce ?? '')) {
+    throw azureGateError('Expected release challenge nonce is invalid.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  if (!Number.isSafeInteger(expectedChallenge.attempt) || expectedChallenge.attempt < 1) {
+    throw azureGateError('Expected release challenge attempt is invalid.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  return immutableJsonClone(expectedChallenge);
+}
+
+function releaseChallengeKey(challenge) {
+  return crypto
+    .createHash('sha256')
+    .update(stableMigrationJson({
+      releaseRunId: challenge.releaseRunId,
+      challengeId: challenge.challengeId,
+      nonce: challenge.nonce,
+      attempt: challenge.attempt,
+    }), 'utf8')
+    .digest('hex');
+}
+
+/**
+ * Deterministic local-only durable replay fixture. Each consumed challenge is
+ * represented by an atomically-created marker file, so a new verifier object
+ * or a new Node process observes the same consumed state. No Azure is touched.
+ */
+export function createLocalDurableAzureChallengeStore(markerPath) {
+  if (typeof markerPath !== 'string' || !path.isAbsolute(markerPath)) {
+    throw new TypeError('local protected challenge marker path must be an absolute path');
+  }
+  const resolvedMarkerPath = path.resolve(markerPath);
+  return Object.freeze({
+    consume(challengeKey) {
+      if (!/^[0-9a-f]{64}$/u.test(challengeKey ?? '')) {
+        throw new TypeError('protected challenge key must be a SHA-256 digest');
+      }
+      fsSync.mkdirSync(path.dirname(resolvedMarkerPath), { recursive: true, mode: 0o700 });
+      const consumedPath = `${resolvedMarkerPath}.${challengeKey}.consumed`;
+      try {
+        const descriptor = fsSync.openSync(consumedPath, 'wx', 0o400);
+        fsSync.closeSync(descriptor);
+        return true;
+      } catch (error) {
+        if (error?.code === 'EEXIST') return false;
+        throw error;
+      }
+    },
+  });
+}
+
+/**
+ * Creates the repository's deterministic protected fixture. This is not a
+ * production provider: it is deliberately the only provider registered here,
+ * while a real deployment must supply its own protected adapter and durable
+ * challenge store outside the evidence-caller process.
+ */
+export function createLocalProtectedAzureOperationalVerifier({
+  expectedConfiguration,
+  trustedPublicKeys,
+  expectedChallenge,
+  challengeStore,
+}) {
+  if (!challengeStore || typeof challengeStore.consume !== 'function') {
+    throw new TypeError('local protected verifier requires a durable challenge store');
+  }
+  const policy = immutableJsonClone({
+    configuration: requireAzureConfiguration(immutableJsonClone(expectedConfiguration)),
+    trustedPublicKeys,
+    expectedChallenge: requireExpectedReleaseChallenge(expectedChallenge),
+  });
+  const provider = Object.freeze({
+    kind: 'protected-operational-verifier',
+    getPolicy: () => policy,
+    consumeChallenge: (challengeKey) => challengeStore.consume(challengeKey),
+  });
+  protectedAzureOperationalVerifierProviders.add(provider);
+  return createProtectedAzureOperationalEvidenceVerifier(provider);
+}
+
+/**
+ * Adapter boundary for a deployment-owned operational verifier. The provider
+ * must be registered by that boundary before use; ordinary evidence objects,
+ * env variables, and caller-created lookalikes cannot become a capability.
+ */
+export function createProtectedAzureOperationalEvidenceVerifier(provider) {
+  if (!provider || !protectedAzureOperationalVerifierProviders.has(provider)) {
+    throw azureGateError(
+      'A protected deployment-owned Azure operational verifier provider is required; caller-created capabilities are rejected.',
+      'AZURE_LIVE_EVIDENCE_UNVERIFIED',
+    );
+  }
+  const providerPolicy = provider.getPolicy();
+  const policy = immutableJsonClone({
+    configuration: requireAzureConfiguration(providerPolicy.configuration),
+    trustedPublicKeys: providerPolicy.trustedPublicKeys,
+    expectedChallenge: requireExpectedReleaseChallenge(providerPolicy.expectedChallenge),
+  });
+  const capability = Object.freeze(Object.create(null));
+  protectedAzureVerifierCapabilities.set(capability, {
+    evidenceClass: 'protected-operational-verifier-contract',
+    resultStatus: 'PROTECTED_OPERATIONAL_VERIFIER_CONTRACT_PASS',
+    configuration: policy.configuration,
+    trustedPublicKeys: policy.trustedPublicKeys,
+    expectedChallenge: policy.expectedChallenge,
+    consumeChallenge: (challengeKey) => provider.consumeChallenge(challengeKey),
+  });
+  return Object.freeze({
+    verify(evidence) {
+      return validateAzureIntegratedEvidenceWithCapability(evidence, capability);
+    },
+  });
+}
+
+export function createLocalSignedAzureEvidenceVerifier({
+  expectedConfiguration,
+  trustedPublicKeys,
+  expectedChallenge,
+  now,
+}) {
+  const capability = Object.freeze(Object.create(null));
+  protectedAzureVerifierCapabilities.set(capability, {
+    evidenceClass: 'local-signed-verifier-contract',
+    configuration: immutableJsonClone(requireAzureConfiguration(immutableJsonClone(expectedConfiguration))),
+    trustedPublicKeys: immutableJsonClone(trustedPublicKeys),
+    expectedChallenge: requireExpectedReleaseChallenge(expectedChallenge),
+    now: now === undefined ? undefined : Number(now),
+    consumed: false,
+    resultStatus: 'LOCAL_SIGNED_VERIFIER_CONTRACT_PASS',
+    consumeChallenge: () => {
+      if (protectedAzureVerifierCapabilities.get(capability).consumed) return false;
+      protectedAzureVerifierCapabilities.get(capability).consumed = true;
+      return true;
+    },
+  });
+  return Object.freeze({
+    verify(evidence) {
+      return validateAzureIntegratedEvidenceWithCapability(evidence, capability);
+    },
+  });
+}
+
+function verifyAzureAggregateAttestation({
+  trustedPublicKeys,
+  expectedChallenge,
+  aggregateAttestation,
+  configuration,
+  releaseReceipt,
+  handoffProvenance,
+  migrationBundle,
+  migrationReceipt,
+  approvalReceipt,
+  providerReceipt,
+  publicCanaryReceipt,
+  jiraReceipt,
+  now = Date.now(),
+}) {
+  if (!aggregateAttestation || typeof aggregateAttestation !== 'object' || Array.isArray(aggregateAttestation)) {
+    throw azureGateError(
+      'Unsigned local JSON evidence cannot establish live state; a signed aggregate release attestation is required.',
+      'AZURE_LIVE_EVIDENCE_UNVERIFIED',
+    );
+  }
+  try {
+    assertNoSensitiveMaterial(aggregateAttestation, 'preflight.aggregateAttestation');
+  } catch (error) {
+    throw azureGateError(error instanceof Error ? error.message : String(error));
+  }
+  for (const [label, evidence] of Object.entries({
+    releaseReceipt,
+    handoffProvenance,
+    migrationBundle,
+    migrationReceipt,
+    approvalReceipt,
+    providerReceipt,
+    publicCanaryReceipt,
+    jiraReceipt,
+  })) {
+    assertNoFixtureEvidence(evidence, `preflight.${label}`);
+  }
+  if (typeof aggregateAttestation.signature !== 'string' || !aggregateAttestation.signature) {
+    throw azureGateError('Release attestation is unsigned; an Ed25519 signature is required.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  assertExactObjectKeys(aggregateAttestation, [
+    'schemaVersion', 'algorithm', 'keyId', 'producer', 'issuer', 'subject', 'audience', 'environment', 'resource',
+    'issuedAt', 'expiresAt', 'operation', 'nonce', 'releaseIdentity', 'evidenceHashes', 'signature',
+  ], 'release aggregate attestation');
+  if (
+    aggregateAttestation.schemaVersion !== 'teamsapp.azure-release-aggregate-attestation.v1'
+    || aggregateAttestation.algorithm !== 'Ed25519'
+    || aggregateAttestation.producer !== 'azure-devops-release-pipeline'
+  ) {
+    throw azureGateError(
+      'Release attestation provenance is not the accepted Azure DevOps producer contract; fixture provenance is not live evidence.',
+      'AZURE_LIVE_EVIDENCE_UNVERIFIED',
+    );
+  }
+  if (!/^[A-Za-z0-9._-]{1,128}$/u.test(aggregateAttestation.keyId ?? '')) {
+    throw azureGateError('Release attestation keyId is invalid.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  if (!/^[A-Za-z0-9_-]{16,128}$/u.test(aggregateAttestation.nonce ?? '')) {
+    throw azureGateError('Release attestation nonce is missing or invalid.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  assertExactObjectKeys(aggregateAttestation.operation, ['releaseRunId', 'challengeId', 'attempt'], 'release attestation operation');
+  const expectedOperation = {
+    releaseRunId: expectedChallenge.releaseRunId,
+    challengeId: expectedChallenge.challengeId,
+    attempt: expectedChallenge.attempt,
+  };
+  if (
+    stableMigrationJson(aggregateAttestation.operation) !== stableMigrationJson(expectedOperation)
+    || aggregateAttestation.nonce !== expectedChallenge.nonce
+  ) {
+    throw azureGateError(
+      'Release attestation operation, attempt, or nonce does not match the protected release challenge.',
+      'AZURE_LIVE_EVIDENCE_UNVERIFIED',
+    );
+  }
+  const issuedAt = assertCanonicalAttestationTimestamp(aggregateAttestation.issuedAt, 'issuedAt');
+  const expiresAt = assertCanonicalAttestationTimestamp(aggregateAttestation.expiresAt, 'expiresAt');
+  if (issuedAt > now + 60_000) {
+    throw azureGateError('Release attestation issuedAt is in the future.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  if (expiresAt <= now || expiresAt <= issuedAt || expiresAt - issuedAt > 15 * 60_000) {
+    throw azureGateError('Release attestation is expired or has an invalid expiry window.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+
+  const { trusted, publicKey } = parseTrustedAttestationKey(trustedPublicKeys, aggregateAttestation.keyId);
+  for (const claim of ['issuer', 'subject', 'audience']) {
+    if (aggregateAttestation[claim] !== trusted[claim]) {
+      throw azureGateError(`Release attestation ${claim} is not trusted for key ${aggregateAttestation.keyId}.`, 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+    }
+  }
+  assertExactObjectKeys(aggregateAttestation.environment, ['id', 'name'], 'release attestation environment');
+  const expectedEnvironment = {
+    id: configuration.AZURE_DEVOPS_ENVIRONMENT_ID,
+    name: configuration.AZURE_DEVOPS_ENVIRONMENT_NAME,
+  };
+  if (stableMigrationJson(aggregateAttestation.environment) !== stableMigrationJson(expectedEnvironment)) {
+    throw azureGateError('Release attestation environment does not match the exact promotion environment.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  const expectedResource = {
+    cosmosEndpoint: configuration.AZURE_COSMOS_ENDPOINT,
+    cosmosDatabase: configuration.AZURE_COSMOS_DATABASE,
+    cosmosContainer: configuration.AZURE_COSMOS_CONTAINER,
+    storageQueueEndpoint: configuration.AZURE_STORAGE_QUEUE_ENDPOINT,
+    azureClientId: configuration.AZURE_CLIENT_ID,
+    teamsAppId: configuration.TEAMS_APP_ID,
+    tabDomain: configuration.TAB_DOMAIN,
+  };
+  assertExactObjectKeys(aggregateAttestation.resource, Object.keys(expectedResource), 'release attestation resource');
+  if (stableMigrationJson(aggregateAttestation.resource) !== stableMigrationJson(expectedResource)) {
+    throw azureGateError('Release attestation resource/target does not match the configured Azure release target.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  const expectedReleaseIdentity = {
+    commit: releaseReceipt.commit,
+    version: releaseReceipt.version,
+    image: releaseReceipt.image,
+    imageDigest: releaseReceipt.imageDigest,
+    teamsPackageSha256: releaseReceipt.teamsPackageSha256,
+    clientBundleSha256: releaseReceipt.clientBundleSha256,
+    serverBundleSha256: releaseReceipt.serverBundleSha256,
+  };
+  assertExactObjectKeys(aggregateAttestation.releaseIdentity, Object.keys(expectedReleaseIdentity), 'release attestation releaseIdentity');
+  if (stableMigrationJson(aggregateAttestation.releaseIdentity) !== stableMigrationJson(expectedReleaseIdentity)) {
+    throw azureGateError('Release attestation release identity does not match the exact immutable release.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  const expectedEvidenceHashes = {
+    releaseReceipt: attestationSha256(releaseReceipt),
+    handoffProvenance: attestationSha256(handoffProvenance),
+    migrationBundle: attestationSha256(migrationBundle),
+    migrationReceipt: attestationSha256(migrationReceipt),
+    approvalReceipt: attestationSha256(approvalReceipt),
+    providerReceipt: attestationSha256(providerReceipt),
+    publicCanaryReceipt: attestationSha256(publicCanaryReceipt),
+    jiraReceipt: attestationSha256(jiraReceipt),
+  };
+  assertExactObjectKeys(aggregateAttestation.evidenceHashes, Object.keys(expectedEvidenceHashes), 'release attestation evidenceHashes');
+  if (stableMigrationJson(aggregateAttestation.evidenceHashes) !== stableMigrationJson(expectedEvidenceHashes)) {
+    throw azureGateError('Release attestation evidence hashes do not match the exact release receipts.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  if (!/^[A-Za-z0-9_-]{86}$/u.test(aggregateAttestation.signature ?? '')) {
+    throw azureGateError('Release attestation is unsigned or has an invalid Ed25519 signature.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  const unsigned = structuredClone(aggregateAttestation);
+  delete unsigned.signature;
+  const signature = Buffer.from(aggregateAttestation.signature, 'base64url');
+  if (!crypto.verify(null, Buffer.from(stableMigrationJson(unsigned)), publicKey, signature)) {
+    throw azureGateError('Release attestation signature verification failed.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  return {
+    status: 'LOCAL_CRYPTOGRAPHIC_CONTRACT_VERIFIED',
+    evidenceClass: 'signed-attestation-cryptographic-contract',
+    verification: 'ED25519_AGGREGATE_CONTRACT_VERIFIED',
+    keyId: aggregateAttestation.keyId,
+    issuer: aggregateAttestation.issuer,
+    subject: aggregateAttestation.subject,
+    audience: aggregateAttestation.audience,
+    environment: structuredClone(expectedEnvironment),
+    resource: structuredClone(expectedResource),
+    releaseIdentity: structuredClone(expectedReleaseIdentity),
+    issuedAt: aggregateAttestation.issuedAt,
+    expiresAt: aggregateAttestation.expiresAt,
+    operation: structuredClone(expectedOperation),
+    nonce: aggregateAttestation.nonce,
+  };
+}
+
+function validateAzureIntegratedEvidenceWithCapability({
+  env,
+  releaseReceipt: releaseReceiptInput,
+  handoffProvenance,
+  sourceCommit,
+  sourceManifest,
+  packageBytes,
+  packageManifest,
+  migrationBundle,
+  migrationReceipt,
+  approvalReceipt,
+  providerReceipt,
+  publicCanaryReceipt,
+  jiraReceipt,
+  aggregateAttestation,
+}, verifierCapability) {
+  const verifierState = protectedAzureVerifierCapabilities.get(verifierCapability);
+  const configuration = verifierState?.configuration ?? requireAzureConfiguration(env ?? {});
+  for (const [label, evidence] of Object.entries({
+    releaseReceipt: releaseReceiptInput,
+    handoffProvenance,
+    sourceManifest,
+    packageManifest,
+    migrationBundle,
+    migrationReceipt,
+    approvalReceipt,
+    providerReceipt,
+    publicCanaryReceipt,
+    jiraReceipt,
+  })) {
+    try {
+      assertNoSensitiveMaterial(evidence, `preflight.${label}`);
+    } catch (error) {
+      throw azureGateError(error instanceof Error ? error.message : String(error));
+    }
+  }
+  let releaseReceipt;
+  try {
+    releaseReceipt = validateAzureReleaseInput(releaseReceiptInput);
+  } catch (error) {
+    throw azureGateError(error instanceof Error ? error.message : String(error));
+  }
+  if (sourceCommit !== releaseReceipt.commit) throw azureGateError('source commit does not match the handoff receipt.');
+  if (sourceManifest?.version !== releaseReceipt.version) throw azureGateError('source manifest version does not match the handoff receipt.');
+  if (
+    handoffProvenance?.schemaVersion !== 1
+    || handoffProvenance.repository !== 'devdoo-teams/teams-app'
+    || handoffProvenance.workflow !== 'devdoo-teams/teams-app/.github/workflows/publish-image.yml'
+    || handoffProvenance.commit !== releaseReceipt.commit
+    || handoffProvenance.attestationVerified !== true
+    || !Number.isSafeInteger(handoffProvenance.artifactId)
+    || !/^sha256:[0-9a-f]{64}$/u.test(handoffProvenance.artifactDigest ?? '')
+    || !Array.isArray(handoffProvenance.attestedSubjects)
+    || !handoffProvenance.attestedSubjects.includes('azure-release-receipt.json')
+    || !handoffProvenance.attestedSubjects.includes('teams-sdk-mvp.zip')
+    || !handoffProvenance.attestedSubjects.includes(`${releaseReceipt.image}@${releaseReceipt.imageDigest}`)
+  ) {
+    throw azureGateError('GitHub handoff provenance does not prove the attested immutable receipt, image, and Teams package.');
+  }
+  if (!(packageBytes instanceof Uint8Array) || packageBytes.byteLength === 0) {
+    throw azureGateError('Teams package bytes are missing.');
+  }
+  const packageDigest = crypto.createHash('sha256').update(packageBytes).digest('hex');
+  if (packageDigest !== releaseReceipt.teamsPackageSha256) {
+    throw azureGateError('Teams package SHA-256 does not match the immutable handoff receipt.');
+  }
+  try {
+    assertPackagedManifest(packageManifest, {
+      version: releaseReceipt.version,
+      appId: configuration.TEAMS_APP_ID,
+      tabDomain: configuration.TAB_DOMAIN,
+      clientId: configuration.CLIENT_ID,
+      botClientId: configuration.BOT_CLIENT_ID,
+      applicationIdUri: configuration.APPLICATION_ID_URI,
+    });
+  } catch (error) {
+    throw azureGateError(`Teams package identity is invalid: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  try {
+    validateMigrationBundle(migrationBundle);
+  } catch (error) {
+    throw azureGateError(error instanceof Error ? error.message : String(error));
+  }
+  if (
+    migrationBundle.manifest.source.commit !== sourceCommit
+    || migrationBundle.manifest.source.commit !== releaseReceipt.commit
+  ) {
+    throw azureGateError('migration bundle source commit does not match the release handoff source commit.');
+  }
+  if (migrationReceipt?.sourceCommit !== sourceCommit || migrationReceipt?.sourceCommit !== releaseReceipt.commit) {
+    throw azureGateError('migration reconciliation source commit does not match the release handoff source commit.');
+  }
+  if (
+    migrationReceipt.schemaVersion !== 1
+    || migrationReceipt.status !== 'PASS'
+    || migrationReceipt.bundleSha256 !== migrationBundle.manifest.bundleSha256
+    || stableMigrationJson(migrationReceipt.recordCounts) !== stableMigrationJson(migrationBundle.manifest.recordCounts)
+    || migrationReceipt.stableIdsSha256 !== migrationBundle.manifest.stableIdsSha256
+    || migrationReceipt.contentHashesSha256 !== migrationBundle.manifest.contentHashesSha256
+  ) {
+    throw azureGateError('migration reconciliation does not bind counts, stable IDs, and content hashes to the immutable bundle.');
+  }
+
+  if (
+    approvalReceipt?.schemaVersion !== 1
+    || approvalReceipt.approvalConfigured !== true
+    || !String(approvalReceipt.environmentId ?? '').trim()
+    || !String(approvalReceipt.environmentName ?? '').trim()
+    || !String(approvalReceipt.checkId ?? '').trim()
+    || !Number.isSafeInteger(approvalReceipt.approverCount)
+    || approvalReceipt.approverCount < 1
+  ) {
+    throw azureGateError('Azure DevOps environment approval receipt is missing or invalid.');
+  }
+  if (
+    approvalReceipt.environmentId !== configuration.AZURE_DEVOPS_ENVIRONMENT_ID
+    || approvalReceipt.environmentName !== configuration.AZURE_DEVOPS_ENVIRONMENT_NAME
+  ) {
+    throw azureGateError('Azure DevOps approval environment does not match the configured promotion environment.');
+  }
+  assertReleaseIdentity(approvalReceipt.releaseIdentity, releaseReceipt, 'Azure DevOps approval');
+
+  assertReleaseIdentity(providerReceipt.releaseIdentity, releaseReceipt, 'provider readiness');
+  if (providerReceipt.schemaVersion !== 1 || !Array.isArray(providerReceipt.providers) || providerReceipt.providers.length < 1) {
+    throw azureGateError('provider readiness classification is missing.');
+  }
+  const providerIds = new Set();
+  for (const provider of providerReceipt.providers) {
+    if (!provider?.id || providerIds.has(provider.id)) throw azureGateError('provider readiness IDs must be non-empty and unique.');
+    providerIds.add(provider.id);
+    if (provider.enabled === true) {
+      if (
+        provider.state !== 'ready'
+        || provider.liveRoundTrip !== 'PASS'
+        || provider.cancellationRecovery !== 'PASS'
+        || !String(provider.receiptId ?? '').trim()
+        || !/^[0-9a-f]{64}$/u.test(provider.resultSha256 ?? '')
+      ) {
+        throw azureGateError(`enabled provider ${provider.id} lacks live readiness, recovery, receipt, or result evidence.`);
+      }
+    } else if (provider.enabled !== false || provider.state !== 'not-enabled') {
+      throw azureGateError(`provider ${provider.id} must be explicitly ready or explicitly not-enabled.`);
+    }
+  }
+  const expectedProviderIds = ['buzz', 'codex', 'github-agent-tasks', 'grok', 'hermes'];
+  if (stableMigrationJson([...providerIds].sort()) !== stableMigrationJson(expectedProviderIds)) {
+    throw azureGateError('provider readiness must classify codex, Hermes, Grok, Buzz, and GitHub agent-tasks explicitly.');
+  }
+  if (providerReceipt.providers.find((provider) => provider.id === 'codex')?.enabled !== true) {
+    throw azureGateError('the Azure worker-plane Codex provider must have live ready evidence.');
+  }
+
+  assertReleaseIdentity(publicCanaryReceipt.releaseIdentity, releaseReceipt, 'public canary');
+  let healthUrl;
+  try {
+    healthUrl = new URL(publicCanaryReceipt.healthUrl);
+  } catch {
+    throw azureGateError('public canary health URL is invalid.');
+  }
+  const expectedCanaryOrigin = `https://${configuration.TAB_DOMAIN}`;
+  if (
+    publicCanaryReceipt.schemaVersion !== 1
+    || publicCanaryReceipt.status !== 'PASS'
+    || !String(publicCanaryReceipt.revisionName ?? '').trim()
+    || healthUrl.protocol !== 'https:'
+    || healthUrl.origin !== expectedCanaryOrigin
+    || healthUrl.pathname !== '/api/health'
+    || healthUrl.username
+    || healthUrl.password
+    || healthUrl.search
+    || healthUrl.hash
+  ) {
+    throw azureGateError(`public canary identity receipt is incomplete, unsafe, or does not match ${expectedCanaryOrigin}.`);
+  }
+
+  if (jiraReceipt.schemaVersion !== 1 || !Array.isArray(jiraReceipt.findings)) {
+    throw azureGateError('Jira mapping receipt is malformed.');
+  }
+  for (const finding of jiraReceipt.findings) {
+    if (!['reproduced-defect', 'release-blocker', 'improvement'].includes(finding?.kind)) {
+      throw azureGateError('Jira mapping finding kind is invalid.');
+    }
+    if (
+      !String(finding.stableId ?? '').trim()
+      || !/^[A-Z][A-Z0-9]+-\d+$/u.test(finding.jiraKey ?? '')
+      || !String(finding.status ?? '').trim()
+    ) {
+      throw azureGateError(`Jira mapping is missing for finding ${finding?.stableId ?? '<unknown>'}.`);
+    }
+  }
+
+  if (!verifierState) {
+    throw azureGateError(
+      'No protected operational verifier trust capability is available; caller evidence and environment configuration cannot establish READY.',
+      'AZURE_LIVE_EVIDENCE_UNVERIFIED',
+    );
+  }
+  if (verifierState.consumed) {
+    throw azureGateError('The protected release challenge was already consumed; replay is rejected.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  const attestation = verifyAzureAggregateAttestation({
+    trustedPublicKeys: verifierState.trustedPublicKeys,
+    expectedChallenge: verifierState.expectedChallenge,
+    aggregateAttestation,
+    configuration,
+    releaseReceipt,
+    handoffProvenance,
+    migrationBundle,
+    migrationReceipt,
+    approvalReceipt,
+    providerReceipt,
+    publicCanaryReceipt,
+    jiraReceipt,
+    now: verifierState.now,
+  });
+  if (!verifierState.consumeChallenge(releaseChallengeKey(verifierState.expectedChallenge))) {
+    throw azureGateError('The protected release challenge was already consumed; replay is rejected.', 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  return {
+    phase: 'azure-integrated-evidence',
+    status: verifierState.resultStatus ?? 'LOCAL_SIGNED_VERIFIER_CONTRACT_PASS',
+    evidenceClass: verifierState.evidenceClass,
+    attestation,
+  };
+}
+
+export function validateAzureIntegratedEvidence(evidence) {
+  return validateAzureIntegratedEvidenceWithCapability(evidence, undefined);
+}
+
+async function readBoundedJson(filePath, label, maxBytes = 1024 * 1024) {
+  if (!filePath?.trim()) {
+    throw azureGateError(`${label} path is required.`, 'AZURE_LIVE_EVIDENCE_UNVERIFIED');
+  }
+  try {
+    const resolved = path.resolve(filePath);
+    const stat = await fs.stat(resolved);
+    if (!stat.isFile() || stat.size === 0 || stat.size > maxBytes) {
+      throw azureGateError(`${label} must be a non-empty bounded JSON file.`);
+    }
+    return JSON.parse(await fs.readFile(resolved, 'utf8'));
+  } catch (error) {
+    if (error?.releaseStatus) throw error;
+    throw azureGateError(
+      `${label} could not be read and validated: ${error instanceof Error ? error.message : String(error)}`,
+      'AZURE_LIVE_EVIDENCE_UNVERIFIED',
+    );
+  }
+}
+
+async function readAndValidateAzureIntegratedEvidence({ env, sourceCommit }) {
+  const releaseReceipt = await readBoundedJson(env.AZURE_RELEASE_RECEIPT_PATH, 'release receipt');
+  const handoffProvenance = await readBoundedJson(env.AZURE_HANDOFF_PROVENANCE_PATH, 'handoff provenance');
+  const aggregateAttestation = await readBoundedJson(env.AZURE_RELEASE_ATTESTATION_PATH, 'aggregate release attestation');
+  const migrationBundlePath = env.AZURE_MIGRATION_BUNDLE_PATH;
+  if (!migrationBundlePath?.trim()) throw azureGateError('AZURE_MIGRATION_BUNDLE_PATH is required.');
+  let migrationBundle;
+  try {
+    migrationBundle = await readMigrationBundle(migrationBundlePath);
+  } catch (error) {
+    throw azureGateError(`migration bundle could not be read and validated: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const [migrationReceipt, approvalReceipt, providerReceipt, publicCanaryReceipt, jiraReceipt, sourceManifest] = await Promise.all([
+    readBoundedJson(env.AZURE_MIGRATION_RECONCILIATION_RECEIPT_PATH, 'migration reconciliation receipt'),
+    readBoundedJson(env.AZURE_APPROVAL_RECEIPT_PATH, 'Azure DevOps approval receipt'),
+    readBoundedJson(env.AZURE_PROVIDER_READINESS_RECEIPT_PATH, 'provider readiness receipt'),
+    readBoundedJson(env.AZURE_PUBLIC_CANARY_RECEIPT_PATH, 'public canary receipt'),
+    readBoundedJson(env.AZURE_JIRA_MAPPING_RECEIPT_PATH, 'Jira mapping receipt'),
+    readSourceManifest(sourceCommit, env),
+  ]);
+  const packageFile = env.AZURE_TEAMS_PACKAGE_PATH;
+  if (!packageFile?.trim()) throw azureGateError('AZURE_TEAMS_PACKAGE_PATH is required.');
+  let packageStat;
+  try {
+    packageStat = await fs.stat(path.resolve(packageFile));
+  } catch (error) {
+    throw azureGateError(
+      `Teams package could not be observed: ${error instanceof Error ? error.message : String(error)}`,
+      'AZURE_LIVE_EVIDENCE_UNVERIFIED',
+    );
+  }
+  if (!packageStat.isFile() || packageStat.size === 0 || packageStat.size > 1024 * 1024 * 1024) {
+    throw azureGateError('Teams package must be a non-empty file no larger than 1 GiB.');
+  }
+  const [packageBytes, packageManifestResult] = await Promise.all([
+    fs.readFile(path.resolve(packageFile)),
+    runCommand('unzip', ['-p', path.resolve(packageFile), 'manifest.json'], { timeoutMs: defaultTimeouts.package, env }),
+  ]);
+  return validateAzureIntegratedEvidence({
+    env,
+    releaseReceipt,
+    handoffProvenance,
+    sourceCommit,
+    sourceManifest,
+    packageBytes,
+    packageManifest: JSON.parse(packageManifestResult.stdout),
+    migrationBundle,
+    migrationReceipt,
+    approvalReceipt,
+    providerReceipt,
+    publicCanaryReceipt,
+    jiraReceipt,
+    aggregateAttestation,
+  });
+}
+
+export function createPreflightCommands(timeoutOverride, profile = 'core', target = 'local') {
   if (!RELEASE_PROFILES.has(profile)) {
     throw new Error('release profile must be either core or optional');
   }
+  if (!RELEASE_TARGETS.has(target)) {
+    throw new Error('release target must be either local or azure');
+  }
+  const azureChecks = target === 'azure'
+    ? [
+      ['azure-state-migration', 'test:azure-state-migration', timeoutOverride ?? defaultTimeouts.test],
+      ['manifest', 'validate:manifest', timeoutOverride ?? defaultTimeouts.deployment],
+      ['package-determinism', 'test:package-determinism', timeoutOverride ?? defaultTimeouts.package],
+    ]
+    : [];
   if (profile === 'optional') {
     // Keep the Core regression suite in the optional promotion gate, then
     // rebuild the server in optional mode last so the marker cannot be
     // accidentally left at Core after a test/build helper runs.
     return [
       ['core-source-check', 'typecheck:core', timeoutOverride ?? defaultTimeouts.typecheck],
+      ['azure-core', 'test:azure-core', timeoutOverride ?? defaultTimeouts.test],
       ['core-test', 'test:core', timeoutOverride ?? defaultTimeouts.test],
       ['optional-test', 'test:optional', timeoutOverride ?? defaultTimeouts.test],
       ['optional-server-build', 'build:server', timeoutOverride ?? defaultTimeouts.build],
       ['deployment', 'check:deployment', timeoutOverride ?? defaultTimeouts.deployment],
+      ...azureChecks,
     ];
   }
   return [
     ['core-source-check', 'typecheck:core', timeoutOverride ?? defaultTimeouts.typecheck],
     ['core-build', 'build:core', timeoutOverride ?? defaultTimeouts.build],
     ['server-build-determinism', 'test:server-build-determinism', timeoutOverride ?? defaultTimeouts.serverDeterminism],
+    ['azure-core', 'test:azure-core', timeoutOverride ?? defaultTimeouts.test],
     ['core-test', 'test:core', timeoutOverride ?? defaultTimeouts.test],
     ['deployment', 'check:deployment', timeoutOverride ?? defaultTimeouts.deployment],
+    ...azureChecks,
   ];
 }
 
 async function runPreflight({ timeoutOverride, releaseSource } = {}) {
   const { env, sourceCommit } = releaseSource;
-  const commands = createPreflightCommands(timeoutOverride, releaseSource.profile);
+  const target = resolveReleaseTarget(env);
+  const commands = createPreflightCommands(timeoutOverride, releaseSource.profile, target);
   const evidence = [];
   for (const [label, script, timeoutMs] of commands) {
     const invocation = npmInvocation(['run', script]);
@@ -577,6 +1437,9 @@ async function runPreflight({ timeoutOverride, releaseSource } = {}) {
       sourceCommit,
       output: `${result.stdout}\n${result.stderr}`.trim().slice(-2_000),
     });
+  }
+  if (target === 'azure') {
+    evidence.push(await readAndValidateAzureIntegratedEvidence({ env, sourceCommit }));
   }
   return { evidence, uiGates: ['DESKTOP_UNVERIFIED', 'MOBILE_UNVERIFIED'] };
 }
@@ -759,7 +1622,8 @@ function isMainModule() {
 }
 
 export function formatReleaseFailure(error, phase = 'all', env = process.env) {
-  const status = ['ETIMEDOUT', 'EPROCESSREAPTIMEOUT', 'ECOMMAND'].includes(error.code) ? 'BLOCKED' : 'FAILED';
+  const status = error.releaseStatus
+    ?? (['ETIMEDOUT', 'EPROCESSREAPTIMEOUT', 'ECOMMAND'].includes(error.code) ? 'BLOCKED' : 'FAILED');
   return {
     status,
     phase,

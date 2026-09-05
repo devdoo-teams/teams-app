@@ -6,6 +6,7 @@ import path from 'node:path';
 import { isFullCommitOid, resolvePinnedCommitOid } from './fileprovider-git-clean.mjs';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 import { parseServerBuildMarker } from './server-build-marker.mjs';
+import { createChildTestEnvironment } from './child-test-environment.mjs';
 
 function hasDatalessSource() {
   const candidates = [
@@ -84,28 +85,22 @@ const tests = [
   'test:a2a-independent-agent-identity',
   'test:a2a-durable-dispatch',
   'test:a2a-role-catalog',
-  'test:work-item-parity',
-  'test:collaboration-parity',
   'test:genui-contract',
   'test:teams-tab-link',
-  'test:response-mode-store',
   'test:deterministic-engine',
-  'test:response-mode-api',
   'test:client-auth',
   'test:user-auth-hardening',
   'test:auth-startup-gate',
   'test:operator-allowlist',
-  'test:client-location',
   'test:client-bootstrap',
-  'test:client-refresh-recovery',
-  'test:client-genui-adapter',
-  'test:client-response-mode',
+  'test:client-orchestration-panel',
+  'test:agent-only-hub-contract',
+  'test:agent-tool-observation',
   'test:local-auth',
-  'test:weather-service',
 ];
 
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-const childEnv = { ...process.env };
+const childEnv = createChildTestEnvironment(process.env);
 const pinnedSourceCommit = childEnv.TEAMS_SOURCE_COMMIT ?? resolvePinnedCommitOid(process.cwd(), { env: childEnv });
 if (!isFullCommitOid(pinnedSourceCommit)) {
   throw new Error(`API-free test runner requires one full pinned source OID, got ${pinnedSourceCommit || '<empty>'}`);
@@ -128,13 +123,13 @@ for (const script of tests) {
     cwd: process.cwd(),
     env: childEnv,
     stdio: 'inherit',
-    timeout: Number(process.env.TEAMS_TEST_TIMEOUT_MS ?? 120_000),
+    timeout: Number(childEnv.TEAMS_TEST_TIMEOUT_MS ?? 120_000),
     killSignal: 'SIGTERM',
   });
 
   if (result.error || result.status !== 0) {
     if (result.error?.code === 'ETIMEDOUT') {
-      throw new Error(`API-free test timed out after ${process.env.TEAMS_TEST_TIMEOUT_MS ?? 120000}ms: npm run ${script}`);
+      throw new Error(`API-free test timed out after ${childEnv.TEAMS_TEST_TIMEOUT_MS ?? 120000}ms: npm run ${script}`);
     }
     throw result.error ?? new Error(`API-free test failed: npm run ${script} (exit ${result.status})`);
   }

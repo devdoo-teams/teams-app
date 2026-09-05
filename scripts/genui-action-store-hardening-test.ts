@@ -99,6 +99,52 @@ try {
     requesterId: 'requester-hardening-runtime',
     tenantId: 'tenant-hardening-runtime',
   })).ok, true);
+
+  const concurrentGrant = {
+    action: 'approve' as const,
+    entityId: 'task-hardening-concurrent',
+    correlationId: 'correlation-hardening-concurrent',
+    conversationId: 'conversation-hardening-concurrent',
+    requesterId: 'requester-hardening-concurrent',
+    tenantId: 'tenant-hardening-concurrent',
+  };
+  const concurrentToken = await validStore.issue(concurrentGrant);
+  const concurrentResults = await Promise.all([
+    validStore.consume({ ...concurrentGrant, token: concurrentToken }),
+    validStore.consume({ ...concurrentGrant, token: concurrentToken }),
+  ]);
+  assert.equal(concurrentResults.filter((result) => result.ok).length, 1, 'a grant can be consumed only once under concurrent requests');
+  assert.deepEqual(
+    concurrentResults.filter((result) => !result.ok).map((result) => result.reason),
+    ['consumed'],
+    'the losing concurrent consume observes the persisted single-use state',
+  );
+
+  const rollbackFile = path.join(directory, 'rollback.json');
+  const rollbackStore = new GenUiActionStore(rollbackFile);
+  await rollbackStore.initialize();
+  const rollbackGrant = {
+    action: 'approve' as const,
+    entityId: 'task-hardening-rollback',
+    correlationId: 'correlation-hardening-rollback',
+    conversationId: 'conversation-hardening-rollback',
+    requesterId: 'requester-hardening-rollback',
+    tenantId: 'tenant-hardening-rollback',
+  };
+  const rollbackToken = await rollbackStore.issue(rollbackGrant);
+  await fs.unlink(rollbackFile);
+  await fs.symlink(path.join(directory, 'symlink-target.json'), rollbackFile);
+  await assert.rejects(
+    () => rollbackStore.consume({ ...rollbackGrant, token: rollbackToken }),
+    /symbolic link/,
+    'a failed atomic write must surface instead of acknowledging the mutation',
+  );
+  await fs.unlink(rollbackFile);
+  assert.equal(
+    (await rollbackStore.consume({ ...rollbackGrant, token: rollbackToken })).ok,
+    true,
+    'a failed atomic write rolls the in-memory grant back for a safe retry',
+  );
   await assert.rejects(() => validStore.issue({
     action: 'approve',
     entityId: '',

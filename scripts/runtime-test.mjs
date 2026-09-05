@@ -17,6 +17,15 @@ const LOCAL_ACCESS_TOKEN_HEADER = 'x-teams-local-access-token';
 const localAccessTokens = new Map();
 const optionalProviderTestsEnabled = process.env.TEAMS_OPTIONAL_RUNTIME === 'true';
 const manifestVersion = JSON.parse(await fs.readFile(path.join(root, 'appPackage/manifest.json'), 'utf8')).version;
+const runtimeServerBuildMarker = JSON.parse(await fs.readFile(path.join(runtimeDistRoot, 'server', '.teams-server-build-commit'), 'utf8'));
+const azureRuntimeIdentity = Object.freeze({
+  commit: runtimeServerBuildMarker.commit,
+  version: manifestVersion,
+  imageDigest: `sha256:${'a'.repeat(64)}`,
+  teamsPackageSha256: 'b'.repeat(64),
+  clientBundleSha256: 'c'.repeat(64),
+  serverBundleSha256: runtimeServerBuildMarker.bundleSha256,
+});
 const runtimeOutputReaders = new Map();
 const codexExecutableSha256 = crypto.createHash('sha256').update(await fs.readFile(process.execPath)).digest('hex');
 
@@ -340,7 +349,6 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
       CODEX_BIN: process.execPath,
       CODEX_BIN_SHA256: codexExecutableSha256,
       CODEX_SCRIPT: path.join(root, 'scripts/fake-codex.mjs'),
-      WEATHER_MODE: 'demo',
       COPILOTKIT_DETERMINISTIC_MODE: production ? '' : 'true',
       TEAMS_USE_SDK: teamsSdk ? 'true' : 'false',
       TEAMS_RUNTIME_DIST_DIR: runtimeDistRoot,
@@ -357,6 +365,13 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
       DEV_TUNNEL_ID: '',
       MCP_PUBLIC_ENABLED: '',
       TEAMS_OPTIONAL_RUNTIME: '',
+      AZURE_RELEASE_MODE: '',
+      RELEASE_SOURCE_COMMIT: '',
+      RELEASE_APP_VERSION: '',
+      RELEASE_IMAGE_DIGEST: '',
+      RELEASE_TEAMS_PACKAGE_SHA256: '',
+      RELEASE_CLIENT_BUNDLE_SHA256: '',
+      RELEASE_SERVER_BUNDLE_SHA256: '',
       TEAMS_OPERATOR_REQUESTER_ALLOWLIST: [
         'local-tenant/local-user',
         'runtime-tenant/runtime-user',
@@ -477,7 +492,6 @@ async function expectStoreLeaseConflict(dataFile, jobDataFile) {
       AGENT_WORKSPACE: root,
       CODEX_BIN: process.execPath,
       CODEX_SCRIPT: path.join(root, 'scripts/fake-codex.mjs'),
-      WEATHER_MODE: 'demo',
       COPILOTKIT_DETERMINISTIC_MODE: 'true',
       TEAMS_USE_SDK: 'false',
       TEAMS_SKIP_OUTBOUND: 'true',
@@ -545,7 +559,6 @@ async function runStartupGateFlow() {
   const productionSsoEnv = (label, overrides = {}) => ({
     NODE_ENV: 'production',
     TAB_DOMAIN: 'runtime.test',
-    WEATHER_MODE: 'live',
     TEAMS_USE_SDK: 'true',
     BOT_CLIENT_ID: '00000000-0000-4000-8000-000000000001',
     TEAMS_CATALOG_APP_ID: '00000000-0000-4000-8000-000000000004',
@@ -641,27 +654,6 @@ async function runStartupGateFlow() {
       APPLICATION_ID_URI: 'api://runtime.test:3978/botid-00000000-0000-4000-8000-000000000001',
     }),
     'Production TAB_DOMAIN must be a public HTTPS hostname',
-  );
-  await expectStartupFailure(
-    'production with demo weather mode',
-    {
-      NODE_ENV: 'production',
-      TAB_DOMAIN: 'runtime.test',
-      WEATHER_MODE: 'demo',
-      TEAMS_USE_SDK: 'true',
-      BOT_CLIENT_ID: '00000000-0000-4000-8000-000000000001',
-      TEAMS_CATALOG_APP_ID: '00000000-0000-4000-8000-000000000004',
-      CLIENT_ID: '00000000-0000-4000-8000-000000000002',
-      CLIENT_SECRET: 'runtime-test-secret',
-      TENANT_ID: '00000000-0000-4000-8000-000000000003',
-      APPLICATION_ID_URI: 'api://runtime.test/botid-00000000-0000-4000-8000-000000000001',
-      TEAMS_USER_AUTH_ACCEPTED_AUDIENCES: '00000000-0000-4000-8000-000000000002',
-      ITEM_STORE_PATH: path.join(tempDir, 'demo-weather-items.json'),
-      AGENT_JOB_STORE_PATH: path.join(tempDir, 'demo-weather-agent-jobs.json'),
-      GENUI_ACTION_STORE_PATH: path.join(tempDir, 'demo-weather-genui-actions.json'),
-      RESPONSE_MODE_STORE_PATH: path.join(tempDir, 'demo-weather-response-modes.json'),
-    },
-    'WEATHER_MODE=demo',
   );
   await expectStartupFailure(
     'production without user SSO configuration',
@@ -806,7 +798,11 @@ async function runLocalFlow(dataFile, jobDataFile, { optionalProviders = false }
     assert(health.body.outbound === 'local-outbox', 'local health reports the local outbox truthfully');
     assert(health.body.version === manifestVersion, 'health version comes from the Teams manifest');
     assert(!('agent' in health.body) && !('agentWorkspace' in health.body), 'health does not expose agent binary or workspace paths');
-    assert(health.body.storage === 'file-json-single-process', 'local runtime reports single-process file storage');
+    assert(health.body.storage?.backend === 'file-json-single-process', 'local runtime reports the compatibility file backend');
+    assert(health.body.storage?.migrated === 0 && health.body.storage?.total === 11, 'health reports that none of the 11 authoritative stores have migrated');
+    assert(health.body.storage?.horizontalSafe === false, 'health does not claim horizontal safety while authoritative stores remain local');
+    assert(Array.isArray(health.body.storage?.authoritativeStores) && health.body.storage.authoritativeStores.length === 11, 'health names every authoritative mutable store');
+    assert(health.body.dispatch?.mode === 'local' && health.body.dispatch?.localCli === true, 'default runtime keeps explicit local dispatch');
     assert(
       health.body.copilotKit === (optionalProviders ? 'enabled' : 'disabled'),
       `CopilotKit runtime is ${optionalProviders ? 'enabled only for the optional provider run' : 'disabled in the Core runtime'}`,
@@ -818,7 +814,6 @@ async function runLocalFlow(dataFile, jobDataFile, { optionalProviders = false }
     assert(health.body.genAI === 'deterministic-test', 'local runtime reports explicit deterministic test mode');
     assert(health.body.genAIProvider?.provider === 'openai', 'health identifies the optional OpenAI provider without exposing credentials');
     assert(health.body.genAIProvider?.configured === false, 'no-key local health reports the OpenAI provider as unavailable');
-    assert(health.body.weatherMode === 'demo', 'local health reports demo weather mode');
     assert(health.body.responseProviders?.deterministic === true, 'local health reports deterministic response provider availability');
     assert(health.body.responseProviders?.openai === false, 'local health reports OpenAI response provider configuration');
     assert(health.body.responseProviders?.local === false, 'local health reports local response provider configuration');
@@ -936,30 +931,6 @@ async function runLocalFlow(dataFile, jobDataFile, { optionalProviders = false }
     assert(copilotTasks.events.some((event) => event.type === 'TOOL_CALL_START' && event.toolCallName === 'showTaskCard'), 'CopilotKit renders the task card tool');
     assert(copilotTasks.events.some((event) => event.type === 'RUN_FINISHED' && event.outcome?.type === 'success'), 'CopilotKit task request finishes successfully');
 
-    const copilotWeather = await copilotRun(
-      server.baseUrl,
-      '현재 위치 날씨 보여줘',
-      'runtime-copilot-weather',
-      [{
-        description: '현재 Teams 업무 허브 날씨 위젯 상태',
-        value: JSON.stringify({
-          source: 'open-meteo',
-          location: { name: '테스트 위치', latitude: 35, longitude: 128, timezone: 'Asia/Seoul' },
-          current: {
-            temperature: 19.5,
-            apparentTemperature: 20.1,
-            humidity: 48,
-            precipitation: 0,
-            windSpeed: 4.2,
-            condition: '맑음',
-            icon: 'sun',
-          },
-        }),
-      }],
-    );
-    const weatherArgs = copilotWeather.events.find((event) => event.type === 'TOOL_CALL_ARGS');
-    assert(weatherArgs?.delta.includes('19.5'), 'CopilotKit weather tool uses the live tab context');
-
     const copilotCodex = await copilotRun(server.baseUrl, '저장소의 현재 구현 상태를 분석해줘', 'runtime-copilot-codex');
     assert(copilotCodex.events.some((event) => event.type === 'TEXT_MESSAGE_CONTENT' && event.delta.includes('Codex')), 'CopilotKit streams Codex progress messages');
     assert(copilotCodex.events.some((event) => event.type === 'RUN_FINISHED'), 'CopilotKit Codex request finishes');
@@ -1007,27 +978,8 @@ async function runLocalFlow(dataFile, jobDataFile, { optionalProviders = false }
     assert(initial.response.status === 200, 'local item list returns 200');
     assert(initial.body.summary.total === 2, 'seed data is available in the isolated store');
 
-    const weather = await request(server.baseUrl, '/api/weather?latitude=37.5665&longitude=126.978&mode=demo');
-    assert(weather.response.status === 200, 'weather widget endpoint returns 200');
-    assert(weather.body.source === 'demo' && weather.body.current.condition === '맑음', 'weather widget returns demo conditions');
-
-    const weatherCommand = await request(server.baseUrl, '/api/messages', {
-      method: 'POST',
-      body: JSON.stringify(activity('날씨', server.baseUrl, 'weather')),
-    });
-    assert(weatherCommand.response.status === 200, 'Bot weather command completes locally');
-    assert(weatherCommand.body.messages.length === 1, 'Bot weather fallback sends exactly one message');
-    assert(weatherCommand.body.activities.length === 1, 'Bot weather fallback sends exactly one Adaptive Card activity');
-    assert(weatherCommand.body.messages[0].includes('현재 기기 위치가 자동으로 전달되지 않습니다'), 'Bot weather command does not guess a location');
-    assertAdaptiveCardActivity(weatherCommand.body.activities[0], 'help/location weather fallback');
-
-    const explicitWeatherCommand = await request(server.baseUrl, '/api/messages', {
-      method: 'POST',
-      body: JSON.stringify(activity('날씨 35.1796 129.0756', server.baseUrl, 'weather-explicit')),
-    });
-    assert(explicitWeatherCommand.response.status === 200, 'Bot explicit weather command completes locally');
-    assert(explicitWeatherCommand.body.messages[0].includes('날씨 위젯'), 'Bot explicit weather command returns widget summary');
-    assertAdaptiveCardActivity(explicitWeatherCommand.body.activities[0], 'explicit coordinate weather');
+    const removedWeather = await request(server.baseUrl, '/api/weather?latitude=37.5665&longitude=126.978');
+    assert(removedWeather.response.status === 404, 'the retired weather endpoint is not mounted');
 
     const naturalDelayedConversation = 'runtime-conversation-natural-delayed';
     const jobsBeforeNaturalDelayed = await request(server.baseUrl, '/api/debug/agent-jobs');
@@ -1144,44 +1096,10 @@ async function runLocalFlow(dataFile, jobDataFile, { optionalProviders = false }
     });
     assert(help.response.status === 200, 'Bot help activity completes locally');
     const helpCard = assertAdaptiveCardActivity(help.body.activities[0], 'help');
-    const commandActionSet = helpCard.body?.find((element) => element.type === 'ActionSet');
     const commandActions = actionSetActions(helpCard).filter((action) => genUiActionFromCard(action) === 'command');
-    assert(commandActions.length === 5, 'help card exposes five command buttons within the Teams action budget');
-    assert(commandActionSet?.type === 'ActionSet', 'help wraps Execute command buttons in an ActionSet for older Teams hosts');
+    assert(commandActions.length === 0, 'the minimal help card exposes no retired quick-command palette');
     assert(!helpCard.actions?.some((action) => action.type === 'Action.Execute'), 'help does not emit Execute command buttons at the top level');
-    assert(
-      JSON.stringify(commandActions.map((action) => action.type)) === JSON.stringify(Array.from({ length: 5 }, () => 'Action.Execute')),
-      'default command buttons use direct Adaptive Card Execute actions',
-    );
-    assert(commandActions.every((action) => action.verb === 'genui.command'), 'default command buttons route through the GenUI command verb');
-    assert(commandActions.every((action) => (
-      action.fallback?.type === 'Action.Submit'
-      && action.fallback.title === action.title
-      && JSON.stringify(action.fallback.data) === JSON.stringify(action.data)
-    )), 'default command buttons keep title and exact payload in their Submit compatibility fallback');
-    assert(commandActions.every((action) => {
-      const payload = actionPayloadFromCard(action);
-      return payload?.action === 'command'
-        && ['help', 'weather', 'status', 'list', 'work'].includes(payload?.entityId)
-        && typeof payload?.actionToken === 'string';
-    }), 'default command buttons carry bounded command payloads');
-
-    for (const command of ['help', 'weather', 'status', 'list', 'work']) {
-      const commandAction = commandActions.find((action) => actionPayloadFromCard(action)?.entityId === command);
-      const commandPayload = actionPayloadFromCard(commandAction);
-      const commandInvoke = await request(server.baseUrl, '/api/messages', {
-        method: 'POST',
-        body: JSON.stringify(genUiInvokeActivity(
-          server.baseUrl,
-          commandPayload,
-          `genui-command-${command}`,
-          'runtime-conversation-genui-command',
-        )),
-      });
-      assert(commandInvoke.response.status === 200 && commandInvoke.body.statusCode === 200, `${command} command button reaches the invoke route`);
-      assert(commandInvoke.body.value?.type === 'AdaptiveCard', `${command} command button returns an Adaptive Card invoke response`);
-      assert(!JSON.stringify(commandInvoke.body.value).includes('AI 생성 콘텐츠'), `${command} command response stays deterministic and unlabeled`);
-    }
+    assert(!/weather|날씨|geolocation/i.test(JSON.stringify(helpCard)), 'the help card contains no retired weather surface');
 
     const carousel = await request(server.baseUrl, '/api/messages', {
       method: 'POST',
@@ -1795,7 +1713,6 @@ async function runProductionAuthFlow(dataFile, jobDataFile) {
     teamsSdk: true,
     dataFile,
     jobDataFile,
-    extraEnv: { WEATHER_MODE: 'live' },
   });
 
   try {
@@ -1807,7 +1724,6 @@ async function runProductionAuthFlow(dataFile, jobDataFile) {
     assert(health.body.version === manifestVersion, 'production health reports the Teams manifest version');
     assert(health.body.genAI === 'not-configured', 'no-key production health does not pretend that OpenAI is configured');
     assert(health.body.genAIProvider?.provider === 'openai' && health.body.genAIProvider?.configured === false, 'no-key production health keeps the optional provider unavailable and healthy');
-    assert(health.body.weatherMode === 'live', 'production health reports live weather mode');
     assert(health.body.responseProviders?.deterministic === true, 'production health reports deterministic response provider availability');
     assert(health.body.responseProviders?.openai === false, 'production health reports OpenAI response provider configuration');
     assert(health.body.responseProviders?.local === false, 'production health reports local response provider configuration');
@@ -1820,13 +1736,40 @@ async function runProductionAuthFlow(dataFile, jobDataFile) {
     const withoutToken = await request(server.baseUrl, '/api/items');
     assert(withoutToken.response.status === 401, 'production API rejects requests without a bearer token');
 
-    const weatherWithoutToken = await request(server.baseUrl, '/api/weather?latitude=37.5665&longitude=126.978&mode=demo');
-    assert(weatherWithoutToken.response.status === 401, 'production weather API rejects requests without a bearer token');
+    const removedWeather = await request(server.baseUrl, '/api/weather?latitude=37.5665&longitude=126.978');
+    assert(removedWeather.response.status === 404, 'production does not mount the retired weather API');
 
     const invalidToken = await request(server.baseUrl, '/api/items', {
       headers: { authorization: 'Bearer definitely-invalid' },
     });
     assert(invalidToken.response.status === 401, 'production API rejects invalid bearer tokens');
+  } finally {
+    await stopServer(server.child);
+  }
+}
+
+async function runAzureReleaseIdentityFlow(dataFile, jobDataFile) {
+  const server = await startServer({
+    production: true,
+    teamsSdk: true,
+    dataFile,
+    jobDataFile,
+    extraEnv: {
+      AZURE_RELEASE_MODE: 'true',
+      RELEASE_SOURCE_COMMIT: azureRuntimeIdentity.commit,
+      RELEASE_APP_VERSION: azureRuntimeIdentity.version,
+      RELEASE_IMAGE_DIGEST: azureRuntimeIdentity.imageDigest,
+      RELEASE_TEAMS_PACKAGE_SHA256: azureRuntimeIdentity.teamsPackageSha256,
+      RELEASE_CLIENT_BUNDLE_SHA256: azureRuntimeIdentity.clientBundleSha256,
+      RELEASE_SERVER_BUNDLE_SHA256: azureRuntimeIdentity.serverBundleSha256,
+    },
+  });
+
+  try {
+    const health = await request(server.baseUrl, '/api/health');
+    assert(health.response.status === 200, 'Azure release-mode health endpoint returns 200');
+    assert(JSON.stringify(health.body.azureReleaseIdentity) === JSON.stringify(azureRuntimeIdentity), 'Azure release-mode health exposes every immutable release identity field from the revision environment');
+    assert(!JSON.stringify(health.body.azureReleaseIdentity).includes('://'), 'Azure release identity does not expose URLs or credentials');
   } finally {
     await stopServer(server.child);
   }
@@ -2003,6 +1946,8 @@ const localJobDataFile = path.join(tempDir, 'local-agent-jobs.json');
 const legacyDataFile = path.join(tempDir, 'legacy-items.json');
 const legacyJobDataFile = path.join(tempDir, 'legacy-agent-jobs.json');
 const productionJobDataFile = path.join(tempDir, 'production-agent-jobs.json');
+const azureReleaseDataFile = path.join(tempDir, 'azure-release-items.json');
+const azureReleaseJobDataFile = path.join(tempDir, 'azure-release-agent-jobs.json');
 const sdkDataFile = path.join(tempDir, 'sdk-items.json');
 const sdkJobDataFile = path.join(tempDir, 'sdk-agent-jobs.json');
 const gitWorkspace = await fs.mkdtemp(path.join(tempDir, 'git-workspace-'));
@@ -2053,6 +1998,8 @@ try {
     await runAgentTimeoutFlow(timeoutDataFile, timeoutJobDataFile);
     console.log('Runtime verification: production authentication guard');
     await runProductionAuthFlow(productionDataFile, productionJobDataFile);
+    console.log('Runtime verification: Azure public release identity');
+    await runAzureReleaseIdentityFlow(azureReleaseDataFile, azureReleaseJobDataFile);
   }
   console.log('Runtime verification complete.');
 } finally {

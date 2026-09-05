@@ -19,6 +19,18 @@ const validate = (candidate) => validatorModule.validateManifest(candidate, pack
 assert.equal(validate(structuredClone(manifest)), undefined, 'the checked-in source manifest contract is valid');
 
 {
+  const candidate = structuredClone(manifest);
+  candidate.devicePermissions = ['geolocation'];
+  assert.match(validate(candidate) ?? '', /must not request.*geolocation/i, 'manifest validation rejects removed location permission');
+}
+
+{
+  const candidate = structuredClone(manifest);
+  candidate.bots[0].commandLists[0].commands.push({ title: '날씨', description: 'removed command' });
+  assert.match(validate(candidate) ?? '', /must not expose.*weather/i, 'manifest validation rejects the removed weather command');
+}
+
+{
   const candidateLock = structuredClone(packageLockJson);
   candidateLock.version = '1.0.45';
   assert.match(

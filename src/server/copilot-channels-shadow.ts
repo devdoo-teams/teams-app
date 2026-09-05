@@ -67,7 +67,6 @@ interface ShadowActionValue {
 
 const KIND_LABELS: Record<GenUiEnvelopeV1['kind'], string> = {
   answer: '답변',
-  weather: '날씨',
   'task-list': '업무 목록',
   'job-status': '작업 상태',
   approval: '승인 요청',
@@ -121,18 +120,6 @@ function fieldsForFacts(facts: GenUiFact[]): ChannelNode {
   });
 }
 
-function weatherFacts(section: Extract<GenUiSection, { type: 'weather' }>): GenUiFact[] {
-  const facts: GenUiFact[] = [];
-  if (section.temperature !== undefined) facts.push({ label: '기온', value: section.temperature, unit: '°C' });
-  if (section.apparentTemperature !== undefined) facts.push({ label: '체감', value: section.apparentTemperature, unit: '°C' });
-  if (section.humidity !== undefined) facts.push({ label: '습도', value: section.humidity, unit: '%' });
-  if (section.windSpeed !== undefined) facts.push({ label: '바람', value: section.windSpeed, unit: 'km/h' });
-  if (section.precipitation !== undefined) facts.push({ label: '강수', value: section.precipitation, unit: 'mm' });
-  if (section.timezone) facts.push({ label: '시간대', value: section.timezone });
-  if (section.source) facts.push({ label: '데이터', value: section.source });
-  return facts;
-}
-
 function renderSection(section: GenUiSection): ChannelNode[] {
   switch (section.type) {
     case 'text':
@@ -148,12 +135,6 @@ function renderSection(section: GenUiSection): ChannelNode[] {
       ]);
     case 'stats':
       return sectionWithHeading(section, [fieldsForFacts(section.stats)]);
-    case 'weather':
-      return sectionWithHeading(section, [
-        ...(section.location ? [section.location] : []),
-        ...(section.condition ? [section.condition] : []),
-        fieldsForFacts(weatherFacts(section)),
-      ]);
     case 'list':
       return sectionWithHeading(section, [section.items.length > 0
         ? section.items.map(itemText).join('\n')

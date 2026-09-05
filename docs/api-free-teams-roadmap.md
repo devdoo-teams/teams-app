@@ -1,182 +1,156 @@
-# API-free Teams Core 로드맵
+# API-free agent-only Teams Core 로드맵
 
 ## 결정
 
-현재 사용 가능한 인증·실행 경로가 Codex CLI와 GHCP CLI뿐이고 OpenAI API 키가 없으므로, 제품의 기준 경로는 **외부 LLM/API 없이 동작하는 Teams Core**로 고정한다.
+현재 기준 제품은 **agent-only Teams Core**다. API 키 없이도 Microsoft Teams 안에서 에이전트 작업을 시작하고, durable 이력과 진행 상황을 조회하며, 승인·입력·취소·재시도를 수행할 수 있어야 한다.
 
 - UI: React 개인 탭 + `@microsoft/teams-js`
-- 대화: Microsoft Teams SDK + TypeScript
-- 메시지 UI: Teams Bot Adaptive Cards와 텍스트 fallback
-- 서버: Express + 결정형 업무/상태/날씨/승인 로직
-- 작업 실행: 서버가 인증된 Codex CLI를 호출하는 명시적 작업 경계
-- 저장소: 현재 단일 프로세스 JSON 저장소. 분산 운영은 별도 단계
-- 선택 기능: CopilotKit, OpenAI-compatible provider, 로컬 모델, MCP는 모두 명시적 feature flag 뒤에 둔다
+- 대화: Microsoft Teams SDK Bot
+- 메시지 UI: canonical Microsoft Teams 문서의 모바일 공식 범위인 Adaptive Cards 1.6의 제한된 subset
+- 서버: Express + 결정형 에이전트 작업 lifecycle
+- 실행: 인증된 Codex CLI 또는 명시적으로 구성된 provider runner
+- 상태: durable AgentJobStore와 선택적 durable queue/worker
+- 선택 기능: CopilotKit, OpenAI-compatible provider, 로컬 모델, MCP, 외부 SaaS adapter는 feature flag와 별도 증거 뒤에 둔다
 
-API 키가 필요한 기능을 Core 완료 조건에 포함하지 않는다. 선택 provider가 꺼져 있는 것은 실패가 아니라 `OPTIONAL_PROVIDER_NOT_CONFIGURED` 상태다.
+날씨, 위치 조회, 일반 업무 CRUD, 협업 피드는 현재 Core 제품 범위가 아니다. 날씨 API·명령·위젯과 geolocation 권한 요청은 제거 상태를 유지하고, 매니페스트에는 사용하지 않는 `devicePermissions`를 선언하지 않는다.
 
-## 공식 호환성 판단
+## 사용자 표면
 
-Microsoft 공식 문서 기준으로 개인 탭은 Teams 모바일에서 WebView로 열리는 사용자 지정 화면이고, TeamsJS 초기화·매니페스트의 `staticTabs`·HTTPS `contentUrl`이 기본 계약이다. 모바일에서는 Android/iOS 클라이언트 각각을 테스트해야 한다.
+### Teams Bot 채팅
 
-Adaptive Cards는 봇과 탭의 UI를 대체하는 별도 기술이 아니라, 봇 메시지 안에서 버튼·입력·링크를 제공하는 메시지 UI다. Teams 모바일은 Adaptive Cards 1.2까지를 기준으로 삼아야 하므로 Core 카드 JSON은 1.2 호환 subset으로 제한한다. 복잡한 화면은 탭에서 제공하고, 채팅 카드는 짧은 요약과 1차 작업만 제공한다.
+- `help`와 `agent ...` namespace만 기본 명령으로 노출한다.
+- 에이전트 작업 시작, 상태·목록 조회, 승인, 추가 입력, 취소, 재시도를 처리한다.
+- 작업 카드는 상태와 최소 action만 보여주고, `프롬프트·도구` `Action.ShowCard`에서 원본 프롬프트와 관찰된 도구를 펼쳐 본다.
+- 카드 응답은 attachment-only다. 카드와 같은 문장을 top-level `text`에 중복 전송하지 않는다.
 
-MCP는 Teams 모바일 화면 표준이 아니다. Microsoft Teams SDK의 MCP client/server는 서버 측 도구 연결 계층으로 사용할 수 있지만, Teams 모바일에 직접 렌더링되는 UI는 여전히 Teams 탭·봇·Adaptive Cards가 담당한다. 현재 저장소에는 구체적인 Jira/Confluence/Bitbucket REST 계약을 감싼 optional MCP provider registry가 구현되어 있지만, 이는 Teams Core UI나 공개 MCP 인증을 의미하지 않는다. MCP Apps 위젯은 계속 별도 host용으로 유지하고, 공개 provider route는 검증된 connector 자격증명과 principal 경계가 확인될 때만 활성화한다.
+### 업무허브 개인 탭
 
-## 2026-08 재검토 결론: API-free Core를 제품 기준으로 고정
+- 서비스·인증·저장소·실행 준비 상태를 간단히 표시한다.
+- 새 작업 입력과 provider/mode 선택, durable 작업 목록, 선택한 작업 상세만 제공한다.
+- 작업 목록은 3초마다 갱신한다. 앞선 요청이 끝난 뒤 다음 요청을 예약해 중첩 폴링을 만들지 않는다.
+- 상세에는 상태, 작업 ID, 원본 프롬프트, 진행 기록, 결과·오류, provider가 보고한 도구를 표시한다.
 
-공식 문서와 샘플을 다시 대조한 결과, 현재 사용 가능한 Codex CLI·GHCP CLI만으로도 Teams 호환 기능을 충분히 쌓을 수 있다. 따라서 다음 항목은 첫 제품의 전제에서 제외한다.
+여기서 `near-real-time`은 3초 polling contract다. push, WebSocket 또는 streaming UI가 구현됐다는 뜻이 아니다. 서버의 durable record가 기준이며 탭의 일시적인 메모리 상태를 완료 증거로 사용하지 않는다.
 
-- CopilotKit UI/runtime, OpenAI-compatible API, 로컬 모델, MCP Apps 위젯은 API·인증·서버가 준비될 때까지 구현·배포·완료 판정에 사용하지 않는다.
-- Teams 모바일 화면은 개인 웹 탭(TeamsJS + React WebView)으로 만들고, Bot 채팅은 Adaptive Cards 1.2 subset + 텍스트 fallback으로 만든다. Microsoft 공식 문서도 모바일 Adaptive Cards의 기준을 1.2로 안내한다.
-- 카드에는 작은 요약과 실제 서버 action만 넣고, 복잡한 입력·목록·위치·업무 CRUD는 탭으로 보낸다. 모든 카드에는 탭 열기 링크를 제공한다.
-- Codex/GHCP CLI는 모델 provider가 아니라 별도 작업 실행 adapter다. Codex는 `codex login status`와 실제 `codex exec` 최종 `agent_message`를 기준으로 판정한다. GHCP는 공식 GitHub Copilot CLI 실행 파일인 `copilot`을 기본으로 사용하며, `copilot --help`만으로 로그인·라이선스·조직 정책을 성공으로 추정하지 않는다. 공식 CLI는 `copilot login`이라는 대화형 흐름을 제공하므로, 자동 health probe는 브라우저·디바이스 로그인을 시작하지 않고 `unknown`을 유지한다. `gh copilot`은 명시적으로 설정된 레거시 호환 경로에서만 사용한다.
+## 도구 provenance의 truth boundary
 
-### A2A 다중 실행 경계
+도구 이력은 provider가 구조화된 실행 이벤트에 명시한 제한된 식별자만 기록한다.
 
-A2A 협업은 단일 CLI를 여러 이름으로 호출하는 방식이 아니라, 명시적으로 등록된 trusted agent와 provider runner를 독립적으로 라우팅하는 서버 경계로 관리한다. `TEAMS_A2A_AGENT_PROVIDERS`에 `codex,copilot`을 설정하면 provider별 worker를 등록하고, `codex,codex`처럼 반복하면 각 Codex worker에 별도 owner-only `AGENT_CODEX_HOME_1`, `AGENT_CODEX_HOME_2`, 별도 격리 provider/runner를 할당해 독립 child를 병렬 실행한다. 두 worker가 같은 홈이나 레거시 `AGENT_CODEX_HOME`을 공유하면 서버는 해당 worker를 fail-closed로 차단한다. 환경변수가 없으면 `TEAMS_AGENT_CLI_PROVIDER` 하나만 등록해 기존 동작을 보존한다. 작업 레코드에는 선택된 provider를 함께 저장해 재시작·취소·재시도에서도 다른 runner로 조용히 전환되지 않게 한다. provider가 구성되지 않았거나 작업 provider와 취소 요청 provider가 다르면 fail-closed한다.
+- `skill`: provider가 skill 분류와 이름을 명시한 경우
+- `plugin`: provider가 plugin 분류와 이름을 명시한 경우
+- `mcp`: provider가 MCP server/tool 이름을 명시한 경우
+- `cli`: command execution 이벤트가 있을 때 실행 파일 basename만
+- `builtin`: provider가 내장 tool 이름을 명시한 경우
 
-원격 협업 peer는 `TEAMS_A2A_REMOTE_AGENTS` JSON roster로 하나씩 등록할 수 있다. 각 peer는 HTTPS endpoint, `tokenEnv`, 독립적인 `executionIdentity`와 `executionBoundaryId`, Core role/capability 계약을 가져야 한다. 서버는 자격 증명을 환경에서 peer별로 해석하고, 한 peer의 카드 조회 실패나 누락된 token이 정상 peer의 시작을 막지 않도록 `a2aRemoteFailures` health 진단에 안전한 식별자와 오류 코드만 남긴다. 레거시 단일 remote 설정과 roster는 함께 사용하지 않는다. 실제 원격 왕복과 Teams UI 증거가 없으면 등록 자체를 협업 성공으로 판정하지 않는다.
+원문 command, 인수, 파일 경로, tool input/output, 환경변수, 토큰과 자격 증명은 저장·표시하지 않는다. provider가 이름을 보고하지 않은 경우 UI는 `보고된 도구 없음`으로 표시한다. 이는 실제 도구 미사용의 증거가 아니다. 프롬프트, command 문자열 또는 최종 응답을 분석해 스킬·플러그인 사용을 추론하지 않는다.
 
-이 설정은 실행 adapter를 활성화할 뿐이며 Codex 로그인, GitHub Copilot 라이선스, 조직 정책, Teams 관리자 승인을 증명하지 않는다. 실제 CLI 최종 결과와 공개 Teams 런타임 증거가 없으면 `A2A_READY`나 릴리스 완료로 판정하지 않는다. 참고 프로토콜은 [A2A v0.2.6 specification](https://a2a-protocol.org/v0.2.6/specification/)이며, Teams 화면 자체는 여전히 TeamsJS 개인 탭·Bot·Adaptive Cards 계약을 따른다.
+Codex CLI 공식 계약에서 `codex exec --json`은 JSONL 실행 이벤트를 제공하지만 skill/plugin provenance를 항상 구분해 주는 계약은 아니다. GitHub Copilot streaming event의 `toolName`, `mcpServerName`, `mcpToolName`처럼 provider가 명시한 식별자만 수집한다. 새 provider도 같은 fail-closed projection을 통과해야 한다.
 
-벤치마킹 기준은 Microsoft 공식 React 기본 탭 샘플, Teams SDK TypeScript quickstart, Teams Samples의 `tab-ui-templates`, `Device permissions`, `Adaptive Card Actions Bot`, `Sequential workflow adaptive cards`, `Deep Link consuming Subentity ID`로 제한한다. MCP Apps 공식 저장소는 UI가 MCP 서버가 제공하는 리소스로 호환 host의 sandbox iframe에 렌더링된다고 설명하고, 지원 클라이언트가 host마다 다르며 Teams 모바일 host 구현을 제공하지 않는다. 따라서 MCP Apps나 CopilotKit의 UI를 Teams 모바일 호환성의 근거로 사용하지 않고, 나중에 실제 MCP 서버·host·인증 계약이 확인된 경우에만 서버 adapter로 검토한다.
+## 공식 Teams 호환성 기준
 
-공식 기준 링크:
+- 개인 탭은 TeamsJS가 초기화되는 HTTPS `contentUrl`을 사용하고 `/tabs/home/` trailing slash를 유지한다.
+- Core 오케스트레이션 Bot 카드는 canonical Microsoft Teams `en-us` 문서의 모바일 공식 지원 범위인 Adaptive Cards 1.6으로 선언하고, 실제 요소도 검증된 제한적 subset만 사용한다. Teams가 지원하지 않는 `positive`/`destructive` action style은 사용하지 않는다. 지역화 문서가 canonical 문서와 다르면 실제 Teams 데스크톱·모바일 검증 전까지 계약 차이를 명시한다.
+- 프롬프트·도구 상세는 Teams가 지원하는 `Action.ShowCard`로 제공한다.
+- 현재 제품이 네이티브 장치 기능을 사용하지 않으므로 Teams 매니페스트에 장치 권한을 선언하지 않는다. 향후 권한이 필요한 기능은 별도 수락·구현·검증·버전으로 추가한다.
+- MCP는 서버 측 optional tool adapter이며 Teams 탭이나 모바일 UI를 대체하지 않는다.
 
-- [Teams 플랫폼 개요](https://learn.microsoft.com/en-us/MicrosoftTeams/platform/overview)
-- [React 기본 탭 앱 만들기](https://learn.microsoft.com/en-us/microsoftteams/platform/get-started/build-basic-tab-app)
-- [Teams에서 탭 사용](https://learn.microsoft.com/en-us/microsoftteams/platform/tabs/what-are-tabs)
-- [데스크톱·웹·모바일 탭 디자인](https://learn.microsoft.com/en-us/microsoftteams/platform/tabs/design/tabs?tabs=mobile)
-- [Teams Adaptive Cards 참고](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/cards/cards-reference)
-- [TypeScript Adaptive Cards builder](https://learn.microsoft.com/en-us/microsoftteams/platform/teams-sdk/in-depth-guides/adaptive-cards/building-adaptive-cards?tabs=minimal)
-- [Microsoft Teams Samples](https://github.com/OfficeDev/Microsoft-Teams-Samples)
-- [Microsoft Teams SDK](https://github.com/microsoft/teams-sdk)
+## 단계별 수직 slice
 
-### 단계별 최소 수직 slice
+각 단계는 source test, clean build, package identity, 공개 runtime, Teams 데스크톱과 모바일 증거를 같은 릴리스로 묶은 뒤에만 완료한다.
 
-각 단계는 `소스 테스트 → 새 Git 커밋 → 새 ZIP → 기존 브라우저 탭에서 업데이트 업로드 → 공개 HTTPS 전환 → 데스크톱/모바일 스크린샷 전수 확인`을 통과한 뒤에만 다음 단계로 이동한다.
+### 0. Agent-only Core 경계
 
-1. `Core shell`: health, TeamsJS 초기화, 인증 상태, 탭 링크, 로딩/오류/재시도.
-2. `한 건 업무`: 입력·추가·목록·완료/재개·삭제. 서버 JSON mutation 직렬화와 실패 롤백을 포함한다.
-3. `Bot 카드`: `help`, `status`, `list`와 카드의 탭 링크·버튼. 카드/텍스트 중복을 금지한다.
-4. `위치 날씨`: `내 위치 사용` 허용/거부/취소/timeout/retry와 좌표 날씨. 위치를 추측하지 않는다.
-5. `Codex 작업`: read-only 실행 → 진행 → 실제 최종 `agent_message` 결과 → 실패/취소. write는 승인 후에만 실행한다.
-6. `Git 경계`: 작업 소유 경로만 commit, 실제 hash 없는 결과는 오류 카드로 표시한다.
-7. `협업`: follow/unfollow, 채널 연결, 알림 저장을 각각 독립된 mutation으로 추가한다.
-8. `선택 provider`: Core와 모바일 전수 검증이 끝난 뒤에만 CopilotKit/OpenAI/MCP adapter를 별도 버전·feature flag로 실험한다. 현재 Jira/Confluence/Bitbucket MCP registry는 optional 코드·테스트·빌드 경계까지 구현되어 있으며, provider credential resolver가 없으면 fail-closed한다. 공개 connector 인증·실제 Teams host 왕복이 없으면 `OPTIONAL_PROVIDER_NOT_CONFIGURED`로 남기고 Core 완료로 섞지 않는다.
+목표:
 
-현재 구현은 1~6의 서버·탭·카드 계약과 명령어 테스트가 존재하지만, 실제 동일 릴리스의 포털·설치본·데스크톱·모바일 스크린샷 증거가 채워지기 전에는 기능 완성으로 판정하지 않는다. WorkItemPanel·CollaborationPanel·위치 권한·응답 모드의 각 성공/실패/권한 분기는 별도 매트릭스 행으로 추가한다.
+- 서버와 탭이 API 키 없이 시작한다.
+- 활성 UI, Bot command list, 매니페스트에 weather/geolocation이 없다.
+- optional provider가 없어도 Core 상태·작업 lifecycle이 동작한다.
 
-## 가장 작은 단위의 구현 순서
-
-### 0. Core 경계 고정
-
-목표: API 키가 없어도 서버와 탭이 시작되고, `/api/health`가 `deterministic=true`, `openai=false`, `mcp=disabled`를 보여준다.
-
-검증:
-
-- `npm run build:core`
-- `npm run test:core`
-- `npm run release:preflight`
-- 공개 `/api/health`와 `/tabs/home/`
-
-### 1. 탭 셸과 상태 읽기
-
-목표: TeamsJS 초기화, 서비스 상태, 인증 상태, 탭 링크가 모바일·데스크톱에서 보인다.
-
-범위: 읽기 전용 상태 카드와 새로고침만 구현한다. 위치·업무 변경·AI를 아직 섞지 않는다.
-
-통과 조건: 초기/로딩/실패/재시도/인증 만료를 전·후 스크린샷과 접근성 트리로 확인한다.
-
-### 2. 업무 한 건 CRUD
-
-목표: 제목 입력 → 추가 → 목록 조회 → 완료/재개 → 삭제를 한 건씩 실제 서버 mutation으로 확인한다.
-
-범위: idempotency key, 소유자 범위, 중복 클릭 잠금, 새로고침·재시작 보존을 포함한다.
-
-통과 조건: 빈 목록, 잘못된 입력, 중복 전송, 성공, 서버 오류, 재시작 후 보존을 각각 확인한다.
-
-### 3. Bot 명령과 Adaptive Card
-
-목표: `help`, `status`, `list`를 Teams SDK Bot으로 처리하고, 카드의 모든 버튼이 동일한 서버 mutation/API로 연결된다.
-
-범위: 카드와 top-level 텍스트 중복을 제거하고, 모든 카드에 업무 허브 탭 링크를 기본 제공한다. 버튼 수는 모바일 가독성을 위해 최소화한다.
-
-통과 조건: 명령 입력 전·후, 카드 버튼 입력 전·후, 잘못된 입력, 권한 거부, 재전송을 Teams 데스크톱과 모바일에서 확인한다.
-
-### 4. 위치 요청과 날씨
-
-목표: 탭의 `내 위치 사용` 버튼이 Teams 모바일 권한과 HTML5 Geolocation 경로를 사용하고, 위치가 없으면 추측하지 않고 안내한다.
-
-범위: 권한 허용/거부/취소/재시도와 좌표 기반 날씨 조회만 다룬다. Bot의 `weather <위도> <경도>`는 별도 명시 입력 경로로 유지한다.
-
-통과 조건: 실제 iOS Teams에서 위치 허용·거부·재시도와 위젯 갱신을 확인한다. 데스크톱 확인만으로 모바일 GPS 통과를 선언하지 않는다.
-
-### 5. Codex CLI 작업 경계
-
-목표: Teams에서 `run`으로 읽기 전용 Codex CLI 작업을 시작하고, `status`/후속 답장으로 같은 thread를 이어간다.
-
-범위: 읽기 전용 → 승인 필요한 write → approve/cancel → commit 순서로 확장한다. GHCP CLI는 별도 실행 adapter로 추가하되, 둘 중 하나가 없을 때 Core 명령이 가짜 완료를 반환하지 않게 한다.
-
-통과 조건: 실제 CLI 프로세스 PID·로그·작업 상태·중단·재시작 보존을 확인하고, 변경 결과가 없는 경우 “완료”라고 답하지 않는다.
-
-### 6. 협업·알림 기능
-
-목표: 팔로우, 채널 연결, 알림 수준 저장을 독립 기능으로 추가한다.
-
-범위: 외부 Jira/Trello/Atlassian 연동은 아직 넣지 않는다. 먼저 내부 업무 상태와 Teams 대화만 연결한다.
-
-### 7. 선택 provider의 격리된 실험
-
-조건: Core 기능과 모바일 전수 검증이 안정된 뒤에만 시작한다.
-
-- CopilotKit: API 키/런타임이 있는 별도 실험 build에서만 켠다.
-- OpenAI-compatible: 서버 환경변수로만 설정하고 모바일에 키·endpoint를 노출하지 않는다.
-- MCP: `src/server/mcp-provider-tools.ts`의 Jira/Confluence/Bitbucket tool registry를 optional 경로에서만 등록한다. local 경로는 고정된 safe principal을 요구하고, 공개 optional 경로는 `TEAMS_MCP_AUTHENTICATED_ENABLED=true`, 별도 MCP Entra resource app/client ID·Application ID URI·accepted audience·delegated scope, `TEAMS_MCP_PROVIDER_TOOLS=true`, 명시된 `MCP_RESOURCE_ORIGIN`/`MCP_AUTHORIZATION_SERVER_URL`, `ATLASSIAN_SITE_URL`, 서버 측 provider credential, Teams Entra delegated bearer 검증을 모두 요구한다. 각 stateful MCP 세션은 검증된 `tid`/`oid` principal에 고정되고, 세션 간 provider registry를 재사용하지 않는다. 토큰은 MCP 입력·출력·로그에 없고, credential이 없으면 fail-closed한다. MCP Apps UI를 Teams 탭으로 직접 가정하지 않는다.
-- 공개 connector를 붙일 때는 `src/server/mcp-provider-auth-boundary.ts`의 principal-scoped broker 계약을 경유한다. 호출자가 Authorization/cookie/token query를 직접 전달할 수 없고, backend가 자격증명을 내부에서 주입하며, 응답은 민감 필드 redaction 후 반환한다. 현재 이 broker는 계약·fixture 테스트로 보호되지만 실제 public connector가 연결됐다는 뜻은 아니다.
-
-선택 provider는 Core 릴리스와 별도 버전·feature flag·테스트·증거를 갖는다. 설정되지 않은 provider가 Core UI를 가리거나 기본 빌드를 지연시키지 않아야 한다.
-
-현재 optional provider 검증 명령은 다음과 같다.
+최소 게이트:
 
 ```bash
-npm run test:atlassian-cloud-client
-npm run test:bitbucket-cloud-client
-npm run test:mcp-provider-tools
-npm run test:mcp-provider-auth-boundary
-npm run test:release-identity-consistency
-npm run test:optional
-npm run build:server                 # mode=optional marker 확인
-npm run release:preflight             # Core가 provider graph를 제외하는지 확인
+npm run test:agent-only-hub-contract
+npm run test:manifest
+npm run typecheck
 ```
 
-이 명령들은 실제 Jira/Bitbucket 계정에 쓰기를 수행하지 않는 contract/fixture 테스트다. 실제 계정 연결을 `PASS`로 기록하려면 authenticated connector가 반환한 workspace/site/repository identity, 같은 release의 runtime log, 실패·timeout·권한 거부 증거를 별도로 보존해야 한다.
+### 1. Durable 작업 lifecycle
+
+목표:
+
+- submit, list, get, approve, input, cancel, retry가 사용자 범위와 idempotency 계약을 지킨다.
+- queued, running, awaiting approval, input required, completed, failed, cancelled 상태가 durable store에 남는다.
+- 저장 실패 시 메모리 상태를 롤백하고 재시작 뒤에도 저장된 상태를 복구한다.
+- 프로세스 exit code 0만으로 완료 처리하지 않고 비어 있지 않은 최종 result를 요구한다.
+
+### 2. 최소 업무허브
+
+목표:
+
+- 초기, 로딩, 빈 목록, 성공, 오류, 재시도 상태를 작은 화면에서도 읽을 수 있다.
+- 3초 non-overlapping polling으로 durable 이력과 진행을 갱신한다.
+- 선택한 작업에서 원본 프롬프트와 provider-reported tools를 조회한다.
+- approval/cancel처럼 확인이 필요한 mutation은 `window.confirm`이 아니라 탭 내부 확인 UI를 사용한다.
+
+### 3. Teams 채팅 카드
+
+목표:
+
+- `help`, `agent run|write|status|list|approve|input|cancel|retry`의 실제 서버 왕복을 확인한다.
+- 작업 카드의 `프롬프트·도구` ShowCard가 원본 프롬프트와 같은 durable tool observations를 표시한다.
+- 상태별 action과 업무허브 링크만 제공하고 카드·text 중복을 만들지 않는다.
+- 잘못된 ID, 중복 요청, 권한 거부, provider unavailable을 성공 카드로 포장하지 않는다.
+
+### 4. 도구 관찰과 보안
+
+목표:
+
+- Codex JSONL 및 지원 provider lifecycle event에서 허용된 category/name만 투영한다.
+- 도구 목록은 중복 제거, 개수·길이 제한, 허용 문자 검증을 거친다.
+- raw command, arguments, output, path, secret이 API·탭·카드·로그 증거에 노출되지 않는다.
+- skill/plugin 명시 이벤트가 없는 실행은 `unreported`로 남고 다른 텍스트에서 추정하지 않는다.
+
+### 5. Worker와 A2A 확장
+
+조건: 단일 agent lifecycle과 same-release Teams UI가 안정된 뒤 진행한다.
+
+- indexed Codex worker는 서로 다른 owner-only `AGENT_CODEX_HOME_<ordinal>`을 사용한다.
+- provider, 실행 identity, 취소, 재시작 복구를 durable task에 고정한다.
+- fixture와 localhost 통과를 live authenticated A2A 증거로 승격하지 않는다.
+- 실제 Agent Card, send/get/list/cancel, 병렬 child, restart recovery, telemetry를 별도 검증한다.
+
+### 6. 선택 provider
+
+조건: agent-only Core 릴리스 게이트가 모두 통과한 뒤 진행한다.
+
+- CopilotKit, OpenAI-compatible, 로컬 모델, MCP, Jira/Confluence/Bitbucket adapter는 optional build와 feature flag로만 활성화한다.
+- 서버 자격 증명은 클라이언트에 노출하지 않고 principal·scope·timeout·redaction 경계를 검증한다.
+- 설정되지 않은 provider는 `OPTIONAL_PROVIDER_NOT_CONFIGURED`로 남기며 Core를 가리거나 가짜 fallback 성공을 반환하지 않는다.
+- contract/fixture 테스트는 실제 connector 인증, 외부 service write, Teams UI 왕복의 증거가 아니다.
 
 ## 릴리스 게이트
 
-각 단계는 다음을 모두 통과해야 다음 단계로 이동한다.
+기능 추가 또는 재현된 버그 수정이 수락된 경우에만 버전을 한 번 올린다. 문서·감사·증거 갱신이나 실패한 재시도만으로 버전 또는 ZIP을 만들지 않는다.
 
-1. 원본 로컬 소스에서 구현·명령어 테스트·API 런타임 검증
-2. 새 버전·새 ZIP·manifest·SHA 검증 및 Git 커밋
-3. 기존 로그인 인앱 브라우저 탭을 재사용해 기존 앱 업데이트 경로로 업로드
-4. local bypass/outbox 종료 후 공개 Teams SDK 프로세스로 전환
-5. 공개 health, 탭, Bot 왕복 확인
-6. 데스크톱 접근성 트리와 전·후 스크린샷 확인
-7. 모바일에서 같은 기능을 직접 확인하고 전·후 스크린샷 확보
-8. 그 뒤에만 Teams 완료 메시지 전송
+1. 현재 source와 focused regression 검사
+2. clean `build:core`, `test:core`, 매니페스트 검증
+3. source commit, manifest version, ZIP SHA-256 결합
+4. 기존 로그인 인앱 브라우저 탭에서 기존 앱의 새 버전 업로드
+5. 공개 health, `/tabs/home/`, 해시 자산, Bot endpoint 확인
+6. Teams 데스크톱에서 Bot·ShowCard·업무허브 전 분기 스크린샷과 접근성 증거
+7. 모바일에서 같은 설치 버전의 레이아웃·카드 action·탭 동작 확인
+8. 모든 발견 항목의 Jira 매핑 후에만 Teams 완료 메시지
 
-화면 잠금·네이티브 파일 선택·Auth 승인으로 3~8번이 불가능하면 해당 단계는 `BLOCKED`로 남긴다. 이를 추측으로 `PASS` 처리하거나 새 브라우저 탭·iCloud 파일·존재하지 않는 원격 저장소로 우회하지 않는다.
+weather/geolocation은 이번 제품에서 `N/A`가 아니라 **제거 계약**이다. 릴리스 gate는 해당 API·명령·UI·매니페스트 권한이 다시 나타나면 실패해야 한다.
 
-## 참고 레퍼런스
+## 공식 레퍼런스
 
-- [Tabs in Microsoft Teams](https://learn.microsoft.com/en-us/microsoftteams/platform/tabs/what-are-tabs)
-- [Design Tabs for Desktop, Web & Mobile](https://learn.microsoft.com/en-us/microsoftteams/platform/tabs/design/tabs?tabs=mobile)
-- [Get Contextual Information for Tabs](https://learn.microsoft.com/en-us/microsoftteams/platform/tabs/how-to/access-teams-context)
-- [Create and Explore Card Types in Teams](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/cards/cards-reference)
-- [Executing Actions in Adaptive Cards](https://learn.microsoft.com/en-us/microsoftteams/platform/teams-sdk/in-depth-guides/adaptive-cards/executing-actions)
-- [Microsoft Teams Developer Platform](https://learn.microsoft.com/en-us/microsoftteams/platform/overview)
-- [Tools and SDKs to Build Teams App](https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/build-and-test/tool-sdk-overview)
-- [Teams SDK quickstart](https://learn.microsoft.com/en-us/microsoftteams/platform/teams-sdk/get-started/quickstart-register)
-- [Microsoft Teams Samples](https://github.com/OfficeDev/Microsoft-Teams-Samples)
-- [Microsoft Teams SDK](https://github.com/microsoft/teams-sdk)
+- [Teams 플랫폼 개요](https://learn.microsoft.com/en-us/microsoftteams/platform/overview)
+- [Teams 탭](https://learn.microsoft.com/en-us/microsoftteams/platform/tabs/what-are-tabs)
+- [데스크톱·웹·모바일 탭 디자인](https://learn.microsoft.com/en-us/microsoftteams/platform/tabs/design/tabs?tabs=mobile)
+- [Teams Adaptive Cards 참고](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/cards/cards-reference)
+- [Teams 카드 동작](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/cards/cards-actions)
+- [Teams 네이티브 장치 권한](https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/device-capabilities/native-device-permissions)
+- [OpenAI Codex CLI commands](https://learn.chatgpt.com/docs/developer-commands?surface=cli)
+- [GitHub Copilot streaming events](https://docs.github.com/en/copilot/how-tos/copilot-sdk/features/streaming-events)
 - [MCP in Teams SDK](https://learn.microsoft.com/en-us/microsoftteams/platform/teams-sdk/in-depth-guides/ai/mcp/overview)

@@ -1,0 +1,64 @@
+#cloud-config
+# Auth material is provisioned out of band after the VM exists.
+# Never copy auth.json, tokens, account keys, connection strings, or device codes here.
+users:
+  - name: teamsworker
+    shell: /bin/bash
+    lock_passwd: true
+
+write_files:
+  - path: /etc/teamsapp/worker.env.example
+    owner: root:teamsworker
+    permissions: '0640'
+    content: |
+      # Non-secret shape only. The verified runtime installer writes worker.env.
+      AZURE_CLIENT_ID=SET_BY_MANAGED_IDENTITY
+      AZURE_STORAGE_QUEUE_ENDPOINT=SET_BY_DEPLOYMENT
+      AZURE_STORAGE_POISON_QUEUE_ENDPOINT=SET_BY_DEPLOYMENT
+      TEAMS_STORAGE_BACKEND=cosmos
+      AZURE_COSMOS_ENDPOINT=SET_BY_DEPLOYMENT
+      AZURE_COSMOS_DATABASE=teamsapp
+      AZURE_COSMOS_CONTAINER=runtime-records
+      NODE_ENV=production
+      TEAMS_SOURCE_COMMIT=SET_BY_DEPLOYMENT
+      AGENT_CODEX_HOME=/var/lib/teamsapp/codex-home
+      CODEX_BIN=/opt/teamsapp/current/bin/codex
+      CODEX_BIN_SHA256=SET_BY_DEPLOYMENT
+      TEAMS_WORKER_COMPOSITION_MODULE=/opt/teamsapp/current/dist/worker/composition.js
+      TEAMS_WORKER_WORKSPACE=/var/lib/teamsapp/workspace
+  - path: /etc/systemd/system/teamsapp-worker.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=TeamsApp durable Codex worker
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      User=teamsworker
+      Group=teamsworker
+      EnvironmentFile=/etc/teamsapp/worker.env
+      WorkingDirectory=/opt/teamsapp/current
+      ExecStart=/opt/teamsapp/current/node/bin/node /opt/teamsapp/current/dist/worker/index.js --run
+      Restart=always
+      RestartSec=5
+      KillMode=control-group
+      TimeoutStopSec=30
+      NoNewPrivileges=true
+      PrivateTmp=true
+      ProtectSystem=strict
+      ProtectHome=true
+      ReadWritePaths=/var/lib/teamsapp
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - [install, -d, -o, teamsworker, -g, teamsworker, -m, '0700', /var/lib/teamsapp/codex-home]
+  - [install, -d, -o, root, -g, teamsworker, -m, '0750', /etc/teamsapp]
+  - [install, -d, -o, root, -g, root, -m, '0755', /opt/teamsapp/bin]
+  - [systemctl, daemon-reload]
+  # The managed-identity Custom Script extension installs the immutable archive,
+  # writes the owner-only environment file, then enables and starts this unit.

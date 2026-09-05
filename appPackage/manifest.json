@@ -15,8 +15,8 @@
     "full": "Teams SDK 업무 허브 MVP"
   },
   "description": {
-    "short": "Teams 안에서 업무를 확인하고 추가합니다.",
-    "full": "Teams SDK로 만든 내부용 업무 허브 MVP입니다. 탭에서 업무 목록을 보고 Teams 메시지 엔드포인트와 연동하며, 모바일 Teams 위치 권한으로 현재 위치 날씨를 확인할 수 있습니다."
+    "short": "Teams에서 에이전트 작업을 실행하고 추적합니다.",
+    "full": "Teams SDK로 만든 에이전트 업무 허브입니다. Bot에서 에이전트 작업을 실행하고, 탭에서 프롬프트와 진행 상황 및 관찰된 도구를 확인할 수 있습니다."
   },
   "icons": {
     "color": "color.png",
@@ -43,16 +43,21 @@
           "scopes": ["personal", "team", "groupChat"],
           "commands": [
             { "title": "help", "description": "사용 가능한 명령을 보여줍니다." },
-            { "title": "날씨", "description": "현재 위치 날씨 위젯을 확인합니다." },
-            { "title": "status", "description": "앱 상태를 확인합니다." },
-            { "title": "list", "description": "진행 중인 업무 목록을 보여줍니다." }
+            { "title": "agent run", "description": "읽기 전용 Core 에이전트 작업을 시작합니다." },
+            { "title": "agent write", "description": "승인이 필요한 작업공간 변경 작업을 시작합니다." },
+            { "title": "agent choose", "description": "모델과 추론 수준을 선택해 읽기 작업을 시작합니다." },
+            { "title": "agent status", "description": "Core 에이전트 작업 상태를 확인합니다." },
+            { "title": "agent list", "description": "Core 에이전트 작업 목록을 확인합니다." },
+            { "title": "agent cancel", "description": "Core 에이전트 작업 취소를 요청합니다." },
+            { "title": "agent approve", "description": "쓰기 작업 승인을 처리합니다." },
+            { "title": "agent retry", "description": "실패한 Core 에이전트 작업을 다시 시도합니다." },
+            { "title": "agent input", "description": "입력이 필요한 Core 에이전트 작업에 값을 전달합니다." }
           ]
         }
       ]
     }
   ],
   "validDomains": ["${{TAB_DOMAIN}}", "token.botframework.com"],
-  "devicePermissions": ["geolocation"],
   "webApplicationInfo": {
     "id": "${{CLIENT_ID}}",
     "resource": "${{APPLICATION_ID_URI}}"

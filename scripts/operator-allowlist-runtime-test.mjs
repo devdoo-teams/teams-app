@@ -114,7 +114,6 @@ async function startServer(extraEnv = {}, options = {}) {
       AGENT_WORKSPACE: root,
       CODEX_BIN: process.execPath,
       CODEX_SCRIPT: path.join(root, 'scripts/fake-codex.mjs'),
-      WEATHER_MODE: 'demo',
       COPILOTKIT_DETERMINISTIC_MODE: 'true',
       TEAMS_USE_SDK: 'false',
       TEAMS_SKIP_OUTBOUND: 'true',

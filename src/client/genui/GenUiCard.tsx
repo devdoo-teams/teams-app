@@ -26,7 +26,6 @@ export type GenUiCardProps = {
 
 const KIND_LABELS: Record<GenUiKind, string> = {
   answer: '답변',
-  weather: '날씨',
   'task-list': '업무 목록',
   'job-status': '작업 상태',
   approval: '승인 필요',
@@ -36,7 +35,6 @@ const KIND_LABELS: Record<GenUiKind, string> = {
 
 const KIND_ICONS: Record<GenUiKind, string> = {
   answer: '✦',
-  weather: '☀',
   'task-list': '✓',
   'job-status': '↗',
   approval: '!',
@@ -76,15 +74,6 @@ function sectionHasContent(section: GenUiSection): boolean {
     case 'text': return Boolean(hasText(section.text) || hasText(section.content) || section.value !== undefined);
     case 'facts': return Boolean(section.facts?.length || section.value !== undefined);
     case 'stats': return section.stats.length > 0;
-    case 'weather': return Boolean(
-      section.location
-      || section.temperature !== undefined
-      || section.apparentTemperature !== undefined
-      || section.humidity !== undefined
-      || section.windSpeed !== undefined
-      || section.precipitation !== undefined
-      || section.condition,
-    );
     case 'list': return section.items.length > 0;
     case 'progress': return true;
     case 'status': return true;
@@ -163,21 +152,6 @@ function SectionBlock({ section }: { section: GenUiSection }) {
               <dt>{fact.label}</dt>
               <dd>{displayScalar(fact.value, fact.unit)}</dd>
             </div>
-          ))}
-        </dl>
-      )}
-
-      {section.type === 'weather' && (
-        <dl className="genui-card__facts">
-          {[
-            ['위치', section.location],
-            ['현재', section.temperature === undefined ? undefined : `${section.temperature.toFixed(1)}°C ${section.condition ?? ''}`.trim()],
-            ['체감', section.apparentTemperature === undefined ? undefined : `${section.apparentTemperature.toFixed(1)}°C`],
-            ['습도', section.humidity === undefined ? undefined : `${Math.round(section.humidity)}%`],
-            ['바람', section.windSpeed === undefined ? undefined : `${section.windSpeed.toFixed(1)}km/h`],
-            ['강수', section.precipitation === undefined ? undefined : `${section.precipitation.toFixed(1)}mm`],
-          ].filter((fact): fact is [string, string] => typeof fact[1] === 'string' && fact[1].length > 0).map(([label, value]) => (
-            <div key={`${sectionId}-${label}`}><dt>{label}</dt><dd>{value}</dd></div>
           ))}
         </dl>
       )}

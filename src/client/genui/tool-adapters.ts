@@ -7,17 +7,6 @@ import {
 
 export type ToolRenderStatus = 'inProgress' | 'executing' | 'complete';
 
-export type WeatherToolParameters = {
-  location: string;
-  temperature: number;
-  apparentTemperature: number;
-  humidity: number;
-  windSpeed: number;
-  precipitation: number;
-  condition: string;
-  source: string;
-};
-
 export type TaskToolParameters = {
   items: Array<{
     id: number;
@@ -44,7 +33,6 @@ export function getGenAiBadgeLabel(genAI: GenAiRuntimeStatus | undefined): strin
   return '설정 필요';
 }
 
-type WeatherToolParametersInput = Partial<WeatherToolParameters>;
 type TaskToolItemInput = Partial<TaskToolParameters['items'][number]>;
 type TaskToolParametersInput = {
   items?: TaskToolItemInput[];
@@ -85,11 +73,6 @@ function finiteNumber(value: number | undefined): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
-function clampedNumber(value: number | undefined, minimum: number, maximum: number): number | undefined {
-  const finite = finiteNumber(value);
-  return finite === undefined ? undefined : Math.min(maximum, Math.max(minimum, finite));
-}
-
 function normalizedCount(value: number | undefined): number | undefined {
   const finite = finiteNumber(value);
   return finite === undefined ? undefined : Math.min(MAX_SAFE_COUNT, Math.max(0, Math.trunc(finite)));
@@ -106,31 +89,6 @@ function isValidCount(value: number | undefined): boolean {
   return typeof value === 'number'
     && Number.isSafeInteger(value)
     && value >= 0;
-}
-
-function isValidWeatherParameters(parameters: WeatherToolParametersInput): boolean {
-  const temperature = finiteNumber(parameters.temperature);
-  const apparentTemperature = finiteNumber(parameters.apparentTemperature);
-  const humidity = finiteNumber(parameters.humidity);
-  const windSpeed = finiteNumber(parameters.windSpeed);
-  const precipitation = finiteNumber(parameters.precipitation);
-
-  return Boolean(boundedText(parameters.location, 200))
-    && temperature !== undefined
-    && apparentTemperature !== undefined
-    && humidity !== undefined
-    && windSpeed !== undefined
-    && precipitation !== undefined
-    && Boolean(boundedText(parameters.condition, 120))
-    && Boolean(boundedText(parameters.source, 120))
-    && temperature >= -273.15
-    && temperature <= 1_000
-    && apparentTemperature >= -273.15
-    && apparentTemperature <= 1_000
-    && humidity >= 0
-    && humidity <= 100
-    && windSpeed >= 0
-    && precipitation >= 0;
 }
 
 function isValidTaskParameters(parameters: TaskToolParametersInput): boolean {
@@ -206,54 +164,6 @@ function baseEnvelope(input: {
   });
   if (parsed.success) return parsed.data;
   return invalidToolResultEnvelope('unknown', 'GenUI envelope schema validation failed.');
-}
-
-export function createWeatherToolEnvelope(
-  parameters: WeatherToolParametersInput,
-  status: ToolRenderStatus,
-  result?: string,
-): GenUiEnvelopeV1 {
-  if (status === 'complete' && !isValidWeatherParameters(parameters)) {
-    return invalidToolResultEnvelope('weather', '날씨 결과의 위치·온도·상태·출처 또는 수치 범위가 올바르지 않습니다.');
-  }
-
-  const location = boundedText(parameters.location, 200) ?? '현재 위치';
-  const temperature = clampedNumber(parameters.temperature, -273.15, 1_000);
-  const apparentTemperature = clampedNumber(parameters.apparentTemperature, -273.15, 1_000);
-  const humidity = clampedNumber(parameters.humidity, 0, 100);
-  const windSpeed = clampedNumber(parameters.windSpeed, 0, 10_000);
-  const precipitation = clampedNumber(parameters.precipitation, 0, 100_000);
-  const condition = boundedText(parameters.condition, 120);
-  const source = boundedText(parameters.source, 120);
-  const effectiveStatus = status === 'complete' ? 'ready' : 'loading';
-  const id = boundedId(`copilot-weather-${location}`, 'copilot-weather');
-  const summary = effectiveStatus === 'ready'
-    ? `${location} · ${temperature!.toFixed(1)}°C · ${condition}`
-    : `${location} 날씨를 조회하고 있습니다.`;
-  const resultText = status === 'complete' ? boundedText(result, 2_000) : undefined;
-  const weatherSection: Record<string, unknown> = {
-    type: 'weather',
-    location,
-    ...(temperature === undefined ? {} : { temperature }),
-    ...(apparentTemperature === undefined ? {} : { apparentTemperature }),
-    ...(humidity === undefined ? {} : { humidity }),
-    ...(windSpeed === undefined ? {} : { windSpeed }),
-    ...(precipitation === undefined ? {} : { precipitation }),
-    ...(condition === undefined ? {} : { condition }),
-    ...(source === undefined ? {} : { source }),
-  };
-  const sections: Array<Record<string, unknown>> = [weatherSection];
-  if (resultText) sections.push({ type: 'text', title: '도구 응답', text: resultText });
-
-  return baseEnvelope({
-    kind: 'weather',
-    status: effectiveStatus,
-    id,
-    title: '현재 위치 날씨',
-    summary,
-    sections,
-    fallbackText: `${summary}${source ? `\n데이터: ${source}` : ''}`,
-  });
 }
 
 export function createTaskToolEnvelope(

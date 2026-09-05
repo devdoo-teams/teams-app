@@ -1,7 +1,6 @@
 import type { AgentJob, AgentJobScope } from './agent-job-store.js';
 import type { AgentService } from './agent-service.js';
 import type { ItemStore } from './item-store.js';
-import type { WeatherResponse } from './weather-service.js';
 import type { RunAgentInput } from '@ag-ui/core';
 import type { GenUiEnvelopeV1 } from '../shared/genui.js';
 import type { ResponseMode } from '../shared/response-mode.js';
@@ -33,14 +32,6 @@ export const LLM_TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'showWeatherCard',
-      description: '현재 위치의 실시간 날씨를 Teams 카드로 표시합니다. 현재 위치 컨텍스트가 없으면 사용자에게 위치 권한을 요청해야 합니다.',
-      parameters: { type: 'object', properties: {}, additionalProperties: false },
-    },
-  },
-  {
-    type: 'function',
-    function: {
       name: 'showTaskCard',
       description: '현재 업무 목록과 요약을 Teams 카드로 표시합니다.',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
@@ -62,10 +53,9 @@ export const LLM_TOOLS = [
 ] as const;
 
 export type ResponseToolEvent = {
-  name: 'showWeatherCard' | 'showTaskCard' | 'workspaceApproval';
+  name: 'showTaskCard' | 'workspaceApproval';
   args: Record<string, unknown>;
   result: string;
-  weather?: WeatherResponse;
 };
 
 export type ApprovalEnvelopeFactory = (
