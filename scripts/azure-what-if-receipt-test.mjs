@@ -272,6 +272,38 @@ try {
   ]);
   assert.deepEqual(verifyAzureWhatIfReceipt(workloadReceipt, workloadIdentity), workloadReceipt);
 
+  const currentContainerAppPropertyChanges = workloadContainerAppPropertyChanges.filter(
+    ({ path: propertyPath }) => propertyPath !== 'properties.configuration.maxInactiveRevisions',
+  );
+  assert.equal(
+    currentContainerAppPropertyChanges.length,
+    workloadContainerAppPropertyChanges.length - 1,
+    'the current Azure provider variant must differ by exactly one default-property path',
+  );
+  const currentWorkerRuntimeExtensionChange = {
+    resourceId: `${scope}/providers/Microsoft.Compute/virtualMachines/teamsapp-worker-goictvxm/extensions/teamsapp-worker-runtime`,
+    changeType: 'Modify',
+    delta: [{ path: 'properties.forceUpdateTag', propertyChangeType: 'Modify' }],
+  };
+  const currentWorkloadReceipt = createAzureWhatIfReceipt({
+    ...workloadIdentity,
+    whatIf: {
+      status: 'Succeeded',
+      changes: [
+        { ...workloadObservedChanges[0], delta: currentContainerAppPropertyChanges },
+        currentWorkerRuntimeExtensionChange,
+        ...workloadObservedChanges.slice(1),
+      ],
+    },
+    checkedAt: '2026-09-05T21:36:29.667Z',
+  });
+  assert.equal(currentWorkloadReceipt.status, 'READY');
+  assert.deepEqual(currentWorkloadReceipt.whatIf.approvedPlannedChanges.map(({ rule }) => rule), [
+    'workload-container-app-release-update',
+    'workload-worker-runtime-extension-update',
+  ]);
+  assert.deepEqual(verifyAzureWhatIfReceipt(currentWorkloadReceipt, workloadIdentity), currentWorkloadReceipt);
+
   for (const unsafeWorkloadChanges of [
     [{ ...workloadObservedChanges[0], resourceId: `${scope}/providers/Microsoft.App/containerApps/teamsapp-production-goictvxm` }],
     [{ ...workloadObservedChanges[0], delta: undefined }],
@@ -283,6 +315,13 @@ try {
       }],
     }],
     [{ ...workloadObservedChanges[0], changeType: 'Delete' }],
+    [{
+      ...currentWorkerRuntimeExtensionChange,
+      delta: [
+        ...currentWorkerRuntimeExtensionChange.delta,
+        { path: 'properties.settings', propertyChangeType: 'Modify' },
+      ],
+    }],
     [{
       ...workloadObservedChanges[4],
       delta: [...workloadWorkerNicPropertyChanges, {
