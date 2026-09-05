@@ -595,6 +595,13 @@ try {
   assert.ok(platformScript?.includes('az bicep version'), 'pre-approval Azure tests must validate Azure CLI Bicep integration');
   assert.ok(platformScript?.includes('command -v bicep'), 'pre-approval Azure tests must resolve the hosted Bicep executable');
   assert.ok(platformScript?.includes('npm run build:worker'), 'pre-approval Azure tests must build the Linux worker');
+  assert.ok(platformScript?.includes('scripts/azure-codex-package.mjs'), 'pre-approval must authenticate and prepare the official Codex package');
+  assert.ok(platformScript?.includes('scripts/azure-worker-runtime-package.mjs build'), 'pre-approval must build the complete immutable worker archive');
+  assert.ok(platformScript?.includes('scripts/azure-worker-runtime-package.mjs verify'), 'pre-approval must verify the complete worker archive before publishing it');
+  assert.ok(platformScript?.includes('--connect-timeout 15'), 'pre-approval package download must have a bounded connection timeout');
+  assert.ok(platformScript?.includes('--max-time 300'), 'pre-approval package download must have a bounded total timeout');
+  assert.equal(platformScript?.includes('cp -RL'), false, 'worker packaging must never recursively dereference the hosted Node toolcache');
+  assert.ok(platformScript?.includes('validate-worker-runtime-manifest.mjs'), 'pre-approval worker package must retain the VM-side manifest validator');
   const platformRbacStep = platformSteps.find((step) => (
     step.task === 'AzureCLI@2' && step.inputs?.inlineScript?.includes('scripts/azure-deployment-rbac.mjs')
   ));
@@ -608,6 +615,11 @@ try {
     platformSteps.some((step) => step.task === 'PublishPipelineArtifact@1'
       && step.inputs?.artifact === 'azure-rbac-preflight-receipt'),
     'pipeline must retain the pre-approval caller-effective RBAC receipt',
+  );
+  assert.ok(
+    platformSteps.some((step) => step.task === 'PublishPipelineArtifact@1'
+      && step.inputs?.artifact === 'azure-worker-runtime-package'),
+    'pipeline must retain the immutable worker runtime package before environment approval',
   );
 
   const deploySteps = allSteps(deployStage);
@@ -631,6 +643,10 @@ try {
     deploySteps.some((step) => step.download === 'current' && step.artifact === 'azure-rbac-preflight-receipt'),
     'deployment must consume the pre-approval RBAC receipt',
   );
+  assert.ok(
+    deploySteps.some((step) => step.download === 'current' && step.artifact === 'azure-worker-runtime-package'),
+    'deployment must consume the exact current-run worker runtime package',
+  );
   assert.ok(deployScript?.includes('az deployment group create'), 'deployment must provision with an Azure resource-group deployment');
   assert.ok(deployScript?.includes('--template-file infra/azure/main.bicep'), 'deployment must execute the compiled main.bicep contract');
   assert.ok(deployScript?.includes('scripts/azure-deployment-contract.mjs outputs'), 'deployment must consume validated Bicep outputs');
@@ -653,19 +669,26 @@ try {
     'Azure deployment must expose the verified Bicep directory to Azure CLI child processes',
   );
   assert.ok(deployScript?.includes('"$BICEP_BIN" --version'), 'Azure deployment must execute the resolved Bicep binary before the Azure Core gate');
-  assert.ok(deployScript?.includes('npm run build:worker'), 'deployment must build the worker from the exact attested source commit');
-  assert.ok(deployScript?.includes('git checkout --detach "$commit"'), 'worker build must check out the exact attested commit');
+  assert.equal(deployScript?.includes('npm run build:worker'), false, 'deployment must not rebuild a worker after environment approval');
+  assert.equal(deployScript?.includes('git fetch'), false, 'deployment must not refetch different source after environment approval');
+  assert.equal(deployScript?.includes('git checkout --detach "$commit"'), false, 'deployment must consume the pre-approved artifact instead of rebuilding it');
+  assert.equal(deployScript?.includes('npm ci'), false, 'deployment must not repeat dependency restoration after environment approval');
   assert.ok(deployScript?.includes('version: 24.19.0') || JSON.stringify(deploySteps).includes('24.19.0'), 'worker archive must carry the pinned Node runtime');
   assert.ok(deployScript?.includes('CODEX_PACKAGE_URL'), 'deployment must require an approved Codex package reference');
   assert.ok(deployScript?.includes('CODEX_PACKAGE_SHA256'), 'deployment must require and verify the package archive digest');
   assert.ok(deployScript?.includes('CODEX_PACKAGE_VERSION'), 'deployment must bind the expected package version');
-  assert.ok(deployScript?.includes('scripts/azure-codex-package.mjs'), 'deployment must prepare the official package through the tested fail-closed helper');
-  assert.ok(deployScript?.includes('validate-worker-runtime-manifest.mjs'), 'worker artifact must retain the tested package-manifest validator used during VM installation');
-  assert.ok(deployScript?.includes("codex_bin_sha=\"$(jq -er '.codexBinSha256'"), 'deployment must read the extracted executable digest from the helper receipt');
+  assert.equal(deployScript?.includes('scripts/azure-codex-package.mjs'), false, 'deployment must not redownload or reprepare Codex after approval');
+  assert.ok(deployScript?.includes('scripts/azure-worker-runtime-package.mjs verify'), 'deployment must verify the exact current-run worker package before any Azure mutation');
+  assert.ok(
+    deployScript.indexOf('scripts/azure-worker-runtime-package.mjs verify') < deployScript.indexOf('az deployment group create'),
+    'worker package verification must occur before the first Azure resource mutation',
+  );
+  assert.ok(deployScript?.includes("codex_bin_sha=\"$(jq -er '.codexBinSha256' \"$worker_receipt\")\""), 'deployment must read the executable digest from the pre-approval worker receipt');
   assert.ok(deployScript?.includes('codexPackageSha256'), 'worker provenance must retain the authenticated package archive digest');
   assert.ok(deployScript?.includes('codexBinSha256="$codex_bin_sha"'), 'Bicep must receive the independently measured executable digest');
   assert.equal(deployScript?.includes('codexBinSha256="$CODEX_PACKAGE_SHA256"'), false, 'package archive SHA must never be reused as the extracted executable SHA');
   assert.equal(deployScript?.includes('CODEX_ARTIFACT_'), false, 'legacy single-executable environment names must be removed');
+  assert.equal(deployScript?.includes('cp -RL'), false, 'deployment must never copy the hosted Node toolcache');
   assert.ok(deployScript?.includes('az storage blob upload'), 'deployment must stage the immutable worker archive in private Azure Blob storage');
   assert.ok(deployScript?.includes('--auth-mode login'), 'artifact staging must use Entra authentication rather than account keys or SAS');
   assert.ok(deployScript?.includes('metadata.sha256'), 'an existing immutable worker blob must be accepted only when its SHA-256 metadata matches');

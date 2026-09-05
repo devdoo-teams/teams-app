@@ -122,7 +122,12 @@ stages:
           - bash: |
               set -euo pipefail
               platform_dir="$(Pipeline.Workspace)/azure-platform-preflight"
+              worker_package_dir="$(Pipeline.Workspace)/azure-worker-runtime-package"
               mkdir -p "$platform_dir" "$(Pipeline.Workspace)/azure-rbac-preflight"
+              [[ "$CODEX_PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]]
+              [[ "$CODEX_PACKAGE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+              expected_codex_package_url="https://github.com/openai/codex/releases/download/rust-v${CODEX_PACKAGE_VERSION}/codex-package-x86_64-unknown-linux-musl.tar.gz"
+              test "$CODEX_PACKAGE_URL" = "$expected_codex_package_url"
               release_receipt="$(Pipeline.Workspace)/validated-github-handoff/dist/evidence/azure-release-receipt.json"
               commit="$(jq -er '.commit' "$release_receipt")"
               git fetch --no-tags origin "$commit" --depth=1
@@ -150,6 +155,39 @@ stages:
               export TEAMS_SOURCE_COMMIT="$commit"
               npm run test:azure-core
               npm run build:worker
+              codex_package_archive="$(Agent.TempDirectory)/codex-package-x86_64-unknown-linux-musl.tar.gz"
+              codex_package_receipt="$(Agent.TempDirectory)/codex-package-receipt.json"
+              codex_runtime="$(Agent.TempDirectory)/codex-runtime"
+              rm -rf "$codex_runtime" "$worker_package_dir"
+              curl --proto '=https' --tlsv1.2 --fail --location --retry 4 --retry-all-errors --connect-timeout 15 --max-time 300 --output "$codex_package_archive" "$CODEX_PACKAGE_URL"
+              node scripts/azure-codex-package.mjs \
+                --archive "$codex_package_archive" \
+                --archive-sha256 "$CODEX_PACKAGE_SHA256" \
+                --expected-version "$CODEX_PACKAGE_VERSION" \
+                --output "$codex_runtime" > "$codex_package_receipt"
+              node scripts/azure-worker-runtime-package.mjs build \
+                --worker-dist dist/worker \
+                --node-bin "$(command -v node)" \
+                --codex-runtime "$codex_runtime" \
+                --codex-receipt "$codex_package_receipt" \
+                --codex-package-sha256 "$CODEX_PACKAGE_SHA256" \
+                --codex-version "$CODEX_PACKAGE_VERSION" \
+                --commit "$commit" \
+                --installer infra/azure/scripts/install-worker-runtime.sh \
+                --validator infra/azure/scripts/validate-worker-runtime-manifest.mjs \
+                --expected-node-version 24.19.0 \
+                --output-dir "$worker_package_dir" > "$(Agent.TempDirectory)/worker-runtime-build-receipt.json"
+              worker_receipt="$worker_package_dir/worker-runtime-receipt.json"
+              worker_archive="$worker_package_dir/worker-runtime-${commit}.tar"
+              node scripts/azure-worker-runtime-package.mjs verify \
+                --archive "$worker_archive" \
+                --receipt "$worker_receipt" \
+                --commit "$commit" \
+                --codex-package-sha256 "$CODEX_PACKAGE_SHA256" \
+                --codex-version "$CODEX_PACKAGE_VERSION" \
+                --expected-node-version 24.19.0 > "$(Agent.TempDirectory)/worker-runtime-verify-receipt.json"
+              worker_archive_sha="$(jq -er '.archiveSha256' "$worker_receipt")"
+              codex_bin_sha="$(jq -er '.codexBinSha256' "$worker_receipt")"
               test "$(git rev-parse HEAD)" = "$commit"
               test -z "$(git status --porcelain=v1 --untracked-files=no)"
               jq -n \
@@ -161,9 +199,17 @@ stages:
                 --arg rubyVersion "$ruby_version" \
                 --arg psychVersion "$psych_version" \
                 --arg pythonVersion "$python_version" \
-                '{schemaVersion:1,kind:"azure-platform-preflight",status:"READY",sourceCommit:$sourceCommit,runnerImage:$runnerImage,nodeVersion:$nodeVersion,bicepVersion:$bicepVersion,tarVersion:$tarVersion,rubyVersion:$rubyVersion,psychVersion:$psychVersion,pythonVersion:$pythonVersion,azureCorePassed:true,workerBuildPassed:true}' \
+                --arg workerRuntimeArchiveSha256 "$worker_archive_sha" \
+                --arg codexPackageVersion "$CODEX_PACKAGE_VERSION" \
+                --arg codexPackageSha256 "$CODEX_PACKAGE_SHA256" \
+                --arg codexBinSha256 "$codex_bin_sha" \
+                '{schemaVersion:1,kind:"azure-platform-preflight",status:"READY",sourceCommit:$sourceCommit,runnerImage:$runnerImage,nodeVersion:$nodeVersion,bicepVersion:$bicepVersion,tarVersion:$tarVersion,rubyVersion:$rubyVersion,psychVersion:$psychVersion,pythonVersion:$pythonVersion,azureCorePassed:true,workerBuildPassed:true,workerRuntimePackaged:true,workerRuntimeArchiveSha256:$workerRuntimeArchiveSha256,codexPackageVersion:$codexPackageVersion,codexPackageSha256:$codexPackageSha256,codexBinSha256:$codexBinSha256}' \
                 > "$platform_dir/azure-platform-preflight-receipt.json"
             displayName: Test exact source with hosted Bicep, GNU tar, Ruby, and Python
+            env:
+              CODEX_PACKAGE_URL: ${{ parameters.codexPackageUrl }}
+              CODEX_PACKAGE_SHA256: ${{ parameters.codexPackageSha256 }}
+              CODEX_PACKAGE_VERSION: ${{ parameters.codexPackageVersion }}
           - task: AzureCLI@2
             displayName: Verify caller-effective Azure RBAC permissions before approval
             inputs:
@@ -193,6 +239,11 @@ stages:
             inputs:
               targetPath: $(Pipeline.Workspace)/azure-platform-preflight
               artifact: azure-platform-preflight-receipt
+          - task: PublishPipelineArtifact@1
+            displayName: Retain immutable pre-approval worker runtime package
+            inputs:
+              targetPath: $(Pipeline.Workspace)/azure-worker-runtime-package
+              artifact: azure-worker-runtime-package
           - task: PublishPipelineArtifact@1
             displayName: Retain pre-approval caller-effective RBAC receipt
             condition: always()
@@ -226,6 +277,8 @@ stages:
                   artifact: azure-platform-preflight-receipt
                 - download: current
                   artifact: azure-rbac-preflight-receipt
+                - download: current
+                  artifact: azure-worker-runtime-package
                 - task: UseNode@1
                   displayName: Install the pinned worker Node runtime
                   inputs:
@@ -248,13 +301,29 @@ stages:
                       provenance="$(Pipeline.Workspace)/validated-github-handoff/github-handoff-provenance.json"
                       platform_receipt="$(Pipeline.Workspace)/azure-platform-preflight-receipt/azure-platform-preflight-receipt.json"
                       rbac_receipt="$(Pipeline.Workspace)/azure-rbac-preflight-receipt/azure-deployment-rbac-receipt.json"
+                      worker_receipt="$(Pipeline.Workspace)/azure-worker-runtime-package/worker-runtime-receipt.json"
                       node scripts/azure-release-input.mjs "$receipt"
                       commit="$(jq -er '.commit' "$receipt")"
+                      worker_archive="$(Pipeline.Workspace)/azure-worker-runtime-package/worker-runtime-${commit}.tar"
+                      node scripts/azure-worker-runtime-package.mjs verify \
+                        --archive "$worker_archive" \
+                        --receipt "$worker_receipt" \
+                        --commit "$commit" \
+                        --codex-package-sha256 "$CODEX_PACKAGE_SHA256" \
+                        --codex-version "$CODEX_PACKAGE_VERSION" \
+                        --expected-node-version 24.19.0 > "$(Agent.TempDirectory)/verified-worker-runtime-receipt.json"
+                      worker_artifact_sha="$(jq -er '.archiveSha256' "$worker_receipt")"
+                      codex_bin_sha="$(jq -er '.codexBinSha256' "$worker_receipt")"
                       test "$(jq -er '.sourceCommit' "$platform_receipt")" = "$commit"
                       test "$(jq -er '.runnerImage' "$platform_receipt")" = "ubuntu-24.04"
                       test "$(jq -er '.status' "$platform_receipt")" = "READY"
                       test "$(jq -er '.azureCorePassed' "$platform_receipt")" = "true"
                       test "$(jq -er '.workerBuildPassed' "$platform_receipt")" = "true"
+                      test "$(jq -er '.workerRuntimePackaged' "$platform_receipt")" = "true"
+                      test "$(jq -er '.workerRuntimeArchiveSha256' "$platform_receipt")" = "$worker_artifact_sha"
+                      test "$(jq -er '.codexPackageVersion' "$platform_receipt")" = "$CODEX_PACKAGE_VERSION"
+                      test "$(jq -er '.codexPackageSha256' "$platform_receipt")" = "$CODEX_PACKAGE_SHA256"
+                      test "$(jq -er '.codexBinSha256' "$platform_receipt")" = "$codex_bin_sha"
                       test "$(jq -er '.status' "$rbac_receipt")" = "READY"
                       test "$(jq -er '.missingActions | length' "$rbac_receipt")" = "0"
                       version="$(jq -er '.version' "$receipt")"
@@ -265,6 +334,19 @@ stages:
                       server_sha="$(jq -er '.serverBundleSha256' "$receipt")"
                       test -n "$GHCR_IMPORT_USERNAME"
                       test -n "$GHCR_IMPORT_TOKEN"
+                      test "$(git rev-parse HEAD)" = "$commit"
+                      test -z "$(git status --porcelain=v1 --untracked-files=no)"
+                      az --version
+                      az bicep version
+                      if command -v bicep >/dev/null 2>&1; then
+                        export BICEP_BIN="$(command -v bicep)"
+                      else
+                        bicep_config_dir="${AZURE_CONFIG_DIR:-$HOME/.azure}"
+                        export BICEP_BIN="${bicep_config_dir}/bin/bicep"
+                      fi
+                      test -x "$BICEP_BIN"
+                      export PATH="$(dirname "$BICEP_BIN"):$PATH"
+                      "$BICEP_BIN" --version
 
                       az deployment group create \
                         --name teamsapp-platform-foundation \
@@ -281,57 +363,6 @@ stages:
                       worker_storage_account="$(jq -er '.workerArtifactStorageAccountName.value' "$(Agent.TempDirectory)/foundation-outputs.json")"
                       worker_artifact_container="$(jq -er '.workerArtifactContainerName.value' "$(Agent.TempDirectory)/foundation-outputs.json")"
                       worker_artifact_base_url="$(jq -er '.workerArtifactContainerUrl.value' "$(Agent.TempDirectory)/foundation-outputs.json")"
-
-                      git fetch --no-tags origin "$commit" --depth=1
-                      git checkout --detach "$commit"
-                      test "$(git rev-parse HEAD)" = "$commit"
-                      test -z "$(git status --porcelain=v1 --untracked-files=no)"
-                      npm ci --ignore-scripts --no-audit --no-fund
-                      az --version
-                      az bicep version
-                      if command -v bicep >/dev/null 2>&1; then
-                        export BICEP_BIN="$(command -v bicep)"
-                      else
-                        bicep_config_dir="${AZURE_CONFIG_DIR:-$HOME/.azure}"
-                        export BICEP_BIN="${bicep_config_dir}/bin/bicep"
-                      fi
-                      test -x "$BICEP_BIN"
-                      export PATH="$(dirname "$BICEP_BIN"):$PATH"
-                      "$BICEP_BIN" --version
-                      npm run build:worker
-
-                      worker_stage="$(Agent.TempDirectory)/worker-runtime"
-                      rm -rf "$worker_stage"
-                      mkdir -p "$worker_stage/dist"
-                      cp -R dist/worker "$worker_stage/dist/worker"
-                      cp infra/azure/scripts/install-worker-runtime.sh "$worker_stage/install-worker-runtime.sh"
-                      cp infra/azure/scripts/validate-worker-runtime-manifest.mjs "$worker_stage/validate-worker-runtime-manifest.mjs"
-                      chmod 0500 "$worker_stage/install-worker-runtime.sh"
-                      chmod 0400 "$worker_stage/validate-worker-runtime-manifest.mjs"
-                      node_root="$(dirname "$(dirname "$(command -v node)")")"
-                      cp -RL "$node_root" "$worker_stage/node"
-                      codex_package_archive="$(Agent.TempDirectory)/codex-package-x86_64-unknown-linux-musl.tar.gz"
-                      codex_package_receipt="$(Agent.TempDirectory)/codex-package-receipt.json"
-                      curl --proto '=https' --tlsv1.2 --fail --location --retry 4 --output "$codex_package_archive" "$CODEX_PACKAGE_URL"
-                      node scripts/azure-codex-package.mjs \
-                        --archive "$codex_package_archive" \
-                        --archive-sha256 "$CODEX_PACKAGE_SHA256" \
-                        --expected-version "$CODEX_PACKAGE_VERSION" \
-                        --output "$worker_stage/codex-runtime" > "$codex_package_receipt"
-                      test "$(jq -er '.archiveSha256' "$codex_package_receipt")" = "$CODEX_PACKAGE_SHA256"
-                      test "$(jq -er '.version' "$codex_package_receipt")" = "$CODEX_PACKAGE_VERSION"
-                      codex_bin_sha="$(jq -er '.codexBinSha256' "$codex_package_receipt")"
-                      [[ "$codex_bin_sha" =~ ^[0-9a-f]{64}$ ]]
-                      jq -cn \
-                        --arg commit "$commit" \
-                        --arg codexPackageVersion "$CODEX_PACKAGE_VERSION" \
-                        --arg codexPackageSha256 "$CODEX_PACKAGE_SHA256" \
-                        --arg codexBinSha256 "$codex_bin_sha" \
-                        '{schemaVersion:2,commit:$commit,codexPackageVersion:$codexPackageVersion,codexPackageSha256:$codexPackageSha256,codexBinSha256:$codexBinSha256}' \
-                        > "$worker_stage/manifest.json"
-                      worker_archive="$(Agent.TempDirectory)/worker-runtime-${commit}.tar"
-                      tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner --format=posix -cf "$worker_archive" -C "$worker_stage" .
-                      worker_artifact_sha="$(sha256sum "$worker_archive" | awk '{print $1}')"
                       worker_blob_name="${commit}/worker-runtime-${commit}.tar"
                       if [[ "$(az storage blob exists --auth-mode login --account-name "$worker_storage_account" --container-name "$worker_artifact_container" --name "$worker_blob_name" --query exists --output tsv)" == true ]]; then
                         existing_sha="$(az storage blob metadata show --auth-mode login --account-name "$worker_storage_account" --container-name "$worker_artifact_container" --name "$worker_blob_name" --query metadata.sha256 --output tsv)"
