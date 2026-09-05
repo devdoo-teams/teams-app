@@ -423,6 +423,11 @@ try {
 
   const compiledWorkerResources = collectResources(compiledWorkerVm);
   const compiledWorkerExtension = findResource(compiledWorkerResources, 'Microsoft.Compute/virtualMachines/extensions');
+  assert.equal(
+    compiledWorkerExtension.properties?.forceUpdateTag,
+    "[substring(parameters('workerArtifactSha256'), 0, 50)]",
+    'worker extension forceUpdateTag must remain digest-derived while respecting the Azure Compute 50-character limit',
+  );
   assert.equal(compiledWorkerVm.parameters?.codexBinSha256?.minLength, 64, 'worker module must require a complete Codex SHA-256 digest');
   assert.equal(compiledWorkerVm.parameters?.codexBinSha256?.maxLength, 64, 'worker module must reject truncated Codex SHA-256 digests');
 

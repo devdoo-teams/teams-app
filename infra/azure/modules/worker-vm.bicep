@@ -245,7 +245,7 @@ resource workerRuntimeExtension 'Microsoft.Compute/virtualMachines/extensions@20
     type: 'CustomScript'
     typeHandlerVersion: '2.1'
     autoUpgradeMinorVersion: true
-    forceUpdateTag: workerArtifactSha256
+    forceUpdateTag: substring(workerArtifactSha256, 0, 50)
     protectedSettings: {
       fileUris: [
         workerArtifactUrl
