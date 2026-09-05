@@ -307,14 +307,39 @@ try {
     appLogsConfiguration?.logAnalyticsConfiguration?.sharedKey,
     'the Log Analytics destination must bind the provisioned workspace shared key',
   );
+  assert.equal(
+    containerEnvironment.properties?.peerAuthentication?.mtls?.enabled,
+    false,
+    'managed-environment peer mTLS must preserve the documented disabled baseline',
+  );
+  assert.equal(
+    containerEnvironment.properties?.peerTrafficConfiguration?.encryption?.enabled,
+    false,
+    'managed-environment peer traffic encryption must preserve the documented disabled baseline',
+  );
+  assert.deepEqual(
+    containerEnvironment.properties?.workloadProfiles,
+    [{ name: 'Consumption', workloadProfileType: 'Consumption' }],
+    'managed environment must explicitly preserve its built-in Consumption workload profile',
+  );
 
   const acr = findResource(resources, 'Microsoft.ContainerRegistry/registries');
   assert.equal(acr.sku?.name, 'Basic', 'canary ACR must preserve the free-first Basic SKU');
+  assert.equal(acr.properties?.encryption?.status, 'disabled', 'Basic ACR must explicitly preserve platform-managed encryption');
   assert.notEqual(acr.properties?.policies?.quarantinePolicy?.status, 'enabled', 'Basic ACR must not quarantine images without a supported release flow');
   assert.notEqual(acr.properties?.policies?.retentionPolicy?.status, 'enabled', 'Basic ACR must not enable the unsupported untagged-manifest retention policy');
 
   const cosmos = findResource(resources, 'Microsoft.DocumentDB/databaseAccounts');
   assert.equal(cosmos.properties?.disableLocalAuth, true, 'Cosmos must reject key-based local authentication and use RBAC only');
+  assert.equal(cosmos.properties?.enableAutomaticFailover, false, 'single-region canary Cosmos must explicitly disable automatic failover');
+  assert.equal(cosmos.properties?.minimalTlsVersion, 'Tls12', 'Cosmos must explicitly require the documented TLS 1.2 baseline');
+  assert.equal(cosmos.properties?.defaultIdentity, 'FirstPartyIdentity', 'Cosmos must explicitly preserve its documented default identity');
+  assert.equal(cosmos.properties?.enableAnalyticalStorage, false, 'Cosmos analytical storage must remain explicitly disabled');
+  assert.equal(
+    cosmos.properties?.analyticalStorageConfiguration?.schemaType,
+    'FullFidelity',
+    'disabled Cosmos analytical storage must preserve the documented schema baseline',
+  );
   assert.ok(
     !(cosmos.properties?.capabilities ?? []).some((capability) => capability.name === 'EnableServerless'),
     'Cosmos canary account must explicitly use provisioned throughput rather than implicit serverless behavior',
@@ -330,6 +355,39 @@ try {
     /"autoscaleMaxThroughput":\{"type":"int","defaultValue":1000/,
     'compiled Cosmos module must bind autoscale max throughput to a 1000 RU/s default',
   );
+  const cosmosContainer = findResource(resources, 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers');
+  assert.deepEqual(
+    cosmosContainer.properties?.resource?.conflictResolutionPolicy,
+    { mode: 'LastWriterWins', conflictResolutionPath: '/_ts' },
+    'Cosmos container must preserve the documented last-writer-wins timestamp baseline',
+  );
+  assert.deepEqual(
+    cosmosContainer.properties?.resource?.indexingPolicy,
+    {
+      automatic: true,
+      indexingMode: 'consistent',
+      includedPaths: [{ path: '/*' }],
+      excludedPaths: [{ path: '/_etag/?' }],
+    },
+    'Cosmos container must explicitly preserve the documented default indexing policy',
+  );
+
+  const applicationInsights = findResource(resources, 'Microsoft.Insights/components');
+  assert.equal(applicationInsights.properties?.Flow_Type, 'Bluefield', 'Application Insights REST flow must be explicit');
+  assert.equal(applicationInsights.properties?.Request_Source, 'rest', 'Application Insights request source must be explicit');
+
+  const blobContainer = findResource(resources, 'Microsoft.Storage/storageAccounts/blobServices/containers');
+  assert.equal(blobContainer.properties?.defaultEncryptionScope, '$account-encryption-key');
+  assert.equal(blobContainer.properties?.denyEncryptionScopeOverride, false);
+  const fileShare = findResource(resources, 'Microsoft.Storage/storageAccounts/fileServices/shares');
+  assert.equal(fileShare.properties?.accessTier, 'TransactionOptimized');
+  for (const serviceType of [
+    'Microsoft.Storage/storageAccounts/blobServices',
+    'Microsoft.Storage/storageAccounts/fileServices',
+    'Microsoft.Storage/storageAccounts/queueServices',
+  ]) {
+    assert.equal(findResource(resources, serviceType), undefined, `${serviceType} must be referenced as an existing default service`);
+  }
 
   const workerVm = findResource(resources, 'Microsoft.Compute/virtualMachines');
   assert.equal(typeof workerVm.properties?.osProfile?.customData, 'string', 'worker VM must attach rendered cloud-init as customData');

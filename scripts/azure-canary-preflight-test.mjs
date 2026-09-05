@@ -93,6 +93,7 @@ const whatIf = summarizeAzureWhatIf({
   changes: [
     { resourceId: `${scope}/providers/Microsoft.Storage/storageAccounts/teamsapp123`, changeType: 'Create' },
     { resourceId: `${scope}/providers/Microsoft.App/managedEnvironments/teamsapp-env-goictvxm`, changeType: 'NoChange' },
+    { resourceId: `${scope}/providers/microsoft.insights/actiongroups/Application Insights Smart Detection`, changeType: 'Ignore' },
     {
       resourceId: `${scope}/providers/Microsoft.Authorization/roleAssignments/${'b'.repeat(32)}`,
       changeType: 'Unsupported',
@@ -104,7 +105,7 @@ const whatIf = summarizeAzureWhatIf({
   ],
 }, { subscriptionId, resourceGroup });
 assert.equal(whatIf.status, 'Succeeded');
-assert.deepEqual(whatIf.changeCounts, { Create: 1, NoChange: 1, Unsupported: 4 });
+assert.deepEqual(whatIf.changeCounts, { Create: 1, NoChange: 1, Ignore: 1, Unsupported: 4 });
 assert.deepEqual(whatIf.unsupportedChanges, [
   {
     resourceId: `${scope}/providers/Microsoft.Authorization/roleAssignments/${'b'.repeat(32)}`,
@@ -150,7 +151,7 @@ for (const unsafeExpression of [
   );
 }
 
-for (const changeType of ['Delete', 'Modify', 'Deploy', 'Ignore']) {
+for (const changeType of ['Delete', 'Modify', 'Deploy']) {
   assert.throws(
     () => summarizeAzureWhatIf({
       status: 'Succeeded',

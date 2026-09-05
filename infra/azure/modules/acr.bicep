@@ -14,6 +14,9 @@ resource registry 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' = 
     adminUserEnabled: false
     anonymousPullEnabled: false
     dataEndpointEnabled: false
+    encryption: {
+      status: 'disabled'
+    }
     networkRuleBypassOptions: 'AzureServices'
     publicNetworkAccess: 'Enabled'
     // Basic has no untagged-manifest retention policy. Quarantine is also

@@ -18,9 +18,16 @@ resource account 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
   kind: 'GlobalDocumentDB'
   properties: {
     databaseAccountOfferType: 'Standard'
+    defaultIdentity: 'FirstPartyIdentity'
+    enableAnalyticalStorage: false
+    analyticalStorageConfiguration: {
+      schemaType: 'FullFidelity'
+    }
+    enableAutomaticFailover: false
     enableFreeTier: enableFreeTier
     disableKeyBasedMetadataWriteAccess: true
     disableLocalAuth: true
+    minimalTlsVersion: 'Tls12'
     publicNetworkAccess: 'Enabled'
     capabilities: []
     consistencyPolicy: {
@@ -57,6 +64,24 @@ resource runtimeContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
   properties: {
     resource: {
       id: containerName
+      conflictResolutionPolicy: {
+        mode: 'LastWriterWins'
+        conflictResolutionPath: '/_ts'
+      }
+      indexingPolicy: {
+        automatic: true
+        indexingMode: 'consistent'
+        includedPaths: [
+          {
+            path: '/*'
+          }
+        ]
+        excludedPaths: [
+          {
+            path: '/_etag/?'
+          }
+        ]
+      }
       partitionKey: {
         paths: [
           '/partitionKey'

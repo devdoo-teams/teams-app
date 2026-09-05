@@ -37,6 +37,7 @@ try {
     status: 'Succeeded',
     changes: [
       { resourceId: `${scope}/providers/Microsoft.Storage/storageAccounts/teamsapp123`, changeType: 'Create' },
+      { resourceId: `${scope}/providers/microsoft.insights/actiongroups/Application Insights Smart Detection`, changeType: 'Ignore' },
       { resourceId: `${scope}/providers/Microsoft.Authorization/roleAssignments/${'b'.repeat(32)}`, changeType: 'Unsupported' },
     ],
   };
@@ -73,6 +74,7 @@ try {
     noPrompt: true,
   });
   assert.equal(receipt.whatIf.manualReviewRequired, true);
+  assert.equal(receipt.whatIf.changeCounts.Ignore, 1);
   assert.deepEqual(verifyAzureWhatIfReceipt(receipt, identity), receipt);
 
   const createResult = spawnSync(process.execPath, [

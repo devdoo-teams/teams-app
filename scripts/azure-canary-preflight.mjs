@@ -330,7 +330,7 @@ export function summarizeAzureWhatIf(payload, { subscriptionId, resourceGroup })
   if (payload.changes.length === 0) fail('what-if returned no resource changes');
 
   const expectedScope = normalized(`/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/`);
-  const allowedChangeTypes = new Set(['Create', 'NoChange', 'Unsupported']);
+  const allowedChangeTypes = new Set(['Create', 'Ignore', 'NoChange', 'Unsupported']);
   const changeCounts = {};
   const unsupportedResources = [];
   const unsupportedChanges = [];

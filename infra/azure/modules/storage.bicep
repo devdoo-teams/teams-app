@@ -69,50 +69,48 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   }
 }
 
-resource queueService 'Microsoft.Storage/storageAccounts/queueServices@2023-05-01' = {
-  name: '${storageAccount.name}/default'
+resource queueService 'Microsoft.Storage/storageAccounts/queueServices@2023-05-01' existing = {
+  parent: storageAccount
+  name: 'default'
 }
 
 resource agentDispatchQueue 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = {
-  name: '${storageAccount.name}/default/agent-dispatch'
-  dependsOn: [
-    queueService
-  ]
+  parent: queueService
+  name: 'agent-dispatch'
 }
 
 resource agentDispatchPoisonQueue 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = {
-  name: '${storageAccount.name}/default/agent-dispatch-poison'
-  dependsOn: [
-    queueService
-  ]
+  parent: queueService
+  name: 'agent-dispatch-poison'
 }
 
-resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
-  name: '${storageAccount.name}/default'
+resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' existing = {
+  parent: storageAccount
+  name: 'default'
 }
 
 resource workerArtifactContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
-  name: '${storageAccount.name}/default/worker-artifacts'
+  parent: blobService
+  name: 'worker-artifacts'
   properties: {
+    defaultEncryptionScope: '$account-encryption-key'
+    denyEncryptionScopeOverride: false
     publicAccess: 'None'
   }
-  dependsOn: [
-    blobService
-  ]
 }
 
-resource fileService 'Microsoft.Storage/storageAccounts/fileServices@2023-05-01' = {
-  name: '${storageAccount.name}/default'
+resource fileService 'Microsoft.Storage/storageAccounts/fileServices@2023-05-01' existing = {
+  parent: storageAccount
+  name: 'default'
 }
 
 resource workerFileShare 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-05-01' = {
-  name: '${storageAccount.name}/default/worker-state'
+  parent: fileService
+  name: 'worker-state'
   properties: {
+    accessTier: 'TransactionOptimized'
     shareQuota: 100
   }
-  dependsOn: [
-    fileService
-  ]
 }
 
 resource appQueueRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {

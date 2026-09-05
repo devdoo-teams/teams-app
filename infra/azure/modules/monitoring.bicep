@@ -23,6 +23,8 @@ resource applicationInsights 'Microsoft.Insights/components@2020-02-02' = {
   kind: 'web'
   properties: {
     Application_Type: 'web'
+    Flow_Type: 'Bluefield'
+    Request_Source: 'rest'
     WorkspaceResourceId: workspace.id
     DisableIpMasking: true
     publicNetworkAccessForIngestion: 'Enabled'
