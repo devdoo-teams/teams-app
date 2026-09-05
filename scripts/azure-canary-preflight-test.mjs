@@ -148,7 +148,7 @@ for (const unsafeExpression of [
   );
 }
 
-for (const changeType of ['Delete', 'Modify']) {
+for (const changeType of ['Delete', 'Modify', 'Deploy', 'Ignore']) {
   assert.throws(
     () => summarizeAzureWhatIf({
       status: 'Succeeded',

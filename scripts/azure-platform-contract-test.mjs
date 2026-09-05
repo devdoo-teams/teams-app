@@ -606,6 +606,14 @@ try {
     step.task === 'AzureCLI@2' && step.inputs?.inlineScript?.includes('scripts/azure-deployment-rbac.mjs')
   ));
   assert.ok(platformRbacStep, 'caller-effective RBAC must be verified before the deployment environment approval');
+  const platformWhatIfScript = platformRbacStep?.inputs?.inlineScript;
+  assert.ok(platformWhatIfScript?.includes('az deployment group what-if'), 'foundation what-if must execute before environment approval');
+  assert.ok(platformWhatIfScript?.includes('--subscription "$AZURE_SUBSCRIPTION_ID"'), 'pre-approval what-if must pin the subscription explicitly');
+  assert.ok(platformWhatIfScript?.includes('--validation-level Provider'), 'pre-approval what-if must use provider validation');
+  assert.ok(platformWhatIfScript?.includes('--result-format ResourceIdOnly'), 'pre-approval what-if must emit bounded resource identities');
+  assert.ok(platformWhatIfScript?.includes('--no-pretty-print'), 'pre-approval what-if must emit machine-readable JSON');
+  assert.ok(platformWhatIfScript?.includes('--no-prompt true'), 'pre-approval what-if must fail instead of prompting for missing parameters');
+  assert.ok(platformWhatIfScript?.includes('scripts/azure-what-if-receipt.mjs create'), 'pre-approval what-if must produce a validated receipt');
   assert.ok(
     platformSteps.some((step) => step.task === 'PublishPipelineArtifact@1'
       && step.inputs?.artifact === 'azure-platform-preflight-receipt'),
@@ -620,6 +628,11 @@ try {
     platformSteps.some((step) => step.task === 'PublishPipelineArtifact@1'
       && step.inputs?.artifact === 'azure-worker-runtime-package'),
     'pipeline must retain the immutable worker runtime package before environment approval',
+  );
+  assert.ok(
+    platformSteps.some((step) => step.task === 'PublishPipelineArtifact@1'
+      && step.inputs?.artifact === 'azure-what-if-preflight-receipt'),
+    'pipeline must retain the exact pre-approval what-if receipt',
   );
 
   const deploySteps = allSteps(deployStage);
@@ -646,6 +659,10 @@ try {
   assert.ok(
     deploySteps.some((step) => step.download === 'current' && step.artifact === 'azure-worker-runtime-package'),
     'deployment must consume the exact current-run worker runtime package',
+  );
+  assert.ok(
+    deploySteps.some((step) => step.download === 'current' && step.artifact === 'azure-what-if-preflight-receipt'),
+    'deployment must consume the exact current-run foundation what-if receipt',
   );
   assert.ok(deployScript?.includes('az deployment group create'), 'deployment must provision with an Azure resource-group deployment');
   assert.ok(deployScript?.includes('--template-file infra/azure/main.bicep'), 'deployment must execute the compiled main.bicep contract');
@@ -683,17 +700,50 @@ try {
     deployScript.indexOf('scripts/azure-worker-runtime-package.mjs verify') < deployScript.indexOf('az deployment group create'),
     'worker package verification must occur before the first Azure resource mutation',
   );
+  assert.ok(deployScript?.includes('scripts/azure-what-if-receipt.mjs verify'), 'deployment must verify the pre-approval what-if receipt');
+  assert.ok(
+    deployScript.indexOf('scripts/azure-what-if-receipt.mjs verify') < deployScript.indexOf('az deployment group create'),
+    'foundation what-if receipt verification must occur before the first Azure resource mutation',
+  );
+  assert.equal(
+    (deployScript?.match(/az deployment group create \\\n/g) ?? []).length,
+    2,
+    'canary deployment must retain exactly the foundation and workload create operations',
+  );
+  assert.ok(
+    /az deployment group create \\\n\s+--name teamsapp-platform-foundation \\\n\s+--subscription "\$AZURE_SUBSCRIPTION_ID"/u.test(deployScript ?? ''),
+    'foundation create must pin the subscription explicitly',
+  );
+  assert.ok(
+    /az deployment group create \\\n\s+--name teamsapp-platform-current \\\n\s+--subscription "\$AZURE_SUBSCRIPTION_ID"/u.test(deployScript ?? ''),
+    'workload create must pin the subscription explicitly',
+  );
+  const firstCreateIndex = deployScript.indexOf('az deployment group create');
+  const workloadWhatIfIndex = deployScript.indexOf('az deployment group what-if', firstCreateIndex + 1);
+  const secondCreateIndex = deployScript.indexOf('az deployment group create', firstCreateIndex + 1);
+  assert.ok(workloadWhatIfIndex > firstCreateIndex, 'exact workload what-if must run after foundation outputs exist');
+  assert.ok(workloadWhatIfIndex < secondCreateIndex, 'exact workload what-if must pass before the workload mutation');
+  assert.ok(deployScript?.includes('--parameters "@${foundation_parameters}"'), 'foundation what-if verification and create must bind one parameter file');
+  assert.ok(deployScript?.includes('--parameters "@${workload_parameters}"'), 'workload what-if and create must bind one parameter file');
+  assert.ok(deployScript?.includes('--validation-level Provider'), 'deployment what-if must retain provider-level validation');
+  assert.ok(deployScript?.includes('--no-pretty-print'), 'deployment what-if must emit machine-readable JSON');
+  assert.ok(deployScript?.includes('--no-prompt true'), 'deployment what-if must not fall back to an interactive prompt');
+  assert.ok(
+    deploySteps.some((step) => step.task === 'PublishPipelineArtifact@1'
+      && step.inputs?.artifact === 'azure-what-if-workload-receipt'),
+    'pipeline must retain the exact workload what-if receipt',
+  );
   assert.ok(deployScript?.includes("codex_bin_sha=\"$(jq -er '.codexBinSha256' \"$worker_receipt\")\""), 'deployment must read the executable digest from the pre-approval worker receipt');
   assert.ok(deployScript?.includes('codexPackageSha256'), 'worker provenance must retain the authenticated package archive digest');
-  assert.ok(deployScript?.includes('codexBinSha256="$codex_bin_sha"'), 'Bicep must receive the independently measured executable digest');
-  assert.equal(deployScript?.includes('codexBinSha256="$CODEX_PACKAGE_SHA256"'), false, 'package archive SHA must never be reused as the extracted executable SHA');
+  assert.ok(deployScript?.includes('--codex-bin-sha256 "$codex_bin_sha"'), 'Bicep parameters must receive the independently measured executable digest');
+  assert.equal(deployScript?.includes('--codex-bin-sha256 "$CODEX_PACKAGE_SHA256"'), false, 'package archive SHA must never be reused as the extracted executable SHA');
   assert.equal(deployScript?.includes('CODEX_ARTIFACT_'), false, 'legacy single-executable environment names must be removed');
   assert.equal(deployScript?.includes('cp -RL'), false, 'deployment must never copy the hosted Node toolcache');
   assert.ok(deployScript?.includes('az storage blob upload'), 'deployment must stage the immutable worker archive in private Azure Blob storage');
   assert.ok(deployScript?.includes('--auth-mode login'), 'artifact staging must use Entra authentication rather than account keys or SAS');
   assert.ok(deployScript?.includes('metadata.sha256'), 'an existing immutable worker blob must be accepted only when its SHA-256 metadata matches');
-  assert.ok(deployScript?.includes('workerArtifactSha256='), 'deployment must bind the worker archive digest into Bicep');
-  assert.ok(deployScript?.includes('codexBinSha256='), 'deployment must bind the measured Codex executable digest into Bicep');
+  assert.ok(deployScript?.includes('--worker-artifact-sha256 "$worker_artifact_sha"'), 'deployment must bind the worker archive digest into Bicep parameters');
+  assert.ok(deployScript?.includes('--codex-bin-sha256 "$codex_bin_sha"'), 'deployment must bind the measured Codex executable digest into Bicep parameters');
   assert.ok(!Object.hasOwn(pipeline.variables ?? {}, 'azureContainerApp'), 'pipeline must not substitute a hard-coded Container App name for Bicep outputs');
   assert.ok(!Object.hasOwn(pipeline.variables ?? {}, 'azureContainerRegistry'), 'pipeline must not substitute a hard-coded ACR name for Bicep outputs');
 

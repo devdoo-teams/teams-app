@@ -211,7 +211,7 @@ stages:
               CODEX_PACKAGE_SHA256: ${{ parameters.codexPackageSha256 }}
               CODEX_PACKAGE_VERSION: ${{ parameters.codexPackageVersion }}
           - task: AzureCLI@2
-            displayName: Verify caller-effective Azure RBAC permissions before approval
+            displayName: Verify caller-effective Azure RBAC and foundation what-if before approval
             inputs:
               azureSubscription: $(azureServiceConnection)
               scriptType: bash
@@ -219,10 +219,14 @@ stages:
               inlineScript: |
                 set -euo pipefail
                 test "$(az account show --query id --output tsv)" = "$AZURE_SUBSCRIPTION_ID"
-                receipt_dir="$(Pipeline.Workspace)/azure-rbac-preflight"
+                test -n "$WORKER_ADMIN_SSH_PUBLIC_KEY"
+                rbac_receipt_dir="$(Pipeline.Workspace)/azure-rbac-preflight"
+                what_if_receipt_dir="$(Pipeline.Workspace)/azure-what-if-preflight"
                 permissions="$(Agent.TempDirectory)/azure-rbac-permissions.json"
-                mkdir -p "$receipt_dir"
-                trap 'rm -f "$permissions"' EXIT
+                foundation_parameters="$(Agent.TempDirectory)/foundation-preflight.parameters.json"
+                foundation_what_if="$(Agent.TempDirectory)/foundation-preflight.what-if.json"
+                mkdir -p "$rbac_receipt_dir" "$what_if_receipt_dir"
+                trap 'rm -f "$permissions" "$foundation_parameters" "$foundation_what_if"' EXIT
                 az rest \
                   --method get \
                   --url "https://management.azure.com/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourcegroups/${AZURE_RESOURCE_GROUP}/providers/Microsoft.Authorization/permissions?api-version=2022-04-01" \
@@ -230,10 +234,64 @@ stages:
                   --output json > "$permissions"
                 node scripts/azure-deployment-rbac.mjs \
                   "$permissions" \
-                  "$receipt_dir/azure-deployment-rbac-receipt.json"
+                  "$rbac_receipt_dir/azure-deployment-rbac-receipt.json"
+
+                release_receipt="$(Pipeline.Workspace)/validated-github-handoff/dist/evidence/azure-release-receipt.json"
+                node scripts/azure-release-input.mjs "$release_receipt"
+                commit="$(jq -er '.commit' "$release_receipt")"
+                version="$(jq -er '.version' "$release_receipt")"
+                source_image="$(jq -er '.image' "$release_receipt")"
+                source_digest="$(jq -er '.imageDigest' "$release_receipt")"
+                test "$(git rev-parse HEAD)" = "$commit"
+                test -z "$(git status --porcelain=v1 --untracked-files=no)"
+                az --version
+                az bicep version
+                if command -v bicep >/dev/null 2>&1; then
+                  export BICEP_BIN="$(command -v bicep)"
+                else
+                  bicep_config_dir="${AZURE_CONFIG_DIR:-$HOME/.azure}"
+                  export BICEP_BIN="${bicep_config_dir}/bin/bicep"
+                fi
+                test -x "$BICEP_BIN"
+                export PATH="$(dirname "$BICEP_BIN"):$PATH"
+                "$BICEP_BIN" --version
+                node scripts/azure-deployment-parameters.mjs \
+                  --phase foundation \
+                  --release-receipt "$release_receipt" \
+                  --workload-name "$AZURE_WORKLOAD_NAME" \
+                  --location "$AZURE_LOCATION" \
+                  --container-image "${source_image}@${source_digest}" \
+                  --worker-admin-ssh-public-key "$WORKER_ADMIN_SSH_PUBLIC_KEY" \
+                  --output "$foundation_parameters"
+                az deployment group what-if \
+                  --name teamsapp-platform-foundation-preflight \
+                  --subscription "$AZURE_SUBSCRIPTION_ID" \
+                  --resource-group "$AZURE_RESOURCE_GROUP" \
+                  --template-file infra/azure/main.bicep \
+                  --parameters "@${foundation_parameters}" \
+                  --mode Incremental \
+                  --result-format ResourceIdOnly \
+                  --no-pretty-print \
+                  --no-prompt true \
+                  --validation-level Provider \
+                  --only-show-errors \
+                  --output json > "$foundation_what_if"
+                node scripts/azure-what-if-receipt.mjs create \
+                  --what-if "$foundation_what_if" \
+                  --phase foundation \
+                  --commit "$commit" \
+                  --version "$version" \
+                  --subscription "$AZURE_SUBSCRIPTION_ID" \
+                  --resource-group "$AZURE_RESOURCE_GROUP" \
+                  --template infra/azure/main.bicep \
+                  --parameters "$foundation_parameters" \
+                  --output "$what_if_receipt_dir/azure-what-if-preflight-receipt.json"
             env:
+              AZURE_LOCATION: $(azureLocation)
               AZURE_RESOURCE_GROUP: $(azureResourceGroup)
               AZURE_SUBSCRIPTION_ID: $(azureSubscriptionId)
+              AZURE_WORKLOAD_NAME: $(azureWorkloadName)
+              WORKER_ADMIN_SSH_PUBLIC_KEY: $(workerAdminSshPublicKey)
           - task: PublishPipelineArtifact@1
             displayName: Retain pre-approval Azure platform receipt
             inputs:
@@ -250,6 +308,11 @@ stages:
             inputs:
               targetPath: $(Pipeline.Workspace)/azure-rbac-preflight
               artifact: azure-rbac-preflight-receipt
+          - task: PublishPipelineArtifact@1
+            displayName: Retain exact pre-approval foundation what-if receipt
+            inputs:
+              targetPath: $(Pipeline.Workspace)/azure-what-if-preflight
+              artifact: azure-what-if-preflight-receipt
 
   - stage: DeployCanary
     displayName: Provision and deploy immutable canary revision
@@ -279,6 +342,8 @@ stages:
                   artifact: azure-rbac-preflight-receipt
                 - download: current
                   artifact: azure-worker-runtime-package
+                - download: current
+                  artifact: azure-what-if-preflight-receipt
                 - task: UseNode@1
                   displayName: Install the pinned worker Node runtime
                   inputs:
@@ -302,6 +367,13 @@ stages:
                       platform_receipt="$(Pipeline.Workspace)/azure-platform-preflight-receipt/azure-platform-preflight-receipt.json"
                       rbac_receipt="$(Pipeline.Workspace)/azure-rbac-preflight-receipt/azure-deployment-rbac-receipt.json"
                       worker_receipt="$(Pipeline.Workspace)/azure-worker-runtime-package/worker-runtime-receipt.json"
+                      foundation_what_if_receipt="$(Pipeline.Workspace)/azure-what-if-preflight-receipt/azure-what-if-preflight-receipt.json"
+                      workload_what_if_receipt_dir="$(Pipeline.Workspace)/azure-what-if-workload"
+                      foundation_parameters="$(Agent.TempDirectory)/foundation.parameters.json"
+                      workload_parameters="$(Agent.TempDirectory)/workload.parameters.json"
+                      workload_what_if="$(Agent.TempDirectory)/workload.what-if.json"
+                      mkdir -p "$workload_what_if_receipt_dir"
+                      trap 'rm -f "$foundation_parameters" "$workload_parameters" "$workload_what_if"' EXIT
                       node scripts/azure-release-input.mjs "$receipt"
                       commit="$(jq -er '.commit' "$receipt")"
                       worker_archive="$(Pipeline.Workspace)/azure-worker-runtime-package/worker-runtime-${commit}.tar"
@@ -329,9 +401,6 @@ stages:
                       version="$(jq -er '.version' "$receipt")"
                       source_image="$(jq -er '.image' "$receipt")"
                       source_digest="$(jq -er '.imageDigest' "$receipt")"
-                      teams_package_sha="$(jq -er '.teamsPackageSha256' "$receipt")"
-                      client_sha="$(jq -er '.clientBundleSha256' "$receipt")"
-                      server_sha="$(jq -er '.serverBundleSha256' "$receipt")"
                       test -n "$GHCR_IMPORT_USERNAME"
                       test -n "$GHCR_IMPORT_TOKEN"
                       test "$(git rev-parse HEAD)" = "$commit"
@@ -348,14 +417,33 @@ stages:
                       export PATH="$(dirname "$BICEP_BIN"):$PATH"
                       "$BICEP_BIN" --version
 
+                      node scripts/azure-deployment-parameters.mjs \
+                        --phase foundation \
+                        --release-receipt "$receipt" \
+                        --workload-name "$AZURE_WORKLOAD_NAME" \
+                        --location "$AZURE_LOCATION" \
+                        --container-image "${source_image}@${source_digest}" \
+                        --worker-admin-ssh-public-key "$WORKER_ADMIN_SSH_PUBLIC_KEY" \
+                        --output "$foundation_parameters"
+                      node scripts/azure-what-if-receipt.mjs verify \
+                        --receipt "$foundation_what_if_receipt" \
+                        --phase foundation \
+                        --commit "$commit" \
+                        --version "$version" \
+                        --subscription "$AZURE_SUBSCRIPTION_ID" \
+                        --resource-group "$AZURE_RESOURCE_GROUP" \
+                        --template infra/azure/main.bicep \
+                        --parameters "$foundation_parameters"
                       az deployment group create \
                         --name teamsapp-platform-foundation \
+                        --subscription "$AZURE_SUBSCRIPTION_ID" \
                         --resource-group "$AZURE_RESOURCE_GROUP" \
                         --template-file infra/azure/main.bicep \
-                        --parameters workloadName="$AZURE_WORKLOAD_NAME" location="$AZURE_LOCATION" enableCosmosFreeTier=true deployContainerApp=false deployWorkerVm=false \
-                        containerImage="${source_image}@${source_digest}" workerAdminSshPublicKey="$WORKER_ADMIN_SSH_PUBLIC_KEY" \
-                        releaseSourceCommit="$commit" releaseVersion="$version" releaseImageDigest="$source_digest" \
-                        releaseTeamsPackageSha256="$teams_package_sha" releaseClientBundleSha256="$client_sha" releaseServerBundleSha256="$server_sha" \
+                        --parameters "@${foundation_parameters}" \
+                        --mode Incremental \
+                        --no-prompt true \
+                        --validation-level Provider \
+                        --only-show-errors \
                         --query properties.outputs --output json > "$(Agent.TempDirectory)/foundation-outputs.json"
                       node scripts/azure-deployment-contract.mjs outputs "$(Agent.TempDirectory)/foundation-outputs.json" foundation > "$(Agent.TempDirectory)/foundation.json"
                       registry_name="$(jq -er '.registryName' "$(Agent.TempDirectory)/foundation.json")"
@@ -364,6 +452,45 @@ stages:
                       worker_artifact_container="$(jq -er '.workerArtifactContainerName.value' "$(Agent.TempDirectory)/foundation-outputs.json")"
                       worker_artifact_base_url="$(jq -er '.workerArtifactContainerUrl.value' "$(Agent.TempDirectory)/foundation-outputs.json")"
                       worker_blob_name="${commit}/worker-runtime-${commit}.tar"
+                      worker_artifact_url="${worker_artifact_base_url}/${worker_blob_name}"
+                      image_tag="${commit:0:12}"
+                      deployed_image="${registry_server}/teamsapp@${source_digest}"
+
+                      node scripts/azure-deployment-parameters.mjs \
+                        --phase workload \
+                        --release-receipt "$receipt" \
+                        --workload-name "$AZURE_WORKLOAD_NAME" \
+                        --location "$AZURE_LOCATION" \
+                        --container-image "$deployed_image" \
+                        --worker-admin-ssh-public-key "$WORKER_ADMIN_SSH_PUBLIC_KEY" \
+                        --worker-artifact-url "$worker_artifact_url" \
+                        --worker-artifact-sha256 "$worker_artifact_sha" \
+                        --codex-bin-sha256 "$codex_bin_sha" \
+                        --output "$workload_parameters"
+                      az deployment group what-if \
+                        --name teamsapp-platform-current-preflight \
+                        --subscription "$AZURE_SUBSCRIPTION_ID" \
+                        --resource-group "$AZURE_RESOURCE_GROUP" \
+                        --template-file infra/azure/main.bicep \
+                        --parameters "@${workload_parameters}" \
+                        --mode Incremental \
+                        --result-format ResourceIdOnly \
+                        --no-pretty-print \
+                        --no-prompt true \
+                        --validation-level Provider \
+                        --only-show-errors \
+                        --output json > "$workload_what_if"
+                      node scripts/azure-what-if-receipt.mjs create \
+                        --what-if "$workload_what_if" \
+                        --phase workload \
+                        --commit "$commit" \
+                        --version "$version" \
+                        --subscription "$AZURE_SUBSCRIPTION_ID" \
+                        --resource-group "$AZURE_RESOURCE_GROUP" \
+                        --template infra/azure/main.bicep \
+                        --parameters "$workload_parameters" \
+                        --output "$workload_what_if_receipt_dir/azure-what-if-workload-receipt.json"
+
                       if [[ "$(az storage blob exists --auth-mode login --account-name "$worker_storage_account" --container-name "$worker_artifact_container" --name "$worker_blob_name" --query exists --output tsv)" == true ]]; then
                         existing_sha="$(az storage blob metadata show --auth-mode login --account-name "$worker_storage_account" --container-name "$worker_artifact_container" --name "$worker_blob_name" --query metadata.sha256 --output tsv)"
                         test "$existing_sha" = "$worker_artifact_sha"
@@ -378,23 +505,21 @@ stages:
                           --overwrite false \
                           --output none
                       fi
-                      worker_artifact_url="${worker_artifact_base_url}/${worker_blob_name}"
-
-                      image_tag="${commit:0:12}"
                       az acr import --name "$registry_name" --source "${source_image}@${source_digest}" --image "teamsapp:${image_tag}" --username "$GHCR_IMPORT_USERNAME" --password "$GHCR_IMPORT_TOKEN" --force
                       imported_digest="$(az acr repository show --name "$registry_name" --image "teamsapp:${image_tag}" --query digest --output tsv)"
                       test "$imported_digest" = "$source_digest"
-                      deployed_image="${registry_server}/teamsapp@${imported_digest}"
+                      test "$deployed_image" = "${registry_server}/teamsapp@${imported_digest}"
 
                       az deployment group create \
                         --name teamsapp-platform-current \
+                        --subscription "$AZURE_SUBSCRIPTION_ID" \
                         --resource-group "$AZURE_RESOURCE_GROUP" \
                         --template-file infra/azure/main.bicep \
-                        --parameters workloadName="$AZURE_WORKLOAD_NAME" location="$AZURE_LOCATION" enableCosmosFreeTier=true deployContainerApp=true deployWorkerVm=true \
-                        containerImage="$deployed_image" workerAdminSshPublicKey="$WORKER_ADMIN_SSH_PUBLIC_KEY" \
-                        workerArtifactUrl="$worker_artifact_url" workerArtifactSha256="$worker_artifact_sha" codexBinSha256="$codex_bin_sha" \
-                        releaseSourceCommit="$commit" releaseVersion="$version" releaseImageDigest="$source_digest" \
-                        releaseTeamsPackageSha256="$teams_package_sha" releaseClientBundleSha256="$client_sha" releaseServerBundleSha256="$server_sha" \
+                        --parameters "@${workload_parameters}" \
+                        --mode Incremental \
+                        --no-prompt true \
+                        --validation-level Provider \
+                        --only-show-errors \
                         --query properties.outputs --output json > "$(Agent.TempDirectory)/deployment-outputs.json"
                       node scripts/azure-deployment-contract.mjs outputs "$(Agent.TempDirectory)/deployment-outputs.json" > "$(Agent.TempDirectory)/deployment.json"
                       test "$(jq -er '.registryName' "$(Agent.TempDirectory)/deployment.json")" = "$registry_name"
@@ -416,6 +541,11 @@ stages:
                     CODEX_PACKAGE_URL: ${{ parameters.codexPackageUrl }}
                     CODEX_PACKAGE_SHA256: ${{ parameters.codexPackageSha256 }}
                     CODEX_PACKAGE_VERSION: ${{ parameters.codexPackageVersion }}
+                - task: PublishPipelineArtifact@1
+                  displayName: Retain exact workload what-if receipt
+                  inputs:
+                    targetPath: $(Pipeline.Workspace)/azure-what-if-workload
+                    artifact: azure-what-if-workload-receipt
 
   - stage: RollbackCanary
     displayName: Roll back the current traffic-serving revision
