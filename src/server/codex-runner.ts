@@ -68,6 +68,10 @@ const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_STDOUT_BUFFER_CHARS = 64 * 1024;
 const MAX_STDERR_CHARS = 8 * 1024;
 const MAX_EVENT_COUNT = 10_000;
+// The updated CLI has been observed to emit one recoverable optional-provider
+// diagnostic after thread.started and before turn.started. Keep the exception
+// exactly as narrow as that evidence; every other error position remains fatal.
+const MAX_RECOVERABLE_PRE_TURN_ERROR_ITEMS = 1;
 const CODEX_THREAD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const CODEX_CHILD_ENV_ALLOWLIST = [
@@ -299,6 +303,7 @@ export class CodexRunner {
     let protocolState: ProtocolState = 'thread';
     let agentMessageCount = 0;
     const currentProtocolState = (): ProtocolState => protocolState;
+    let recoverablePreTurnErrorItemCount = 0;
     let timeoutHandle: NodeJS.Timeout | undefined;
     let resolveTermination!: (error: Error) => void;
     const terminationPromise = new Promise<Error>((resolve) => { resolveTermination = resolve; });
@@ -334,9 +339,27 @@ export class CodexRunner {
         protocolFailure('Codex emitted an event after turn.completed.');
         return;
       }
-      if (isFailureType(type) || (type === 'item.completed' && event.item?.type === 'error')) {
+      if (isFailureType(type)) {
         const detail = redactCliDiagnostics(
           errorPayload(event.error) || errorPayload(event.item?.message),
+          { paths: [options.workspace, process.env.HOME, process.env.USERPROFILE] },
+        );
+        protocolFailure(detail ? `Codex reported a terminal failure: ${detail}` : 'Codex reported a terminal failure.');
+        return;
+      }
+      if (type === 'item.completed' && event.item?.type === 'error') {
+        const diagnostic = errorPayload(event.item.message);
+        const isBoundedPreTurnDiagnostic = protocolState === 'turn'
+          && !errorPayload(event.error)
+          && diagnostic.length > 0
+          && diagnostic.length <= MAX_STDERR_CHARS
+          && recoverablePreTurnErrorItemCount < MAX_RECOVERABLE_PRE_TURN_ERROR_ITEMS;
+        if (isBoundedPreTurnDiagnostic) {
+          recoverablePreTurnErrorItemCount += 1;
+          return;
+        }
+        const detail = redactCliDiagnostics(
+          errorPayload(event.error) || diagnostic,
           { paths: [options.workspace, process.env.HOME, process.env.USERPROFILE] },
         );
         protocolFailure(detail ? `Codex reported a terminal failure: ${detail}` : 'Codex reported a terminal failure.');

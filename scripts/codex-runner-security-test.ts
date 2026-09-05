@@ -46,11 +46,17 @@ const provider = new TestIsolationProvider();
 const fakeSource = `
 const caseName = process.argv.at(-1)?.match(/CASE:([a-z0-9-]+)/i)?.[1] ?? 'success';
 const threadId = ${JSON.stringify(threadId)};
+const thread = () => console.log(JSON.stringify({ type: 'thread.started', thread_id: threadId }));
 const prefix = () => {
-  console.log(JSON.stringify({ type: 'thread.started', thread_id: threadId }));
+  thread();
   console.log(JSON.stringify({ type: 'turn.started' }));
 };
 const message = (text) => console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text } }));
+const errorItem = (message, extra = {}) => console.log(JSON.stringify({
+  type: 'item.completed',
+  item: { type: 'error', message },
+  ...extra,
+}));
 const completed = () => console.log(JSON.stringify({ type: 'turn.completed' }));
 if (caseName === 'malformed') {
   process.stdout.write('not-json\\n');
@@ -81,6 +87,26 @@ if (caseName === 'malformed') {
   await new Promise(() => setInterval(() => {}, 1_000));
 } else if (caseName === 'secret-result') {
   prefix(); message('access_token=codex-runner-secret-fixture'); completed();
+} else if (caseName === 'pre-thread-item-error') {
+  errorItem('must not precede thread.started');
+} else if (caseName === 'active-turn-item-error') {
+  prefix();
+  errorItem('must not be tolerated inside an active turn');
+} else if (caseName === 'pre-turn-top-level-error') {
+  thread();
+  errorItem('must not hide a terminal top-level error', { error: { message: 'terminal' } });
+} else if (caseName === 'excessive-pre-turn-errors') {
+  thread();
+  for (let index = 0; index < 2; index += 1) errorItem('bounded optional-provider diagnostic ' + index);
+} else if (caseName === 'recoverable-pre-turn-error') {
+  thread();
+  errorItem('optional MCP bootstrap failed; Codex continued without it');
+  console.log(JSON.stringify({ type: 'turn.started' }));
+  message('RECOVERED_AFTER_OPTIONAL_MCP_ERROR');
+  console.log(JSON.stringify({
+    type: 'turn.completed',
+    usage: { input_tokens: 12, cached_input_tokens: 3, output_tokens: 4, reasoning_output_tokens: 1 },
+  }));
 } else {
   prefix(); message('SECURITY_FAKE_OK'); completed();
 }
@@ -240,6 +266,10 @@ const negativeCases: Array<[string, RegExp, number?]> = [
   ['nonzero', /exited|code|signal|protocol/i],
   ['signal', /signal|protocol|terminated/i],
   ['timeout', /시간 제한|timeout/i, 100],
+  ['pre-thread-item-error', /terminal|failure|protocol/i],
+  ['active-turn-item-error', /terminal|failure|protocol/i],
+  ['pre-turn-top-level-error', /terminal|failure|protocol/i],
+  ['excessive-pre-turn-errors', /terminal|failure|protocol/i],
 ];
 
 let attachmentChild: ReturnType<typeof spawnChild> | undefined;
@@ -259,6 +289,20 @@ try {
   const redactedResult = await runCase('secret-result');
   assert.equal(redactedResult.finalMessage.includes('codex-runner-secret-fixture'), false, 'credential-shaped success output must not enter durable result sinks');
   assert.match(redactedResult.finalMessage, /REDACTED/u);
+
+  const recoveredEvents: string[] = [];
+  const recovered = await runCase('recoverable-pre-turn-error', (event) => {
+    recoveredEvents.push(`${event.type}:${event.item?.type ?? ''}`);
+  });
+  assert.equal(recovered.finalMessage, 'RECOVERED_AFTER_OPTIONAL_MCP_ERROR');
+  assert.equal(recovered.eventCount, 5);
+  assert.deepEqual(recoveredEvents, [
+    'thread.started:',
+    'item.completed:error',
+    'turn.started:',
+    'item.completed:agent_message',
+    'turn.completed:',
+  ], 'a bounded pre-turn optional-provider diagnostic remains observable without replacing the terminal result');
 
   for (const [caseName, expected, timeoutMs] of negativeCases) {
     await assert.rejects(() => runCase(caseName, undefined, timeoutMs), expected, `${caseName} must be rejected`);
