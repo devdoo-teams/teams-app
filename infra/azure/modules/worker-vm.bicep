@@ -21,6 +21,7 @@ param codexBinSha256 string
 param releaseSourceCommit string
 
 var renderedCloudInit = loadTextContent('../cloud-init/codex-worker.yml')
+var workerPrerequisiteRecovery = loadTextContent('../scripts/recover-worker-prerequisites.py')
 
 // This script is part of the trusted ARM template. It must authenticate the
 // downloaded bytes before reading or executing any archive-provided program.
@@ -256,7 +257,7 @@ resource workerRuntimeExtension 'Microsoft.Compute/virtualMachines/extensions@20
       managedIdentity: {
         clientId: workerIdentityClientId
       }
-      commandToExecute: 'cloud-init status --wait && bash -o pipefail -c "printf %s ${base64(workerArchiveBootstrapScript)} | base64 --decode | bash -s -- ${base64(releaseSourceCommit)} ${base64(workerArtifactSha256)} ${base64(codexBinSha256)} ${base64(workerIdentityClientId)} ${base64(agentDispatchQueueEndpoint)} ${base64(agentDispatchPoisonQueueEndpoint)} ${base64(cosmosEndpoint)} ${base64(cosmosDatabase)} ${base64(cosmosContainer)} ${base64('/var/lib/teamsapp/bootstrap')}"'
+      commandToExecute: 'if cloud-init status --wait; then :; else bash -o pipefail -c "printf %s ${base64(workerPrerequisiteRecovery)} | base64 --decode | python3 - ${base64(renderedCloudInit)}" || exit 1; fi; bash -o pipefail -c "printf %s ${base64(workerArchiveBootstrapScript)} | base64 --decode | bash -s -- ${base64(releaseSourceCommit)} ${base64(workerArtifactSha256)} ${base64(codexBinSha256)} ${base64(workerIdentityClientId)} ${base64(agentDispatchQueueEndpoint)} ${base64(agentDispatchPoisonQueueEndpoint)} ${base64(cosmosEndpoint)} ${base64(cosmosDatabase)} ${base64(cosmosContainer)} ${base64('/var/lib/teamsapp/bootstrap')}"'
     }
   }
 }

@@ -13,6 +13,12 @@ const pipelinePath = path.join(root, 'azure-pipelines.yml');
 const workerVmBicepSource = fs.readFileSync(workerVmBicepPath, 'utf8');
 const rubyYamlSafeLoadProgram = 'puts JSON.generate(YAML.safe_load(File.read(ARGV[0]), permitted_classes: [], permitted_symbols: [], aliases: true))';
 
+const prerequisiteRecoveryTest = spawnSync('python3', ['scripts/azure-worker-prerequisites-test.py'], {
+  cwd: root, encoding: 'utf8', timeout: 20_000,
+});
+assert.equal(prerequisiteRecoveryTest.status, 0,
+  `worker prerequisite recovery regression suite failed: ${prerequisiteRecoveryTest.stderr}`);
+
 function resolveBicep() {
   const configured = process.env.BICEP_BIN?.trim();
   if (configured) {
@@ -201,7 +207,7 @@ function renderCompiledCommand(template, expression, parameters) {
   });
 }
 
-function runCompiledWorkerExtension(template, extension, fixture, { commit, digest }) {
+function runCompiledWorkerExtension(template, extension, fixture, { commit, digest, cloudInitExit = 0, cloudInitOutput = '' }) {
   const bootstrapRoot = path.join(fixture, 'private-bootstrap');
   const commandToExecute = String(extension?.properties?.protectedSettings?.commandToExecute ?? '');
   const parameters = {
@@ -225,7 +231,10 @@ function runCompiledWorkerExtension(template, extension, fixture, { commit, dige
   }
   const commandBin = path.join(fixture, 'command-bin');
   fs.mkdirSync(commandBin, { recursive: true });
-  fs.writeFileSync(path.join(commandBin, 'cloud-init'), '#!/usr/bin/env bash\nexit 0\n', { mode: 0o500 });
+  fs.writeFileSync(path.join(commandBin, 'cloud-init'), `#!/usr/bin/env bash
+printf '%s\\n' "$MP307_CLOUD_INIT_OUTPUT"
+exit "$MP307_CLOUD_INIT_EXIT"
+`, { mode: 0o500 });
   const logs = {
     sentinel: path.join(fixture, 'installer-executed'),
     installerPath: path.join(fixture, 'installer-path'),
@@ -249,6 +258,8 @@ function runCompiledWorkerExtension(template, extension, fixture, { commit, dige
         ...process.env,
         PATH: `${commandBin}${path.delimiter}${process.env.PATH ?? ''}`,
         TMPDIR: fixture,
+        MP307_CLOUD_INIT_EXIT: String(cloudInitExit),
+        MP307_CLOUD_INIT_OUTPUT: cloudInitOutput,
         MP279_SENTINEL: logs.sentinel,
         MP279_INSTALLER_PATH_LOG: logs.installerPath,
         MP279_TMPDIR_LOG: logs.tmpdir,
@@ -431,6 +442,22 @@ try {
 
   const compiledWorkerResources = collectResources(compiledWorkerVm);
   const compiledWorkerExtension = findResource(compiledWorkerResources, 'Microsoft.Compute/virtualMachines/extensions');
+  // MP-307: execute the real compiled wrapper against the existing-VM failure,
+  // not the old fixture that made every cloud-init invocation succeed.
+  const failedInitFixture = fs.mkdtempSync(path.join(outputDirectory, 'failed-init-'));
+  const failedInitArchive = createWorkerBootstrapArchive(failedInitFixture);
+  const failedInit = runCompiledWorkerExtension(compiledWorkerVm, compiledWorkerExtension, failedInitFixture, {
+    ...failedInitArchive,
+    cloudInitExit: 1,
+    cloudInitOutput: 'status: error',
+  });
+  assert.notEqual(failedInit.result.status, 0, 'unrecovered cloud-init failure must block runtime installation');
+  assert.equal(fs.existsSync(failedInit.logs.sentinel), false, 'runtime installer must not execute before prerequisite recovery');
+  assert.match(
+    failedInit.result.stderr,
+    /WORKER_PREREQUISITES_BLOCKED/,
+    'cloud-init failure must identify the prerequisite boundary instead of returning an unexplained status:error',
+  );
   assert.equal(
     compiledWorkerExtension.properties?.forceUpdateTag,
     "[substring(parameters('workerArtifactSha256'), 0, 50)]",
