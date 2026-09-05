@@ -340,6 +340,13 @@ const providerNoiseRules = Object.freeze([
     propertyChanges: Object.freeze([]),
   }),
   Object.freeze({
+    rule: 'foundation-omitted-worker-runtime-extension',
+    phase: 'foundation',
+    changeType: 'Ignore',
+    resource: /^providers\/microsoft\.compute\/virtualmachines\/teamsapp-worker-[a-z0-9]{8}\/extensions\/teamsapp-worker-runtime$/u,
+    propertyChanges: Object.freeze([]),
+  }),
+  Object.freeze({
     rule: 'foundation-omitted-worker-nic',
     phase: 'foundation',
     changeType: 'Ignore',

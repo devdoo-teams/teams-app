@@ -107,6 +107,9 @@ try {
     resourceId: `${scope}/providers/Microsoft.Compute/virtualMachines/teamsapp-worker-goictvxm`,
     changeType: 'Ignore',
   }, {
+    resourceId: `${scope}/providers/Microsoft.Compute/virtualMachines/teamsapp-worker-goictvxm/extensions/teamsapp-worker-runtime`,
+    changeType: 'Ignore',
+  }, {
     resourceId: `${scope}/providers/Microsoft.Network/networkInterfaces/teamsapp-worker-goictvxm-nic`,
     changeType: 'Ignore',
   }, {
@@ -120,13 +123,14 @@ try {
   });
   assert.equal(foundationOmittedWorkloadReceipt.status, 'READY');
   assert.deepEqual(foundationOmittedWorkloadReceipt.whatIf.approvedPlannedChanges, []);
-  assert.equal(foundationOmittedWorkloadReceipt.whatIf.changeCounts.Ignore, 5);
+  assert.equal(foundationOmittedWorkloadReceipt.whatIf.changeCounts.Ignore, 6);
   assert.deepEqual(
     foundationOmittedWorkloadReceipt.whatIf.approvedProviderNoise.map(({ rule }) => rule),
     [
       'foundation-omitted-container-app',
       'foundation-omitted-worker-os-disk',
       'foundation-omitted-worker-vm',
+      'foundation-omitted-worker-runtime-extension',
       'foundation-omitted-worker-nic',
       'foundation-omitted-worker-vnet',
     ],
@@ -152,6 +156,13 @@ try {
   }, {
     resourceId: `${scope}/providers/Microsoft.Compute/virtualMachines/not-teamsapp-worker-goictvxm`,
     changeType: 'Ignore',
+  }, {
+    resourceId: `${scope}/providers/Microsoft.Compute/virtualMachines/teamsapp-worker-goictvxm/extensions/not-teamsapp-worker-runtime`,
+    changeType: 'Ignore',
+  }, {
+    resourceId: `${scope}/providers/Microsoft.Compute/virtualMachines/teamsapp-worker-goictvxm/extensions/teamsapp-worker-runtime`,
+    changeType: 'Ignore',
+    delta: [{ path: 'properties.forceUpdateTag', propertyChangeType: 'Modify' }],
   }, {
     resourceId: `${scope}/providers/Microsoft.Network/publicIPAddresses/teamsapp-worker-goictvxm`,
     changeType: 'Ignore',
