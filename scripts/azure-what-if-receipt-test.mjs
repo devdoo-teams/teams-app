@@ -96,6 +96,78 @@ try {
     Unsupported: 1,
   });
 
+  const foundationOmittedWorkloadChanges = [{
+    resourceId: `${scope}/providers/Microsoft.App/containerApps/teamsapp-canary-goictvxm`,
+    changeType: 'Ignore',
+  }, {
+    resourceId: `${scope}/providers/Microsoft.Compute/disks/teamsapp-worker-goictvxm_disk1_090d8836195044e8ac578c4b64d5b0c6`,
+    changeType: 'Ignore',
+  }, {
+    resourceId: `${scope}/providers/Microsoft.Compute/virtualMachines/teamsapp-worker-goictvxm`,
+    changeType: 'Ignore',
+  }, {
+    resourceId: `${scope}/providers/Microsoft.Network/networkInterfaces/teamsapp-worker-goictvxm-nic`,
+    changeType: 'Ignore',
+  }, {
+    resourceId: `${scope}/providers/Microsoft.Network/virtualNetworks/teamsapp-worker-goictvxm-network`,
+    changeType: 'Ignore',
+  }];
+  const foundationOmittedWorkloadReceipt = createAzureWhatIfReceipt({
+    ...identity,
+    whatIf: { status: 'Succeeded', changes: foundationOmittedWorkloadChanges },
+    checkedAt: '2026-09-05T12:01:00.000Z',
+  });
+  assert.equal(foundationOmittedWorkloadReceipt.status, 'READY');
+  assert.equal(foundationOmittedWorkloadReceipt.whatIf.changeCounts.Ignore, 5);
+  assert.deepEqual(
+    foundationOmittedWorkloadReceipt.whatIf.approvedProviderNoise.map(({ rule }) => rule),
+    [
+      'foundation-omitted-container-app',
+      'foundation-omitted-worker-os-disk',
+      'foundation-omitted-worker-vm',
+      'foundation-omitted-worker-nic',
+      'foundation-omitted-worker-vnet',
+    ],
+  );
+  const foundationOmittedWorkloadDiagnostic = createAzureWhatIfDiagnostic({
+    ...identity,
+    whatIf: { status: 'Succeeded', changes: foundationOmittedWorkloadChanges },
+    checkedAt: '2026-09-05T12:01:30.000Z',
+  });
+  assert.equal(foundationOmittedWorkloadDiagnostic.status, 'OBSERVED');
+  assert.throws(
+    () => createAzureWhatIfReceipt({
+      ...identity,
+      phase: 'workload',
+      whatIf: { status: 'Succeeded', changes: foundationOmittedWorkloadChanges },
+    }),
+    /Ignore/i,
+    'workload what-if must not accept resources omitted only by the foundation phase',
+  );
+  for (const unsafeFoundationIgnore of [{
+    resourceId: `${scope}/providers/Microsoft.App/containerApps/teamsapp-production-goictvxm`,
+    changeType: 'Ignore',
+  }, {
+    resourceId: `${scope}/providers/Microsoft.Compute/virtualMachines/not-teamsapp-worker-goictvxm`,
+    changeType: 'Ignore',
+  }, {
+    resourceId: `${scope}/providers/Microsoft.Network/publicIPAddresses/teamsapp-worker-goictvxm`,
+    changeType: 'Ignore',
+  }, {
+    resourceId: `${scope}/providers/Microsoft.Network/virtualNetworks/teamsapp-worker-goictvxm-network`,
+    changeType: 'Ignore',
+    delta: [{ path: 'properties.addressSpace', propertyChangeType: 'Modify' }],
+  }]) {
+    assert.throws(
+      () => createAzureWhatIfReceipt({
+        ...identity,
+        whatIf: { status: 'Succeeded', changes: [unsafeFoundationIgnore] },
+      }),
+      /Ignore|allowlist|namespace/i,
+      'foundation Ignore classification must remain exact and property-change free',
+    );
+  }
+
   const createResult = spawnSync(process.execPath, [
     path.join(import.meta.dirname, 'azure-what-if-receipt.mjs'),
     'create',

@@ -121,7 +121,7 @@ function validateDiagnosticPropertyPath(value) {
   if (containsForbiddenControl) fail('diagnostic property path contains a forbidden control character');
 }
 
-function validateWhatIfSummary(summary, target) {
+function validateWhatIfSummary(summary, target, phase) {
   assertExactKeys(summary, [
     'status',
     'changeCounts',
@@ -173,7 +173,7 @@ function validateWhatIfSummary(summary, target) {
         fail('approved provider-noise property change type is invalid');
       }
     }
-    const classified = classifyAzureWhatIfProviderNoise(entry, target);
+    const classified = classifyAzureWhatIfProviderNoise(entry, { ...target, phase });
     if (!classified || classified.rule !== entry.rule || JSON.stringify(classified) !== JSON.stringify(entry)) {
       fail(`approved provider noise is invalid for ${String(entry.resourceId ?? '<missing>')}`);
     }
@@ -229,7 +229,7 @@ function validateReceiptShape(receipt) {
     || receipt.contract.noPrompt !== true) {
     fail('what-if CLI contract is invalid');
   }
-  validateWhatIfSummary(receipt.whatIf, receipt.target);
+  validateWhatIfSummary(receipt.whatIf, receipt.target, receipt.phase);
   const expectedStatus = receipt.whatIf.manualReviewRequired ? 'REVIEW_REQUIRED' : 'READY';
   if (receipt.status !== expectedStatus) fail('receipt status is inconsistent with the what-if result');
   validateCheckedAt(receipt.checkedAt);
@@ -318,7 +318,7 @@ function validateDiagnosticShape(diagnostic) {
   }
   const blocked = diagnostic.whatIf.changes.some((change) => (
     !BASE_ALLOWED_CHANGE_TYPES.has(change.changeType)
-    && !classifyAzureWhatIfProviderNoise(change, diagnostic.target)
+    && !classifyAzureWhatIfProviderNoise(change, { ...diagnostic.target, phase: diagnostic.phase })
   ));
   if (diagnostic.status !== (blocked ? 'BLOCKED' : 'OBSERVED')) fail('diagnostic status is inconsistent');
   validateCheckedAt(diagnostic.checkedAt);
@@ -350,7 +350,7 @@ export function createAzureWhatIfDiagnostic({
   const whatIfDiagnostic = diagnoseAzureWhatIf(whatIf, { subscriptionId, resourceGroup });
   const blocked = whatIfDiagnostic.changes.some((change) => (
     !BASE_ALLOWED_CHANGE_TYPES.has(change.changeType)
-    && !classifyAzureWhatIfProviderNoise(change, { subscriptionId, resourceGroup })
+    && !classifyAzureWhatIfProviderNoise(change, { subscriptionId, resourceGroup, phase })
   ));
   return validateDiagnosticShape({
     schemaVersion: 1,
@@ -396,7 +396,7 @@ export function createAzureWhatIfReceipt({
   };
   validateIdentity(identity);
   validateCheckedAt(checkedAt);
-  const summary = summarizeAzureWhatIf(whatIf, { subscriptionId, resourceGroup });
+  const summary = summarizeAzureWhatIf(whatIf, { subscriptionId, resourceGroup, phase });
   return validateReceiptShape({
     schemaVersion: 2,
     kind: 'azure-deployment-what-if',

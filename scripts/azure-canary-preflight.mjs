@@ -318,6 +318,41 @@ const providerNoiseRules = Object.freeze([
     resource: /^providers\/microsoft\.insights\/actiongroups\/application insights smart detection$/u,
     propertyChanges: Object.freeze([]),
   }),
+  Object.freeze({
+    rule: 'foundation-omitted-container-app',
+    phase: 'foundation',
+    changeType: 'Ignore',
+    resource: /^providers\/microsoft\.app\/containerapps\/teamsapp-canary-[a-z0-9]{8}$/u,
+    propertyChanges: Object.freeze([]),
+  }),
+  Object.freeze({
+    rule: 'foundation-omitted-worker-os-disk',
+    phase: 'foundation',
+    changeType: 'Ignore',
+    resource: /^providers\/microsoft\.compute\/disks\/teamsapp-worker-[a-z0-9]{8}_disk1_[0-9a-f]{32}$/u,
+    propertyChanges: Object.freeze([]),
+  }),
+  Object.freeze({
+    rule: 'foundation-omitted-worker-vm',
+    phase: 'foundation',
+    changeType: 'Ignore',
+    resource: /^providers\/microsoft\.compute\/virtualmachines\/teamsapp-worker-[a-z0-9]{8}$/u,
+    propertyChanges: Object.freeze([]),
+  }),
+  Object.freeze({
+    rule: 'foundation-omitted-worker-nic',
+    phase: 'foundation',
+    changeType: 'Ignore',
+    resource: /^providers\/microsoft\.network\/networkinterfaces\/teamsapp-worker-[a-z0-9]{8}-nic$/u,
+    propertyChanges: Object.freeze([]),
+  }),
+  Object.freeze({
+    rule: 'foundation-omitted-worker-vnet',
+    phase: 'foundation',
+    changeType: 'Ignore',
+    resource: /^providers\/microsoft\.network\/virtualnetworks\/teamsapp-worker-[a-z0-9]{8}-network$/u,
+    propertyChanges: Object.freeze([]),
+  }),
 ]);
 
 function sortedPropertyChanges(propertyChanges) {
@@ -334,7 +369,7 @@ function equalPropertyChanges(left, right) {
   return JSON.stringify(sortedPropertyChanges(left)) === JSON.stringify(sortedPropertyChanges(right));
 }
 
-export function classifyAzureWhatIfProviderNoise(change, { subscriptionId, resourceGroup }) {
+export function classifyAzureWhatIfProviderNoise(change, { subscriptionId, resourceGroup, phase }) {
   if (!change || typeof change !== 'object' || Array.isArray(change)) return null;
   const resourceId = String(change.resourceId ?? '');
   const changeType = String(change.changeType ?? '');
@@ -355,6 +390,7 @@ export function classifyAzureWhatIfProviderNoise(change, { subscriptionId, resou
   const scopedResource = normalizedResourceId.slice(expectedScope.length);
   const matchingRule = providerNoiseRules.find((candidate) => (
     candidate.changeType === changeType
+    && (candidate.phase === undefined || candidate.phase === phase)
     && candidate.resource.test(scopedResource)
     && equalPropertyChanges(candidate.propertyChanges, propertyChanges)
   ));
@@ -417,7 +453,7 @@ export function diagnoseAzureWhatIf(payload, { subscriptionId, resourceGroup }) 
   return { status: payload.status, changeCounts, changes };
 }
 
-export function summarizeAzureWhatIf(payload, { subscriptionId, resourceGroup }) {
+export function summarizeAzureWhatIf(payload, { subscriptionId, resourceGroup, phase }) {
   if (!payload || typeof payload !== 'object' || !Array.isArray(payload.changes)) fail('what-if response is malformed');
   if (payload.status !== 'Succeeded') fail(`what-if status must be Succeeded, got ${String(payload.status)}`);
   if (payload.changes.length === 0) fail('what-if returned no resource changes');
@@ -443,7 +479,7 @@ export function summarizeAzureWhatIf(payload, { subscriptionId, resourceGroup })
       ? unsupportedExpressionNamespace(resourceId, { subscriptionId, resourceGroup })
       : resourceNamespace(resourceId);
     if (!expectedResourceNamespaces.has(namespace)) fail(`resource namespace is outside the canary allowlist: ${namespace || resourceId}`);
-    const providerNoise = classifyAzureWhatIfProviderNoise(change, { subscriptionId, resourceGroup });
+    const providerNoise = classifyAzureWhatIfProviderNoise(change, { subscriptionId, resourceGroup, phase });
     if (!allowedChangeTypes.has(changeType) && !providerNoise) {
       fail(`what-if contains disallowed ${changeType || 'unknown'} change for ${resourceId}`);
     }
@@ -623,7 +659,10 @@ export async function runAzureCanaryPreflight({
     templateFile: path.join(canonicalRoot, 'infra', 'azure', 'main.bicep'),
   });
   const whatIfResult = await run(azureCli, whatIfArguments, 300_000);
-  const whatIf = summarizeAzureWhatIf(parseJsonOutput(whatIfResult, 'ARM what-if'), config);
+  const whatIf = summarizeAzureWhatIf(parseJsonOutput(whatIfResult, 'ARM what-if'), {
+    ...config,
+    phase: 'foundation',
+  });
 
   return {
     schemaVersion: 1,
