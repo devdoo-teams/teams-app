@@ -134,6 +134,9 @@ stages:
               git checkout --detach "$commit"
               test "$(git rev-parse HEAD)" = "$commit"
               test -z "$(git status --porcelain=v1 --untracked-files=no)"
+              pinned_node_bin="$(command -v node)"
+              test -x "$pinned_node_bin"
+              test "$("$pinned_node_bin" --version)" = 'v24.19.0'
               node scripts/azure-release-input.mjs "$release_receipt"
               npm ci --ignore-scripts --no-audit --no-fund
               az --version
@@ -145,7 +148,7 @@ stages:
                 export BICEP_BIN="${bicep_config_dir}/bin/bicep"
               fi
               test -x "$BICEP_BIN"
-              export PATH="$(dirname "$BICEP_BIN"):$PATH"
+              export PATH="$PATH:$(dirname "$BICEP_BIN")"
               bicep_version="$("$BICEP_BIN" --version)"
               tar_version="$(tar --version | sed -n '1p')"
               ruby_version="$(ruby --version)"
@@ -167,7 +170,7 @@ stages:
                 --output "$codex_runtime" > "$codex_package_receipt"
               node scripts/azure-worker-runtime-package.mjs build \
                 --worker-dist dist/worker \
-                --node-bin "$(command -v node)" \
+                --node-bin "$pinned_node_bin" \
                 --codex-runtime "$codex_runtime" \
                 --codex-receipt "$codex_package_receipt" \
                 --codex-package-sha256 "$CODEX_PACKAGE_SHA256" \
@@ -193,7 +196,7 @@ stages:
               jq -n \
                 --arg sourceCommit "$commit" \
                 --arg runnerImage "ubuntu-24.04" \
-                --arg nodeVersion "$(node --version)" \
+                --arg nodeVersion "$("$pinned_node_bin" --version)" \
                 --arg bicepVersion "$bicep_version" \
                 --arg tarVersion "$tar_version" \
                 --arg rubyVersion "$ruby_version" \
@@ -253,7 +256,7 @@ stages:
                   export BICEP_BIN="${bicep_config_dir}/bin/bicep"
                 fi
                 test -x "$BICEP_BIN"
-                export PATH="$(dirname "$BICEP_BIN"):$PATH"
+                export PATH="$PATH:$(dirname "$BICEP_BIN")"
                 "$BICEP_BIN" --version
                 node scripts/azure-deployment-parameters.mjs \
                   --phase foundation \
@@ -414,7 +417,7 @@ stages:
                         export BICEP_BIN="${bicep_config_dir}/bin/bicep"
                       fi
                       test -x "$BICEP_BIN"
-                      export PATH="$(dirname "$BICEP_BIN"):$PATH"
+                      export PATH="$PATH:$(dirname "$BICEP_BIN")"
                       "$BICEP_BIN" --version
 
                       node scripts/azure-deployment-parameters.mjs \

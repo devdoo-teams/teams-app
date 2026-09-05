@@ -598,6 +598,37 @@ try {
   assert.ok(platformScript?.includes('scripts/azure-codex-package.mjs'), 'pre-approval must authenticate and prepare the official Codex package');
   assert.ok(platformScript?.includes('scripts/azure-worker-runtime-package.mjs build'), 'pre-approval must build the complete immutable worker archive');
   assert.ok(platformScript?.includes('scripts/azure-worker-runtime-package.mjs verify'), 'pre-approval must verify the complete worker archive before publishing it');
+  assert.ok(
+    platformScript?.includes([
+      'pinned_node_bin="$(command -v node)"',
+      'test -x "$pinned_node_bin"',
+      'test "$("$pinned_node_bin" --version)" = \'v24.19.0\'',
+    ].join('\n')),
+    'pre-approval must capture and verify the UseNode-selected executable before another tool directory can shadow PATH',
+  );
+  assert.ok(
+    (platformScript?.indexOf('pinned_node_bin="$(command -v node)"') ?? -1)
+      < (platformScript?.indexOf('export PATH="$PATH:$(dirname "$BICEP_BIN")"') ?? -1),
+    'the pinned Node executable must be captured before the Bicep directory is added to PATH',
+  );
+  assert.ok(
+    platformScript?.includes('export PATH="$PATH:$(dirname "$BICEP_BIN")"'),
+    'the Bicep directory must be available to Azure CLI children without shadowing UseNode',
+  );
+  assert.equal(
+    platformScript?.includes('export PATH="$(dirname "$BICEP_BIN"):$PATH"'),
+    false,
+    'the Bicep directory must not shadow the pinned Node runtime',
+  );
+  assert.ok(
+    platformScript?.includes('--node-bin "$pinned_node_bin"'),
+    'worker packaging must use the verified absolute UseNode executable instead of resolving node from a mutated PATH',
+  );
+  assert.equal(
+    platformScript?.includes('--node-bin "$(command -v node)"'),
+    false,
+    'worker packaging must not re-resolve Node after PATH mutations',
+  );
   assert.ok(platformScript?.includes('--connect-timeout 15'), 'pre-approval package download must have a bounded connection timeout');
   assert.ok(platformScript?.includes('--max-time 300'), 'pre-approval package download must have a bounded total timeout');
   assert.equal(platformScript?.includes('cp -RL'), false, 'worker packaging must never recursively dereference the hosted Node toolcache');
@@ -682,8 +713,13 @@ try {
     'Azure deployment must fall back to the task-local Azure CLI managed Bicep path',
   );
   assert.ok(
+    deployScript?.includes('export PATH="$PATH:$(dirname "$BICEP_BIN")"'),
+    'Azure deployment must expose the verified Bicep directory to Azure CLI child processes without shadowing UseNode',
+  );
+  assert.equal(
     deployScript?.includes('export PATH="$(dirname "$BICEP_BIN"):$PATH"'),
-    'Azure deployment must expose the verified Bicep directory to Azure CLI child processes',
+    false,
+    'Azure deployment must not shadow the pinned Node runtime with the Bicep directory',
   );
   assert.ok(deployScript?.includes('"$BICEP_BIN" --version'), 'Azure deployment must execute the resolved Bicep binary before the Azure Core gate');
   assert.equal(deployScript?.includes('npm run build:worker'), false, 'deployment must not rebuild a worker after environment approval');
