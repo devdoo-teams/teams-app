@@ -273,7 +273,8 @@ assert.equal(reasoningCard.actions?.[0]?.data?.action, 'orchestration.submit-sel
 assert.equal(reasoningCard.actions?.[0]?.data?.model, 'gpt-5.6-sol');
 
 const manifest = JSON.parse(await readFile(new URL('../appPackage/manifest.json', import.meta.url), 'utf8'));
-assert.equal(manifest.version, '1.0.100');
+const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+assert.equal(manifest.version, packageJson.version, 'manifest version must match the package version');
 const commands = manifest.bots[0].commandLists[0].commands.map((command: { title: string }) => command.title);
 for (const command of ['agent run', 'agent write', 'agent choose', 'agent status', 'agent list', 'agent cancel', 'agent approve', 'agent retry', 'agent input']) {
   assert.ok(commands.includes(command), `manifest discovers ${command}`);
