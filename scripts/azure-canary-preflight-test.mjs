@@ -127,6 +127,7 @@ assert.deepEqual(whatIf.approvedProviderNoise, [{
   rule: 'incremental-smart-detection-ignore',
   propertyChanges: [],
 }]);
+assert.deepEqual(whatIf.approvedPlannedChanges, []);
 
 const managedEnvironmentId = `${scope}/providers/Microsoft.App/managedEnvironments/teamsapp-env-goictvxm`;
 const cosmosAccountId = `${scope}/providers/Microsoft.DocumentDB/databaseAccounts/teamsapp-cosmos-goictvxm`;
@@ -200,6 +201,7 @@ assert.deepEqual(approvedProviderNoise.approvedProviderNoise, [{
     propertyChangeType: 'Create',
   }],
 }]);
+assert.deepEqual(approvedProviderNoise.approvedPlannedChanges, []);
 
 for (const unsafeNoise of [{
   resourceId: managedEnvironmentId,

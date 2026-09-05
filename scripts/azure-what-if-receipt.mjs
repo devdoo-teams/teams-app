@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  classifyAzureWhatIfPlannedChange,
   classifyAzureWhatIfProviderNoise,
   diagnoseAzureWhatIf,
   summarizeAzureWhatIf,
@@ -128,6 +129,7 @@ function validateWhatIfSummary(summary, target, phase) {
     'unsupportedResources',
     'unsupportedChanges',
     'approvedProviderNoise',
+    'approvedPlannedChanges',
     'missingUnsupportedReasonCount',
     'manualReviewRequired',
     'destructiveChangeCount',
@@ -159,32 +161,46 @@ function validateWhatIfSummary(summary, target, phase) {
   if ((summary.changeCounts.Unsupported ?? 0) !== summary.unsupportedChanges.length) {
     fail('Unsupported change count is inconsistent');
   }
-  if (!Array.isArray(summary.approvedProviderNoise)) fail('approved provider noise must be an array');
-  const providerNoiseCounts = {};
-  const seenProviderNoise = new Set();
-  for (const entry of summary.approvedProviderNoise) {
-    assertExactKeys(entry, ['resourceId', 'changeType', 'rule', 'propertyChanges'], 'approved provider noise');
-    if (typeof entry.rule !== 'string' || entry.rule.length === 0) fail('approved provider-noise rule is invalid');
-    if (!Array.isArray(entry.propertyChanges)) fail('approved provider-noise propertyChanges must be an array');
-    for (const propertyChange of entry.propertyChanges) {
-      assertExactKeys(propertyChange, ['path', 'propertyChangeType'], 'approved provider-noise property change');
-      validateDiagnosticPropertyPath(propertyChange.path);
-      if (!PROPERTY_CHANGE_TYPES.has(propertyChange.propertyChangeType)) {
-        fail('approved provider-noise property change type is invalid');
+  const validateApprovedEntries = (entries, label, classifier) => {
+    if (!Array.isArray(entries)) fail(`${label} must be an array`);
+    const countsByType = {};
+    const seen = new Set();
+    for (const entry of entries) {
+      assertExactKeys(entry, ['resourceId', 'changeType', 'rule', 'propertyChanges'], label);
+      if (typeof entry.rule !== 'string' || entry.rule.length === 0) fail(`${label} rule is invalid`);
+      if (!Array.isArray(entry.propertyChanges)) fail(`${label} propertyChanges must be an array`);
+      for (const propertyChange of entry.propertyChanges) {
+        assertExactKeys(propertyChange, ['path', 'propertyChangeType'], `${label} property change`);
+        validateDiagnosticPropertyPath(propertyChange.path);
+        if (!PROPERTY_CHANGE_TYPES.has(propertyChange.propertyChangeType)) {
+          fail(`${label} property change type is invalid`);
+        }
       }
+      const classified = classifier(entry, { ...target, phase });
+      if (!classified || classified.rule !== entry.rule || JSON.stringify(classified) !== JSON.stringify(entry)) {
+        fail(`${label} is invalid for ${String(entry.resourceId ?? '<missing>')}`);
+      }
+      const identity = JSON.stringify(entry);
+      if (seen.has(identity)) fail(`${label} contains a duplicate entry`);
+      seen.add(identity);
+      countsByType[entry.changeType] = (countsByType[entry.changeType] ?? 0) + 1;
     }
-    const classified = classifyAzureWhatIfProviderNoise(entry, { ...target, phase });
-    if (!classified || classified.rule !== entry.rule || JSON.stringify(classified) !== JSON.stringify(entry)) {
-      fail(`approved provider noise is invalid for ${String(entry.resourceId ?? '<missing>')}`);
-    }
-    const identity = JSON.stringify(entry);
-    if (seenProviderNoise.has(identity)) fail('approved provider noise contains a duplicate entry');
-    seenProviderNoise.add(identity);
-    providerNoiseCounts[entry.changeType] = (providerNoiseCounts[entry.changeType] ?? 0) + 1;
-  }
+    return countsByType;
+  };
+  const providerNoiseCounts = validateApprovedEntries(
+    summary.approvedProviderNoise,
+    'approved provider noise',
+    classifyAzureWhatIfProviderNoise,
+  );
+  const plannedChangeCounts = validateApprovedEntries(
+    summary.approvedPlannedChanges,
+    'approved planned change',
+    classifyAzureWhatIfPlannedChange,
+  );
   for (const changeType of ['Ignore', 'Modify']) {
-    if ((summary.changeCounts[changeType] ?? 0) !== (providerNoiseCounts[changeType] ?? 0)) {
-      fail(`${changeType} change count is inconsistent with approved provider noise`);
+    const approvedCount = (providerNoiseCounts[changeType] ?? 0) + (plannedChangeCounts[changeType] ?? 0);
+    if ((summary.changeCounts[changeType] ?? 0) !== approvedCount) {
+      fail(`${changeType} change count is inconsistent with approved changes`);
     }
   }
   const missingReasons = summary.unsupportedChanges.filter(({ unsupportedReason }) => unsupportedReason === null).length;
@@ -211,7 +227,7 @@ function validateReceiptShape(receipt) {
     'whatIf',
     'checkedAt',
   ], 'receipt');
-  if (receipt.schemaVersion !== 2) fail('schemaVersion must be 2');
+  if (receipt.schemaVersion !== 3) fail('schemaVersion must be 3');
   if (receipt.kind !== 'azure-deployment-what-if') fail('kind is invalid');
   if (receipt.nonMutating !== true) fail('nonMutating must be true');
   if (!PHASES.has(receipt.phase)) fail('phase is invalid');
@@ -319,6 +335,7 @@ function validateDiagnosticShape(diagnostic) {
   const blocked = diagnostic.whatIf.changes.some((change) => (
     !BASE_ALLOWED_CHANGE_TYPES.has(change.changeType)
     && !classifyAzureWhatIfProviderNoise(change, { ...diagnostic.target, phase: diagnostic.phase })
+    && !classifyAzureWhatIfPlannedChange(change, { ...diagnostic.target, phase: diagnostic.phase })
   ));
   if (diagnostic.status !== (blocked ? 'BLOCKED' : 'OBSERVED')) fail('diagnostic status is inconsistent');
   validateCheckedAt(diagnostic.checkedAt);
@@ -351,6 +368,7 @@ export function createAzureWhatIfDiagnostic({
   const blocked = whatIfDiagnostic.changes.some((change) => (
     !BASE_ALLOWED_CHANGE_TYPES.has(change.changeType)
     && !classifyAzureWhatIfProviderNoise(change, { subscriptionId, resourceGroup, phase })
+    && !classifyAzureWhatIfPlannedChange(change, { subscriptionId, resourceGroup, phase })
   ));
   return validateDiagnosticShape({
     schemaVersion: 1,
@@ -398,7 +416,7 @@ export function createAzureWhatIfReceipt({
   validateCheckedAt(checkedAt);
   const summary = summarizeAzureWhatIf(whatIf, { subscriptionId, resourceGroup, phase });
   return validateReceiptShape({
-    schemaVersion: 2,
+    schemaVersion: 3,
     kind: 'azure-deployment-what-if',
     nonMutating: true,
     status: summary.manualReviewRequired ? 'REVIEW_REQUIRED' : 'READY',

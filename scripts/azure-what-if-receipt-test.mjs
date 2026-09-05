@@ -57,7 +57,7 @@ try {
     whatIf: whatIfPayload,
     checkedAt: '2026-09-05T12:00:00.000Z',
   });
-  assert.equal(receipt.schemaVersion, 2);
+  assert.equal(receipt.schemaVersion, 3);
   assert.equal(receipt.kind, 'azure-deployment-what-if');
   assert.equal(receipt.nonMutating, true);
   assert.equal(receipt.status, 'REVIEW_REQUIRED');
@@ -81,6 +81,7 @@ try {
     rule: 'incremental-smart-detection-ignore',
     propertyChanges: [],
   }]);
+  assert.deepEqual(receipt.whatIf.approvedPlannedChanges, []);
   assert.deepEqual(verifyAzureWhatIfReceipt(receipt, identity), receipt);
 
   const observedDiagnostic = createAzureWhatIfDiagnostic({
@@ -118,6 +119,7 @@ try {
     checkedAt: '2026-09-05T12:01:00.000Z',
   });
   assert.equal(foundationOmittedWorkloadReceipt.status, 'READY');
+  assert.deepEqual(foundationOmittedWorkloadReceipt.whatIf.approvedPlannedChanges, []);
   assert.equal(foundationOmittedWorkloadReceipt.whatIf.changeCounts.Ignore, 5);
   assert.deepEqual(
     foundationOmittedWorkloadReceipt.whatIf.approvedProviderNoise.map(({ rule }) => rule),
@@ -167,6 +169,135 @@ try {
       'foundation Ignore classification must remain exact and property-change free',
     );
   }
+
+  const workloadContainerAppPropertyChanges = [
+    { path: 'properties.configuration.ingress.exposedPort', propertyChangeType: 'Delete' },
+    { path: 'properties.configuration.maxInactiveRevisions', propertyChangeType: 'Delete' },
+    { path: 'properties.configuration.registries', propertyChangeType: 'Array' },
+    { path: '0', propertyChangeType: 'Modify' },
+    { path: 'server', propertyChangeType: 'Modify' },
+    { path: 'properties.configuration.secrets', propertyChangeType: 'Array' },
+    { path: '0', propertyChangeType: 'Modify' },
+    { path: 'keyVaultUrl', propertyChangeType: 'Modify' },
+    { path: '1', propertyChangeType: 'Modify' },
+    { path: 'keyVaultUrl', propertyChangeType: 'Modify' },
+    { path: '2', propertyChangeType: 'Modify' },
+    { path: 'keyVaultUrl', propertyChangeType: 'Modify' },
+    { path: 'properties.runningStatus', propertyChangeType: 'Delete' },
+    { path: 'properties.template.containers', propertyChangeType: 'Array' },
+    { path: '0', propertyChangeType: 'Modify' },
+    { path: 'env', propertyChangeType: 'Array' },
+    { path: '0', propertyChangeType: 'Modify' },
+    { path: 'value', propertyChangeType: 'Modify' },
+    { path: '2', propertyChangeType: 'Modify' },
+    { path: 'value', propertyChangeType: 'Modify' },
+    { path: '6', propertyChangeType: 'Modify' },
+    { path: 'value', propertyChangeType: 'Modify' },
+    { path: '7', propertyChangeType: 'Modify' },
+    { path: 'value', propertyChangeType: 'Modify' },
+    { path: '10', propertyChangeType: 'Modify' },
+    { path: 'value', propertyChangeType: 'Modify' },
+    { path: '12', propertyChangeType: 'Modify' },
+    { path: 'value', propertyChangeType: 'Modify' },
+    { path: 'image', propertyChangeType: 'Modify' },
+    { path: 'properties.template.revisionSuffix', propertyChangeType: 'Modify' },
+    { path: 'properties.workloadProfileName', propertyChangeType: 'Delete' },
+  ];
+  const workloadWorkerNicPropertyChanges = [
+    { path: 'kind', propertyChangeType: 'Delete' },
+    { path: 'properties.allowPort25Out', propertyChangeType: 'Delete' },
+    { path: 'properties.auxiliaryMode', propertyChangeType: 'Delete' },
+    { path: 'properties.auxiliarySku', propertyChangeType: 'Delete' },
+    { path: 'properties.disableTcpStateTracking', propertyChangeType: 'Delete' },
+    { path: 'properties.ipConfigurations', propertyChangeType: 'Array' },
+    { path: '0', propertyChangeType: 'Modify' },
+    { path: 'properties.privateIPAddress', propertyChangeType: 'Delete' },
+    { path: 'properties.privateIPAddressVersion', propertyChangeType: 'Delete' },
+  ];
+  const workloadObservedChanges = [{
+    resourceId: `${scope}/providers/Microsoft.App/containerApps/teamsapp-canary-goictvxm`,
+    changeType: 'Modify',
+    delta: workloadContainerAppPropertyChanges,
+  }, {
+    resourceId: `${scope}/providers/Microsoft.App/managedEnvironments/teamsapp-env-goictvxm`,
+    changeType: 'Modify',
+    delta: [{
+      path: 'properties.appLogsConfiguration.logAnalyticsConfiguration.customerId',
+      propertyChangeType: 'Modify',
+    }],
+  }, {
+    resourceId: `${scope}/providers/Microsoft.DocumentDB/databaseAccounts/teamsapp-cosmos-goictvxm`,
+    changeType: 'Modify',
+    delta: [{ path: 'properties.sqlEndpoint', propertyChangeType: 'Delete' }],
+  }, {
+    resourceId: `${scope}/providers/Microsoft.DocumentDB/databaseAccounts/teamsapp-cosmos-goictvxm/sqlDatabases/teamsapp`,
+    changeType: 'Modify',
+    delta: [{ path: 'properties.options', propertyChangeType: 'Create' }],
+  }, {
+    resourceId: `${scope}/providers/Microsoft.Network/networkInterfaces/teamsapp-worker-goictvxm-nic`,
+    changeType: 'Modify',
+    delta: workloadWorkerNicPropertyChanges,
+  }, {
+    resourceId: `${scope}/providers/Microsoft.Compute/disks/teamsapp-worker-goictvxm_disk1_090d8836195044e8ac578c4b64d5b0c6`,
+    changeType: 'Ignore',
+  }];
+  const workloadIdentity = { ...identity, phase: 'workload' };
+  const workloadReceipt = createAzureWhatIfReceipt({
+    ...workloadIdentity,
+    whatIf: { status: 'Succeeded', changes: workloadObservedChanges },
+    checkedAt: '2026-09-05T19:57:45.864Z',
+  });
+  assert.equal(workloadReceipt.schemaVersion, 3);
+  assert.equal(workloadReceipt.status, 'READY');
+  assert.deepEqual(workloadReceipt.whatIf.approvedPlannedChanges.map(({ rule }) => rule), [
+    'workload-container-app-release-update',
+  ]);
+  assert.deepEqual(workloadReceipt.whatIf.approvedProviderNoise.map(({ rule }) => rule), [
+    'managed-environment-customer-id-reference',
+    'cosmos-account-read-only-endpoint',
+    'cosmos-database-request-options',
+    'workload-worker-nic-rest-defaults',
+    'workload-managed-worker-os-disk',
+  ]);
+  assert.deepEqual(verifyAzureWhatIfReceipt(workloadReceipt, workloadIdentity), workloadReceipt);
+
+  for (const unsafeWorkloadChanges of [
+    [{ ...workloadObservedChanges[0], resourceId: `${scope}/providers/Microsoft.App/containerApps/teamsapp-production-goictvxm` }],
+    [{ ...workloadObservedChanges[0], delta: undefined }],
+    [{
+      ...workloadObservedChanges[0],
+      delta: [...workloadContainerAppPropertyChanges, {
+        path: 'properties.configuration.ingress.external',
+        propertyChangeType: 'Modify',
+      }],
+    }],
+    [{ ...workloadObservedChanges[0], changeType: 'Delete' }],
+    [{
+      ...workloadObservedChanges[4],
+      delta: [...workloadWorkerNicPropertyChanges, {
+        path: 'properties.enableAcceleratedNetworking',
+        propertyChangeType: 'Modify',
+      }],
+    }],
+    [{ ...workloadObservedChanges[5], delta: [{ path: 'properties.diskSizeGB', propertyChangeType: 'Modify' }] }],
+  ]) {
+    assert.throws(
+      () => createAzureWhatIfReceipt({
+        ...workloadIdentity,
+        whatIf: { status: 'Succeeded', changes: unsafeWorkloadChanges },
+      }),
+      /Modify|Delete|Ignore|allowlist/i,
+      'workload release classification must reject unexpected resources, paths, missing details, and destructive changes',
+    );
+  }
+  assert.throws(
+    () => createAzureWhatIfReceipt({
+      ...identity,
+      whatIf: { status: 'Succeeded', changes: [workloadObservedChanges[0]] },
+    }),
+    /Modify/i,
+    'workload release changes must not be accepted during the foundation phase',
+  );
 
   const createResult = spawnSync(process.execPath, [
     path.join(import.meta.dirname, 'azure-what-if-receipt.mjs'),

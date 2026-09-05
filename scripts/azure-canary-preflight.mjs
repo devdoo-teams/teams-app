@@ -353,6 +353,72 @@ const providerNoiseRules = Object.freeze([
     resource: /^providers\/microsoft\.network\/virtualnetworks\/teamsapp-worker-[a-z0-9]{8}-network$/u,
     propertyChanges: Object.freeze([]),
   }),
+  Object.freeze({
+    rule: 'workload-worker-nic-rest-defaults',
+    phase: 'workload',
+    changeType: 'Modify',
+    resource: /^providers\/microsoft\.network\/networkinterfaces\/teamsapp-worker-[a-z0-9]{8}-nic$/u,
+    propertyChanges: Object.freeze([
+      Object.freeze({ path: '0', propertyChangeType: 'Modify' }),
+      Object.freeze({ path: 'kind', propertyChangeType: 'Delete' }),
+      Object.freeze({ path: 'properties.allowPort25Out', propertyChangeType: 'Delete' }),
+      Object.freeze({ path: 'properties.auxiliaryMode', propertyChangeType: 'Delete' }),
+      Object.freeze({ path: 'properties.auxiliarySku', propertyChangeType: 'Delete' }),
+      Object.freeze({ path: 'properties.disableTcpStateTracking', propertyChangeType: 'Delete' }),
+      Object.freeze({ path: 'properties.ipConfigurations', propertyChangeType: 'Array' }),
+      Object.freeze({ path: 'properties.privateIPAddress', propertyChangeType: 'Delete' }),
+      Object.freeze({ path: 'properties.privateIPAddressVersion', propertyChangeType: 'Delete' }),
+    ]),
+  }),
+  Object.freeze({
+    rule: 'workload-managed-worker-os-disk',
+    phase: 'workload',
+    changeType: 'Ignore',
+    resource: /^providers\/microsoft\.compute\/disks\/teamsapp-worker-[a-z0-9]{8}_disk1_[0-9a-f]{32}$/u,
+    propertyChanges: Object.freeze([]),
+  }),
+]);
+
+const plannedChangeRules = Object.freeze([
+  Object.freeze({
+    rule: 'workload-container-app-release-update',
+    phase: 'workload',
+    changeType: 'Modify',
+    resource: /^providers\/microsoft\.app\/containerapps\/teamsapp-canary-[a-z0-9]{8}$/u,
+    propertyChanges: Object.freeze([
+      Object.freeze({ path: '0', propertyChangeType: 'Modify' }),
+      Object.freeze({ path: '0', propertyChangeType: 'Modify' }),
+      Object.freeze({ path: '0', propertyChangeType: 'Modify' }),
+      Object.freeze({ path: '0', propertyChangeType: 'Modify' }),
+      Object.freeze({ path: '1', propertyChangeType: 'Modify' }),
+      Object.freeze({ path: '10', propertyChangeType: 'Modify' }),
+      Object.freeze({ path: '12', propertyChangeType: 'Modify' }),
+      Object.freeze({ path: '2', propertyChangeType: 'Modify' }),
+      Object.freeze({ path: '2', propertyChangeType: 'Modify' }),
+      Object.freeze({ path: '6', propertyChangeType: 'Modify' }),
+      Object.freeze({ path: '7', propertyChangeType: 'Modify' }),
+      Object.freeze({ path: 'env', propertyChangeType: 'Array' }),
+      Object.freeze({ path: 'image', propertyChangeType: 'Modify' }),
+      Object.freeze({ path: 'keyVaultUrl', propertyChangeType: 'Modify' }),
+      Object.freeze({ path: 'keyVaultUrl', propertyChangeType: 'Modify' }),
+      Object.freeze({ path: 'keyVaultUrl', propertyChangeType: 'Modify' }),
+      Object.freeze({ path: 'properties.configuration.ingress.exposedPort', propertyChangeType: 'Delete' }),
+      Object.freeze({ path: 'properties.configuration.maxInactiveRevisions', propertyChangeType: 'Delete' }),
+      Object.freeze({ path: 'properties.configuration.registries', propertyChangeType: 'Array' }),
+      Object.freeze({ path: 'properties.configuration.secrets', propertyChangeType: 'Array' }),
+      Object.freeze({ path: 'properties.runningStatus', propertyChangeType: 'Delete' }),
+      Object.freeze({ path: 'properties.template.containers', propertyChangeType: 'Array' }),
+      Object.freeze({ path: 'properties.template.revisionSuffix', propertyChangeType: 'Modify' }),
+      Object.freeze({ path: 'properties.workloadProfileName', propertyChangeType: 'Delete' }),
+      Object.freeze({ path: 'server', propertyChangeType: 'Modify' }),
+      Object.freeze({ path: 'value', propertyChangeType: 'Modify' }),
+      Object.freeze({ path: 'value', propertyChangeType: 'Modify' }),
+      Object.freeze({ path: 'value', propertyChangeType: 'Modify' }),
+      Object.freeze({ path: 'value', propertyChangeType: 'Modify' }),
+      Object.freeze({ path: 'value', propertyChangeType: 'Modify' }),
+      Object.freeze({ path: 'value', propertyChangeType: 'Modify' }),
+    ]),
+  }),
 ]);
 
 function sortedPropertyChanges(propertyChanges) {
@@ -369,7 +435,7 @@ function equalPropertyChanges(left, right) {
   return JSON.stringify(sortedPropertyChanges(left)) === JSON.stringify(sortedPropertyChanges(right));
 }
 
-export function classifyAzureWhatIfProviderNoise(change, { subscriptionId, resourceGroup, phase }) {
+function classifyAzureWhatIfRule(change, { subscriptionId, resourceGroup, phase }, rules) {
   if (!change || typeof change !== 'object' || Array.isArray(change)) return null;
   const resourceId = String(change.resourceId ?? '');
   const changeType = String(change.changeType ?? '');
@@ -388,7 +454,7 @@ export function classifyAzureWhatIfProviderNoise(change, { subscriptionId, resou
   }
 
   const scopedResource = normalizedResourceId.slice(expectedScope.length);
-  const matchingRule = providerNoiseRules.find((candidate) => (
+  const matchingRule = rules.find((candidate) => (
     candidate.changeType === changeType
     && (candidate.phase === undefined || candidate.phase === phase)
     && candidate.resource.test(scopedResource)
@@ -402,6 +468,14 @@ export function classifyAzureWhatIfProviderNoise(change, { subscriptionId, resou
     rule: matchingRule.rule,
     propertyChanges,
   };
+}
+
+export function classifyAzureWhatIfProviderNoise(change, context) {
+  return classifyAzureWhatIfRule(change, context, providerNoiseRules);
+}
+
+export function classifyAzureWhatIfPlannedChange(change, context) {
+  return classifyAzureWhatIfRule(change, context, plannedChangeRules);
 }
 
 export function diagnoseAzureWhatIf(payload, { subscriptionId, resourceGroup }) {
@@ -464,6 +538,7 @@ export function summarizeAzureWhatIf(payload, { subscriptionId, resourceGroup, p
   const unsupportedResources = [];
   const unsupportedChanges = [];
   const approvedProviderNoise = [];
+  const approvedPlannedChanges = [];
 
   for (const change of payload.changes) {
     const resourceId = String(change?.resourceId ?? '');
@@ -480,10 +555,12 @@ export function summarizeAzureWhatIf(payload, { subscriptionId, resourceGroup, p
       : resourceNamespace(resourceId);
     if (!expectedResourceNamespaces.has(namespace)) fail(`resource namespace is outside the canary allowlist: ${namespace || resourceId}`);
     const providerNoise = classifyAzureWhatIfProviderNoise(change, { subscriptionId, resourceGroup, phase });
-    if (!allowedChangeTypes.has(changeType) && !providerNoise) {
+    const plannedChange = classifyAzureWhatIfPlannedChange(change, { subscriptionId, resourceGroup, phase });
+    if (!allowedChangeTypes.has(changeType) && !providerNoise && !plannedChange) {
       fail(`what-if contains disallowed ${changeType || 'unknown'} change for ${resourceId}`);
     }
     if (providerNoise) approvedProviderNoise.push(providerNoise);
+    if (plannedChange) approvedPlannedChanges.push(plannedChange);
     if (changeType === 'Unsupported') {
       if (!unresolvedExpression && !isAllowlistedUnsupported(resourceId)) fail(`Unsupported resource is outside the manual-review allowlist: ${resourceId}`);
       unsupportedResources.push(resourceId);
@@ -501,6 +578,7 @@ export function summarizeAzureWhatIf(payload, { subscriptionId, resourceGroup, p
     unsupportedResources,
     unsupportedChanges,
     approvedProviderNoise,
+    approvedPlannedChanges,
     missingUnsupportedReasonCount: unsupportedChanges.filter(({ unsupportedReason }) => unsupportedReason === null).length,
     manualReviewRequired: unsupportedResources.length > 0,
     destructiveChangeCount: 0,
