@@ -59,6 +59,16 @@ assert.notEqual(artifactStepsStart, -1, 'immutable artifact job must define its 
 const artifactHeader = artifactJob.slice(0, artifactStepsStart);
 assert.match(
   artifactHeader,
+  /if:\s*github\.event_name\s*==\s*'workflow_dispatch'/,
+  'immutable release candidates must require an explicit workflow dispatch',
+);
+assert.doesNotMatch(
+  artifactHeader,
+  /github\.event_name\s*!=\s*'pull_request'/,
+  'ordinary main pushes must not generate a duplicate-version release candidate',
+);
+assert.match(
+  artifactHeader,
   /needs:\s*\[\s*core\s*,\s*a2a\s*,\s*continuity\s*,\s*container\s*\]/,
   'immutable artifact job must wait for Core, A2A, continuity, and Docker runtime verification',
 );
