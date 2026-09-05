@@ -42,6 +42,7 @@
     "test:azure-deployment-rbac": "node scripts/azure-deployment-rbac-test.mjs",
     "test:azure-deployment-contract": "node scripts/azure-deployment-contract-test.mjs",
     "test:azure-deployment-parameters": "node scripts/azure-deployment-parameters-test.mjs",
+    "test:azure-worker-vm-state": "node scripts/azure-worker-vm-state-test.mjs",
     "test:azure-what-if-receipt": "node scripts/azure-what-if-receipt-test.mjs",
     "test:azure-canary-preflight": "node scripts/azure-canary-preflight-test.mjs",
     "azure:canary-preflight": "node scripts/azure-canary-preflight.mjs",

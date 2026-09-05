@@ -39,6 +39,7 @@ try {
   assert.equal(foundation.contentVersion, '1.0.0.0');
   assert.equal(foundation.parameters.deployContainerApp.value, false);
   assert.equal(foundation.parameters.deployWorkerVm.value, false);
+  assert.equal(foundation.parameters.initializeWorkerVm.value, false);
   assert.equal(foundation.parameters.containerImage.value, `${release.image}@${digest}`);
   assert.equal(foundation.parameters.deploymentPrincipalId.value, common.deploymentPrincipalId);
   assert.equal(foundation.parameters.releaseSourceCommit.value, commit);
@@ -52,13 +53,26 @@ try {
     workerArtifactUrl,
     workerArtifactSha256: 'f'.repeat(64),
     codexBinSha256: '1'.repeat(64),
+    initializeWorkerVm: false,
   });
   assert.equal(workload.parameters.deployContainerApp.value, true);
   assert.equal(workload.parameters.deployWorkerVm.value, true);
+  assert.equal(workload.parameters.initializeWorkerVm.value, false);
   assert.equal(workload.parameters.deploymentPrincipalId.value, common.deploymentPrincipalId);
   assert.equal(workload.parameters.workerArtifactUrl.value, workerArtifactUrl);
   assert.equal(workload.parameters.workerArtifactSha256.value, 'f'.repeat(64));
   assert.equal(workload.parameters.codexBinSha256.value, '1'.repeat(64));
+
+  const firstDeployment = buildAzureDeploymentParameters({
+    ...common,
+    phase: 'workload',
+    containerImage: `teamsappfixture.azurecr.io/teamsapp@${digest}`,
+    workerArtifactUrl,
+    workerArtifactSha256: 'f'.repeat(64),
+    codexBinSha256: '1'.repeat(64),
+    initializeWorkerVm: true,
+  });
+  assert.equal(firstDeployment.parameters.initializeWorkerVm.value, true);
 
   assert.throws(
     () => buildAzureDeploymentParameters({
@@ -82,8 +96,11 @@ try {
       ...common,
       phase: 'workload',
       containerImage: `teamsappfixture.azurecr.io/teamsapp@${digest}`,
+      workerArtifactUrl,
+      workerArtifactSha256: 'f'.repeat(64),
+      codexBinSha256: '1'.repeat(64),
     }),
-    /worker artifact/i,
+    /initialize worker VM/i,
   );
   assert.throws(
     () => buildAzureDeploymentParameters({
@@ -93,6 +110,7 @@ try {
       workerArtifactUrl,
       workerArtifactSha256: 'f'.repeat(64),
       codexBinSha256: '1'.repeat(64),
+      initializeWorkerVm: false,
     }),
     /digest/i,
   );
@@ -118,6 +136,26 @@ try {
 
   const overwriteResult = spawnSync(process.execPath, cliArgs, { encoding: 'utf8' });
   assert.notEqual(overwriteResult.status, 0, 'parameter generation must not overwrite an existing file');
+
+  const workloadOutputPath = path.join(temporaryDirectory, 'workload.parameters.json');
+  const workloadCliArgs = [
+    path.join(import.meta.dirname, 'azure-deployment-parameters.mjs'),
+    '--phase', 'workload',
+    '--release-receipt', releasePath,
+    '--workload-name', common.workloadName,
+    '--location', common.location,
+    '--container-image', `teamsappfixture.azurecr.io/teamsapp@${digest}`,
+    '--deployment-principal-id', common.deploymentPrincipalId,
+    '--worker-admin-ssh-public-key', common.workerAdminSshPublicKey,
+    '--worker-artifact-url', workerArtifactUrl,
+    '--worker-artifact-sha256', 'f'.repeat(64),
+    '--codex-bin-sha256', '1'.repeat(64),
+    '--initialize-worker-vm', 'false',
+    '--output', workloadOutputPath,
+  ];
+  const workloadCliResult = spawnSync(process.execPath, workloadCliArgs, { encoding: 'utf8' });
+  assert.equal(workloadCliResult.status, 0, workloadCliResult.stderr);
+  assert.deepEqual(JSON.parse(fs.readFileSync(workloadOutputPath, 'utf8')), workload);
 
   console.log('azure-deployment-parameters-test: PASS');
 } finally {

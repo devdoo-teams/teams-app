@@ -54,6 +54,7 @@ export function buildAzureDeploymentParameters({
   workerArtifactUrl,
   workerArtifactSha256,
   codexBinSha256,
+  initializeWorkerVm,
 }) {
   if (!PHASES.has(phase)) fail('phase must be foundation or workload');
   const release = validateAzureReleaseInput(inputRelease);
@@ -68,6 +69,7 @@ export function buildAzureDeploymentParameters({
     if ([workerArtifactUrl, workerArtifactSha256, codexBinSha256].some((value) => value !== undefined)) {
       fail('foundation parameters must not include workload-only worker artifact fields');
     }
+    if (initializeWorkerVm !== undefined) fail('foundation parameters must not include initialize worker VM');
   } else {
     if (!ACR_IMAGE.test(String(containerImage ?? ''))) fail('workload container image must be an immutable Azure Container Registry digest');
     if (containerImage.slice(containerImage.indexOf('@') + 1) !== release.imageDigest) {
@@ -76,6 +78,7 @@ export function buildAzureDeploymentParameters({
     if (!workerArtifactUrl || !workerArtifactSha256 || !codexBinSha256) {
       fail('workload worker artifact URL and SHA-256 values are required');
     }
+    if (typeof initializeWorkerVm !== 'boolean') fail('workload initialize worker VM must be an explicit boolean');
     validateWorkerArtifactUrl(workerArtifactUrl, release.commit);
     if (!SHA256.test(workerArtifactSha256)) fail('worker artifact SHA-256 is invalid');
     if (!SHA256.test(codexBinSha256)) fail('Codex executable SHA-256 is invalid');
@@ -90,6 +93,7 @@ export function buildAzureDeploymentParameters({
     enableCosmosFreeTier: parameter(true),
     deployContainerApp: parameter(phase === 'workload'),
     deployWorkerVm: parameter(phase === 'workload'),
+    initializeWorkerVm: parameter(phase === 'workload' ? initializeWorkerVm : false),
     releaseSourceCommit: parameter(release.commit),
     releaseVersion: parameter(release.version),
     releaseImageDigest: parameter(release.imageDigest),
@@ -122,6 +126,7 @@ function parseArguments(args) {
     '--worker-artifact-url',
     '--worker-artifact-sha256',
     '--codex-bin-sha256',
+    '--initialize-worker-vm',
     '--output',
   ]);
   const required = new Set([
@@ -147,7 +152,19 @@ function parseArguments(args) {
   for (const name of required) {
     if (!values.has(name)) fail(`${name} is required`);
   }
+  if (values.get('--phase') === 'workload' && !values.has('--initialize-worker-vm')) {
+    fail('--initialize-worker-vm is required for workload');
+  }
+  if (values.get('--phase') === 'foundation' && values.has('--initialize-worker-vm')) {
+    fail('--initialize-worker-vm is workload-only');
+  }
   return values;
+}
+
+function parseBoolean(value, name) {
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  fail(`${name} must be true or false`);
 }
 
 function assertRegularReleaseReceipt(receiptPath) {
@@ -186,6 +203,9 @@ function runCli() {
     workerArtifactUrl: values.get('--worker-artifact-url'),
     workerArtifactSha256: values.get('--worker-artifact-sha256'),
     codexBinSha256: values.get('--codex-bin-sha256'),
+    initializeWorkerVm: values.has('--initialize-worker-vm')
+      ? parseBoolean(values.get('--initialize-worker-vm'), '--initialize-worker-vm')
+      : undefined,
   });
   writeExclusive(values.get('--output'), result);
   process.stdout.write(`Azure ${values.get('--phase')} deployment parameters written\n`);

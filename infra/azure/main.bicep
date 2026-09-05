@@ -26,6 +26,9 @@ param deployContainerApp bool = true
 @description('Provision the worker VM only after an immutable worker archive has been staged.')
 param deployWorkerVm bool = true
 
+@description('Includes first-boot custom data only after the deployment pipeline proves that the worker VM does not exist.')
+param initializeWorkerVm bool
+
 @description('Private Blob URL for the immutable worker runtime archive.')
 param workerArtifactUrl string = 'https://invalid.example/worker-runtime.tar'
 
@@ -194,6 +197,7 @@ module workerVm './modules/worker-vm.bicep' = if (deployWorkerVm) {
     workerArtifactSha256: workerArtifactSha256
     codexBinSha256: codexBinSha256
     releaseSourceCommit: releaseSourceCommit
+    initializeWorkerVm: initializeWorkerVm
   }
   dependsOn: [
     storage
@@ -211,7 +215,7 @@ output containerAppName string = appName
 output containerAppFqdn string = deployContainerApp ? containerApp!.outputs.fqdn : ''
 output containerAppRevisionName string = deployContainerApp ? containerApp!.outputs.revisionName : ''
 output containerAppResourceId string = resourceId('Microsoft.App/containerApps', appName)
-output workerVmResourceId string = deployWorkerVm ? workerVm!.outputs.resourceId : ''
+output workerVmResourceId string = resourceId('Microsoft.Compute/virtualMachines', workerName)
 output workerArtifactStorageAccountName string = storage.outputs.accountName
 output workerArtifactContainerName string = storage.outputs.workerArtifactContainerName
 output workerArtifactContainerUrl string = storage.outputs.workerArtifactContainerUrl

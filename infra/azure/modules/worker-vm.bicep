@@ -3,6 +3,7 @@ param workerName string
 param workerIdentityResourceId string
 param workerIdentityClientId string
 param workerAdminSshPublicKey string
+param initializeWorkerVm bool
 param agentDispatchQueueEndpoint string
 param agentDispatchPoisonQueueEndpoint string
 param cosmosEndpoint string
@@ -196,7 +197,9 @@ resource workerVm 'Microsoft.Compute/virtualMachines@2024-03-01' = {
     osProfile: {
       computerName: workerName
       adminUsername: 'teamsworker'
-      customData: base64(renderedCloudInit)
+      ...(initializeWorkerVm ? {
+        customData: base64(renderedCloudInit)
+      } : {})
       linuxConfiguration: {
         disablePasswordAuthentication: true
         ssh: {

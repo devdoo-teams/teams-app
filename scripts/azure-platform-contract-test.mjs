@@ -10,6 +10,7 @@ const mainBicepPath = path.join(root, 'infra', 'azure', 'main.bicep');
 const workerVmBicepPath = path.join(root, 'infra', 'azure', 'modules', 'worker-vm.bicep');
 const canaryParametersPath = path.join(root, 'infra', 'azure', 'parameters', 'canary.bicepparam');
 const pipelinePath = path.join(root, 'azure-pipelines.yml');
+const workerVmBicepSource = fs.readFileSync(workerVmBicepPath, 'utf8');
 const rubyYamlSafeLoadProgram = 'puts JSON.generate(YAML.safe_load(File.read(ARGV[0]), permitted_classes: [], permitted_symbols: [], aliases: true))';
 
 function resolveBicep() {
@@ -390,8 +391,15 @@ try {
   }
 
   const workerVm = findResource(resources, 'Microsoft.Compute/virtualMachines');
-  assert.equal(typeof workerVm.properties?.osProfile?.customData, 'string', 'worker VM must attach rendered cloud-init as customData');
-  assert.match(workerVm.properties.osProfile.customData, /base64\(variables\('renderedCloudInit'\)\)/, 'worker VM must base64-encode rendered cloud-init');
+  assert.equal(compiled.parameters?.initializeWorkerVm?.type, 'bool', 'main deployment must require an explicit create-vs-update VM decision');
+  assert.equal(compiledWorkerVm.parameters?.initializeWorkerVm?.type, 'bool', 'worker module must require an explicit create-vs-update VM decision');
+  assert.match(workerVmBicepSource, /\.\.\.\(initializeWorkerVm \? \{\s*customData: base64\(renderedCloudInit\)\s*\} : \{\}\)/u, 'worker VM must emit customData only for verified first creation');
+  const standaloneWorkerVm = findResource(collectResources(compiledWorkerVm), 'Microsoft.Compute/virtualMachines');
+  assert.match(
+    String(standaloneWorkerVm.properties?.osProfile),
+    /if\(parameters\('initializeWorkerVm'\), createObject\('customData', base64\(variables\('renderedCloudInit'\)\)\), createObject\(\)\)/u,
+    'compiled ARM must add customData only when the observed first-creation parameter is true',
+  );
   const compiledJson = JSON.stringify(compiled);
   assert.match(compiledJson, /teamsapp-worker\\u002Eservice|teamsapp-worker\.service/, 'rendered cloud-init must contain the worker systemd unit');
   assert.match(compiledJson, /dist\/worker\/index\.js/, 'rendered cloud-init must execute the packaged worker entrypoint');
@@ -626,6 +634,8 @@ try {
   ]) {
     assert.ok(compiled.outputs?.[output], `main.bicep must expose non-secret deployment output ${output}`);
   }
+  assert.ok(compiled.outputs?.workerVmResourceId, 'foundation outputs must expose the deterministic worker VM resource ID');
+  assert.equal(String(compiled.outputs.workerVmResourceId.value).includes("if(parameters('deployWorkerVm')"), false, 'worker VM resource ID must remain available when the foundation omits the VM module');
   assert.equal(Object.keys(compiled.outputs ?? {}).filter((name) => /secret|connection|string|key/i.test(name)).length, 0, 'Bicep outputs must not expose secrets, connection strings, or keys');
 
   const pipeline = parseYaml(pipelinePath);
@@ -845,6 +855,15 @@ try {
   const secondCreateIndex = deployScript.indexOf('az deployment group create', firstCreateIndex + 1);
   assert.ok(workloadWhatIfIndex > firstCreateIndex, 'exact workload what-if must run after foundation outputs exist');
   assert.ok(workloadWhatIfIndex < secondCreateIndex, 'exact workload what-if must pass before the workload mutation');
+  const workerStateIndex = deployScript.indexOf('scripts/azure-worker-vm-state.mjs');
+  const workloadParameterIndex = deployScript.indexOf('--phase workload');
+  assert.ok(workerStateIndex > firstCreateIndex, 'worker VM existence must be observed after deterministic foundation outputs exist');
+  assert.ok(workerStateIndex < workloadParameterIndex, 'worker VM existence must be bound before workload parameters are generated');
+  assert.ok(deployScript?.includes('az resource list'), 'worker VM existence must use the official Azure resource inventory command');
+  assert.ok(deployScript?.includes('--resource-type Microsoft.Compute/virtualMachines'), 'worker VM inventory must be limited to the exact resource type');
+  assert.ok(deployScript?.includes('--resource-group "$AZURE_RESOURCE_GROUP"'), 'worker VM inventory must remain scoped to the release resource group');
+  assert.ok(deployScript?.includes('--subscription "$AZURE_SUBSCRIPTION_ID"'), 'worker VM inventory must pin the release subscription');
+  assert.ok(deployScript?.includes('--initialize-worker-vm "$initialize_worker_vm"'), 'workload parameters must receive the observed create-vs-update decision');
   assert.ok(deployScript?.includes('--parameters "@${foundation_parameters}"'), 'foundation what-if verification and create must bind one parameter file');
   assert.ok(deployScript?.includes('--parameters "@${workload_parameters}"'), 'workload what-if and create must bind one parameter file');
   assert.ok(deployScript?.includes('--validation-level Provider'), 'deployment what-if must retain provider-level validation');

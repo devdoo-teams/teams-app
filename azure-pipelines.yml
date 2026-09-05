@@ -393,8 +393,9 @@ stages:
                       foundation_parameters="$(Agent.TempDirectory)/foundation.parameters.json"
                       workload_parameters="$(Agent.TempDirectory)/workload.parameters.json"
                       workload_what_if="$(Agent.TempDirectory)/workload.what-if.json"
+                      worker_vm_inventory="$(Agent.TempDirectory)/worker-vm-inventory.json"
                       mkdir -p "$workload_what_if_receipt_dir"
-                      trap 'rm -f "$foundation_parameters" "$workload_parameters" "$workload_what_if"' EXIT
+                      trap 'rm -f "$foundation_parameters" "$workload_parameters" "$workload_what_if" "$worker_vm_inventory"' EXIT
                       node scripts/azure-release-input.mjs "$receipt"
                       commit="$(jq -er '.commit' "$receipt")"
                       worker_archive="$(Pipeline.Workspace)/azure-worker-runtime-package/worker-runtime-${commit}.tar"
@@ -477,6 +478,23 @@ stages:
                       worker_storage_account="$(jq -er '.workerArtifactStorageAccountName.value' "$(Agent.TempDirectory)/foundation-outputs.json")"
                       worker_artifact_container="$(jq -er '.workerArtifactContainerName.value' "$(Agent.TempDirectory)/foundation-outputs.json")"
                       worker_artifact_base_url="$(jq -er '.workerArtifactContainerUrl.value' "$(Agent.TempDirectory)/foundation-outputs.json")"
+                      worker_vm_resource_id="$(jq -er '.workerVmResourceId.value' "$(Agent.TempDirectory)/foundation-outputs.json")"
+                      worker_vm_name="${worker_vm_resource_id##*/}"
+                      test -n "$worker_vm_name"
+                      az resource list \
+                        --subscription "$AZURE_SUBSCRIPTION_ID" \
+                        --resource-group "$AZURE_RESOURCE_GROUP" \
+                        --name "$worker_vm_name" \
+                        --resource-type Microsoft.Compute/virtualMachines \
+                        --only-show-errors \
+                        --output json > "$worker_vm_inventory"
+                      worker_vm_state="$workload_what_if_receipt_dir/azure-worker-vm-state.json"
+                      node scripts/azure-worker-vm-state.mjs \
+                        --inventory "$worker_vm_inventory" \
+                        --expected-resource-id "$worker_vm_resource_id" \
+                        --output "$worker_vm_state"
+                      initialize_worker_vm="$(jq -er '.initializeWorkerVm | if type == "boolean" then tostring else error("initializeWorkerVm must be boolean") end' "$worker_vm_state")"
+                      [[ "$initialize_worker_vm" == true || "$initialize_worker_vm" == false ]]
                       worker_blob_name="${commit}/worker-runtime-${commit}.tar"
                       worker_artifact_url="${worker_artifact_base_url}/${worker_blob_name}"
                       image_tag="${commit:0:12}"
@@ -493,6 +511,7 @@ stages:
                         --worker-artifact-url "$worker_artifact_url" \
                         --worker-artifact-sha256 "$worker_artifact_sha" \
                         --codex-bin-sha256 "$codex_bin_sha" \
+                        --initialize-worker-vm "$initialize_worker_vm" \
                         --output "$workload_parameters"
                       az deployment group what-if \
                         --name teamsapp-platform-current-preflight \
