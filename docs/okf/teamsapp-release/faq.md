@@ -163,6 +163,7 @@ The release pipeline now names its last execution boundary and writes a secret-f
 Internal source and verification:
 - `azure-pipelines.yml` DeployCanary AzureCLI block and failure artifact step.
 - `scripts/azure-deployment-failure-receipt.mjs` and `scripts/azure-deployment-failure-receipt-test.mjs`.
+- Fix commit: `3bfcd676ff510aefdbea6e267c3e238063f9b96f`.
 - `npm run test:azure-deployment-failure-receipt` — GREEN.
 - `npm run test:azure-core-runner` — GREEN; the new regression is in the Azure Core inventory.
 - `node scripts/azure-platform-contract-test.mjs` — GREEN.

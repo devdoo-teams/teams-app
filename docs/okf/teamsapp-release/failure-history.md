@@ -81,6 +81,10 @@ sources:
     resource: "https://github.com/devdoo-teams/teams-app/blob/18cea41fd16d97b39038a00761a272ae23d310d5/azure-pipelines.yml"
     title: "TeamsApp Azure pipeline at source-materialization fix"
     location: "release receipt parsing, fetch/checkout, HEAD/worktree verification"
+  - id: failure-receipt-fix
+    resource: "https://github.com/devdoo-teams/teams-app/blob/3bfcd676ff510aefdbea6e267c3e238063f9b96f/azure-pipelines.yml"
+    title: "TeamsApp Azure post-approval failure boundary fix"
+    location: "named failure boundaries, secret-free receipt, and failed-task artifact"
   - id: platform-contract
     resource: "https://github.com/devdoo-teams/teams-app/blob/18cea41fd16d97b39038a00761a272ae23d310d5/scripts/azure-platform-contract-test.mjs"
     title: "TeamsApp Azure platform contract test"
@@ -368,6 +372,8 @@ Fix:
 - retain a secret-free `azure-deployment-failure-receipt` artifact on task failure with boundary, exit code, source commit, version, and run ID;
 - emit an Azure DevOps safe log issue pointing to the boundary and artifact without copying stderr, tokens, or secret values;
 - add a focused RED/GREEN regression test and include it in the Azure Core test inventory.
+
+Fix commit: `3bfcd676ff510aefdbea6e267c3e238063f9b96f`.
 
 Result:
 - Run 30 remains `FAIL`, not `PASS` or `IN_PROGRESS`;
