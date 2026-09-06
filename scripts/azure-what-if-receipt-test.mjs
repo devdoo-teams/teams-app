@@ -427,6 +427,55 @@ try {
     'workload-container-app-release-update',
   ]);
 
+  // Run 37 observed the next exact legacy env/secret reconciliation shape.
+  // Keep the fixture value-free and reject any unobserved property multiset.
+  const run37ContainerAppPropertyChanges = [
+    { path: 'properties.configuration.ingress.exposedPort', propertyChangeType: 'Delete' },
+    { path: 'properties.configuration.registries', propertyChangeType: 'Array' },
+    { path: '0', propertyChangeType: 'Modify' },
+    { path: 'server', propertyChangeType: 'Modify' },
+    { path: 'properties.configuration.secrets', propertyChangeType: 'Array' },
+    { path: '0', propertyChangeType: 'Modify' },
+    { path: 'keyVaultUrl', propertyChangeType: 'Modify' },
+    { path: '1', propertyChangeType: 'Modify' },
+    { path: 'keyVaultUrl', propertyChangeType: 'Modify' },
+    { path: '2', propertyChangeType: 'Modify' },
+    { path: 'keyVaultUrl', propertyChangeType: 'Modify' },
+    { path: '3', propertyChangeType: 'Modify' },
+    { path: 'keyVaultUrl', propertyChangeType: 'Modify' },
+    { path: '4', propertyChangeType: 'Modify' },
+    { path: 'keyVaultUrl', propertyChangeType: 'Modify' },
+    { path: 'properties.runningStatus', propertyChangeType: 'Delete' },
+    { path: 'properties.template.containers', propertyChangeType: 'Array' },
+    { path: '0', propertyChangeType: 'Modify' },
+    { path: 'env', propertyChangeType: 'Array' },
+    { path: '0', propertyChangeType: 'Modify' },
+    { path: 'value', propertyChangeType: 'Modify' },
+    { path: '11', propertyChangeType: 'Modify' },
+    { path: 'value', propertyChangeType: 'Modify' },
+    { path: '15', propertyChangeType: 'Modify' },
+    { path: 'value', propertyChangeType: 'Modify' },
+    { path: '16', propertyChangeType: 'Modify' },
+    { path: 'value', propertyChangeType: 'Modify' },
+    { path: 'properties.workloadProfileName', propertyChangeType: 'Delete' },
+  ];
+  const run37ContainerAppOnly = createAzureWhatIfReceipt({
+    ...workloadIdentity,
+    whatIf: {
+      status: 'Succeeded',
+      changes: [{
+        resourceId: `${scope}/providers/Microsoft.App/containerApps/teamsapp-canary-goictvxm`,
+        changeType: 'Modify',
+        delta: run37ContainerAppPropertyChanges,
+      }],
+    },
+    checkedAt: '2026-09-07T06:00:00.000Z',
+  });
+  assert.equal(run37ContainerAppOnly.status, 'READY');
+  assert.deepEqual(run37ContainerAppOnly.whatIf.approvedPlannedChanges.map(({ rule }) => rule), [
+    'workload-container-app-release-update',
+  ]);
+
   for (const unsafeWorkloadChanges of [
     [{ ...workloadObservedChanges[0], resourceId: `${scope}/providers/Microsoft.App/containerApps/teamsapp-production-goictvxm` }],
     [{ ...workloadObservedChanges[0], delta: undefined }],

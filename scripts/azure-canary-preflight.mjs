@@ -520,6 +520,40 @@ const workloadContainerAppRun33ReleaseUpdatePropertyChanges = Object.freeze([
   Object.freeze({ path: 'properties.workloadProfileName', propertyChangeType: 'Delete' }),
 ]);
 
+// Run 37 observed the next deterministic legacy env/secret reconciliation
+// shape. Keep this as a complete value-free multiset: only this exact
+// provider-reported shape is eligible for the planned release update.
+const workloadContainerAppRun37ReleaseUpdatePropertyChanges = Object.freeze([
+  Object.freeze({ path: 'properties.configuration.ingress.exposedPort', propertyChangeType: 'Delete' }),
+  Object.freeze({ path: 'properties.configuration.registries', propertyChangeType: 'Array' }),
+  Object.freeze({ path: '0', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'server', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'properties.configuration.secrets', propertyChangeType: 'Array' }),
+  Object.freeze({ path: '0', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'keyVaultUrl', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: '1', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'keyVaultUrl', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: '2', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'keyVaultUrl', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: '3', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'keyVaultUrl', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: '4', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'keyVaultUrl', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'properties.runningStatus', propertyChangeType: 'Delete' }),
+  Object.freeze({ path: 'properties.template.containers', propertyChangeType: 'Array' }),
+  Object.freeze({ path: '0', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'env', propertyChangeType: 'Array' }),
+  Object.freeze({ path: '0', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'value', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: '11', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'value', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: '15', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'value', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: '16', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'value', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'properties.workloadProfileName', propertyChangeType: 'Delete' }),
+]);
+
 const workloadContainerAppReleaseUpdateVariants = Object.freeze([
   workloadContainerAppReleaseUpdatePropertyChanges,
   // ARM what-if can omit this service-defaulted Delete noise; keep both complete observed multisets exact.
@@ -531,6 +565,7 @@ const workloadContainerAppReleaseUpdateVariants = Object.freeze([
     ({ path: propertyPath }) => propertyPath !== 'properties.configuration.maxInactiveRevisions',
   )),
   workloadContainerAppRun33ReleaseUpdatePropertyChanges,
+  workloadContainerAppRun37ReleaseUpdatePropertyChanges,
 ]);
 
 const plannedChangeRules = Object.freeze([
