@@ -38,11 +38,13 @@ CopilotKit, OpenAI API, MCP, 로컬 모델과 Jira/Confluence/Bitbucket adapter�
 
 코드 수정이나 운영 설정 변경 전에 대상 제품의 작업 시점 공식 1차 문서와 설치된 CLI/SDK의 실제 버전·`--help`를 함께 확인한다. 디버깅 순서는 다음과 같으며, 어느 단계도 추측으로 건너뛰지 않는다.
 
-1. 공식 문서의 직접 URL, 갱신일, 지원 버전과 명령 계약을 기록한다. 기술 계약은 vendor 공식 문서·API schema·설치 help만 근거로 사용한다.
+0. [`docs/okf/teamsapp-release/index.md`](okf/teamsapp-release/index.md)의 OKF bundle을 먼저 읽고, 관련 concept의 `status`, `stale_after`, `sources`, `verified`를 확인한다. 과거 실패가 같은 유형이면 기존 concept/log를 갱신하고, 새 원인이면 별도 concept 또는 log 항목을 추가한다.
+1. 공식 문서의 직접 URL, 갱신일, 지원 버전과 명령 계약을 기록한다. 각 출처에는 정확한 문서 제목·섹션/소제목·관찰된 line range를 남기고, line이 안정적이지 않으면 `section anchor used`라고 기록한다. 기술 계약은 vendor 공식 문서·API schema·설치 help만 근거로 사용한다.
 2. 로컬/CI에 설치된 도구의 `--version`과 해당 하위 명령 `--help`를 저장하고 공식 문서와 대조한다. 불일치는 `CONTRACT_DRIFT_BLOCKED`다.
 3. 현재 서비스와 데이터를 건드리지 않는 최소 재현으로 정확한 stdout/stderr·종료 코드·대상 identity를 확보한다. 오류 원문을 얻기 전에는 설정이나 파라미터를 추측 변경하지 않는다.
 4. 재현을 focused RED 테스트로 고정하고 최소 수정한다. 동일 테스트 GREEN과 실제 read-back을 모두 확인하며 fixture 통과를 live 결과로 승격하지 않는다.
 5. 반복 스크립트/스킬은 실행 전 계약·버전·금지 동작·테스트를 점검한다. 결함이 나오면 스킬 자체를 수정하고 압박 시나리오를 다시 통과시킨 후 사용한다.
+6. 작업 종료 시 OKF concept의 `generated`, `verified`, `status`, `stale_after`와 `log.md`를 갱신하고, 공식 문서 URL·섹션/line, 내부 `file:line`, 재현·RED/GREEN·live 결과를 남긴다. OKF와 실제 증거가 불일치하면 `UNVERIFIED` 또는 `CONTRACT_DRIFT_BLOCKED`로 보고한다.
 
 Azure foundation preflight의 현재 공식 근거는 [ARM what-if operation](https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-what-if), [`az deployment group what-if`](https://learn.microsoft.com/en-us/cli/azure/deployment/group?view=azure-cli-latest), [`az bicep`](https://learn.microsoft.com/en-us/cli/azure/bicep?view=azure-cli-latest)이다. Microsoft 문서상 what-if는 리소스를 변경하지 않고 예측만 하며, `--no-pretty-print`는 프로그램이 평가할 JSON을 반환한다. 설치 help가 `bicep.use_binary_from_path=True`를 보고하면 검증된 Bicep 경로를 Azure CLI 자식 `PATH`에 넣은 뒤 실행한다. Azure Pipeline은 환경 승인 전에 exact-release foundation what-if를 실행하고 커밋·버전·구독·리소스 그룹·Bicep·ARM 파라미터 해시 영수증을 게시해야 한다. 승인 후에는 같은 파라미터를 재생성해 영수증과 대조한 다음 첫 mutation을 수행하고, 실제 foundation 출력으로 만든 workload 파라미터에도 두 번째 what-if를 통과시켜야 한다. `Create`/`Delete`/`Ignore`/`NoChange`/`Modify`/`Deploy`/`Unsupported` 의미는 공식 change-type 계약대로 분류하고, `Delete`/`Modify`/`Deploy`/`Ignore` 및 모호하거나 범위 밖인 결과를 자동 승인하지 않는다.
 

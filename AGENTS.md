@@ -16,6 +16,9 @@
 
 ## 공식 계약 우선 디버깅 게이트
 
+- 모든 Teams/Azure/클라우드 릴리스·디버깅·승인 작업은 시작 전에 OKF(Open Knowledge Format) 번들을 읽는다: [`docs/okf/teamsapp-release/index.md`](docs/okf/teamsapp-release/index.md). 최소 읽기 순서는 `index.md` → `failure-history.md` → `official-contracts.md` → `gates.md`이며, 해당 작업이 실패 이력이나 운영 질문과 관련되면 `faq.md`와 `log.md`도 읽는다.
+- OKF는 Google Cloud의 canonical Open Knowledge Format v0.2 규격을 따른다. 각 concept는 YAML frontmatter의 `type`·`sources`·`generated`·`verified`·`status`·`stale_after`와 Markdown 본문을 사용하며, 공식 출처는 `sources`에 URL·문서 제목·정확한 섹션/관찰된 line range를 기록한다. 공식 HTML line이 안정적이지 않으면 그 사실과 section anchor를 명시하고, 내부 소스·로그는 정확한 `file:line`으로 별도 기록한다.
+- OKF concept의 `stale_after`가 지났거나 공식 문서·설치 help가 바뀌었으면 최신 1차 문서를 다시 조사하고 bundle을 갱신하기 전까지 운영 결정을 `UNVERIFIED`로 유지한다. OKF를 읽지 않고 배포 승인, 환경 mutation, Jira Done, Teams 완료 메시지를 실행하지 않는다.
 - 클라우드, Teams, Entra, GitHub, Azure DevOps, 외부 provider, SDK, CLI의 동작을 진단하거나 구현할 때 기억이나 추측을 계약으로 사용하지 않는다. 작업 시점의 공식 1차 문서와 설치된 도구의 `--version`/`--help`를 먼저 확인하고, 둘이 일치하는 옵션·상태·제약만 구현 근거로 사용한다.
 - 디버깅 기록은 `OFFICIAL CONTRACT`, `OBSERVED EVIDENCE`, `INFERENCE`, `FIXTURE`, `LIVE RESULT`를 분리한다. 공식 문서가 보장하지 않거나 실제로 관찰하지 않은 항목은 `UNVERIFIED`로 유지한다.
 - 순서는 `공식 문서 URL과 갱신일 확인 → 설치 버전과 로컬 help 확인 → 최소 비파괴 재현 → 정확한 실패 출력 보존 → RED 회귀 테스트 → 최소 수정 → 동일 명령 GREEN → 실제 read-back`으로 고정한다. 실패 원문을 확보하기 전에 설정·파라미터·권한을 추측 변경하지 않는다.
