@@ -789,6 +789,19 @@ try {
   assert.ok(platformRbacStep, 'caller-effective RBAC must be verified before the deployment environment approval');
   const platformWhatIfScript = platformRbacStep?.inputs?.inlineScript;
   assert.equal(platformRbacStep?.inputs?.addSpnToEnvironment, true, 'pre-approval must bind parameters to the selected Azure service connection');
+  assert.ok(
+    platformWhatIfScript?.includes('git fetch --no-tags origin "$commit" --depth=1'),
+    'pre-approval what-if must materialize the exact attested release source before reading deployment templates',
+  );
+  assert.ok(
+    platformWhatIfScript?.includes('git checkout --detach "$commit"'),
+    'pre-approval what-if must check out the exact attested release source',
+  );
+  assert.ok(
+    (platformWhatIfScript?.indexOf('git checkout --detach "$commit"') ?? -1)
+      < (platformWhatIfScript?.indexOf('test "$(git rev-parse HEAD)" = "$commit"') ?? -1),
+    'pre-approval what-if must materialize the release source before checking its identity',
+  );
   assert.ok(platformWhatIfScript?.includes('az account get-access-token --resource-type arm'), 'pre-approval must resolve the authenticated ARM principal without Graph lookup');
   assert.ok(platformWhatIfScript?.includes('scripts/azure-access-token-principal.mjs'), 'pre-approval must validate tenant and client claims before using the token object ID');
   assert.ok(platformWhatIfScript?.includes('--deployment-principal-id "$deployment_principal_id"'), 'pre-approval parameters must include the exact deployment principal object ID');
@@ -892,8 +905,19 @@ try {
   );
   assert.ok(deployScript?.includes('"$BICEP_BIN" --version'), 'Azure deployment must execute the resolved Bicep binary before the Azure Core gate');
   assert.equal(deployScript?.includes('npm run build:worker'), false, 'deployment must not rebuild a worker after environment approval');
-  assert.equal(deployScript?.includes('git fetch'), false, 'deployment must not refetch different source after environment approval');
-  assert.equal(deployScript?.includes('git checkout --detach "$commit"'), false, 'deployment must consume the pre-approved artifact instead of rebuilding it');
+  assert.ok(
+    deployScript?.includes('git fetch --no-tags origin "$commit" --depth=1'),
+    'deployment must materialize the exact pre-approved release source before using Bicep',
+  );
+  assert.ok(
+    deployScript?.includes('git checkout --detach "$commit"'),
+    'deployment must check out the exact pre-approved release source',
+  );
+  assert.ok(
+    (deployScript?.indexOf('git checkout --detach "$commit"') ?? -1)
+      < (deployScript?.indexOf('test "$(git rev-parse HEAD)" = "$commit"') ?? -1),
+    'deployment must verify release source identity after materializing it',
+  );
   assert.equal(deployScript?.includes('npm ci'), false, 'deployment must not repeat dependency restoration after environment approval');
   assert.ok(deployScript?.includes('version: 24.19.0') || JSON.stringify(deploySteps).includes('24.19.0'), 'worker archive must carry the pinned Node runtime');
   assert.ok(deployScript?.includes('CODEX_PACKAGE_URL'), 'deployment must require an approved Codex package reference');

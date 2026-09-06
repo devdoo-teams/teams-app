@@ -267,6 +267,8 @@ stages:
                 release_receipt="$(Pipeline.Workspace)/validated-github-handoff/dist/evidence/azure-release-receipt.json"
                 node scripts/azure-release-input.mjs "$release_receipt"
                 commit="$(jq -er '.commit' "$release_receipt")"
+                git fetch --no-tags origin "$commit" --depth=1
+                git checkout --detach "$commit"
                 version="$(jq -er '.version' "$release_receipt")"
                 source_image="$(jq -er '.image' "$release_receipt")"
                 source_digest="$(jq -er '.imageDigest' "$release_receipt")"
@@ -455,6 +457,8 @@ stages:
                       trap 'rm -f "$foundation_parameters" "$workload_parameters" "$workload_what_if" "$worker_vm_inventory"' EXIT
                       node scripts/azure-release-input.mjs "$receipt"
                       commit="$(jq -er '.commit' "$receipt")"
+                      git fetch --no-tags origin "$commit" --depth=1
+                      git checkout --detach "$commit"
                       worker_archive="$(Pipeline.Workspace)/azure-worker-runtime-package/worker-runtime-${commit}.tar"
                       node scripts/azure-worker-runtime-package.mjs verify \
                         --archive "$worker_archive" \
