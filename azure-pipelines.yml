@@ -287,7 +287,8 @@ stages:
                 test -x "$BICEP_BIN"
                 export PATH="$PATH:$(dirname "$BICEP_BIN")"
                 "$BICEP_BIN" --version
-                node scripts/azure-deployment-parameters.mjs \
+                set +e
+                parameter_output="$(node scripts/azure-deployment-parameters.mjs \
                   --phase foundation \
                   --release-receipt "$release_receipt" \
                   --workload-name "$AZURE_WORKLOAD_NAME" \
@@ -306,7 +307,17 @@ stages:
                   --teams-user-auth-accepted-audiences "$TEAMS_USER_AUTH_ACCEPTED_AUDIENCES" \
                   --bot-client-secret-key-vault-secret-name "$TEAMS_BOT_CLIENT_SECRET_KEY_VAULT_SECRET_NAME" \
                   --operator-allowlist-key-vault-secret-name "$TEAMS_OPERATOR_ALLOWLIST_KEY_VAULT_SECRET_NAME" \
-                  --output "$foundation_parameters"
+                  --output "$foundation_parameters" 2>&1)"
+                parameter_status=$?
+                set -e
+                if [ "$parameter_status" -ne 0 ]; then
+                  printf '%s\n' "Azure foundation deployment parameter generation failed (status ${parameter_status})." >&2
+                  printf '%s\n' "$parameter_output" \
+                    | sed -E 's/(password|secret|token|authorization|bearer)[^[:space:]]*/\1=[REDACTED]/Ig' >&2
+                  exit "$parameter_status"
+                fi
+                printf '%s\n' "$parameter_output"
+                test -s "$foundation_parameters"
                 az deployment group what-if \
                   --name teamsapp-platform-foundation-preflight \
                   --subscription "$AZURE_SUBSCRIPTION_ID" \
