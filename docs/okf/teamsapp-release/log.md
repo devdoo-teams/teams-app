@@ -73,6 +73,14 @@
 * **Verification**: the new regression was RED before the classifier change and `node scripts/azure-what-if-receipt-test.mjs` is GREEN after it. `summarizeAzureWhatIf` now classifies the downloaded diagnostic as `REVIEW_REQUIRED` with the nine Unsupported rows preserved. Full `npm run test:azure-core` is pending a clean commit because the FileProvider gate correctly rejected the dirty tracked worktree (`EWORKTREEDIRTY`).
 * **Limit**: no Azure mutation, version bump, package upload, or Teams completion message is justified. The classifier fix is source-only until committed, full Core verification is rerun, and the remaining Unsupported review plus runtime recovery are separately proven.
 
+## 2026-09-07 — Run 34 release-checkout helper provenance gap
+
+* **Observed evidence**: Run 34 used pipeline source `c0b54175ddff7d90d099f5dbc400b9e2dafb17ae` and the same deploy-only release artifact `71df02e2ea9e9dbecbe864e0f1c6be3d649cbb4a`. Hosted Azure Core passed 26/26, but the deploy job checked out the release commit before executing `azure-what-if-receipt.mjs`; that release commit did not contain the new Run 33 classifier variant. The run therefore failed again at `workload-parameters-and-what-if` with the same disallowed Container App Modify boundary.
+* **Root cause**: the CI policy helper and its classifier dependency were treated as release-source files even though they are pipeline-control code. This is a source handoff/provenance defect, not evidence that the new exact fixture is wrong.
+* **Implementation**: the deploy job now snapshots `azure-what-if-receipt.mjs` and `azure-canary-preflight.mjs` into `$(Agent.TempDirectory)` before release checkout and invokes the preserved helper pair. This mirrors the earlier failure-receipt helper snapshot rule.
+* **Verification**: `node scripts/azure-platform-contract-test.mjs` was RED before the change and GREEN after it. The application version remains `1.0.103`; no Azure mutation or Teams completion message was performed.
+* **Next**: commit/push this CI handoff fix, rerun the exact release candidate, verify the workload receipt reaches `REVIEW_REQUIRED` rather than classifier failure, then review the nine Unsupported rows and continue only with durable runtime evidence.
+
 ## 2026-09-07 — Run 33 pre-approval artifact read-back mismatch
 
 * **Observed evidence**: Run `33` / build `20260906.12` used pipeline source `main@92b95d5364e610c827b7f396c2c832ebc961ad10`, deploy-only release artifact commit `71df02e2ea9e9dbecbe864e0f1c6be3d649cbb4a`, and product version `1.0.103`. The Azure gate job completed its observed pre-approval receipt publication while the build API remained `state=1`; no DeployCanary mutation or public-health result was promoted.

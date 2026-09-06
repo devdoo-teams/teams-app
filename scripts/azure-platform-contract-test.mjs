@@ -910,8 +910,25 @@ try {
     'deployment must materialize the exact pre-approved release source before using Bicep',
   );
   assert.ok(
+    deployScript?.includes('what_if_receipt_tools_dir="$(Agent.TempDirectory)/azure-what-if-receipt-tools"'),
+    'deployment must reserve a pipeline-owned what-if helper directory before release checkout',
+  );
+  assert.ok(
+    deployScript?.includes('cp scripts/azure-what-if-receipt.mjs "$what_if_receipt_tools_dir/azure-what-if-receipt.mjs"'),
+    'deployment must snapshot the CI what-if receipt helper before release checkout',
+  );
+  assert.ok(
+    deployScript?.includes('cp scripts/azure-canary-preflight.mjs "$what_if_receipt_tools_dir/azure-canary-preflight.mjs"'),
+    'deployment must snapshot the CI what-if classifier dependency before release checkout',
+  );
+  assert.ok(
     deployScript?.includes('git checkout --detach "$commit"'),
     'deployment must check out the exact pre-approved release source',
+  );
+  assert.ok(
+    (deployScript?.indexOf('cp scripts/azure-what-if-receipt.mjs') ?? -1)
+      < (deployScript?.indexOf('git checkout --detach "$commit"') ?? -1),
+    'what-if helper snapshot must precede release checkout',
   );
   assert.ok(
     (deployScript?.indexOf('git checkout --detach "$commit"') ?? -1)
@@ -972,10 +989,10 @@ try {
   assert.equal(deployScript?.includes('--result-format ResourceIdOnly'), false, 'deployment what-if must not use ambiguous ResourceIdOnly classification');
   assert.ok(deployScript?.includes('--no-pretty-print'), 'deployment what-if must emit machine-readable JSON');
   assert.ok(deployScript?.includes('--no-prompt true'), 'deployment what-if must not fall back to an interactive prompt');
-  assert.ok(deployScript?.includes('scripts/azure-what-if-receipt.mjs diagnose'), 'workload what-if must retain value-free property-path diagnostics before evaluation');
+  assert.ok(deployScript?.includes('node "$what_if_receipt_script" diagnose'), 'workload what-if must use the pipeline-owned value-free diagnostic helper');
   assert.ok(
-    deployScript.indexOf('scripts/azure-what-if-receipt.mjs diagnose')
-      < deployScript.indexOf('scripts/azure-what-if-receipt.mjs create'),
+    deployScript.indexOf('node "$what_if_receipt_script" diagnose')
+      < deployScript.indexOf('node "$what_if_receipt_script" create'),
     'workload diagnostic must be written before the fail-closed receipt evaluation',
   );
   assert.ok(
