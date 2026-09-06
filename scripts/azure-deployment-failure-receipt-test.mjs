@@ -28,6 +28,27 @@ assert.match(
   /node\s+"\$failure_receipt_script"/u,
   'deploy failure handling must execute the preserved CI receipt helper',
 );
+assert.notEqual(deployCanary.indexOf('failure_receipt_sha256='), -1, 'deploy must allocate a receipt checksum sidecar');
+assert.match(
+  deployCanary,
+  /test\s+-s\s+"\$failure_receipt"/u,
+  'deploy failure handling must reject an empty receipt before publishing the artifact',
+);
+assert.match(
+  deployCanary,
+  /jq\s+-e\s+.*schemaVersion.*status.*FAIL.*"\$failure_receipt"/u,
+  'deploy failure handling must validate the receipt schema before publishing the artifact',
+);
+assert.match(
+  deployCanary,
+  /sha256sum\s+"\$failure_receipt"/u,
+  'deploy failure handling must calculate a checksum for the retained receipt',
+);
+assert.match(
+  deployCanary,
+  /test\s+-s\s+"\$failure_receipt_sha256"/u,
+  'deploy failure handling must reject a missing receipt checksum sidecar',
+);
 const validateHandoff = pipeline.slice(
   pipeline.indexOf('  - stage: ValidateHandoff'),
   pipeline.indexOf('  - stage: ValidateApprovalConfiguration'),

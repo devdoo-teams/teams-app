@@ -466,6 +466,7 @@ stages:
                       set -Eeuo pipefail
                       failure_receipt_dir="$(Pipeline.Workspace)/azure-deployment-failure"
                       failure_receipt="$failure_receipt_dir/azure-deployment-failure-receipt.json"
+                      failure_receipt_sha256="$failure_receipt_dir/azure-deployment-failure-receipt.sha256"
                       failure_receipt_script="$(Agent.TempDirectory)/azure-deployment-failure-receipt.mjs"
                       failure_boundary="bootstrap"
                       mkdir -p "$failure_receipt_dir"
@@ -474,15 +475,33 @@ stages:
                         local status="$1"
                         (
                           set +e
-                          node "$failure_receipt_script" \
-                            --output "$failure_receipt" \
-                            --stage "DeployCanary" \
-                            --job "DeployCanaryRevision" \
-                            --boundary "${failure_boundary:-bootstrap}" \
-                            --exit-code "$status" \
-                            --source-commit "${commit:-unknown}" \
-                            --release-version "${version:-unknown}" \
-                            --pipeline-run-id "${BUILD_BUILDID:-unknown}" >/dev/null 2>&1
+                          receipt_write_status="FAILED"
+                          receipt_sha256="unknown"
+                          if node "$failure_receipt_script" \
+                              --output "$failure_receipt" \
+                              --stage "DeployCanary" \
+                              --job "DeployCanaryRevision" \
+                              --boundary "${failure_boundary:-bootstrap}" \
+                              --exit-code "$status" \
+                              --source-commit "${commit:-unknown}" \
+                              --release-version "${version:-unknown}" \
+                              --pipeline-run-id "${BUILD_BUILDID:-unknown}" >/dev/null 2>&1; then
+                            if test -s "$failure_receipt" && jq -e '.schemaVersion == 1 and .status == "FAIL" and (.boundary | type == "string") and (.exitCode | type == "number")' "$failure_receipt" >/dev/null 2>&1; then
+                              receipt_sha256="$(sha256sum "$failure_receipt" | awk '{print $1}')"
+                              if [[ "$receipt_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+                                printf '%s\n' "$receipt_sha256" > "$failure_receipt_sha256"
+                                chmod 600 "$failure_receipt_sha256"
+                                if test -s "$failure_receipt_sha256" && grep -Eq '^[0-9a-f]{64}$' "$failure_receipt_sha256"; then
+                                  receipt_write_status="READY"
+                                fi
+                              fi
+                            fi
+                          fi
+                          if [[ "$receipt_write_status" == READY ]]; then
+                            printf '##vso[task.logissue type=warning;code=TEAMSAPP_AZURE_DEPLOYMENT_RECEIPT;]receiptWriteStatus=READY; receiptSha256=%s.\n' "$receipt_sha256"
+                          else
+                            printf '##vso[task.logissue type=error;code=TEAMSAPP_AZURE_DEPLOYMENT_RECEIPT;]receiptWriteStatus=FAILED; receipt artifact was not written, non-empty, schema-valid, and checksum-backed.\n'
+                          fi
                           printf '##vso[task.logissue type=error;code=TEAMSAPP_AZURE_DEPLOYMENT_BOUNDARY;]boundary=%s exitCode=%s; inspect azure-deployment-failure-receipt artifact and this task stderr.\n' "${failure_boundary:-bootstrap}" "$status"
                         ) || true
                       }
