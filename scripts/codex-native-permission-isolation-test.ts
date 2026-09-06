@@ -13,6 +13,7 @@ import {
   AgentExecutionUnavailableError,
   type AgentIsolationSpawnOptions,
 } from '../src/server/agent-execution-policy.js';
+import { buildCodexExecArguments } from '../src/server/codex-runner.js';
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-codex-native-isolation-'));
 const sourceWorkspace = path.join(root, 'source');
@@ -322,6 +323,21 @@ try {
   assert.ok(spawnCalls[0]?.args.includes('--ignore-user-config'), 'dangerous user config must not load into the service run');
   assert.ok(spawnCalls[0]?.args.includes('--ignore-rules'), 'user/project exec rules must not widen the service run');
   assert.ok(spawnCalls[0]?.args.includes('--strict-config'), 'unknown security configuration must fail closed');
+
+  const selectedArgs = buildCodexExecArguments({
+    prefixArgs: [],
+    mode: 'read-only',
+    workspace: lease.workspace,
+    enrichedPrompt: 'inspect the projected workspace with the selected model',
+    selection: {
+      model: 'gpt-6-astra',
+      reasoningEffort: 'medium',
+      catalogRevision: 'a'.repeat(64),
+    },
+  });
+  await lease.spawn(scope, codexExecutable, selectedArgs, spawnOptions);
+  assert.equal(spawnCalls.length, 2, 'a valid model/reasoning selection must remain launchable through the read-only lease');
+  assert.deepEqual(spawnCalls[1]?.args, selectedArgs);
 
   await assert.rejects(
     () => lease.spawn(scope, codexExecutable, [...args.slice(0, 2), '--sandbox', 'read-only', ...args.slice(2)], spawnOptions),
