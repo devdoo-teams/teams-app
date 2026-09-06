@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 
-const { normalizeCliCapability, probeCliCapabilities } = await import('../src/server/codex-capability.ts');
+const {
+  normalizeCliCapability,
+  probeCliCapabilities,
+  promoteVerifiedCodexCapability,
+} = await import('../src/server/codex-capability.ts');
 
 const GHCP_CAPABILITY_ARGS = [
   '--prompt', 'Respond with exactly GHCP_CAPABILITY_OK.',
@@ -446,6 +450,42 @@ async function testNormalizerDoesNotPromoteUnknownEntitlement() {
   );
 }
 
+async function testBoundedCodexExecutionPromotesAuthenticatedCapability() {
+  const loginOnly = {
+    state: 'unknown',
+    executable: 'present',
+    probe: 'not-run',
+    authentication: 'authenticated',
+    login: 'authenticated',
+    entitlement: 'unknown',
+    reason: 'unknown',
+  };
+
+  assert.deepEqual(
+    promoteVerifiedCodexCapability(loginOnly, true),
+    {
+      state: 'available',
+      executable: 'present',
+      probe: 'passed',
+      authentication: 'authenticated',
+      login: 'authenticated',
+      entitlement: 'allowed',
+      reason: 'verified',
+    },
+    'the exact bounded read-only execution result must make the authenticated Codex provider selectable',
+  );
+  assert.deepEqual(
+    promoteVerifiedCodexCapability(loginOnly, false),
+    loginOnly,
+    'login-only evidence must remain conservative when the bounded execution has not passed',
+  );
+  assert.equal(
+    promoteVerifiedCodexCapability({ ...loginOnly, authentication: 'not-authenticated', login: 'not-authenticated' }, true).state,
+    'unknown',
+    'a bounded result cannot override explicit unauthenticated evidence',
+  );
+}
+
 const tests = [
   testGhcpCapabilityProbeRequiresExplicitFeatureFlag,
   testCodexAuthRequiresOfficialStatusText,
@@ -461,6 +501,7 @@ const tests = [
   testOnlyExplicitNotAuthenticatedEvidenceSetsLoginState,
   testNormalizerDoesNotPromoteUnknownLogin,
   testNormalizerDoesNotPromoteUnknownEntitlement,
+  testBoundedCodexExecutionPromotesAuthenticatedCapability,
 ];
 
 for (const test of tests) {

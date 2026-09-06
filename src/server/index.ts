@@ -44,6 +44,7 @@ import {
   agentCapacityText as mapAgentCapacityText,
 } from './agent-admission-controller.js';
 import {
+  promoteVerifiedCodexCapability,
   probeCliCapabilities,
   unknownCliCapabilities,
   type CliCapabilities,
@@ -477,10 +478,15 @@ async function runA2ANativePreflight(policy: AgentExecutionPolicy): Promise<A2AW
   }
 }
 
+const nativeExecutionPreflight = !azureQueueDispatch
+  && baseExecutionReadiness.state === 'configured'
+  && isProduction
+  ? await runA2ANativePreflight(agentExecutionPolicy)
+  : undefined;
+const nativeExecutionVerified = nativeExecutionPreflight?.state === 'configured';
 const legacyExecutionReadiness = azureQueueDispatch
   ? { state: 'unavailable' as const, reason: 'external-worker-dispatch' as const }
-  : baseExecutionReadiness.state === 'configured' && isProduction
-  && (await runA2ANativePreflight(agentExecutionPolicy)).state === 'unavailable'
+  : nativeExecutionPreflight?.state === 'unavailable'
   ? { state: 'unavailable' as const, reason: 'isolation-unavailable' as const }
   : baseExecutionReadiness;
 
@@ -1158,7 +1164,9 @@ function envelopeText(envelope: GenUiEnvelopeV1): string {
 }
 
 async function buildStatusEnvelope(): Promise<GenUiEnvelopeV1> {
-  const capabilities = azureQueueDispatch ? unknownCliCapabilities() : await probeCliCapabilities();
+  const capabilities = azureQueueDispatch
+    ? unknownCliCapabilities()
+    : verifiedCoreCliCapabilities(coreProviderCapabilities);
   return genUi.status({
     teamsSdk: Boolean(teamsApp),
     environment: isProduction ? 'production' : 'local',
@@ -1810,7 +1818,7 @@ http.get('/api/health', async (_request: any, response: any) => {
   let cliCapabilities: CliCapabilities;
   try {
     if (azureQueueDispatch) throw new Error('CLI probing belongs to the external Linux worker.');
-    cliCapabilities = await probeCliCapabilities();
+    cliCapabilities = verifiedCoreCliCapabilities(await probeCliCapabilities());
   } catch {
     // A capability probe is diagnostic only. If the runner itself fails, keep
     // health available and report the dimensions as unknown rather than
@@ -2598,6 +2606,15 @@ await agentService.initialize();
 const coreProviderCapabilities = !azureQueueDispatch
   ? await probeCliCapabilities().catch(() => unknownCliCapabilities())
   : undefined;
+
+function verifiedCoreCliCapabilities(capabilities: CliCapabilities): CliCapabilities {
+  if (agentProvider !== 'codex' || !nativeExecutionVerified) return capabilities;
+  return {
+    ...capabilities,
+    codex: promoteVerifiedCodexCapability(capabilities.codex, true),
+  };
+}
+
 const AZURE_CORE_SUBMISSION_FACT_MAX_AGE_MS = 30_000;
 let latestAzureCoreProviderFact: CoreProviderFact | undefined;
 type MeasuredInputResumeRuntime = ProviderNeutralAgentRunner & Readonly<{
@@ -2615,9 +2632,12 @@ type MeasuredInputResumeRuntime = ProviderNeutralAgentRunner & Readonly<{
 function measuredCoreRuntime(
   provider: CliAgentProvider,
 ): { runtime: MeasuredInputResumeRuntime; availability: 'available' } | undefined {
+  const capabilities = coreProviderCapabilities
+    ? verifiedCoreCliCapabilities(coreProviderCapabilities)
+    : undefined;
   const availability = provider === 'copilot'
-    ? coreProviderCapabilities?.ghcp.state
-    : coreProviderCapabilities?.codex.state;
+    ? capabilities?.ghcp.state
+    : capabilities?.codex.state;
   const runtime = providerRunners[provider] as MeasuredInputResumeRuntime | undefined;
   return availability === 'available' && runtime
     ? { runtime, availability }
@@ -2779,11 +2799,14 @@ async function observeAzureCoreProviderFact(input: Readonly<{
 
 function observeCoreProviderFacts(): CoreProviderFact[] {
   if (azureQueueDispatch) return [currentAzureCoreProviderFact()];
+  const capabilities = coreProviderCapabilities
+    ? verifiedCoreCliCapabilities(coreProviderCapabilities)
+    : undefined;
   return [...new Set(Object.keys(providerRunners).concat(agentProvider))]
     .map((provider) => {
       const capability = provider === 'copilot'
-        ? coreProviderCapabilities?.ghcp
-        : coreProviderCapabilities?.codex;
+        ? capabilities?.ghcp
+        : capabilities?.codex;
       return {
         provider,
         availability: capability?.state ?? 'unknown',

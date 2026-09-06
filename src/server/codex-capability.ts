@@ -68,6 +68,30 @@ export type CliCapabilities = Readonly<{
   ghcp: CliCapability;
 }>;
 
+/**
+ * Combines the conservative login-status observation with a separately
+ * completed bounded Codex execution preflight. Login status alone is not
+ * enough to advertise a selectable provider, but a successful exact
+ * read-only preflight proves the capability needed by the Core surface.
+ */
+export function promoteVerifiedCodexCapability(
+  capability: CliCapability,
+  boundedExecutionVerified: boolean,
+): CliCapability {
+  if (!boundedExecutionVerified
+    || capability.executable !== 'present'
+    || capability.authentication !== 'authenticated') {
+    return capability;
+  }
+  return {
+    ...capability,
+    state: 'available',
+    probe: 'passed',
+    entitlement: 'allowed',
+    reason: 'verified',
+  };
+}
+
 export type ProbeCliCapabilitiesOptions = Readonly<{
   codexCommand?: CliCommandSpec;
   ghcpCommand?: CliCommandSpec;
