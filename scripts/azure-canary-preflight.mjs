@@ -436,6 +436,90 @@ const workloadContainerAppLegacyReleaseUpdatePropertyChanges = Object.freeze((()
   });
 })());
 
+// Azure Container Apps can report a larger but still deterministic env/secret
+// delta when the canary was created by an older template revision. This exact
+// value-free shape was observed in Run 33 after the current Bicep template
+// reconciled the legacy canary. Keep it as a complete multiset: do not replace
+// this with a broad "any env Modify" rule.
+const workloadContainerAppRun33ReleaseUpdatePropertyChanges = Object.freeze([
+  Object.freeze({ path: 'properties.configuration.ingress.exposedPort', propertyChangeType: 'Delete' }),
+  Object.freeze({ path: 'properties.configuration.registries', propertyChangeType: 'Array' }),
+  Object.freeze({ path: '0', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'server', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'properties.configuration.secrets', propertyChangeType: 'Array' }),
+  Object.freeze({ path: '0', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'keyVaultUrl', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: '1', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'keyVaultUrl', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: '2', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'keyVaultUrl', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: '3', propertyChangeType: 'Create' }),
+  Object.freeze({ path: '4', propertyChangeType: 'Create' }),
+  Object.freeze({ path: 'properties.runningStatus', propertyChangeType: 'Delete' }),
+  Object.freeze({ path: 'properties.template.containers', propertyChangeType: 'Array' }),
+  Object.freeze({ path: '0', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'env', propertyChangeType: 'Array' }),
+  Object.freeze({ path: '0', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'value', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: '2', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'name', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'value', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: '3', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'name', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'value', propertyChangeType: 'Delete' }),
+  Object.freeze({ path: 'secretRef', propertyChangeType: 'Create' }),
+  Object.freeze({ path: '4', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'name', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'value', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: '5', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'name', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'value', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: '6', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'name', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'value', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: '7', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'name', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'value', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: '8', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'name', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'value', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: '9', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'name', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'secretRef', propertyChangeType: 'Delete' }),
+  Object.freeze({ path: 'value', propertyChangeType: 'Create' }),
+  Object.freeze({ path: '10', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'name', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'value', propertyChangeType: 'Delete' }),
+  Object.freeze({ path: 'secretRef', propertyChangeType: 'Create' }),
+  Object.freeze({ path: '11', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'name', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'value', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: '12', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'name', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'value', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: '13', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'name', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'value', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: '14', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'name', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'value', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: '15', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'name', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'value', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: '16', propertyChangeType: 'Create' }),
+  Object.freeze({ path: '17', propertyChangeType: 'Create' }),
+  Object.freeze({ path: '18', propertyChangeType: 'Create' }),
+  Object.freeze({ path: '19', propertyChangeType: 'Create' }),
+  Object.freeze({ path: '20', propertyChangeType: 'Create' }),
+  Object.freeze({ path: '21', propertyChangeType: 'Create' }),
+  Object.freeze({ path: '22', propertyChangeType: 'Create' }),
+  Object.freeze({ path: '23', propertyChangeType: 'Create' }),
+  Object.freeze({ path: '24', propertyChangeType: 'Create' }),
+  Object.freeze({ path: 'image', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'properties.template.revisionSuffix', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'properties.workloadProfileName', propertyChangeType: 'Delete' }),
+]);
+
 const workloadContainerAppReleaseUpdateVariants = Object.freeze([
   workloadContainerAppReleaseUpdatePropertyChanges,
   // ARM what-if can omit this service-defaulted Delete noise; keep both complete observed multisets exact.
@@ -446,6 +530,7 @@ const workloadContainerAppReleaseUpdateVariants = Object.freeze([
   Object.freeze(workloadContainerAppLegacyReleaseUpdatePropertyChanges.filter(
     ({ path: propertyPath }) => propertyPath !== 'properties.configuration.maxInactiveRevisions',
   )),
+  workloadContainerAppRun33ReleaseUpdatePropertyChanges,
 ]);
 
 const plannedChangeRules = Object.freeze([
