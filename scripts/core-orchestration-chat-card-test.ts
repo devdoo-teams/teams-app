@@ -227,11 +227,22 @@ const providers: CoreProviderFact[] = [{
   capabilities: [],
   observedAt: '2026-09-03T00:00:00.000Z',
   source: 'runtime-observation',
-}];
+  readiness: {
+    configured: 'configured',
+    executable: 'present',
+    authentication: 'authenticated',
+    entitlement: 'unknown',
+    probe: 'not-run',
+    reason: 'unknown',
+  },
+} as never];
 const listActivity = createCoreOrchestrationListActivity([job('running')], providers, { openTabUrl: tabUrl });
 const listCard = cardFrom(listActivity);
 assert.match(JSON.stringify(listCard), /job-durable-42/);
 assert.match(JSON.stringify(listCard), /unknown/);
+assert.match(JSON.stringify(listCard), /configured/);
+assert.match(JSON.stringify(listCard), /authenticated/);
+assert.match(JSON.stringify(listCard), /not-run/);
 assert.doesNotMatch(JSON.stringify(listCard), /provider.*available/i, 'unknown providers are not promoted to live availability');
 assert.equal(listCard.actions?.at(-1)?.type, 'Action.OpenUrl');
 assert.equal(listCard.actions?.at(-1)?.url, tabUrl);

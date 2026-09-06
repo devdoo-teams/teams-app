@@ -15,6 +15,7 @@ import type {
   CoreOrchestrationJob,
   CoreOrchestrationProvider,
   CoreProviderFact,
+  CoreProviderReadiness,
   CoreProvideInputRequest,
   CoreProvideInputResult,
   CoreSubmitRequest,
@@ -604,12 +605,36 @@ function validateProviderFact(fact: CoreProviderFact): CoreProviderFact {
     || fact.capabilities.some((capability) => typeof capability !== 'string' || !capability.trim())) {
     throw new CoreOrchestrationValidationError('Provider capabilities must contain measured capability names.');
   }
+  const readiness = fact.readiness === undefined ? undefined : validateProviderReadiness(fact.readiness);
   return Object.freeze({
     provider: fact.provider,
     availability: fact.availability,
     capabilities: Object.freeze([...fact.capabilities]),
     observedAt: fact.observedAt,
     source: fact.source,
+    ...(readiness ? { readiness } : {}),
+  });
+}
+
+function validateProviderReadiness(value: CoreProviderReadiness): CoreProviderReadiness {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new CoreOrchestrationValidationError('Provider readiness is invalid.');
+  }
+  if (!['configured', 'not-configured', 'unknown'].includes(value.configured)
+    || !['present', 'absent', 'unknown'].includes(value.executable)
+    || !['authenticated', 'not-authenticated', 'unknown'].includes(value.authentication)
+    || !['allowed', 'blocked', 'unknown'].includes(value.entitlement)
+    || !['passed', 'not-run', 'failed', 'unknown'].includes(value.probe)
+    || !['verified', 'missing', 'auth-required', 'policy-blocked', 'execution-failed', 'unknown'].includes(value.reason)) {
+    throw new CoreOrchestrationValidationError('Provider readiness is invalid.');
+  }
+  return Object.freeze({
+    configured: value.configured,
+    executable: value.executable,
+    authentication: value.authentication,
+    entitlement: value.entitlement,
+    probe: value.probe,
+    reason: value.reason,
   });
 }
 

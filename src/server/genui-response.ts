@@ -135,6 +135,20 @@ function toolUsageLabel(category: CoreAgentToolCategory): string {
   return 'CLI';
 }
 
+function providerFactLabel(provider: CoreProviderFact): string {
+  const availability = identifierText(provider.availability, 40, 'unknown');
+  const readiness = provider.readiness;
+  if (!readiness) return availability;
+  return [
+    availability,
+    `설정 ${identifierText(readiness.configured, 24, 'unknown')}`,
+    `실행파일 ${identifierText(readiness.executable, 24, 'unknown')}`,
+    `인증 ${identifierText(readiness.authentication, 32, 'unknown')}`,
+    `권한 ${identifierText(readiness.entitlement, 24, 'unknown')}`,
+    `probe ${identifierText(readiness.probe, 24, 'unknown')}`,
+  ].join(' · ');
+}
+
 function orchestrationDetailAction(job: CoreOrchestrationJob): Record<string, unknown> {
   const tools = job.tools ?? [];
   const observedTools = tools.length > 0
@@ -314,7 +328,7 @@ export function createCoreOrchestrationListActivity(
   }));
   const providerFacts = providers.slice(0, 10).map((provider) => ({
     title: displayText(provider.provider, 80, 'unknown-provider'),
-    value: identifierText(provider.availability, 40, 'unknown'),
+    value: providerFactLabel(provider),
   }));
   return orchestrationActivity({
     type: 'AdaptiveCard',

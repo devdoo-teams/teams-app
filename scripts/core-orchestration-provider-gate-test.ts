@@ -16,7 +16,15 @@ let facts: CoreProviderFact[] = [{
   capabilities: [],
   observedAt: '2026-09-04T00:00:00.000Z',
   source: 'runtime-probe',
-}];
+  readiness: {
+    configured: 'configured',
+    executable: 'present',
+    authentication: 'authenticated',
+    entitlement: 'unknown',
+    probe: 'not-run',
+    reason: 'unknown',
+  },
+} as never];
 let submitCalls = 0;
 let approveCalls = 0;
 let retryCalls = 0;
@@ -143,6 +151,34 @@ try {
     providerError('CORE_ORCHESTRATION_PROVIDER_UNAVAILABLE'),
   );
   assert.equal(submitCalls, 1, 'only the measured provider submission reached the agent service');
+
+  const detailedFacts = service.listProviderFacts();
+  assert.deepEqual(detailedFacts[0]?.readiness, {
+    configured: 'configured',
+    executable: 'present',
+    authentication: 'authenticated',
+    entitlement: 'unknown',
+    probe: 'not-run',
+    reason: 'unknown',
+  }, 'provider readiness dimensions remain observable after service validation');
+
+  const invalidReadinessService = new CoreOrchestrationService({
+    agentService: fakeAgentService,
+    jobStore: store,
+    observeProviderFacts: () => [{
+      provider: 'codex',
+      availability: 'unknown',
+      capabilities: [],
+      observedAt: '2026-09-04T00:00:00.000Z',
+      source: 'runtime-probe',
+      readiness: { configured: 'maybe' },
+    } as never],
+  });
+  assert.throws(
+    () => invalidReadinessService.listProviderFacts(),
+    /Provider readiness is invalid/u,
+    'invalid readiness dimensions are rejected instead of being silently normalized',
+  );
 
   console.log('core-orchestration-provider-gate-test: PASS');
 } finally {

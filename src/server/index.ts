@@ -43,7 +43,12 @@ import {
   publicAgentCapacityError as mapAgentCapacityError,
   agentCapacityText as mapAgentCapacityText,
 } from './agent-admission-controller.js';
-import { probeCliCapabilities, unknownCliCapabilities, type CliCapabilities } from './codex-capability.js';
+import {
+  probeCliCapabilities,
+  unknownCliCapabilities,
+  type CliCapabilities,
+  type CliCapability,
+} from './codex-capability.js';
 import { GitService } from './git-service.js';
 import {
   configureResponseEngineRouter,
@@ -200,6 +205,7 @@ import type {
   CoreOrchestrationJob,
   CoreOrchestrationProvider,
   CoreProviderFact,
+  CoreProviderReadiness,
 } from '../shared/core-orchestration.js';
 
 /**
@@ -2675,6 +2681,37 @@ function azureCoreProviderFact(
     capabilities,
     observedAt,
     source: 'runtime-observation',
+    readiness: {
+      configured: azureAgentDispatchQueue ? 'configured' : 'not-configured',
+      executable: 'unknown',
+      authentication: 'unknown',
+      entitlement: 'unknown',
+      probe: availability === 'available' ? 'passed' : availability === 'unavailable' ? 'failed' : 'not-run',
+      reason: availability === 'available' ? 'verified' : availability === 'unavailable' ? 'execution-failed' : 'unknown',
+    },
+  };
+}
+
+function cliProviderReadiness(capability: CliCapability | undefined): CoreProviderReadiness {
+  if (!capability) {
+    return {
+      configured: 'unknown',
+      executable: 'unknown',
+      authentication: 'unknown',
+      entitlement: 'unknown',
+      probe: 'unknown',
+      reason: 'unknown',
+    };
+  }
+  return {
+    configured: capability.executable === 'present'
+      ? 'configured'
+      : capability.executable === 'absent' ? 'not-configured' : 'unknown',
+    executable: capability.executable,
+    authentication: capability.authentication,
+    entitlement: capability.entitlement,
+    probe: capability.probe,
+    reason: capability.reason,
   };
 }
 
@@ -2753,6 +2790,7 @@ function observeCoreProviderFacts(): CoreProviderFact[] {
         capabilities: measuredCoreProviderCapabilities(provider as CliAgentProvider),
         observedAt: new Date().toISOString(),
         source: 'runtime-probe' as const,
+        readiness: cliProviderReadiness(capability),
       };
     });
 }

@@ -388,6 +388,14 @@ const unavailableAndMobile = renderToStaticMarkup(<OrchestrationPanelView
     capabilities: ['submit'],
     observedAt: '2026-09-03T00:59:00.000Z',
     source: 'runtime-observation',
+    readiness: {
+      configured: 'not-configured',
+      executable: 'absent',
+      authentication: 'unknown',
+      entitlement: 'unknown',
+      probe: 'not-run',
+      reason: 'missing',
+    },
   }]}
   jobs={[task('completed', { result: 'Evidence prepared.' })]}
   selectedJob={task('completed', { result: 'Evidence prepared.' })}
@@ -396,6 +404,7 @@ const unavailableAndMobile = renderToStaticMarkup(<OrchestrationPanelView
 />);
 assert.match(unavailableAndMobile, /<option disabled="" value="hermes">hermes \(사용 불가\)<\/option>/);
 assert.match(unavailableAndMobile, /hermes: 현재 사용할 수 없음/);
+assert.match(unavailableAndMobile, /설정 not-configured · 실행파일 absent · 인증 unknown · 권한 unknown · probe not-run/);
 assert.match(unavailableAndMobile, /Evidence prepared/);
 assert.match(unavailableAndMobile, /모바일에서 작업 제어가 원활하지 않으면 Teams 데스크톱 또는 웹 탭에서 계속하세요/);
 

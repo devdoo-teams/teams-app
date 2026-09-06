@@ -103,6 +103,28 @@ export type CoreProvideInputResult =
 
 export type CoreProviderAvailability = 'available' | 'unavailable' | 'unknown';
 export type CoreProviderFactSource = 'runtime-probe' | 'runtime-observation';
+export type CoreProviderConfiguredState = 'configured' | 'not-configured' | 'unknown';
+export type CoreProviderExecutableState = 'present' | 'absent' | 'unknown';
+export type CoreProviderAuthenticationState = 'authenticated' | 'not-authenticated' | 'unknown';
+export type CoreProviderEntitlementState = 'allowed' | 'blocked' | 'unknown';
+export type CoreProviderProbeState = 'passed' | 'not-run' | 'failed' | 'unknown';
+export type CoreProviderReadinessReason =
+  | 'verified'
+  | 'missing'
+  | 'auth-required'
+  | 'policy-blocked'
+  | 'execution-failed'
+  | 'unknown';
+
+/** Measured provider dimensions; configuration is not proof of execution. */
+export type CoreProviderReadiness = Readonly<{
+  configured: CoreProviderConfiguredState;
+  executable: CoreProviderExecutableState;
+  authentication: CoreProviderAuthenticationState;
+  entitlement: CoreProviderEntitlementState;
+  probe: CoreProviderProbeState;
+  reason: CoreProviderReadinessReason;
+}>;
 
 /** Provider facts are observations, never configuration or fixture declarations. */
 export type CoreProviderFact = Readonly<{
@@ -111,6 +133,7 @@ export type CoreProviderFact = Readonly<{
   capabilities: readonly string[];
   observedAt: string;
   source: CoreProviderFactSource;
+  readiness?: CoreProviderReadiness;
 }>;
 
 export class CoreOrchestrationProviderUnavailableError extends Error {

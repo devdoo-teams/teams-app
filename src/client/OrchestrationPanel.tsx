@@ -95,6 +95,12 @@ function supports(provider: CoreProviderFact | undefined, capability: string): b
   return isAvailable(provider) && provider!.capabilities.includes(capability);
 }
 
+function providerReadinessText(provider: CoreProviderFact): string {
+  const readiness = provider.readiness;
+  if (!readiness) return '';
+  return ` · 설정 ${readiness.configured} · 실행파일 ${readiness.executable} · 인증 ${readiness.authentication} · 권한 ${readiness.entitlement} · probe ${readiness.probe}`;
+}
+
 export function validateOrchestrationSubmission(
   prompt: string,
   providerId: string,
@@ -317,7 +323,7 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
         </label>
         {props.providers.filter((provider) => !isAvailable(provider)).map((provider) => (
           <p className="panel-description" key={provider.provider}>
-            {provider.provider}: {provider.availability === 'unknown' ? '가용성 확인 필요' : '현재 사용할 수 없음'}
+            {provider.provider}: {provider.availability === 'unknown' ? '가용성 확인 필요' : '현재 사용할 수 없음'}{providerReadinessText(provider)}
           </p>
         ))}
         {props.providerId === 'codex' ? props.modelCatalog ? (
