@@ -270,6 +270,12 @@ npm run release:update -- start
 재개한다. 기본 상태 파일은 `.release/update-current.json`이며 토큰·비밀번호·MFA 값은 저장하지
 않는다. 시작 시 기록한 미추적 파일은 `untrackedAtStart`로만 보존한다.
 
+각 포털·설치본·데스크톱·모바일 증거를 등록하기 직전에도 `release:update`가 공개 `/api/health`,
+`/`, `/tabs/home/` 및 해시 자산을 같은 release identity로 다시 확인한다. 따라서 최초 public
+게이트 통과 뒤 Dev Tunnel이나 공개 프로세스가 사라진 상태에서 화면 증거만 남기는 것을 허용하지
+않는다. 이 재검증이 실패하면 해당 UI 단계는 `BLOCKED`로 저장하고, 이전 공개 identity와 증거를
+성공으로 승격하지 않는다.
+
 여기서 `run`은 자동 게이트(`machine → package → public`)를 뜻한다. 포털 업로드와
 설치본·데스크톱·모바일 증거는 의도적으로 별도 handoff이며, `run`의 성공 출력만으로
 Teams 배포 완료를 보고하지 않는다. 실패 JSON에는 run ID·상태 경로·다음 게이트·identity·

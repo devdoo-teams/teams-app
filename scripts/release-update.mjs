@@ -838,6 +838,23 @@ async function verifyReadyPhaseIdentity(statePath, state, phase) {
   return current;
 }
 
+/**
+ * A browser/UI attestation is only meaningful while the same public release
+ * identity is still serving. Re-probe the public phase immediately before
+ * accepting any surface evidence so a tunnel/process disappearing between
+ * the automated public gate and the UI handoff cannot be recorded as a
+ * release success.
+ */
+export async function verifyBrowserSurfacePrerequisites(
+  statePath,
+  state,
+  surface,
+  { verifyPublic = verifyReadyPhaseIdentity } = {},
+) {
+  if (!browserPhases.has(surface)) throw new Error('browser evidence requires a UI surface');
+  return verifyPublic(statePath, state, 'public');
+}
+
 function assertSafeJiraText(value, label) {
   if (typeof value !== 'string' || value.trim() === '') throw new Error(`Jira reconciliation requires ${label}`);
   if (/(?:bearer\s+\S+|password\s*[:=]|api[_ -]?key\s*[:=]|secret\s*[:=])/i.test(value)) {
@@ -1057,23 +1074,24 @@ async function executeBrowserEvidence(statePath, state, options) {
   const attempted = recordAttempt(state, surface);
   await writeCanonicalState(attempted, statePath);
   try {
+    const publicState = await verifyBrowserSurfacePrerequisites(statePath, attempted, surface);
     const evidencePath = path.resolve(options.evidencePath);
     const evidenceInput = JSON.parse(await fs.readFile(evidencePath, 'utf8'));
     const { attestation: attestationInput } = splitBrowserEvidenceInput(evidenceInput, { requireFullEvidence: true });
-    const attestation = validateBrowserAttestation(attestationInput, attempted, surface);
+    const attestation = validateBrowserAttestation(attestationInput, publicState, surface);
     let registration;
     if (surface === 'portal') {
-      const publicOrigin = await expectedOriginForState(attempted);
+      const publicOrigin = await expectedOriginForState(publicState);
       if (!publicOrigin) throw new Error('portal evidence requires a recorded public origin for Teams messaging endpoint verification');
       registration = await verifyTeamsRegistration({
-        appId: packagedAppId(attempted),
-        expectedVersion: attempted.version,
+        appId: packagedAppId(publicState),
+        expectedVersion: publicState.version,
         expectedEndpoint: `${publicOrigin}/api/messages`,
-        expectedPackagePath: attempted.releaseUpdate?.packagePath ?? defaultPackagePath,
-        expectedPackageSha256: attempted.package?.sha256,
+        expectedPackagePath: publicState.releaseUpdate?.packagePath ?? defaultPackagePath,
+        expectedPackageSha256: publicState.package?.sha256,
       });
     }
-    await runLoopCommand(statePath, ['evidence', '--file', evidencePath], 'browser', attempted);
+    await runLoopCommand(statePath, ['evidence', '--file', evidencePath], 'browser', publicState);
     const after = await readCanonicalState(statePath);
     if (!phaseReady(after, surface)) throw new Error(`${surface} evidence was not recorded as READY`);
     after.releaseUpdate = updateMetadata(after, {

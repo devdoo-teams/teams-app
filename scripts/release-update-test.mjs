@@ -19,6 +19,7 @@ import {
   summarizeBrowserHandoff,
   validateJiraReconciliation,
   validateBrowserAttestation,
+  verifyBrowserSurfacePrerequisites,
 } from './release-update.mjs';
 import { splitBrowserEvidenceInput } from './release-loop.mjs';
 
@@ -190,6 +191,24 @@ assert.deepEqual(publicReady.releaseUpdate.identity, {
   assetSha256: 'c'.repeat(64),
 });
 assert.equal(summarizeBrowserHandoff(publicReady, 'portal').appId, 'e915b402-eed4-4ee2-ba1f-c31d75c870a5');
+
+const publicRevalidationCalls = [];
+const publicRevalidatedState = { status: 'PUBLIC_READY', marker: 'fresh-public-probe' };
+assert.deepEqual(
+  await verifyBrowserSurfacePrerequisites('/tmp/release-state.json', { status: 'PORTAL_READY' }, 'portal', {
+    verifyPublic: async (...args) => {
+      publicRevalidationCalls.push(args);
+      return publicRevalidatedState;
+    },
+  }),
+  publicRevalidatedState,
+  'browser evidence must receive the freshly revalidated public state',
+);
+assert.deepEqual(
+  publicRevalidationCalls,
+  [['/tmp/release-state.json', { status: 'PORTAL_READY' }, 'public']],
+  'every UI surface must revalidate the public phase before accepting evidence',
+);
 
 const browserHandoff = summarizeBrowserHandoff(publicReady, 'portal');
 assert.equal(browserHandoff.surface, 'portal');
