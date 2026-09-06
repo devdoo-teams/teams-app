@@ -311,7 +311,7 @@ Required regression:
 
 - `npm run test:azure-deployment-failure-receipt` must assert snapshot-before-checkout and preserved-helper execution;
 - `npm run test:azure-core` must be GREEN before queuing another hosted run;
-- a hosted run must read back a non-empty receipt artifact or keep the failure `UNVERIFIED`.
+- a hosted run must read back a non-empty, schema-valid JSON receipt and its SHA-256 sidecar or keep the failure `UNVERIFIED`.
 
 [^okf-spec]: Open Knowledge Format v0.2 specification, sections 3-5 and 8-9, observed web lines 253-327, 370-444, 486-513. https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md
 [^arm-what-if]: ARM what-if operation, What-if operation and permissions, observed web lines 29-52. https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-what-if

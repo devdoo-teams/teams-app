@@ -442,11 +442,12 @@ Classification:
 Fix:
 - commit `9c793d4d5f2c436223d3c8c8fa228b052515c8fa` snapshots `scripts/azure-deployment-failure-receipt.mjs` into `$(Agent.TempDirectory)` before the deploy job checks out the release commit, then runs that preserved helper from the `ERR` trap;
 - `scripts/azure-deployment-failure-receipt-test.mjs` now has a RED/GREEN ordering regression proving that receipt handling cannot depend on files present only in the release commit;
-- `npm run test:azure-deployment-failure-receipt` and `npm run test:azure-core` (27/27) are GREEN at the fix commit; application/package/Teams version remains `1.0.103`.
+- commit `32308334af096ca062939c62913bdb17f8da4949` additionally requires the failure receipt to be non-empty and schema-valid, writes a SHA-256 sidecar, and logs a safe `receiptWriteStatus` without persisting raw stderr;
+- the new assertions were RED before implementation; `npm run test:azure-deployment-failure-receipt` and `npm run test:azure-core` (27/27) are GREEN at the clean fix commit; application/package/Teams version remains `1.0.103`.
 
 Result:
 - Run 32 remains `FAIL_AFTER_APPROVAL` before any workload create/update, revision, traffic, or health proof;
-- the empty receipt defect is fixed in source but requires a new hosted run to prove the preserved helper writes a non-empty receipt;
+- the empty receipt defect is fixed in source, but a new hosted run must read back both the JSON and SHA-256 sidecar to prove the artifact is non-empty and usable;
 - the what-if allowlist must not be widened speculatively; inspect artifact `156` or a fresh diagnostic before changing property variants;
 - no Teams completion message or Jira Done transition is justified; Jira mapping is `JIRA_SYNC_UNVERIFIED` in this run.
 

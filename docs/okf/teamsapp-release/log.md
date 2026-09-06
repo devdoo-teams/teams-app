@@ -48,3 +48,13 @@
 * **Knowledge graph**: [`docs/research/2026-09-07-azure-devops-linux-vm-root-cause.md`](../../research/2026-09-07-azure-devops-linux-vm-root-cause.md) records the graph, official URLs with observed sections/line ranges, repository file/line evidence, confirmed versus unverified causes, and a staged redesign. It recommends separating plan/approval/mutation/readiness/promotion and consolidating duplicate checks into durable receipts rather than deleting evidence gates.
 * **Toolchain note**: local `az` was not installed, so local CLI help could not be verified. Run 32 hosted evidence recorded Azure CLI `2.89.1`, Azure DevOps extension `1.0.7`, and Bicep `0.46.1`. No Azure mutation or version bump was performed.
 * **Status**: `RELEASE_BLOCKED`; no allowlist widening, new Azure run, Teams completion message, or Jira Done transition is justified until artifact read-back and a fresh non-empty failure receipt are proven.
+
+## 2026-09-07 — Failure receipt integrity hardening
+
+* **Official contract**: Azure Pipelines artifacts are a stage handoff and must be retained and read back as evidence; a task status or artifact listing alone does not prove a usable receipt.[^az-pipeline-artifacts]
+* **Observed risk**: the Run 32 source fix preserved the receipt helper, but the trap still suppressed helper failure and did not reject an empty or malformed receipt before artifact publication.
+* **Implementation**: commit `32308334af096ca062939c62913bdb17f8da4949` adds a non-empty/schema-valid check, a SHA-256 sidecar, and explicit safe `receiptWriteStatus` logging. It does not copy stderr, tokens, or secret values and does not change the application version.
+* **Verification**: the new assertions were RED before implementation; `npm run test:azure-deployment-failure-receipt` is GREEN after it; `npm run test:azure-core` completed all 27/27 fixtures from the clean commit.
+* **Limit**: this proves source-level failure-evidence behavior only. A fresh hosted run must still read back both the JSON and `.sha256` artifact through Azure DevOps before Run 32's failure evidence is promoted to `VERIFIED`; the workload `Modify` delta remains `UNVERIFIED`.
+
+[^az-pipeline-artifacts]: Publish and download pipeline artifacts, stage handoff and workspace guidance, observed web lines 305-355. https://learn.microsoft.com/en-us/azure/devops/pipelines/artifacts/pipeline-artifacts?tabs++=+yaml&view=azure-devops
