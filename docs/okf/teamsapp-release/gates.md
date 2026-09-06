@@ -6,12 +6,12 @@ resource: /gates.md
 tags: [release-gate, azure, teams, provenance, rollback]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T14:50:34Z"
+  at: "2026-09-06T15:22:25Z"
 verified:
   by: "process:release-gate-reconciliation/1"
-  at: "2026-09-06T14:50:34Z"
+  at: "2026-09-06T15:22:25Z"
 status: stable
-stale_after: "2026-09-13T14:50:34Z"
+stale_after: "2026-09-13T15:22:25Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -119,6 +119,7 @@ ARM what-if is non-mutating and predicts changes rather than applying them.[^arm
 22. A failed post-approval task writes a secret-free failure receipt containing only stage/job, last named boundary, exit code, source/version/run identity, and next action.
 23. The failure receipt is published with a failure condition even when the mutation task exits nonzero; raw stderr, tokens, secret values, and auth material are not copied into it.
 23a. A failed pre-approval GitHub handoff writes a separate secret-free `github-handoff-failure-receipt` artifact with the last named handoff boundary before approval is retried.
+23b. The post-approval failure-receipt helper is copied from the pipeline source into an agent-temporary absolute path before the task checks out the deploy-only release commit; the failure trap executes that preserved helper, so receipt generation cannot depend on release-source contents.
 
 Azure Pipelines approvals control when a stage should run.[^az-approval] Deployment jobs separately model deploy, route/post-route health, and `on: failure` handling.[^az-deployment-jobs]
 
@@ -141,12 +142,13 @@ Container Apps troubleshooting requires revision status and system/application l
 
 # Current run
 
-Run 31 failed in the release handoff before approval because its requested commit had no immutable artifact; Run 30 remains FAILED_AFTER_APPROVAL with a generic post-approval exit and no durable boundary. Neither is release complete.
+Run 32 failed after approval at the workload what-if classifier before workload mutation. Run 31 failed in the release handoff before approval because its requested commit had no immutable artifact; Run 30 remains FAILED_AFTER_APPROVAL with a generic post-approval exit and no durable boundary. The Run 32 receipt-helper fix is locally verified at `9c793d4`, but hosted proof is still required. None is release complete.
 
 # Required commands before a new run
 
     git diff --check
     node scripts/azure-platform-contract-test.mjs
+    npm run test:azure-deployment-failure-receipt
     npm run test:azure-core
     git status --short --branch
 

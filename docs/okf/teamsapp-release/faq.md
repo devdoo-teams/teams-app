@@ -6,12 +6,12 @@ resource: /faq.md
 tags: [faq, incident-response, release, teams, azure]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T14:50:34Z"
+  at: "2026-09-06T15:22:25Z"
 verified:
   by: "process:release-faq-reconciliation/1"
-  at: "2026-09-06T14:50:34Z"
+  at: "2026-09-06T15:22:25Z"
 status: stable
-stale_after: "2026-09-13T14:50:34Z"
+stale_after: "2026-09-13T15:22:25Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -293,6 +293,25 @@ All required items must use the same identity:
 - blocker-to-Jira mapping and durable non-empty receipt.
 
 If any item is FAIL, BLOCKED, UNVERIFIED, or MIXED_IDENTITY, completion is forbidden.
+
+## Q16. Why did Run 32 retain an empty Azure failure receipt?
+
+Because the DeployCanary task deliberately checked out the exact deploy-only release commit before running its Azure commands. The receipt helper had been added to the newer pipeline source commit, but was absent from that older release commit. The `ERR` trap therefore tried to execute a missing helper while suppressing the helper's own error; Azure DevOps created the named artifact directory but uploaded zero files.
+
+Evidence:
+
+- Run 32 log 44: the task checked out `71df02e2...` and later failed at `workload-parameters-and-what-if`.
+- Run 32 log 46: `Processed 0 files` and `Uploaded 0 out of 61 bytes` for `azure-deployment-failure-receipt`.
+- `git show 71df02e2:scripts/azure-deployment-failure-receipt.mjs`: the helper path is absent at the deploy source commit.
+- Source fix `9c793d4`: copy the helper to `$(Agent.TempDirectory)` before release checkout and invoke that preserved path.
+
+The fix does not make the Azure deployment successful. It only restores durable failure evidence. The what-if `Modify` mismatch remains a separate fail-closed gate and must not be bypassed by adding an unobserved allowlist rule. This is consistent with Microsoft’s contract that what-if previews predicted changes without applying them, and with Azure Pipelines’ separation of approval from deployment lifecycle and failure evidence.[^arm-what-if][^az-deployment-jobs]
+
+Required regression:
+
+- `npm run test:azure-deployment-failure-receipt` must assert snapshot-before-checkout and preserved-helper execution;
+- `npm run test:azure-core` must be GREEN before queuing another hosted run;
+- a hosted run must read back a non-empty receipt artifact or keep the failure `UNVERIFIED`.
 
 [^okf-spec]: Open Knowledge Format v0.2 specification, sections 3-5 and 8-9, observed web lines 253-327, 370-444, 486-513. https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md
 [^arm-what-if]: ARM what-if operation, What-if operation and permissions, observed web lines 29-52. https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-what-if

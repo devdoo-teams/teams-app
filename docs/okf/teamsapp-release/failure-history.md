@@ -6,12 +6,12 @@ resource: /failure-history.md
 tags: [teamsapp, azure, release, incident, failure, provenance]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T14:50:34Z"
+  at: "2026-09-06T15:22:25Z"
 verified:
   by: "process:release-evidence-reconciliation/1"
-  at: "2026-09-06T14:50:34Z"
+  at: "2026-09-06T15:22:25Z"
 status: stable
-stale_after: "2026-09-13T14:50:34Z"
+stale_after: "2026-09-13T15:22:25Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -419,6 +419,37 @@ Result:
 - a new hosted run with the known release artifact commit is required to exercise the receipt and observe the Run 30 post-approval boundary;
 - no Azure mutation, Teams package update, completion message, or Jira Done transition is justified.
 
+## Run 32: workload what-if blocked and failure receipt was empty
+
+Observed:
+- pipeline run `32` / build `20260906.11` used source `395e158f8c61570aa644963897e0c7231f7b3b5d` and the deploy-only release artifact commit `71df02e2ea9e9dbecbe864e0f1c6be3d649cbb4a` for app `1.0.103`;
+- authenticated handoff, Azure Core 27/27, RBAC, foundation what-if, worker package, and approval preflight completed; the user approved the `teamsapp-canary` environment;
+- Azure CLI `2.89.1` / Bicep `0.46.1` reached the post-approval workload what-if and logged `Invalid Azure canary preflight: what-if contains disallowed Modify change for /subscriptions/0e58c3cb-474d-4e70-978a-4939c586f867/resourceGroups/rg-teamsapp-canary/providers/Microsoft.App/containerApps/teamsapp-canary-goictvxm`;
+- the workload evidence artifact `azure-what-if-workload-receipt` was retained as artifact `156` with reported size `29400`; the current Azure DevOps artifact MCP download returned `TF400813`, so the exact property delta inside that artifact is not promoted here;
+- the bounded failure artifact `azure-deployment-failure-receipt` was artifact `157` with reported size `0`; log 46 recorded `Processed 0 files` from the failure directory and `Uploaded 0 out of 61 bytes`.
+
+Official evidence:
+- ARM what-if is a non-mutating preview and exposes predicted resource change types; a `Modify` result must be evaluated against the deployment's explicit allowlist rather than treated as proof that a mutation occurred.[^arm-what-if]
+- Azure CLI's what-if contract supports full resource payloads, machine-readable output, provider validation, and no-prompt automation used by this pipeline.[^az-what-if-help]
+- Azure Pipelines approval and deployment lifecycle are separate boundaries; approval does not establish a successful revision or health result.[^az-approval][^az-deployment-jobs]
+
+Classification:
+- `OFFICIAL CONTRACT`: the what-if gate may block a predicted `Modify`; what-if itself did not mutate Azure;
+- `OBSERVED EVIDENCE`: the exact resource and failing boundary `workload-parameters-and-what-if` are in log 44; no deployment, revision, traffic, or public health evidence exists;
+- `INFERENCE`: the container-app `Modify` delta did not match the repository's exact workload planned-change variants. The property-level cause remains `UNVERIFIED` until artifact `156` can be read back;
+- `ROOT CAUSE`: `WORKLOAD_WHAT_IF_ALLOWLIST_MISMATCH` is confirmed at the gate boundary, while `ZERO_BYTE_FAILURE_RECEIPT` is separately confirmed as a CI helper provenance defect.
+
+Fix:
+- commit `9c793d4d5f2c436223d3c8c8fa228b052515c8fa` snapshots `scripts/azure-deployment-failure-receipt.mjs` into `$(Agent.TempDirectory)` before the deploy job checks out the release commit, then runs that preserved helper from the `ERR` trap;
+- `scripts/azure-deployment-failure-receipt-test.mjs` now has a RED/GREEN ordering regression proving that receipt handling cannot depend on files present only in the release commit;
+- `npm run test:azure-deployment-failure-receipt` and `npm run test:azure-core` (27/27) are GREEN at the fix commit; application/package/Teams version remains `1.0.103`.
+
+Result:
+- Run 32 remains `FAIL_AFTER_APPROVAL` before any workload create/update, revision, traffic, or health proof;
+- the empty receipt defect is fixed in source but requires a new hosted run to prove the preserved helper writes a non-empty receipt;
+- the what-if allowlist must not be widened speculatively; inspect artifact `156` or a fresh diagnostic before changing property variants;
+- no Teams completion message or Jira Done transition is justified; Jira mapping is `JIRA_SYNC_UNVERIFIED` in this run.
+
 # Historical failure inventory
 
 | Failure group | Observed evidence | Preventive classification |
@@ -434,14 +465,17 @@ Result:
 | authentication boundary confusion | Codex CLI, Teams CLI, Azure, and MFA treated as one login | separate status checks; user-only secret handoff |
 | approval passed but deployment failed generically | Run 30 manual approval followed by one AzureCLI exit code 1 with no durable boundary | named deployment boundaries, secret-free failure receipt, failure artifact, Azure revision/log read-back |
 | release artifact parameter had no immutable artifact | Run 31 handoff lookup found zero artifacts for the requested commit before approval | separate pipeline source/release commit, exact artifact/head SHA/digest lookup, pre-approval handoff failure receipt |
+| failure receipt helper disappeared after release checkout | Run 32 workload what-if failed after checkout to `71df02e`; the receipt artifact processed 0 files because the helper existed only in the pipeline source commit | snapshot CI receipt helpers before release checkout, execute the preserved absolute path, and assert ordering in Azure Core |
 
 These records do not substitute for current Azure run evidence.
 
 # Current judgment
 
-The current state is RELEASE_BLOCKED / RUN 31 FAILED_BEFORE_APPROVAL; Run 30 remains FAILED_AFTER_APPROVAL.
+The current state is RELEASE_BLOCKED / RUN 32 FAILED_AFTER_APPROVAL; Run 31 remains FAILED_BEFORE_APPROVAL and Run 30 remains FAILED_AFTER_APPROVAL.
 
 - local/contract/Azure Core evidence: PASS within scope;
+- Run 32 workload what-if: FAILED after approval at `workload-parameters-and-what-if`; no Azure workload mutation occurred;
+- Run 32 failure receipt: FAILED to retain a non-empty artifact in the run, fixed in source commit `9c793d4` but not yet hosted-verified;
 - Run 31 release handoff: FAILED before approval because the requested artifact was absent;
 - Run 30 post-approval Azure mutation: FAILED at an unknown named boundary (Run 30 evidence incomplete);
 - healthy revision: UNVERIFIED;
