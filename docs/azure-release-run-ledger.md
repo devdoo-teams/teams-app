@@ -143,6 +143,19 @@
 - Source correction pending: accept `Provisioned` and legacy `Succeeded`, log safe state fields, preserve `ScaledToZero + Healthy`; no version bump or Teams upload
 - Decision: after clean Core 28/28 from the correction commit, run one bounded Run 42 and read back the safe state diagnostic before promotion.
 
+## 현재 run 42 read-back
+
+- Pipeline source: `b38a1eb786b5da639314ecf2d04a81edb0190d50`
+- Requested release artifact: `71df02e2ea9e9dbecbe864e0f1c6be3d649cbb4a`, app `1.0.103`, image digest `sha256:a52d4d53baee73cd3769ac297b723f8b05883500692d2ce4b4eb856f07ee1f27`
+- Outcome: `FAIL_AFTER_APPROVAL` at `final-identity-contract`
+- Completed boundaries: handoff, Azure Core/RBAC, approval, worker Blob SHA, workload deployment, accepted revision readiness, and public `/api/health` response
+- Exact failure: `Invalid Azure deployment contract: revision readiness or traffic state is not complete`
+- Root cause: pipeline source used the updated readiness contract, but release checkout replaced the final identity helper with the older `71df02e` copy; `git show` confirmed old `Running/Succeeded` checks
+- Live health: HTTP 200 with `ok=true`, version `1.0.103`, release source/image/server identity, `auth=teams-authenticated`, `bot=teams-sdk`, `outbound=teams-sdk`; worker heartbeat/A2A remain unavailable
+- Failure receipt: task logged `receiptWriteStatus=READY`, SHA `6e8a536eccb8da674b37f33b3b60dc713ab637a72a572e759ebc61addbb846af`; it is not a release-complete receipt
+- Source correction pending: snapshot `scripts/azure-deployment-contract.mjs` before release checkout and invoke that absolute path; focused tests are GREEN, hosted verification pending
+- Decision: do not bump app version or upload Teams package; run clean Core, then one bounded hosted rerun before any promotion or completion report
+
 ## 다음 실행 전 필수 명령
 
 ```bash

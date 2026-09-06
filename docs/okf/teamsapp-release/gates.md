@@ -6,12 +6,12 @@ resource: /gates.md
 tags: [release-gate, azure, teams, provenance, rollback]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T22:31:00Z"
+  at: "2026-09-06T23:26:36Z"
 verified:
   by: "process:release-gate-reconciliation/1"
-  at: "2026-09-06T22:31:00Z"
+  at: "2026-09-06T23:26:36Z"
 status: stable
-stale_after: "2026-09-13T22:31:00Z"
+stale_after: "2026-09-13T23:26:36Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -166,7 +166,7 @@ Container Apps troubleshooting requires revision status and system/application l
 
 # Current run
 
-Run 40 failed after approval at the revision-and-health boundary after worker Blob staging succeeded. Azure Portal read-back showed the expected revision `Healthy / ScaledToZero / traffic 100% / replicas 0`, while the old gate required `Running`; its failure artifact was also reported as zero bytes because the task used an `ERR` trap and explicitly called `exit 1`. The source corrections are locally verified but not hosted-verified. Run 40 is not release complete.
+Run 42 is the current failed run: it passed handoff, approval, worker Blob, workload deployment, the updated revision poll, and public health fetch, then failed at `final-identity-contract` because release checkout loaded the older deployment-contract helper. Run 42 retained a non-empty failure receipt, and the source-level snapshot correction is locally verified but not hosted-verified. Run 42 is not release complete. The earlier Run 40 `Running`/scale-to-zero false negative and empty-receipt failure remain historical incidents, not current pass evidence.
 
 # Required commands before a new run
 

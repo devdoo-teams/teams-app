@@ -973,6 +973,12 @@ try {
     'worker package verification must occur before the first Azure resource mutation',
   );
   assert.ok(deployScript?.includes('scripts/azure-what-if-receipt.mjs verify'), 'deployment must verify the pre-approval what-if receipt');
+  assert.ok(deployScript?.includes('cp scripts/azure-deployment-contract.mjs "$deployment_contract_script"'), 'deployment must snapshot the final identity contract before release checkout');
+  assert.ok(deployScript?.includes('node "$deployment_contract_script" verify'), 'deployment must execute the snapshotted final identity contract');
+  assert.ok(
+    deployScript.indexOf('cp scripts/azure-deployment-contract.mjs "$deployment_contract_script"') < deployScript.indexOf('git checkout --detach "$commit"'),
+    'final identity contract snapshot must precede release checkout',
+  );
   assert.ok(deployScript?.includes('expected_revision_name="${app_name}--${commit:0:10}"'), 'deployment must derive the expected revision from the attested release commit');
   assert.ok(deployScript?.includes('az containerapp revision show'), 'deployment must read back the expected Container App revision');
   assert.ok(deployScript?.includes('revision_ready="false"'), 'deployment must initialize a bounded revision-readiness poll');

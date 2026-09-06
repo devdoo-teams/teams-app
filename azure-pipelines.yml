@@ -470,6 +470,7 @@ stages:
                       failure_receipt_script="$(Agent.TempDirectory)/azure-deployment-failure-receipt.mjs"
                       what_if_receipt_tools_dir="$(Agent.TempDirectory)/azure-what-if-receipt-tools"
                       what_if_receipt_script="$what_if_receipt_tools_dir/azure-what-if-receipt.mjs"
+                      deployment_contract_script="$what_if_receipt_tools_dir/azure-deployment-contract.mjs"
                       failure_boundary="bootstrap"
                       worker_blob_script="$(Agent.TempDirectory)/azure-worker-blob-stage.mjs"
                       foundation_parameters="$(Agent.TempDirectory)/foundation.parameters.json"
@@ -481,6 +482,7 @@ stages:
                       cp scripts/azure-deployment-failure-receipt.mjs "$failure_receipt_script"
                       cp scripts/azure-worker-blob-stage.mjs "$worker_blob_script"
                       cp scripts/azure-what-if-receipt.mjs "$what_if_receipt_tools_dir/azure-what-if-receipt.mjs"
+                      cp scripts/azure-deployment-contract.mjs "$deployment_contract_script"
                       cp scripts/azure-canary-preflight.mjs "$what_if_receipt_tools_dir/azure-canary-preflight.mjs"
                       cp scripts/core-test-runner.mjs "$what_if_receipt_tools_dir/core-test-runner.mjs"
                       cp scripts/core-test-workspace.mjs "$what_if_receipt_tools_dir/core-test-workspace.mjs"
@@ -489,6 +491,7 @@ stages:
                       test -s "$failure_receipt_script"
                       test -s "$worker_blob_script"
                       test -s "$what_if_receipt_script"
+                      test -s "$deployment_contract_script"
                       test -s "$what_if_receipt_tools_dir/azure-canary-preflight.mjs"
                       test -s "$what_if_receipt_tools_dir/core-test-runner.mjs"
                       test -s "$what_if_receipt_tools_dir/core-test-workspace.mjs"
@@ -810,7 +813,7 @@ stages:
                       fi
                       curl --fail --retry 12 --retry-all-errors --retry-delay 5 --output "$(Agent.TempDirectory)/health.json" "https://${fqdn}/api/health"
                       failure_boundary="final-identity-contract"
-                      node scripts/azure-deployment-contract.mjs verify "$receipt" "$provenance" "$(Agent.TempDirectory)/revision.json" "$(Agent.TempDirectory)/health.json" "$registry_server"
+                      node "$deployment_contract_script" verify "$receipt" "$provenance" "$(Agent.TempDirectory)/revision.json" "$(Agent.TempDirectory)/health.json" "$registry_server"
                   env:
                     AZURE_LOCATION: $(azureLocation)
                     AZURE_RESOURCE_GROUP: $(azureResourceGroup)

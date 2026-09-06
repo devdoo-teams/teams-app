@@ -6,12 +6,12 @@ resource: /failure-history.md
 tags: [teamsapp, azure, release, incident, failure, provenance]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T22:31:00Z"
+  at: "2026-09-06T23:26:36Z"
 verified:
   by: "process:release-evidence-reconciliation/1"
-  at: "2026-09-06T22:31:00Z"
+  at: "2026-09-06T23:26:36Z"
 status: stable
-stale_after: "2026-09-13T22:31:00Z"
+stale_after: "2026-09-13T23:26:36Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -513,7 +513,7 @@ These records do not substitute for current Azure run evidence.
 
 # Current judgment
 
-The current state is RELEASE_BLOCKED / Run 40 FAILED_AFTER_APPROVAL at `revision-and-health`; Run 39 remains FAILED_AFTER_APPROVAL at `worker-blob`, Run 38 remains FAILED_AFTER_APPROVAL at the same boundary, Run 32 remains FAILED_AFTER_APPROVAL, Run 31 remains FAILED_BEFORE_APPROVAL, and Run 30 remains FAILED_AFTER_APPROVAL.
+The current state is RELEASE_BLOCKED / Run 42 FAILED_AFTER_APPROVAL at `final-identity-contract`; Run 41 remains FAILED_AFTER_APPROVAL at `revision-and-health`, Run 40 remains FAILED_AFTER_APPROVAL at `revision-and-health`, Run 39 remains FAILED_AFTER_APPROVAL at `worker-blob`, Run 38 remains FAILED_AFTER_APPROVAL at the same boundary, Run 32 remains FAILED_AFTER_APPROVAL, Run 31 remains FAILED_BEFORE_APPROVAL, and Run 30 remains FAILED_AFTER_APPROVAL.
 
 - local/contract/Azure Core evidence: PASS within scope;
 - Run 32 workload what-if: FAILED after approval at `workload-parameters-and-what-if`; no Azure workload mutation occurred;
@@ -521,12 +521,14 @@ The current state is RELEASE_BLOCKED / Run 40 FAILED_AFTER_APPROVAL at `revision
 - Run 39 worker Blob metadata query: FAILED because the nested `metadata.sha256` query produced a false empty value; Run 40 proves the corrected top-level query passes;
 - Run 40 revision readiness: FAILED because healthy `ScaledToZero` was excluded by the `Running`-only predicate; source correction is pending a fresh hosted run;
 - Run 40 failure receipt: FAILED to retain a non-empty artifact because explicit `exit 1` bypassed the `ERR` trap; the `EXIT`-trap correction is pending a fresh hosted run;
+- Run 42 final identity: FAILED because the release checkout replaced the updated pipeline contract helper with an older copy; the source snapshot correction is locally tested but hosted-unverified;
+- Run 42 failure receipt: retained with `receiptWriteStatus=READY` and checksum `6e8a536eccb8da674b37f33b3b60dc713ab637a72a572e759ebc61addbb846af`; receipt integrity is verified, but release success is not;
 - Run 33 pre-approval receipt read-back: reported artifact sizes conflict with 62-byte authorization text; no receipt content is verified;
 - Run 31 release handoff: FAILED before approval because the requested artifact was absent;
 - Run 30 post-approval Azure mutation: FAILED at an unknown named boundary (Run 30 evidence incomplete);
 - Run 39 deployment receipt: valid, non-empty, checksum-backed, with exact failure boundary;
-- healthy revision: UNVERIFIED;
-- public health identity: UNVERIFIED;
+- healthy revision: observed as `Healthy / ScaledToZero / traffic 100% / replicas 0`, but same-run final identity reconciliation: UNVERIFIED;
+- public health: HTTP 200 and core identity observed in Run 42; same-release final identity: UNVERIFIED;
 - portal/installed same package: UNVERIFIED;
 - Teams desktop fresh reply: UNVERIFIED;
 - mobile: MOBILE_UNVERIFIED;
@@ -574,6 +576,20 @@ The existing Ego Lite Azure Container Apps page still showed the latest revision
 **FIX AND VERIFICATION.** The next source change accepts the official `Provisioned` state while preserving `Succeeded` compatibility, keeps the `ScaledToZero + Healthy` restriction, and emits only non-secret revision state fields when the bounded poll fails (`azure-pipelines.yml:784-808`; `scripts/azure-deployment-contract.mjs:1-54,73-86,125-130`). Focused deployment, failure-receipt, and platform-contract tests are GREEN after the change. No application version bump, package upload, or Teams completion message was performed.
 
 **CURRENT JUDGMENT.** Run 41 remains failed and is not a verification pass for the current source change. After a clean `npm run test:azure-core`, queue only one bounded Run 42 using the same release identity. Its first required read-back is the redacted revision-state diagnostic; only a real `Provisioned`/`Succeeded` + healthy/active/traffic result followed by public health can advance the release. `minReplicas >= 1`, worker VM 24/7 evidence, Teams package/desktop/mobile, and live A2A remain `UNVERIFIED`.
+
+## 2026-09-07 — Run 42 final identity helper provenance gap
+
+**OFFICIAL CONTRACT.** Azure Pipelines deployment jobs run sequential deployment steps and separate deployment/failure lifecycle boundaries ([deployment jobs](https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops), lines 37-76). Azure Container Apps revision readiness requires successful provisioning and probe readiness before traffic promotion ([revisions](https://learn.microsoft.com/en-us/azure/container-apps/revisions), lines 128-138); the API/revision contract is evaluated from the actual revision read-back, not from a pipeline stage label.
+
+**OBSERVED EVIDENCE.** Run 42 / build `20260906.21` used pipeline source `b38a1eb786b5da639314ecf2d04a81edb0190d50`, deploy-only release commit `71df02e2ea9e9dbecbe864e0f1c6be3d649cbb4a`, version `1.0.103`, and image digest `sha256:a52d4d53baee73cd3769ac297b723f8b05883500692d2ce4b4eb856f07ee1f27`. Handoff, Azure Core/RBAC, approval, worker Blob staging, workload deploy, and the pipeline-source readiness predicate passed. The task then fetched public `/api/health` successfully (2920-byte response) but the final identity step logged `Invalid Azure deployment contract: revision readiness or traffic state is not complete` and failed at `final-identity-contract`. The failure receipt was retained with `receiptWriteStatus=READY` and SHA `6e8a536eccb8da674b37f33b3b60dc713ab637a72a572e759ebc61addbb846af`.
+
+The existing pipeline source contained the updated `Provisioned`/`ScaledToZero` contract, but the task had checked out the deploy-only release commit before invoking `node scripts/azure-deployment-contract.mjs verify`. A read-only comparison showed the release commit still required `runningState == Running` and `provisioningState == Succeeded` (`git show 71df02e2:scripts/azure-deployment-contract.mjs`). The source and release helper identities were therefore mixed. A separate live curl against the same Azure FQDN returned HTTP 200 with `ok=true`, `version=1.0.103`, `sourceCommit=71df02e2...`, `auth=teams-authenticated`, `bot=teams-sdk`, and `outbound=teams-sdk`; its dispatch worker heartbeat/readiness and A2A execution remained unavailable.
+
+**CLASSIFICATION.** `CONFIRMED_ROOT_CAUSE` / `RELEASE_CHECKOUT_CONTRACT_HELPER_DRIFT`: the pipeline-level readiness accepted the observed state, while the release-checkout copy of the final identity helper rejected it. `PUBLIC_HEALTH_PASS_WITH_IDENTITY_GATE_FAIL` is separately recorded; HTTP 200 is not a release completion proof. No application crash, Blob mismatch, or new version violation is inferred from this run.
+
+**FIX AND VERIFICATION.** The source correction snapshots `scripts/azure-deployment-contract.mjs` into the agent-temporary helper directory before `git checkout --detach "$commit"` and invokes the preserved absolute path (`azure-pipelines.yml:471-495,555-557,814-816`). `scripts/azure-platform-contract-test.mjs:975-981` now asserts snapshot ordering and invocation; it was RED before the correction and GREEN after it, together with the deployment and failure-receipt tests. No application version bump or Teams package upload was performed.
+
+**CURRENT JUDGMENT.** Run 42 remains `FAIL_AFTER_APPROVAL`; its public health result is useful live evidence but not same-release completion because the final identity contract did not pass. After the clean Core gate, one bounded rerun with the preserved helper is required. If that run passes, continue to package/portal/desktop Teams verification; 24/7 worker, Teams mobile, and live A2A remain separate `UNVERIFIED` gates.
 
 [^okf-spec]: Open Knowledge Format v0.2 specification, sections 1, 3, 4, 5, 8, 9, observed web lines 197-204, 253-327, 370-444, 486-513. https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md
 [^arm-what-if]: Template deployment what-if, What-if operation and permissions, observed web lines 29-52. https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-what-if

@@ -6,12 +6,12 @@ resource: /faq.md
 tags: [faq, incident-response, release, teams, azure]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T22:31:00Z"
+  at: "2026-09-06T23:26:36Z"
 verified:
   by: "process:release-faq-reconciliation/1"
-  at: "2026-09-06T22:31:00Z"
+  at: "2026-09-06T23:26:36Z"
 status: stable
-stale_after: "2026-09-13T22:31:00Z"
+stale_after: "2026-09-13T23:26:36Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -382,6 +382,24 @@ Required separation:
 - `UNVERIFIED`: hosted success, public `/api/health`, 24/7 `minReplicas >= 1`, worker VM heartbeat/restart recovery, Teams package/desktop/mobile, and live A2A.
 
 The source correction is intentionally bounded: it accepts official `Provisioned` and legacy `Succeeded`, accepts `ScaledToZero` only with `Healthy`, prints only safe revision state fields on failure, and preserves the original exit code through the nonzero `EXIT` trap. It does not raise the application version because this is CI/release-gate behavior, not a user-visible application change. See [Update and deploy changes in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/revisions), lines 48-72 and 128-138.
+
+## Q20. Why did Run 42 reach public health but still fail?
+
+Run 42 used the corrected pipeline-source readiness predicate, so it got past worker Blob staging, Azure deployment, and the revision poll. The final identity check still executed `scripts/azure-deployment-contract.mjs` from the deploy-only release checkout. That older commit required `Running` and `Succeeded`, so it rejected the same healthy scale-to-zero/provisioned revision that the pipeline predicate had accepted. This is a helper-provenance mismatch, not evidence that the public server was down.
+
+Evidence:
+
+- Run 42 log 44: worker Blob SHA succeeded; a public health response was downloaded (`2920` bytes); then `Invalid Azure deployment contract: revision readiness or traffic state is not complete` and `boundary=final-identity-contract`.
+- Read-only source comparison: current pipeline contract contains `Provisioned`/`ScaledToZero`, while `git show 71df02e2:scripts/azure-deployment-contract.mjs` contains only `Running`/`Succeeded` checks.
+- Public FQDN curl: HTTP 200, `ok=true`, `version=1.0.103`, release `sourceCommit`, `auth=teams-authenticated`, `bot=teams-sdk`, and `outbound=teams-sdk`. This does not prove the final release identity contract, Teams installation, 24/7 worker, mobile, or A2A.
+
+Fix:
+
+- Snapshot the final identity contract before `git checkout --detach "$commit"` and invoke the absolute snapshot path. The platform contract test asserts both ordering and invocation.
+- Keep all release-critical helpers that read or classify deployment state in the pipeline-owned snapshot closure, or bind them to an immutable helper bundle; do not let release checkout silently replace them.
+- Re-run clean Azure Core and one bounded hosted run. Do not increment `1.0.103` for this CI-only provenance repair.
+
+The focused tests are GREEN, but Run 42 remains failed until a hosted rerun proves the same helper identity through public health and final identity read-back. See [Deployment jobs](https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops), lines 37-76, and [Container Apps revisions](https://learn.microsoft.com/en-us/azure/container-apps/revisions), lines 128-138.
 
 [^okf-spec]: Open Knowledge Format v0.2 specification, sections 3-5 and 8-9, observed web lines 253-327, 370-444, 486-513. https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md
 [^arm-what-if]: ARM what-if operation, What-if operation and permissions, observed web lines 29-52. https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-what-if
