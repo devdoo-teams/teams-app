@@ -60,7 +60,7 @@ export function createAzureDeploymentFailureReceipt({
     checkedAt,
     diagnostics: {
       rawErrorPersisted: false,
-      nextAction: 'Inspect the failed AzureCLI task stderr and the named Azure boundary before retrying.',
+      nextAction: 'Inspect the failed pipeline task stderr and the named boundary before retrying.',
     },
   };
 }

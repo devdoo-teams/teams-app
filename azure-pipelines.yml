@@ -55,9 +55,31 @@ stages:
         steps:
           - checkout: self
           - bash: |
-              set -euo pipefail
+              set -Eeuo pipefail
+              handoff_failure_dir="$(Pipeline.Workspace)/github-handoff-failure"
+              handoff_failure="$handoff_failure_dir/github-handoff-failure-receipt.json"
+              handoff_boundary="bootstrap"
+              mkdir -p "$handoff_failure_dir"
+              write_failure_receipt() {
+                local status="$1"
+                (
+                  set +e
+                  node scripts/azure-deployment-failure-receipt.mjs \
+                    --output "$handoff_failure" \
+                    --stage "ValidateHandoff" \
+                    --job "ValidateReleaseArtifact" \
+                    --boundary "${handoff_boundary:-bootstrap}" \
+                    --exit-code "$status" \
+                    --source-commit "${GITHUB_RELEASE_COMMIT:-unknown}" \
+                    --pipeline-run-id "${BUILD_BUILDID:-unknown}" >/dev/null 2>&1
+                  printf '##vso[task.logissue type=error;code=TEAMSAPP_GITHUB_HANDOFF_BOUNDARY;]boundary=%s exitCode=%s; inspect github-handoff-failure-receipt artifact and this task stderr.\n' "${handoff_boundary:-bootstrap}" "$status"
+                ) || true
+              }
+              trap 'status=$?; write_failure_receipt "$status"; exit "$status"' ERR
               test -n "$GITHUB_RELEASE_COMMIT"
+              handoff_boundary="github-container-registry-auth"
               printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ARTIFACT_USERNAME" --password-stdin
+              handoff_boundary="release-artifact-handoff"
               node scripts/azure-github-handoff.mjs "$GITHUB_REPOSITORY" "$GITHUB_RELEASE_COMMIT" "$(Pipeline.Workspace)/github-handoff"
             displayName: Download, digest-check, extract, and attest GitHub artifact
             env:
@@ -66,6 +88,12 @@ stages:
               GITHUB_RELEASE_COMMIT: ${{ parameters.githubReleaseCommit }}
               GITHUB_REPOSITORY: $(githubRepository)
               GITHUB_TOKEN: $(githubArtifactReadToken)
+          - task: PublishPipelineArtifact@1
+            displayName: Retain bounded GitHub handoff failure receipt
+            condition: failed()
+            inputs:
+              targetPath: $(Pipeline.Workspace)/github-handoff-failure
+              artifact: github-handoff-failure-receipt
           - task: PublishPipelineArtifact@1
             displayName: Retain verified GitHub handoff and provenance
             inputs:

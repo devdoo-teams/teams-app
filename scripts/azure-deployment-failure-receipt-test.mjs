@@ -5,6 +5,16 @@ import path from 'node:path';
 
 const repositoryRoot = path.resolve(import.meta.dirname, '..');
 const pipeline = fs.readFileSync(path.join(repositoryRoot, 'azure-pipelines.yml'), 'utf8');
+const validateHandoff = pipeline.slice(
+  pipeline.indexOf('  - stage: ValidateHandoff'),
+  pipeline.indexOf('  - stage: ValidateApprovalConfiguration'),
+);
+
+assert.notEqual(validateHandoff.indexOf('  - stage: ValidateHandoff'), -1, 'pipeline must retain a handoff validation stage');
+assert.match(validateHandoff, /handoff_failure_dir=/u, 'handoff validation must allocate a failure receipt directory');
+assert.match(validateHandoff, /handoff_boundary="bootstrap"/u, 'handoff validation must initialize a safe failure boundary');
+assert.match(validateHandoff, /trap 'status=\$\?; write_failure_receipt "\$status"; exit "\$status"' ERR/u, 'handoff validation must retain failures at the exact failing boundary');
+assert.match(validateHandoff, /artifact: github-handoff-failure-receipt/u, 'handoff validation must publish its failure receipt');
 
 assert.match(pipeline, /failure_boundary="bootstrap"/u, 'deploy must initialize a safe failure boundary before any Azure command');
 assert.match(pipeline, /azure-deployment-failure-receipt\.mjs/u, 'deploy must write the bounded failure receipt through a repository script');
@@ -30,6 +40,18 @@ assert.equal(receipt.exitCode, 1);
 assert.equal(receipt.diagnostics.rawErrorPersisted, false);
 assert.doesNotMatch(JSON.stringify(receipt), /password|secret|token|authorization|bearer/iu);
 assert.throws(() => createAzureDeploymentFailureReceipt({ boundary: 'workload-deployment', exitCode: 1, sourceCommit: 'not-a-commit' }), /source commit/i);
+const handoffReceipt = createAzureDeploymentFailureReceipt({
+  stage: 'ValidateHandoff',
+  job: 'ValidateReleaseArtifact',
+  boundary: 'release-artifact-handoff',
+  exitCode: 1,
+  sourceCommit: 'b'.repeat(40),
+  pipelineRunId: '31',
+});
+assert.equal(handoffReceipt.stage, 'ValidateHandoff');
+assert.equal(handoffReceipt.job, 'ValidateReleaseArtifact');
+assert.equal(handoffReceipt.releaseVersion, 'unknown');
+assert.equal(handoffReceipt.diagnostics.nextAction, 'Inspect the failed pipeline task stderr and the named boundary before retrying.');
 
 const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'teams-azure-deployment-failure-'));
 try {
