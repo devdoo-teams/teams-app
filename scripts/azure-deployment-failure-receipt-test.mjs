@@ -5,6 +5,29 @@ import path from 'node:path';
 
 const repositoryRoot = path.resolve(import.meta.dirname, '..');
 const pipeline = fs.readFileSync(path.join(repositoryRoot, 'azure-pipelines.yml'), 'utf8');
+const deployCanary = pipeline.slice(
+  pipeline.indexOf('  - stage: DeployCanary'),
+  pipeline.indexOf('  - stage: RollbackCanary'),
+);
+
+const receiptHelperSnapshotIndex = deployCanary.indexOf('failure_receipt_script=');
+const releaseCheckoutIndex = deployCanary.indexOf('git checkout --detach "$commit"');
+assert.notEqual(receiptHelperSnapshotIndex, -1, 'deploy must snapshot the CI receipt helper before release checkout');
+assert.notEqual(releaseCheckoutIndex, -1, 'deploy must materialize the exact release source');
+assert.ok(
+  receiptHelperSnapshotIndex < releaseCheckoutIndex,
+  'the CI receipt helper must be preserved before release checkout can replace the source tree',
+);
+assert.match(
+  deployCanary,
+  /cp\s+scripts\/azure-deployment-failure-receipt\.mjs\s+"\$failure_receipt_script"/u,
+  'deploy must copy the CI receipt helper before release checkout',
+);
+assert.match(
+  deployCanary,
+  /node\s+"\$failure_receipt_script"/u,
+  'deploy failure handling must execute the preserved CI receipt helper',
+);
 const validateHandoff = pipeline.slice(
   pipeline.indexOf('  - stage: ValidateHandoff'),
   pipeline.indexOf('  - stage: ValidateApprovalConfiguration'),
