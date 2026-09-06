@@ -160,7 +160,7 @@ candidate and the preserved service are separate:
   ```js
   requireText(/if:\s*\|[\s\S]*github\.event_name == 'workflow_dispatch'[\s\S]*github\.ref == 'refs\/heads\/main'/, 'manual promotion must be main-only');
   requireText(/startsWith\(github\.ref, 'refs\/tags\/v'\)/, 'tag promotion must be version-tag-only');
-  requireText(/git fetch origin main/, 'tag promotion must fetch main for ancestry verification');
+  requireText(/git fetch --no-tags origin \+refs\/heads\/main:refs\/remotes\/origin\/main\b/, 'tag promotion must update the complete origin/main history for ancestry verification');
   requireText(/git merge-base --is-ancestor/, 'tag promotion must prove the tag commit is on main');
   requireText(/fetch-depth:\s*0/, 'promotion checkout must retain ancestry metadata');
   requireText(/npm run check:deployment/, 'promotion must require a complete deployment variable contract');
@@ -188,7 +188,7 @@ candidate and the preserved service are separate:
         (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
   ```
 
-  For tag events, run `git fetch origin main --depth=1` and reject the run unless `git merge-base --is-ancestor "$GITHUB_SHA" origin/main` succeeds. Use `fetch-depth: 0` on checkout.
+  For tag events, run `git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main` so the complete ref used by the guard is updated, then reject the run unless `git merge-base --is-ancestor "$GITHUB_SHA" origin/main` succeeds. Use `fetch-depth: 0` on checkout; do not re-shallow `origin/main` before this ancestry check.
 
 - [x] **Step 4: Generate the exact package and pre-push identity.**
 

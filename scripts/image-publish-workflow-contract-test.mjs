@@ -15,7 +15,10 @@ requireText(
   'manual image promotion must be main-only and tag promotion must be version-tag-only',
 );
 requireText(/fetch-depth:\s*0/, 'promotion checkout must retain ancestry metadata');
-requireText(/git fetch origin main/, 'promotion must fetch main for ancestry verification');
+requireText(
+  /git fetch --no-tags origin \+refs\/heads\/main:refs\/remotes\/origin\/main\b/,
+  'tag promotion must update the complete origin/main history used by ancestry verification',
+);
 requireText(/git merge-base --is-ancestor/, 'promotion must prove the tag commit is on main');
 requireText(/packages:\s*write/, 'registry publication requires package write permission');
 requireText(/attestations:\s*write/, 'provenance attestation requires attestation permission');

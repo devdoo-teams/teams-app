@@ -52,7 +52,7 @@ jobs:
       - name: Verify the exact source before publishing
         run: |
           set -euo pipefail
-          git fetch origin main --depth=1
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' && "$GITHUB_REF" != 'refs/heads/main' ]]; then
             echo 'manual image promotion is allowed only from refs/heads/main' >&2
             exit 1
