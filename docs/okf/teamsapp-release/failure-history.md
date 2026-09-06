@@ -6,12 +6,12 @@ resource: /failure-history.md
 tags: [teamsapp, azure, release, incident, failure, provenance]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T23:26:36Z"
+  at: "2026-09-06T23:41:31Z"
 verified:
   by: "process:release-evidence-reconciliation/1"
-  at: "2026-09-06T23:26:36Z"
+  at: "2026-09-06T23:41:31Z"
 status: stable
-stale_after: "2026-09-13T23:26:36Z"
+stale_after: "2026-09-13T23:41:31Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -33,6 +33,10 @@ sources:
     resource: "https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops"
     title: "Deployment jobs - Azure Pipelines"
     location: "deployment lifecycle hooks and failure handling; observed web lines 55-76"
+  - id: node-esm
+    resource: "https://nodejs.org/api/esm.html"
+    title: "Modules: ECMAScript modules - Node.js documentation"
+    location: "relative import resolution and mandatory file extensions; observed web lines 212-226 on 2026-09-06"
   - id: github-artifacts
     resource: "https://docs.github.com/en/rest/actions/artifacts?apiVersion=2026-03-10"
     title: "REST API endpoints for GitHub Actions artifacts"
@@ -513,7 +517,7 @@ These records do not substitute for current Azure run evidence.
 
 # Current judgment
 
-The current state is RELEASE_BLOCKED / Run 42 FAILED_AFTER_APPROVAL at `final-identity-contract`; Run 41 remains FAILED_AFTER_APPROVAL at `revision-and-health`, Run 40 remains FAILED_AFTER_APPROVAL at `revision-and-health`, Run 39 remains FAILED_AFTER_APPROVAL at `worker-blob`, Run 38 remains FAILED_AFTER_APPROVAL at the same boundary, Run 32 remains FAILED_AFTER_APPROVAL, Run 31 remains FAILED_BEFORE_APPROVAL, and Run 30 remains FAILED_AFTER_APPROVAL.
+The current state is RELEASE_BLOCKED / Run 43 FAILED_AFTER_APPROVAL at `final-identity-contract`; Run 42 remains FAILED_AFTER_APPROVAL at the same boundary, Run 41 remains FAILED_AFTER_APPROVAL at `revision-and-health`, Run 40 remains FAILED_AFTER_APPROVAL at `revision-and-health`, Run 39 remains FAILED_AFTER_APPROVAL at `worker-blob`, Run 38 remains FAILED_AFTER_APPROVAL at the same boundary, Run 32 remains FAILED_AFTER_APPROVAL, Run 31 remains FAILED_BEFORE_APPROVAL, and Run 30 remains FAILED_AFTER_APPROVAL.
 
 - local/contract/Azure Core evidence: PASS within scope;
 - Run 32 workload what-if: FAILED after approval at `workload-parameters-and-what-if`; no Azure workload mutation occurred;
@@ -523,6 +527,8 @@ The current state is RELEASE_BLOCKED / Run 42 FAILED_AFTER_APPROVAL at `final-id
 - Run 40 failure receipt: FAILED to retain a non-empty artifact because explicit `exit 1` bypassed the `ERR` trap; the `EXIT`-trap correction is pending a fresh hosted run;
 - Run 42 final identity: FAILED because the release checkout replaced the updated pipeline contract helper with an older copy; the source snapshot correction is locally tested but hosted-unverified;
 - Run 42 failure receipt: retained with `receiptWriteStatus=READY` and checksum `6e8a536eccb8da674b37f33b3b60dc713ab637a72a572e759ebc61addbb846af`; receipt integrity is verified, but release success is not;
+- Run 43 final identity: FAILED because the preserved `azure-deployment-contract.mjs` imported `./azure-release-input.mjs`, but that dependency was not included in the temporary snapshot; the source snapshot closure is now incomplete by direct hosted evidence;
+- Run 43 failure receipt: artifact `245` reported `545 B`; the task logged `receiptWriteStatus=READY` with checksum `2651ec69422d53fa8a0674ff4101c195e16b2fc4c778c61e57a80950dabd2019`;
 - Run 33 pre-approval receipt read-back: reported artifact sizes conflict with 62-byte authorization text; no receipt content is verified;
 - Run 31 release handoff: FAILED before approval because the requested artifact was absent;
 - Run 30 post-approval Azure mutation: FAILED at an unknown named boundary (Run 30 evidence incomplete);
@@ -590,6 +596,20 @@ The existing pipeline source contained the updated `Provisioned`/`ScaledToZero` 
 **FIX AND VERIFICATION.** The source correction snapshots `scripts/azure-deployment-contract.mjs` into the agent-temporary helper directory before `git checkout --detach "$commit"` and invokes the preserved absolute path (`azure-pipelines.yml:471-495,555-557,814-816`). `scripts/azure-platform-contract-test.mjs:975-981` now asserts snapshot ordering and invocation; it was RED before the correction and GREEN after it, together with the deployment and failure-receipt tests. No application version bump or Teams package upload was performed.
 
 **CURRENT JUDGMENT.** Run 42 remains `FAIL_AFTER_APPROVAL`; its public health result is useful live evidence but not same-release completion because the final identity contract did not pass. After the clean Core gate, one bounded rerun with the preserved helper is required. If that run passes, continue to package/portal/desktop Teams verification; 24/7 worker, Teams mobile, and live A2A remain separate `UNVERIFIED` gates.
+
+## 2026-09-07 — Run 43 incomplete helper dependency snapshot
+
+**OFFICIAL CONTRACT.** Node.js resolves relative ECMAScript module specifiers relative to the importing module and requires the file extension ([Node.js ECMAScript modules](https://nodejs.org/api/esm.html), `import Specifiers` and `Mandatory file extensions`, observed lines 212-226). The Azure Pipelines deployment job and final identity check are separate sequential steps ([deployment jobs](https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops), lines 37-76), so the temporary helper bundle must be executable as a complete module graph after release checkout.
+
+**OBSERVED EVIDENCE.** Run 43 / build `20260906.22` used pipeline source `10d340b5f7bd04b3d14f2e407c02e567ed2eef5c`, deploy-only release commit `71df02e2ea9e9dbecbe864e0f1c6be3d649cbb4a`, version `1.0.103`, and the same image digest `sha256:a52d4d53baee73cd3769ac297b723f8b05883500692d2ce4b4eb856f07ee1f27`. The run passed handoff, hosted Core 26/26, approval, worker Blob staging, workload deployment, the updated revision poll, and public health fetch. It then failed at `final-identity-contract`; the exact hosted error was `ERR_MODULE_NOT_FOUND: Cannot find module '/home/vsts/work/_temp/azure-what-if-receipt-tools/azure-release-input.mjs' imported from /home/vsts/work/_temp/azure-what-if-receipt-tools/azure-deployment-contract.mjs`.
+
+The failure artifact list showed `azure-deployment-failure-receipt` artifact `245` with `545` bytes, containing the non-empty failure receipt, and the task logged `receiptWriteStatus=READY` with checksum `2651ec69422d53fa8a0674ff4101c195e16b2fc4c778c61e57a80950dabd2019`. The same task fetched `2920` bytes from the public health endpoint before the module-load failure. This is distinct from Run42: the top-level helper was preserved, but its relative dependency was not.
+
+**CLASSIFICATION.** `CONFIRMED_ROOT_CAUSE` / `INCOMPLETE_RELEASE_CRITICAL_HELPER_CLOSURE`. The prior fix protected one helper file but did not protect the complete relative import closure. `PUBLIC_HEALTH_PASS_WITH_FINAL_IDENTITY_MODULE_LOAD_FAIL` is a separate boundary; it does not establish a release pass, Teams installation, 24/7 worker, mobile, or A2A success.
+
+**FIX REQUIRED.** Add `scripts/azure-release-input.mjs` to the same pipeline-owned temporary directory before `git checkout --detach "$commit"`, assert that it is non-empty, and add a RED regression that executes the snapshotted `azure-deployment-contract.mjs` with a valid fixture receipt after the source checkout. The test must fail if any local relative import required by the helper is missing. Do not solve this by copying arbitrary repository files or by changing the release commit; use an explicit, reviewed helper closure (or an immutable helper bundle).
+
+**CURRENT JUDGMENT.** Run 43 remains `FAIL_AFTER_APPROVAL` with verified non-empty failure evidence. No version bump or Teams upload is justified. Update this record again only after the closure test is GREEN, clean Core passes, and one bounded hosted rerun proves the final identity helper can load and validate the same release.
 
 [^okf-spec]: Open Knowledge Format v0.2 specification, sections 1, 3, 4, 5, 8, 9, observed web lines 197-204, 253-327, 370-444, 486-513. https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md
 [^arm-what-if]: Template deployment what-if, What-if operation and permissions, observed web lines 29-52. https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-what-if

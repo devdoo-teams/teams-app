@@ -156,6 +156,18 @@
 - Source correction pending: snapshot `scripts/azure-deployment-contract.mjs` before release checkout and invoke that absolute path; focused tests are GREEN, hosted verification pending
 - Decision: do not bump app version or upload Teams package; run clean Core, then one bounded hosted rerun before any promotion or completion report
 
+## 현재 run 43 read-back
+
+- Pipeline source: `10d340b5f7bd04b3d14f2e407c02e567ed2eef5c`
+- Requested release artifact: `71df02e2ea9e9dbecbe864e0f1c6be3d649cbb4a`, app `1.0.103`, image digest `sha256:a52d4d53baee73cd3769ac297b723f8b05883500692d2ce4b4eb856f07ee1f27`
+- Outcome: `FAIL_AFTER_APPROVAL` at `final-identity-contract`
+- Completed boundaries: handoff, hosted Core 26/26, approval, worker Blob SHA, workload deployment, accepted revision readiness, and public health fetch
+- Exact failure: `ERR_MODULE_NOT_FOUND` for `/home/vsts/work/_temp/azure-what-if-receipt-tools/azure-release-input.mjs`, imported by the preserved `/home/vsts/work/_temp/azure-what-if-receipt-tools/azure-deployment-contract.mjs`
+- Root cause: the Run42 fix snapshotted only the top-level final identity helper, not its relative local import closure; Node failed at module resolution after release checkout
+- Failure receipt: artifact `245`, listed size `545 B`; task logged `receiptWriteStatus=READY`, checksum `2651ec69422d53fa8a0674ff4101c195e16b2fc4c778c61e57a80950dabd2019`
+- Public health: 2920-byte response fetched before final identity module-load failure; HTTP/API core evidence is separate from release completion
+- Decision: Run43 remains failed; add/test the explicit dependency closure, update docs, commit/push, run clean Core, then one bounded rerun. No version bump or Teams upload.
+
 ## 다음 실행 전 필수 명령
 
 ```bash

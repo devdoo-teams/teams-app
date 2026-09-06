@@ -4,12 +4,12 @@
 
 - 조사일: 2026-09-07 (Asia/Seoul)
 - 대상: `devdoo-teams/teams-app`, canonical worktree `/Users/doosansmacbookpro/Documents/TeamsApp`, `main`
-- 조사 기준 HEAD: `92b95d5364e610c827b7f396c2c832ebc961ad10`
+- 조사 기준 HEAD: `10d340b5f7bd04b3d14f2e407c02e567ed2eef5c`
 - 제품 버전: `1.0.103` (이번 조사에서는 버전 변경 없음)
-- 운영 사건: Azure DevOps Run 32 / Build `20260906.11` 및 Run 33 / Build `20260906.12`
+- 운영 사건: Azure DevOps Run 32 / Build `20260906.11`부터 Run 43 / Build `20260906.22`까지
 - 조사 범위: Azure DevOps 승인·배포·아티팩트 계약, ARM what-if 및 Bicep 경계, Azure Container Apps revision/health/traffic, ACR managed identity, Linux VM/cloud-init/Custom Script Extension, 24/7 worker 상태·증거 체인
 - 증거 분류: `OFFICIAL CONTRACT`, `OBSERVED REPOSITORY EVIDENCE`, `INFERENCE / RECOMMENDATION`, `LIVE UNVERIFIED`
-- 이 문서는 읽기·리서치·문서화 결과다. Azure 리소스, Teams 앱, 트래픽, 비밀, Jira, 브라우저 세션은 변경하지 않았다.
+- 이 문서는 읽기·리서치·문서화 결과다. 이번 문서 갱신 자체는 Azure 리소스, Teams 앱, 트래픽, 비밀, Jira, 브라우저 세션을 변경하지 않았으며, Run 43의 pipeline 배포·실패 read-back은 아래에 별도 기록한다.
 
 ## 결론
 
@@ -372,3 +372,13 @@ Run 42 / Azure DevOps build `20260906.21` used pipeline source `b38a1eb786b5da63
 The pipeline source had the corrected `Provisioned`/`ScaledToZero + Healthy` predicate, but the release checkout was performed before the final identity command. The release commit's copy of `scripts/azure-deployment-contract.mjs` still required `Running` and `Succeeded`; `git show 71df02e2:scripts/azure-deployment-contract.mjs` confirmed that older contract. This is a confirmed provenance defect, `RELEASE_CHECKOUT_CONTRACT_HELPER_DRIFT`, not evidence that the Azure public endpoint was down. A separate curl returned HTTP 200 with `ok=true`, application version `1.0.103`, the release source identity, and authenticated Teams Core fields; worker heartbeat/readiness and A2A remained unavailable.
 
 The minimal correction snapshots the contract helper to the agent temporary directory before `git checkout --detach "$commit"` and invokes the preserved absolute path. `scripts/azure-platform-contract-test.mjs` first failed on the missing ordering assertion (RED), then passed with the deployment-contract and failure-receipt tests (GREEN). This is a CI/release-gate fix, so version `1.0.103` is unchanged and no Teams package upload is justified. The correction is pending a clean Core gate and one bounded hosted rerun; the current release remains `BLOCKED`.
+
+## Run 43 incomplete release-critical helper closure
+
+Node.js's official ECMAScript-module contract resolves a relative specifier from the importing module and requires the explicit file extension ([Node.js ESM documentation](https://nodejs.org/api/esm.html), `import Specifiers` and `Mandatory file extensions`, observed lines 212-226). Run 43 / build `20260906.22` demonstrated why a single-file snapshot is insufficient: the pipeline copied `azure-deployment-contract.mjs` before release checkout, but that file imports `./azure-release-input.mjs`.
+
+The run used pipeline source `10d340b5f7bd04b3d14f2e407c02e567ed2eef5c`, release commit `71df02e2ea9e9dbecbe864e0f1c6be3d649cbb4a`, version `1.0.103`, and image digest `sha256:a52d4d53baee73cd3769ac297b723f8b05883500692d2ce4b4eb856f07ee1f27`. Handoff, hosted Core 26/26, approval, worker Blob, workload deployment, the updated revision poll, and a 2920-byte public health response completed. The final identity step failed with the exact hosted error `ERR_MODULE_NOT_FOUND` for `/home/vsts/work/_temp/azure-what-if-receipt-tools/azure-release-input.mjs`, imported from the preserved deployment helper.
+
+The failure artifact was retained: artifact `245` was listed at `545 B`, and the task recorded `receiptWriteStatus=READY` with SHA `2651ec69422d53fa8a0674ff4101c195e16b2fc4c778c61e57a80950dabd2019`. This is `CONFIRMED_ROOT_CAUSE` / `INCOMPLETE_RELEASE_CRITICAL_HELPER_CLOSURE`. The public health response is useful live evidence but does not pass the final identity gate.
+
+The next minimum change is to copy and assert `scripts/azure-release-input.mjs` in the same temporary helper directory before release checkout. A regression must execute the snapshotted deployment helper after checkout with a valid fixture receipt and fail if any local relative import is absent. The closure must remain explicit and minimal; copying the whole repository would hide provenance errors. Version `1.0.103` remains unchanged, and the hosted release stays `BLOCKED` until clean Core and one bounded rerun pass.

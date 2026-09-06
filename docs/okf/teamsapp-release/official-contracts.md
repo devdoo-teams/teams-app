@@ -6,12 +6,12 @@ resource: /official-contracts.md
 tags: [official-contract, azure, teams, release, evidence]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T22:31:00Z"
+  at: "2026-09-06T23:41:31Z"
 verified:
   by: "process:official-source-research/1"
-  at: "2026-09-06T22:31:00Z"
+  at: "2026-09-06T23:41:31Z"
 status: stable
-stale_after: "2026-09-13T22:31:00Z"
+stale_after: "2026-09-13T23:41:31Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -37,6 +37,10 @@ sources:
     resource: "https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops"
     title: "Deployment jobs - Azure Pipelines"
     location: "Deployment lifecycle hooks and `on: failure`; observed web lines 55-76 on 2026-09-06"
+  - id: node-esm
+    resource: "https://nodejs.org/api/esm.html"
+    title: "Modules: ECMAScript modules - Node.js documentation"
+    location: "Import specifiers, relative resolution, and mandatory file extensions; observed web lines 212-226 on 2026-09-06"
   - id: az-pipeline-artifacts
     resource: "https://learn.microsoft.com/en-us/azure/devops/pipelines/artifacts/pipeline-artifacts?tabs++=+yaml&view=azure-devops"
     title: "Publish and download pipeline artifacts - Azure Pipelines"

@@ -974,11 +974,52 @@ try {
   );
   assert.ok(deployScript?.includes('scripts/azure-what-if-receipt.mjs verify'), 'deployment must verify the pre-approval what-if receipt');
   assert.ok(deployScript?.includes('cp scripts/azure-deployment-contract.mjs "$deployment_contract_script"'), 'deployment must snapshot the final identity contract before release checkout');
+  assert.ok(
+    deployScript?.includes('cp scripts/azure-release-input.mjs "$what_if_receipt_tools_dir/azure-release-input.mjs"'),
+    'deployment must snapshot the final identity contract local import before release checkout',
+  );
+  assert.ok(
+    deployScript?.includes('test -s "$what_if_receipt_tools_dir/azure-release-input.mjs"'),
+    'deployment must reject an empty final identity contract local import snapshot',
+  );
   assert.ok(deployScript?.includes('node "$deployment_contract_script" verify'), 'deployment must execute the snapshotted final identity contract');
   assert.ok(
     deployScript.indexOf('cp scripts/azure-deployment-contract.mjs "$deployment_contract_script"') < deployScript.indexOf('git checkout --detach "$commit"'),
     'final identity contract snapshot must precede release checkout',
   );
+  assert.ok(
+    deployScript.indexOf('cp scripts/azure-release-input.mjs "$what_if_receipt_tools_dir/azure-release-input.mjs"') < deployScript.indexOf('git checkout --detach "$commit"'),
+    'final identity contract import snapshot must precede release checkout',
+  );
+  const finalIdentityHelperSources = new Map([
+    ['azure-deployment-contract.mjs', fs.readFileSync(path.join(root, 'scripts', 'azure-deployment-contract.mjs'), 'utf8')],
+    ['azure-release-input.mjs', fs.readFileSync(path.join(root, 'scripts', 'azure-release-input.mjs'), 'utf8')],
+  ]);
+  const checkedFinalIdentityHelpers = new Set();
+  const pendingFinalIdentityHelpers = ['azure-deployment-contract.mjs'];
+  const relativeImportPattern = /from\s+['"](\.\/[^'"]+)['"]/gu;
+  while (pendingFinalIdentityHelpers.length > 0) {
+    const helper = pendingFinalIdentityHelpers.shift();
+    if (checkedFinalIdentityHelpers.has(helper)) continue;
+    checkedFinalIdentityHelpers.add(helper);
+    const source = finalIdentityHelperSources.get(helper);
+    assert.ok(source, `final identity helper source must be present for ${helper}`);
+    let match;
+    while ((match = relativeImportPattern.exec(source)) !== null) {
+      const dependency = path.basename(match[1]);
+      assert.ok(finalIdentityHelperSources.has(dependency), `final identity helper dependency must be an explicit closure member: ${dependency}`);
+      pendingFinalIdentityHelpers.push(dependency);
+      assert.ok(
+        deployScript.includes(`cp scripts/${dependency} "$what_if_receipt_tools_dir/${dependency}"`),
+        `deployment must snapshot final identity helper dependency ${dependency}`,
+      );
+      assert.ok(
+        deployScript.includes(`test -s "$what_if_receipt_tools_dir/${dependency}"`),
+        `deployment must reject an empty final identity helper dependency ${dependency}`,
+      );
+    }
+    relativeImportPattern.lastIndex = 0;
+  }
   assert.ok(deployScript?.includes('expected_revision_name="${app_name}--${commit:0:10}"'), 'deployment must derive the expected revision from the attested release commit');
   assert.ok(deployScript?.includes('az containerapp revision show'), 'deployment must read back the expected Container App revision');
   assert.ok(deployScript?.includes('revision_ready="false"'), 'deployment must initialize a bounded revision-readiness poll');

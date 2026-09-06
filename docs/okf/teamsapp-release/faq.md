@@ -6,12 +6,12 @@ resource: /faq.md
 tags: [faq, incident-response, release, teams, azure]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T23:26:36Z"
+  at: "2026-09-06T23:41:31Z"
 verified:
   by: "process:release-faq-reconciliation/1"
-  at: "2026-09-06T23:26:36Z"
+  at: "2026-09-06T23:41:31Z"
 status: stable
-stale_after: "2026-09-13T23:26:36Z"
+stale_after: "2026-09-13T23:41:31Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -33,6 +33,10 @@ sources:
     resource: "https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops"
     title: "Deployment jobs - Azure Pipelines"
     location: "deployment lifecycle hooks and failure handling; observed web lines 55-76"
+  - id: node-esm
+    resource: "https://nodejs.org/api/esm.html"
+    title: "Modules: ECMAScript modules - Node.js documentation"
+    location: "relative import resolution and mandatory file extensions; observed web lines 212-226 on 2026-09-06"
   - id: github-artifacts
     resource: "https://docs.github.com/en/rest/actions/artifacts?apiVersion=2026-03-10"
     title: "REST API endpoints for GitHub Actions artifacts"
@@ -400,6 +404,24 @@ Fix:
 - Re-run clean Azure Core and one bounded hosted run. Do not increment `1.0.103` for this CI-only provenance repair.
 
 The focused tests are GREEN, but Run 42 remains failed until a hosted rerun proves the same helper identity through public health and final identity read-back. See [Deployment jobs](https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops), lines 37-76, and [Container Apps revisions](https://learn.microsoft.com/en-us/azure/container-apps/revisions), lines 128-138.
+
+## Q21. Why did Run 43 fail after the Run 42 helper snapshot fix?
+
+Run 43 exposed the next, narrower provenance defect. The pipeline did snapshot `azure-deployment-contract.mjs` before release checkout, but that module contains `import { readAzureReleaseInput } from './azure-release-input.mjs'`. Only the importer was copied, so after checkout Node could not resolve the relative dependency and the final identity step failed with `ERR_MODULE_NOT_FOUND`. Node's official ECMAScript-module contract resolves relative specifiers from the importing file and requires the explicit file extension ([Node.js ECMAScript modules](https://nodejs.org/api/esm.html), `import Specifiers` and `Mandatory file extensions`, observed lines 212-226).
+
+Evidence:
+
+- Run 43 / build `20260906.22` log 44: `ERR_MODULE_NOT_FOUND` for `/home/vsts/work/_temp/azure-what-if-receipt-tools/azure-release-input.mjs`, imported by the preserved deployment helper.
+- The same run passed the updated revision poll and downloaded a 2920-byte public health response before the module-load failure; this is not evidence that the public server was down.
+- Failure artifact `245` was listed at `545 B`; the task recorded `receiptWriteStatus=READY` and checksum `2651ec69422d53fa8a0674ff4101c195e16b2fc4c778c61e57a80950dabd2019`.
+
+Fix and gate:
+
+- Copy `scripts/azure-release-input.mjs` into the same pipeline-owned helper directory before `git checkout --detach "$commit"` and assert it is non-empty.
+- Add a RED regression that runs the snapshotted deployment helper after release checkout with a valid fixture receipt and fails on any missing local import.
+- Keep the closure explicit and minimal; do not copy the whole repository or alter the release commit to hide a missing helper.
+
+Run 43 remains failed. No application version bump or Teams upload is appropriate for this CI-only repair. A clean Core gate and one bounded hosted rerun are required before this release can advance.
 
 [^okf-spec]: Open Knowledge Format v0.2 specification, sections 3-5 and 8-9, observed web lines 253-327, 370-444, 486-513. https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md
 [^arm-what-if]: ARM what-if operation, What-if operation and permissions, observed web lines 29-52. https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-what-if
