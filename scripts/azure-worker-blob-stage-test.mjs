@@ -28,6 +28,10 @@ const existing = await ensureAzureWorkerBlob({
 });
 assert.deepEqual(existing, { status: 'existing', sha256 });
 assert.equal(calls.some((args) => args.includes('--auth-mode') && args.includes('login')), true);
+const metadataCall = calls.find((args) => args[1] === 'blob' && args[2] === 'metadata');
+assert.ok(metadataCall, 'existing Blob validation must read user-defined metadata');
+assert.equal(metadataCall[metadataCall.indexOf('--query') + 1], 'sha256', 'metadata show returns the metadata map at the top level');
+assert.equal(metadataCall.includes('metadata.sha256'), false, 'metadata show must not query a nested metadata object');
 
 let stage = 0;
 const uploaded = await ensureAzureWorkerBlob({

@@ -1045,7 +1045,9 @@ try {
   assert.ok(workerBlobStageSource.includes("'storage', 'blob', 'upload'"), 'Blob staging helper must use the official Azure CLI upload command');
   assert.ok(workerBlobStageSource.includes("'--auth-mode', 'login'"), 'artifact staging must use Entra authentication rather than account keys or SAS');
   assert.ok(workerBlobStageSource.includes("'storage', 'blob', 'exists'"), 'Blob staging helper must probe data-plane availability');
-  assert.ok(workerBlobStageSource.includes('metadata.sha256'), 'an existing immutable worker blob must be accepted only when its SHA-256 metadata matches');
+  assert.ok(workerBlobStageSource.includes('function metadataArgs'), 'Blob staging helper must read immutable worker metadata');
+  assert.ok(workerBlobStageSource.includes("'--query', 'sha256'"), 'Blob staging helper must query the top-level metadata map returned by Azure CLI');
+  assert.equal(workerBlobStageSource.includes("'--query', 'metadata.sha256'"), false, 'Blob staging helper must not query a nested metadata map');
   assert.equal(deployScript?.includes('az storage blob exists'), false, 'unbounded inline Blob authorization probes must not bypass the tested helper');
   assert.equal(deployScript?.includes('--auth-mode key'), false, 'deployment must never fall back to shared account keys');
   assert.equal(/--account-key|--sas-token/u.test(deployScript ?? ''), false, 'deployment must never use account keys or SAS tokens');

@@ -6,12 +6,12 @@ resource: /faq.md
 tags: [faq, incident-response, release, teams, azure]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T15:22:25Z"
+  at: "2026-09-06T22:01:14Z"
 verified:
   by: "process:release-faq-reconciliation/1"
-  at: "2026-09-06T15:22:25Z"
+  at: "2026-09-06T22:01:14Z"
 status: stable
-stale_after: "2026-09-13T15:22:25Z"
+stale_after: "2026-09-13T22:01:14Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -69,6 +69,14 @@ sources:
     resource: "https://github.com/devdoo-teams/teams-app/blob/main/docs/teams-release-workflow.md"
     title: "TeamsApp release workflow"
     location: "official-contract and same-release sections"
+  - id: az-storage-blob-cli-source
+    resource: "https://github.com/Azure/azure-cli/blob/dev/src/azure-cli/azure/cli/command_modules/storage/commands.py"
+    title: "Azure CLI Storage command registration"
+    location: "storage blob metadata show transforms get_blob_properties to x.metadata; observed source lines 2688-2693"
+  - id: az-storage-blob-reference
+    resource: "https://learn.microsoft.com/en-us/cli/azure/storage/blob?view=azure-cli-latest"
+    title: "az storage blob"
+    location: "metadata show/update and upload options; observed current CLI reference"
 ---
 
 # How to use this FAQ
@@ -312,6 +320,25 @@ Required regression:
 - `npm run test:azure-deployment-failure-receipt` must assert snapshot-before-checkout and preserved-helper execution;
 - `npm run test:azure-core` must be GREEN before queuing another hosted run;
 - a hosted run must read back a non-empty, schema-valid JSON receipt and its SHA-256 sidecar or keep the failure `UNVERIFIED`.
+
+## Q17. Why did the worker Blob step keep failing after IAM was present?
+
+The hosted Run 39 evidence identifies a query-shape defect, not a missing role. The deployment queried `metadata.sha256` after `az storage blob metadata show`. The official Azure CLI command registration transforms `get_blob_properties` to `x.metadata` (source lines 2688-2693), so the returned user-defined metadata map is top-level and the correct query is `sha256`. The nested query can return an empty value even when the Blob has the expected metadata.
+
+Evidence:
+
+- Run 39 / build `20260906.18`, source `6edcdbc6576ae9585f43ca6dc4fd2241262cc78e`, log 44: `expected fe36475c... observed <empty>` at `worker-blob`.
+- Azure Portal: `worker-artifacts` exists and its container-scope role list shows `Storage Blob Data Contributor` for the deployment service principal.
+- Official Azure CLI source: [`commands.py`](https://github.com/Azure/azure-cli/blob/dev/src/azure-cli/azure/cli/command_modules/storage/commands.py), lines 2688-2693.
+- Official command reference: [`az storage blob`](https://learn.microsoft.com/en-us/cli/azure/storage/blob?view=azure-cli-latest), `metadata show`, `metadata update`, `upload`, and `--auth-mode login`.
+
+Fix:
+
+- `scripts/azure-worker-blob-stage.mjs` now queries `sha256`, keeps the Entra-only path, and verifies the exact value after upload or a concurrent-create race.
+- `scripts/azure-worker-blob-stage-test.mjs` is RED for the nested query and GREEN for the corrected query.
+- `npm run test:azure-core` must be run from the clean correction commit before the next hosted run.
+
+Do not delete or overwrite a mismatched Blob based only on a false empty query. Read the top-level metadata correctly first; if it then mismatches, retain the exact evidence and treat the object as an independently reviewed immutable-artifact conflict.
 
 [^okf-spec]: Open Knowledge Format v0.2 specification, sections 3-5 and 8-9, observed web lines 253-327, 370-444, 486-513. https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md
 [^arm-what-if]: ARM what-if operation, What-if operation and permissions, observed web lines 29-52. https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-what-if

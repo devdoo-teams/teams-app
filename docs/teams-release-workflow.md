@@ -54,6 +54,8 @@ Azure foundation preflight의 현재 공식 근거는 [ARM what-if operation](ht
 
 post-approval AzureCLI는 실행 전 `failure_boundary`를 갱신하고 오류 시 [`azure-deployment-failure-receipt.mjs`](../scripts/azure-deployment-failure-receipt.mjs)가 stage/job, 마지막 boundary, exit code, source/version/run identity만 담은 secret-free receipt를 만든다. `azure-deployment-failure` artifact가 없으면 해당 run의 원인은 `UNVERIFIED`이며, 다음 run에서 receipt와 revision/system/application logs를 read-back하기 전에는 원인 확정·무근거 재시도·완료보고·Jira Done을 진행하지 않는다.
 
+worker Blob staging은 [`azure-worker-blob-stage.mjs`](../scripts/azure-worker-blob-stage.mjs) 하나의 bounded 경계로 실행한다. 이 helper는 Azure CLI의 Entra `--auth-mode login`으로 existence를 확인하고, 없으면 `--overwrite false`와 `--if-none-match *`로 업로드한 뒤 metadata를 read-back한다. Azure CLI 공식 소스상 `az storage blob metadata show`는 `get_blob_properties`의 `x.metadata`를 top-level로 반환하므로 SHA 질의는 `--query sha256`이어야 하며 `metadata.sha256`는 사용하지 않는다. 기존 Blob과 동시 업로드 결과는 같은 SHA-256 metadata와 일치할 때만 재사용하고, 오류는 민감값을 제거한 진단으로 남긴다. 이 helper와 회귀 테스트가 clean commit의 Azure Core gate에서 GREEN이 아니면 canary 승인·재실행을 진행하지 않는다. 근거: [Azure CLI Storage command registration](https://github.com/Azure/azure-cli/blob/dev/src/azure-cli/azure/cli/command_modules/storage/commands.py), lines 2688-2693, 및 [`az storage blob`](https://learn.microsoft.com/en-us/cli/azure/storage/blob?view=azure-cli-latest).
+
 ### Optional Jira/Confluence/Bitbucket MCP 게이트
 
 provider registry 변경은 다음 순서를 추가로 따른다.

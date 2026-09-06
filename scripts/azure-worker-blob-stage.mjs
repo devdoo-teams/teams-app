@@ -81,7 +81,7 @@ function metadataArgs({ accountName, containerName, blobName }) {
     '--account-name', accountName,
     '--container-name', containerName,
     '--name', blobName,
-    '--query', 'metadata.sha256',
+    '--query', 'sha256',
     '--output', 'tsv',
     '--only-show-errors',
   ];

@@ -6,12 +6,12 @@ resource: /failure-history.md
 tags: [teamsapp, azure, release, incident, failure, provenance]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T15:22:25Z"
+  at: "2026-09-06T22:01:14Z"
 verified:
   by: "process:release-evidence-reconciliation/1"
-  at: "2026-09-06T15:22:25Z"
+  at: "2026-09-06T22:01:14Z"
 status: stable
-stale_after: "2026-09-13T15:22:25Z"
+stale_after: "2026-09-13T22:01:14Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -53,6 +53,14 @@ sources:
     resource: "https://learn.microsoft.com/en-us/azure/container-apps/health-probes"
     title: "Health probes in Azure Container Apps"
     location: "probe types and readiness before traffic; observed web lines 36-41 and 187-188"
+  - id: az-storage-blob-cli-source
+    resource: "https://github.com/Azure/azure-cli/blob/dev/src/azure-cli/azure/cli/command_modules/storage/commands.py"
+    title: "Azure CLI Storage command registration"
+    location: "storage blob metadata show transforms get_blob_properties to x.metadata; observed source lines 2688-2693"
+  - id: az-storage-blob-reference
+    resource: "https://learn.microsoft.com/en-us/cli/azure/storage/blob?view=azure-cli-latest"
+    title: "az storage blob"
+    location: "metadata show/update and upload command contracts; observed current CLI reference"
   - id: teams-package
     resource: "https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/build-and-test/apps-package"
     title: "Teams app package"
@@ -497,20 +505,34 @@ These records do not substitute for current Azure run evidence.
 
 # Current judgment
 
-The current state is RELEASE_BLOCKED / Run 33 RUN_IN_PROGRESS with `ARTIFACT_READBACK_UNVERIFIED`; Run 32 remains FAILED_AFTER_APPROVAL, Run 31 remains FAILED_BEFORE_APPROVAL, and Run 30 remains FAILED_AFTER_APPROVAL.
+The current state is RELEASE_BLOCKED / Run 39 FAILED_AFTER_APPROVAL at `worker-blob`; Run 38 remains FAILED_AFTER_APPROVAL at the same boundary, Run 32 remains FAILED_AFTER_APPROVAL, Run 31 remains FAILED_BEFORE_APPROVAL, and Run 30 remains FAILED_AFTER_APPROVAL.
 
 - local/contract/Azure Core evidence: PASS within scope;
 - Run 32 workload what-if: FAILED after approval at `workload-parameters-and-what-if`; no Azure workload mutation occurred;
 - Run 32 failure receipt: FAILED to retain a non-empty artifact in the run, fixed in source commit `9c793d4` but not yet hosted-verified;
+- Run 39 worker Blob metadata query: FAILED because the nested `metadata.sha256` query produced a false empty value; correction is pending a fresh hosted run;
 - Run 33 pre-approval receipt read-back: reported artifact sizes conflict with 62-byte authorization text; no receipt content is verified;
 - Run 31 release handoff: FAILED before approval because the requested artifact was absent;
 - Run 30 post-approval Azure mutation: FAILED at an unknown named boundary (Run 30 evidence incomplete);
+- Run 39 deployment receipt: valid, non-empty, checksum-backed, with exact failure boundary;
 - healthy revision: UNVERIFIED;
 - public health identity: UNVERIFIED;
 - portal/installed same package: UNVERIFIED;
 - Teams desktop fresh reply: UNVERIFIED;
 - mobile: MOBILE_UNVERIFIED;
 - live A2A: UNVERIFIED.
+
+## 2026-09-07 — Run 38/39 worker Blob metadata query root cause and correction
+
+**OFFICIAL CONTRACT.** Azure CLI registers `storage blob metadata show` against `get_blob_properties` and transforms the response with `lambda x: x.metadata`, so the command returns the user-defined metadata map at the top level ([official source](https://github.com/Azure/azure-cli/blob/dev/src/azure-cli/azure/cli/command_modules/storage/commands.py), lines 2688-2693). The current [`az storage blob` reference](https://learn.microsoft.com/en-us/cli/azure/storage/blob?view=azure-cli-latest) defines metadata show/update, upload, `--auth-mode login`, and overwrite controls.
+
+**OBSERVED EVIDENCE.** Run 38 / build `20260906.17` failed after approval at `worker-blob`; the valid retained receipt has `sourceCommit=71df02e2ea9e9dbecbe864e0f1c6be3d649cbb4a`, `releaseVersion=1.0.103`, and `pipelineRunId=38`. Run 39 / build `20260906.18`, pipeline source `6edcdbc6576ae9585f43ca6dc4fd2241262cc78e`, reached the same boundary and printed: `immutable Blob metadata SHA-256 mismatch: expected fe36475c64b74a39876df0734569ad9f880089f37413299035f783598cddc74b, observed <empty>`. The Azure Portal read-back showed the exact `worker-artifacts` container and a container-scope `Storage Blob Data Contributor` role assignment for the deployment service principal.
+
+**CLASSIFICATION.** `CONFIRMED_ROOT_CAUSE` / `AZURE_BLOB_METADATA_QUERY_SHAPE`. The nested query `metadata.sha256` was wrong for this command's top-level metadata-map output; `sha256` is the correct query. The prior “empty metadata” was a query-shape false negative, not proof that the storage role or container was missing.
+
+**FIX AND VERIFICATION.** Commit `6edcdbc6576ae9585f43ca6dc4fd2241262cc78e` introduced the single bounded worker-Blob staging helper and redacted diagnostics. The follow-up correction changes the query to `sha256` and adds a RED regression that rejects `metadata.sha256`; the focused helper, platform-contract, and core-runner tests are GREEN after the correction. Version remains `1.0.103`; no package or Teams upload is warranted for this CI-only repair.
+
+**CURRENT JUDGMENT.** Run 39 remains `FAIL_AFTER_APPROVAL` and is not a verification pass for the correction. The exact invalid query is now identified; the existing Blob is preserved until a fresh run successfully reads the correct metadata. Azure revision/public health/Teams UI/mobile/A2A remain `UNVERIFIED`.
 
 [^okf-spec]: Open Knowledge Format v0.2 specification, sections 1, 3, 4, 5, 8, 9, observed web lines 197-204, 253-327, 370-444, 486-513. https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md
 [^arm-what-if]: Template deployment what-if, What-if operation and permissions, observed web lines 29-52. https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-what-if
