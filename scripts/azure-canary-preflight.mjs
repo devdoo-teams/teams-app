@@ -403,6 +403,10 @@ const workloadContainerAppReleaseUpdatePropertyChanges = Object.freeze([
   Object.freeze({ path: 'keyVaultUrl', propertyChangeType: 'Modify' }),
   Object.freeze({ path: 'keyVaultUrl', propertyChangeType: 'Modify' }),
   Object.freeze({ path: 'keyVaultUrl', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: '3', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: '4', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'keyVaultUrl', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'keyVaultUrl', propertyChangeType: 'Modify' }),
   Object.freeze({ path: 'properties.configuration.ingress.exposedPort', propertyChangeType: 'Delete' }),
   Object.freeze({ path: 'properties.configuration.maxInactiveRevisions', propertyChangeType: 'Delete' }),
   Object.freeze({ path: 'properties.configuration.registries', propertyChangeType: 'Array' }),
@@ -420,10 +424,26 @@ const workloadContainerAppReleaseUpdatePropertyChanges = Object.freeze([
   Object.freeze({ path: 'value', propertyChangeType: 'Modify' }),
 ]);
 
+const workloadContainerAppLegacyReleaseUpdatePropertyChanges = Object.freeze((() => {
+  let keyVaultUrlCount = 0;
+  return workloadContainerAppReleaseUpdatePropertyChanges.filter(({ path: propertyPath }) => {
+    if (propertyPath === '3' || propertyPath === '4') return false;
+    if (propertyPath === 'keyVaultUrl') {
+      keyVaultUrlCount += 1;
+      return keyVaultUrlCount <= 3;
+    }
+    return true;
+  });
+})());
+
 const workloadContainerAppReleaseUpdateVariants = Object.freeze([
   workloadContainerAppReleaseUpdatePropertyChanges,
   // ARM what-if can omit this service-defaulted Delete noise; keep both complete observed multisets exact.
   Object.freeze(workloadContainerAppReleaseUpdatePropertyChanges.filter(
+    ({ path: propertyPath }) => propertyPath !== 'properties.configuration.maxInactiveRevisions',
+  )),
+  workloadContainerAppLegacyReleaseUpdatePropertyChanges,
+  Object.freeze(workloadContainerAppLegacyReleaseUpdatePropertyChanges.filter(
     ({ path: propertyPath }) => propertyPath !== 'properties.configuration.maxInactiveRevisions',
   )),
 ]);

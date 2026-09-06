@@ -304,6 +304,30 @@ try {
   ]);
   assert.deepEqual(verifyAzureWhatIfReceipt(currentWorkloadReceipt, workloadIdentity), currentWorkloadReceipt);
 
+  const currentContainerAppWithTeamsSecrets = [
+    ...currentContainerAppPropertyChanges,
+    { path: '3', propertyChangeType: 'Modify' },
+    { path: 'keyVaultUrl', propertyChangeType: 'Modify' },
+    { path: '4', propertyChangeType: 'Modify' },
+    { path: 'keyVaultUrl', propertyChangeType: 'Modify' },
+  ];
+  const currentWorkloadWithTeamsSecrets = createAzureWhatIfReceipt({
+    ...workloadIdentity,
+    whatIf: {
+      status: 'Succeeded',
+      changes: [
+        { ...workloadObservedChanges[0], delta: currentContainerAppWithTeamsSecrets },
+        ...workloadObservedChanges.slice(1),
+      ],
+    },
+    checkedAt: '2026-09-06T12:41:00.000Z',
+  });
+  assert.equal(currentWorkloadWithTeamsSecrets.status, 'READY');
+  assert.deepEqual(
+    verifyAzureWhatIfReceipt(currentWorkloadWithTeamsSecrets, workloadIdentity),
+    currentWorkloadWithTeamsSecrets,
+  );
+
   for (const unsafeWorkloadChanges of [
     [{ ...workloadObservedChanges[0], resourceId: `${scope}/providers/Microsoft.App/containerApps/teamsapp-production-goictvxm` }],
     [{ ...workloadObservedChanges[0], delta: undefined }],
