@@ -434,14 +434,26 @@ function verifyCompiledAzureComposition(): void {
     'TEAMS_AGENT_DISPATCH_MODE',
     'AZURE_STORAGE_QUEUE_ENDPOINT',
     'AZURE_STORAGE_POISON_QUEUE_ENDPOINT',
+    'BOT_CLIENT_ID',
+    'CLIENT_SECRET',
+    'TENANT_ID',
+    'CLIENT_ID',
+    'APPLICATION_ID_URI',
+    'TEAMS_CATALOG_APP_ID',
+    'TAB_DOMAIN',
+    'TEAMS_USER_AUTH_ACCEPTED_AUDIENCES',
+    'TEAMS_OPERATOR_REQUESTER_ALLOWLIST',
   ]) {
     assert.ok(env.has(name), `Container App must bind ${name}`);
   }
+  assert.equal(env.get('CLIENT_SECRET')?.secretRef, 'teams-bot-client-secret');
+  assert.equal(env.get('TEAMS_OPERATOR_REQUESTER_ALLOWLIST')?.secretRef, 'teams-operator-allowlist');
   assert.equal(env.get('TEAMS_STORAGE_BACKEND')?.value, 'cosmos');
   assert.equal(env.get('TEAMS_AGENT_DISPATCH_MODE')?.value, 'azure-queue');
   assert.ok(template.outputs?.cosmosEndpoint);
   assert.ok(template.outputs?.cosmosDatabase);
   assert.ok(template.outputs?.cosmosContainer);
+  assert.ok(template.outputs?.keyVaultName);
 }
 
 function verifyIndexCompositionContract(): void {

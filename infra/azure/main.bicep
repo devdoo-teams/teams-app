@@ -70,6 +70,33 @@ param releaseClientBundleSha256 string
 @maxLength(64)
 param releaseServerBundleSha256 string
 
+@description('Observed Teams bot client ID used by the production Bot Framework runtime.')
+param botClientId string
+
+@description('Observed Entra tenant ID used by the production Teams runtime.')
+param tenantId string
+
+@description('Observed Entra client ID used for delegated Teams user authentication.')
+param clientId string
+
+@description('Observed combined Teams bot and tab Application ID URI.')
+param applicationIdUri string
+
+@description('Observed Teams organization catalog application ID.')
+param teamsCatalogAppId string
+
+@description('Public HTTPS hostname bound to the Teams tab and SSO resource.')
+param tabDomain string
+
+@description('Comma-separated delegated-token audiences accepted by the runtime.')
+param teamsUserAuthAcceptedAudiences string
+
+@description('Existing Key Vault secret name containing the Teams bot client secret.')
+param botClientSecretKeyVaultSecretName string
+
+@description('Existing Key Vault secret name containing the operator requester allowlist.')
+param operatorAllowlistKeyVaultSecretName string
+
 var uniqueSuffix = toLower(take(uniqueString(resourceGroup().id, workloadName), 8))
 var compactPrefix = toLower(replace(workloadName, '-', ''))
 var acrName = take('${compactPrefix}${uniqueSuffix}', 50)
@@ -177,6 +204,15 @@ module containerApp './modules/container-app.bicep' = if (deployContainerApp) {
     releaseTeamsPackageSha256: releaseTeamsPackageSha256
     releaseClientBundleSha256: releaseClientBundleSha256
     releaseServerBundleSha256: releaseServerBundleSha256
+    botClientId: botClientId
+    tenantId: tenantId
+    clientId: clientId
+    applicationIdUri: applicationIdUri
+    teamsCatalogAppId: teamsCatalogAppId
+    tabDomain: tabDomain
+    teamsUserAuthAcceptedAudiences: teamsUserAuthAcceptedAudiences
+    botClientSecretKeyVaultSecretName: botClientSecretKeyVaultSecretName
+    operatorAllowlistKeyVaultSecretName: operatorAllowlistKeyVaultSecretName
   }
 }
 
@@ -206,6 +242,7 @@ module workerVm './modules/worker-vm.bicep' = if (deployWorkerVm) {
 
 output registryName string = acrName
 output registryLoginServer string = registry.outputs.loginServer
+output keyVaultName string = keyVaultName
 output containerEnvironmentName string = environmentName
 output appIdentityClientId string = identities.outputs.appIdentityClientId
 output cosmosEndpoint string = cosmos.outputs.endpoint

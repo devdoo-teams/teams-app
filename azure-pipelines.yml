@@ -39,6 +39,9 @@ variables:
   azureWorkloadName: teamsapp
   githubRepository: devdoo-teams/teams-app
   allowedGitHubRepositories: devdoo-teams/teams-app
+  # These values are supplied as Azure DevOps pipeline variables (or a linked
+  # variable group). Secret contents never enter this file or the ARM params.
+  # The two *_KEY_VAULT_SECRET_NAME values are only secret names.
 
 stages:
   - stage: ValidateHandoff
@@ -119,6 +122,22 @@ stages:
             displayName: Install the pinned worker Node runtime
             inputs:
               version: 24.19.0
+          - bash: |
+              set -euo pipefail
+              node scripts/azure-production-runtime-config.mjs
+            displayName: Validate production Teams identity and Key Vault reference contract
+            env:
+              TEAMS_APP_ID: $(TEAMS_APP_ID)
+              TEAMS_CATALOG_APP_ID: $(TEAMS_CATALOG_APP_ID)
+              BOT_ID: $(BOT_ID)
+              TAB_DOMAIN: $(TAB_DOMAIN)
+              CLIENT_ID: $(CLIENT_ID)
+              BOT_CLIENT_ID: $(BOT_CLIENT_ID)
+              TENANT_ID: $(TENANT_ID)
+              APPLICATION_ID_URI: $(APPLICATION_ID_URI)
+              TEAMS_USER_AUTH_ACCEPTED_AUDIENCES: $(TEAMS_USER_AUTH_ACCEPTED_AUDIENCES)
+              TEAMS_BOT_CLIENT_SECRET_KEY_VAULT_SECRET_NAME: $(TEAMS_BOT_CLIENT_SECRET_KEY_VAULT_SECRET_NAME)
+              TEAMS_OPERATOR_ALLOWLIST_KEY_VAULT_SECRET_NAME: $(TEAMS_OPERATOR_ALLOWLIST_KEY_VAULT_SECRET_NAME)
           - bash: |
               set -euo pipefail
               platform_dir="$(Pipeline.Workspace)/azure-platform-preflight"
@@ -271,6 +290,17 @@ stages:
                   --container-image "${source_image}@${source_digest}" \
                   --deployment-principal-id "$deployment_principal_id" \
                   --worker-admin-ssh-public-key "$WORKER_ADMIN_SSH_PUBLIC_KEY" \
+                  --teams-app-id "$TEAMS_APP_ID" \
+                  --teams-catalog-app-id "$TEAMS_CATALOG_APP_ID" \
+                  --bot-id "$BOT_ID" \
+                  --tab-domain "$TAB_DOMAIN" \
+                  --client-id "$CLIENT_ID" \
+                  --bot-client-id "$BOT_CLIENT_ID" \
+                  --tenant-id "$TENANT_ID" \
+                  --application-id-uri "$APPLICATION_ID_URI" \
+                  --teams-user-auth-accepted-audiences "$TEAMS_USER_AUTH_ACCEPTED_AUDIENCES" \
+                  --bot-client-secret-key-vault-secret-name "$TEAMS_BOT_CLIENT_SECRET_KEY_VAULT_SECRET_NAME" \
+                  --operator-allowlist-key-vault-secret-name "$TEAMS_OPERATOR_ALLOWLIST_KEY_VAULT_SECRET_NAME" \
                   --output "$foundation_parameters"
                 az deployment group what-if \
                   --name teamsapp-platform-foundation-preflight \
@@ -311,6 +341,17 @@ stages:
               AZURE_SUBSCRIPTION_ID: $(azureSubscriptionId)
               AZURE_WORKLOAD_NAME: $(azureWorkloadName)
               WORKER_ADMIN_SSH_PUBLIC_KEY: $(workerAdminSshPublicKey)
+              TEAMS_APP_ID: $(TEAMS_APP_ID)
+              TEAMS_CATALOG_APP_ID: $(TEAMS_CATALOG_APP_ID)
+              BOT_ID: $(BOT_ID)
+              TAB_DOMAIN: $(TAB_DOMAIN)
+              CLIENT_ID: $(CLIENT_ID)
+              BOT_CLIENT_ID: $(BOT_CLIENT_ID)
+              TENANT_ID: $(TENANT_ID)
+              APPLICATION_ID_URI: $(APPLICATION_ID_URI)
+              TEAMS_USER_AUTH_ACCEPTED_AUDIENCES: $(TEAMS_USER_AUTH_ACCEPTED_AUDIENCES)
+              TEAMS_BOT_CLIENT_SECRET_KEY_VAULT_SECRET_NAME: $(TEAMS_BOT_CLIENT_SECRET_KEY_VAULT_SECRET_NAME)
+              TEAMS_OPERATOR_ALLOWLIST_KEY_VAULT_SECRET_NAME: $(TEAMS_OPERATOR_ALLOWLIST_KEY_VAULT_SECRET_NAME)
           - task: PublishPipelineArtifact@1
             displayName: Retain pre-approval Azure platform receipt
             inputs:
@@ -451,6 +492,17 @@ stages:
                         --container-image "${source_image}@${source_digest}" \
                         --deployment-principal-id "$deployment_principal_id" \
                         --worker-admin-ssh-public-key "$WORKER_ADMIN_SSH_PUBLIC_KEY" \
+                        --teams-app-id "$TEAMS_APP_ID" \
+                        --teams-catalog-app-id "$TEAMS_CATALOG_APP_ID" \
+                        --bot-id "$BOT_ID" \
+                        --tab-domain "$TAB_DOMAIN" \
+                        --client-id "$CLIENT_ID" \
+                        --bot-client-id "$BOT_CLIENT_ID" \
+                        --tenant-id "$TENANT_ID" \
+                        --application-id-uri "$APPLICATION_ID_URI" \
+                        --teams-user-auth-accepted-audiences "$TEAMS_USER_AUTH_ACCEPTED_AUDIENCES" \
+                        --bot-client-secret-key-vault-secret-name "$TEAMS_BOT_CLIENT_SECRET_KEY_VAULT_SECRET_NAME" \
+                        --operator-allowlist-key-vault-secret-name "$TEAMS_OPERATOR_ALLOWLIST_KEY_VAULT_SECRET_NAME" \
                         --output "$foundation_parameters"
                       node scripts/azure-what-if-receipt.mjs verify \
                         --receipt "$foundation_what_if_receipt" \
@@ -475,6 +527,17 @@ stages:
                       node scripts/azure-deployment-contract.mjs outputs "$(Agent.TempDirectory)/foundation-outputs.json" foundation > "$(Agent.TempDirectory)/foundation.json"
                       registry_name="$(jq -er '.registryName' "$(Agent.TempDirectory)/foundation.json")"
                       registry_server="$(jq -er '.registryLoginServer' "$(Agent.TempDirectory)/foundation.json")"
+                      key_vault_name="$(jq -er '.keyVaultName.value' "$(Agent.TempDirectory)/foundation-outputs.json")"
+                      for secret_name in \
+                        "$TEAMS_BOT_CLIENT_SECRET_KEY_VAULT_SECRET_NAME" \
+                        "$TEAMS_OPERATOR_ALLOWLIST_KEY_VAULT_SECRET_NAME"; do
+                        test -n "$(az keyvault secret show \
+                          --vault-name "$key_vault_name" \
+                          --name "$secret_name" \
+                          --query id \
+                          --only-show-errors \
+                          --output tsv)"
+                      done
                       worker_storage_account="$(jq -er '.workerArtifactStorageAccountName.value' "$(Agent.TempDirectory)/foundation-outputs.json")"
                       worker_artifact_container="$(jq -er '.workerArtifactContainerName.value' "$(Agent.TempDirectory)/foundation-outputs.json")"
                       worker_artifact_base_url="$(jq -er '.workerArtifactContainerUrl.value' "$(Agent.TempDirectory)/foundation-outputs.json")"
@@ -508,6 +571,17 @@ stages:
                         --container-image "$deployed_image" \
                         --deployment-principal-id "$deployment_principal_id" \
                         --worker-admin-ssh-public-key "$WORKER_ADMIN_SSH_PUBLIC_KEY" \
+                        --teams-app-id "$TEAMS_APP_ID" \
+                        --teams-catalog-app-id "$TEAMS_CATALOG_APP_ID" \
+                        --bot-id "$BOT_ID" \
+                        --tab-domain "$TAB_DOMAIN" \
+                        --client-id "$CLIENT_ID" \
+                        --bot-client-id "$BOT_CLIENT_ID" \
+                        --tenant-id "$TENANT_ID" \
+                        --application-id-uri "$APPLICATION_ID_URI" \
+                        --teams-user-auth-accepted-audiences "$TEAMS_USER_AUTH_ACCEPTED_AUDIENCES" \
+                        --bot-client-secret-key-vault-secret-name "$TEAMS_BOT_CLIENT_SECRET_KEY_VAULT_SECRET_NAME" \
+                        --operator-allowlist-key-vault-secret-name "$TEAMS_OPERATOR_ALLOWLIST_KEY_VAULT_SECRET_NAME" \
                         --worker-artifact-url "$worker_artifact_url" \
                         --worker-artifact-sha256 "$worker_artifact_sha" \
                         --codex-bin-sha256 "$codex_bin_sha" \
@@ -601,6 +675,17 @@ stages:
                     GHCR_IMPORT_USERNAME: $(githubArtifactUsername)
                     GHCR_IMPORT_TOKEN: $(githubArtifactReadToken)
                     WORKER_ADMIN_SSH_PUBLIC_KEY: $(workerAdminSshPublicKey)
+                    TEAMS_APP_ID: $(TEAMS_APP_ID)
+                    TEAMS_CATALOG_APP_ID: $(TEAMS_CATALOG_APP_ID)
+                    BOT_ID: $(BOT_ID)
+                    TAB_DOMAIN: $(TAB_DOMAIN)
+                    CLIENT_ID: $(CLIENT_ID)
+                    BOT_CLIENT_ID: $(BOT_CLIENT_ID)
+                    TENANT_ID: $(TENANT_ID)
+                    APPLICATION_ID_URI: $(APPLICATION_ID_URI)
+                    TEAMS_USER_AUTH_ACCEPTED_AUDIENCES: $(TEAMS_USER_AUTH_ACCEPTED_AUDIENCES)
+                    TEAMS_BOT_CLIENT_SECRET_KEY_VAULT_SECRET_NAME: $(TEAMS_BOT_CLIENT_SECRET_KEY_VAULT_SECRET_NAME)
+                    TEAMS_OPERATOR_ALLOWLIST_KEY_VAULT_SECRET_NAME: $(TEAMS_OPERATOR_ALLOWLIST_KEY_VAULT_SECRET_NAME)
                     CODEX_PACKAGE_URL: ${{ parameters.codexPackageUrl }}
                     CODEX_PACKAGE_SHA256: ${{ parameters.codexPackageSha256 }}
                     CODEX_PACKAGE_VERSION: ${{ parameters.codexPackageVersion }}

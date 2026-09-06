@@ -18,6 +18,15 @@ param releaseImageDigest string
 param releaseTeamsPackageSha256 string
 param releaseClientBundleSha256 string
 param releaseServerBundleSha256 string
+param botClientId string
+param tenantId string
+param clientId string
+param applicationIdUri string
+param teamsCatalogAppId string
+param tabDomain string
+param teamsUserAuthAcceptedAudiences string
+param botClientSecretKeyVaultSecretName string
+param operatorAllowlistKeyVaultSecretName string
 
 resource app 'Microsoft.App/containerApps@2024-03-01' = {
   name: appName
@@ -65,6 +74,16 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
           keyVaultUrl: '${keyVaultUri}secrets/azure-storage-file-endpoint'
           identity: appIdentityResourceId
         }
+        {
+          name: 'teams-bot-client-secret'
+          keyVaultUrl: '${keyVaultUri}secrets/${botClientSecretKeyVaultSecretName}'
+          identity: appIdentityResourceId
+        }
+        {
+          name: 'teams-operator-allowlist'
+          keyVaultUrl: '${keyVaultUri}secrets/${operatorAllowlistKeyVaultSecretName}'
+          identity: appIdentityResourceId
+        }
       ]
     }
     template: {
@@ -85,6 +104,42 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'AZURE_RELEASE_MODE'
               value: 'true'
+            }
+            {
+              name: 'BOT_CLIENT_ID'
+              value: botClientId
+            }
+            {
+              name: 'CLIENT_SECRET'
+              secretRef: 'teams-bot-client-secret'
+            }
+            {
+              name: 'TENANT_ID'
+              value: tenantId
+            }
+            {
+              name: 'CLIENT_ID'
+              value: clientId
+            }
+            {
+              name: 'APPLICATION_ID_URI'
+              value: applicationIdUri
+            }
+            {
+              name: 'TEAMS_CATALOG_APP_ID'
+              value: teamsCatalogAppId
+            }
+            {
+              name: 'TAB_DOMAIN'
+              value: tabDomain
+            }
+            {
+              name: 'TEAMS_USER_AUTH_ACCEPTED_AUDIENCES'
+              value: teamsUserAuthAcceptedAudiences
+            }
+            {
+              name: 'TEAMS_OPERATOR_REQUESTER_ALLOWLIST'
+              secretRef: 'teams-operator-allowlist'
             }
             {
               name: 'AZURE_COSMOS_ENDPOINT'

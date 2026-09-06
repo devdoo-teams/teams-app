@@ -15,6 +15,17 @@ param releaseTeamsPackageSha256 = '000000000000000000000000000000000000000000000
 param releaseClientBundleSha256 = '0000000000000000000000000000000000000000000000000000000000000000'
 param releaseServerBundleSha256 = '0000000000000000000000000000000000000000000000000000000000000000'
 
+// Runtime identity fixtures are intentionally non-production values used only for Bicep compilation.
+param botClientId = '00000000-0000-4000-8000-000000000001'
+param tenantId = '00000000-0000-4000-8000-000000000002'
+param clientId = '00000000-0000-4000-8000-000000000003'
+param applicationIdUri = 'api://teamsapp.example.com/botid-00000000-0000-4000-8000-000000000001'
+param teamsCatalogAppId = '00000000-0000-4000-8000-000000000004'
+param tabDomain = 'teamsapp.example.com'
+param teamsUserAuthAcceptedAudiences = '00000000-0000-4000-8000-000000000003'
+param botClientSecretKeyVaultSecretName = 'teams-bot-client-secret'
+param operatorAllowlistKeyVaultSecretName = 'teams-operator-allowlist'
+
 // This is a non-secret format placeholder. The deployer supplies the approved owner public key.
 param workerAdminSshPublicKey = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAzureCanaryContractOnly teamsapp@azure-canary'
 param deployWorkerVm = true

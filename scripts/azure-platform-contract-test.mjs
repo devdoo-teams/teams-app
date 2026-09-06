@@ -633,6 +633,15 @@ try {
   for (const name of [
     'AZURE_CLIENT_ID',
     'AZURE_RELEASE_MODE',
+    'BOT_CLIENT_ID',
+    'CLIENT_SECRET',
+    'TENANT_ID',
+    'CLIENT_ID',
+    'APPLICATION_ID_URI',
+    'TEAMS_CATALOG_APP_ID',
+    'TAB_DOMAIN',
+    'TEAMS_USER_AUTH_ACCEPTED_AUDIENCES',
+    'TEAMS_OPERATOR_REQUESTER_ALLOWLIST',
     'RELEASE_IMAGE_DIGEST',
     'RELEASE_CLIENT_BUNDLE_SHA256',
     'RELEASE_SERVER_BUNDLE_SHA256',
@@ -647,12 +656,31 @@ try {
     'true',
     'compiled Container App revision must explicitly enable strict Azure release identity mode',
   );
+  assert.equal(
+    appContainer?.env?.find((entry) => entry.name === 'CLIENT_SECRET')?.secretRef,
+    'teams-bot-client-secret',
+    'bot client secret must be consumed through a Container App secret reference',
+  );
+  assert.equal(
+    appContainer?.env?.find((entry) => entry.name === 'TEAMS_OPERATOR_REQUESTER_ALLOWLIST')?.secretRef,
+    'teams-operator-allowlist',
+    'operator allowlist must be consumed through a Container App secret reference',
+  );
+  const containerSecrets = new Set((containerApp.properties?.configuration?.secrets ?? []).map((entry) => entry.name));
+  assert.ok(containerSecrets.has('teams-bot-client-secret'), 'Container App must declare the bot client secret Key Vault reference');
+  assert.ok(containerSecrets.has('teams-operator-allowlist'), 'Container App must declare the operator allowlist Key Vault reference');
+  assert.equal(
+    JSON.stringify(compiled).includes('client-secret-value'),
+    false,
+    'compiled platform template must not contain a client secret value',
+  );
   assert.equal(containerApp.properties?.template?.scale?.minReplicas, 0, 'Container App must scale to zero');
   assert.equal(containerApp.properties?.configuration?.activeRevisionsMode, 'multiple', 'Container App must retain rollback revisions');
 
   for (const output of [
     'registryName',
     'registryLoginServer',
+    'keyVaultName',
     'containerAppName',
     'containerAppFqdn',
     'containerAppRevisionName',
@@ -663,7 +691,11 @@ try {
   }
   assert.ok(compiled.outputs?.workerVmResourceId, 'foundation outputs must expose the deterministic worker VM resource ID');
   assert.equal(String(compiled.outputs.workerVmResourceId.value).includes("if(parameters('deployWorkerVm')"), false, 'worker VM resource ID must remain available when the foundation omits the VM module');
-  assert.equal(Object.keys(compiled.outputs ?? {}).filter((name) => /secret|connection|string|key/i.test(name)).length, 0, 'Bicep outputs must not expose secrets, connection strings, or keys');
+  assert.equal(
+    Object.keys(compiled.outputs ?? {}).filter((name) => name !== 'keyVaultName' && /secret|connection|string|key/i.test(name)).length,
+    0,
+    'Bicep outputs must not expose secrets, connection strings, or keys',
+  );
 
   const pipeline = parseYaml(pipelinePath);
   const parameterNames = new Set((pipeline.parameters ?? []).map((parameter) => parameter.name));
@@ -696,6 +728,10 @@ try {
   assert.equal(platformJob?.pool?.vmImage, 'ubuntu-24.04', 'Azure platform tests must pin the same supported Linux runner used for deployment');
   const platformSteps = allSteps(platformStage);
   const platformScripts = platformSteps.map((step) => step.bash).filter(Boolean);
+  assert.ok(
+    platformScripts.some((script) => script.includes('scripts/azure-production-runtime-config.mjs')),
+    'Azure platform must validate the production Teams identity and Key Vault reference contract before mutation',
+  );
   const platformScript = platformScripts.find((script) => script.includes('npm run test:azure-core'));
   assert.ok(platformScript, 'Azure Core must run before the deployment environment approval is requested');
   assert.ok(platformScript?.includes('git checkout --detach "$commit"'), 'pre-approval Azure tests must use the exact attested source commit');
@@ -821,6 +857,9 @@ try {
   assert.ok(deployScript?.includes('az deployment group create'), 'deployment must provision with an Azure resource-group deployment');
   assert.ok(deployScript?.includes('--template-file infra/azure/main.bicep'), 'deployment must execute the compiled main.bicep contract');
   assert.ok(deployScript?.includes('scripts/azure-deployment-contract.mjs outputs'), 'deployment must consume validated Bicep outputs');
+  assert.ok(deployScript?.includes('az keyvault secret show'), 'deployment must verify required Key Vault secret metadata before workload mutation');
+  assert.ok(deployScript?.includes('TEAMS_BOT_CLIENT_SECRET_KEY_VAULT_SECRET_NAME'), 'deployment must use the configured bot secret name');
+  assert.ok(deployScript?.includes('TEAMS_OPERATOR_ALLOWLIST_KEY_VAULT_SECRET_NAME'), 'deployment must use the configured operator allowlist secret name');
   assert.equal(deployScript?.includes('npm run test:azure-core'), false, 'the first Azure Core execution must not be deferred until after approval');
   assert.ok(deployScript?.includes('azure-platform-preflight-receipt.json'), 'deployment must bind the pre-approval receipt to the exact release commit');
   assert.equal(
@@ -878,6 +917,10 @@ try {
     'workload create must pin the subscription explicitly',
   );
   const firstCreateIndex = deployScript.indexOf('az deployment group create');
+  assert.ok(
+    deployScript.indexOf('az keyvault secret show') < deployScript.indexOf('az deployment group create', firstCreateIndex + 1),
+    'Key Vault secret metadata must be verified before the workload mutation',
+  );
   const workloadWhatIfIndex = deployScript.indexOf('az deployment group what-if', firstCreateIndex + 1);
   const secondCreateIndex = deployScript.indexOf('az deployment group create', firstCreateIndex + 1);
   assert.ok(workloadWhatIfIndex > firstCreateIndex, 'exact workload what-if must run after foundation outputs exist');

@@ -25,6 +25,7 @@ const provenance = {
 const outputs = {
   registryName: { type: 'String', value: 'teamsappabc123' },
   registryLoginServer: { type: 'String', value: 'teamsappabc123.azurecr.io' },
+  keyVaultName: { type: 'String', value: 'teamsapp-abc123' },
   containerAppName: { type: 'String', value: 'teamsapp-canary-abc123' },
   containerAppFqdn: { type: 'String', value: 'teamsapp-canary.example.azurecontainerapps.io' },
   containerAppRevisionName: { type: 'String', value: 'teamsapp-canary-abc123--aaaaaaaaaa' },

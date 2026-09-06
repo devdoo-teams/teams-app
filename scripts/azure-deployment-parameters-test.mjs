@@ -28,6 +28,19 @@ try {
     location: 'koreacentral',
     deploymentPrincipalId: '12345678-1234-1234-1234-123456789abc',
     workerAdminSshPublicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixture fixture@example.invalid',
+    productionRuntimeConfig: {
+      TEAMS_APP_ID: '00000000-0000-4000-8000-000000000001',
+      TEAMS_CATALOG_APP_ID: '00000000-0000-4000-8000-000000000002',
+      BOT_ID: '00000000-0000-4000-8000-000000000003',
+      TAB_DOMAIN: 'teamsapp.example.com',
+      CLIENT_ID: '00000000-0000-4000-8000-000000000004',
+      BOT_CLIENT_ID: '00000000-0000-4000-8000-000000000005',
+      TENANT_ID: '00000000-0000-4000-8000-000000000006',
+      APPLICATION_ID_URI: 'api://teamsapp.example.com/botid-00000000-0000-4000-8000-000000000005',
+      TEAMS_USER_AUTH_ACCEPTED_AUDIENCES: '00000000-0000-4000-8000-000000000004',
+      TEAMS_BOT_CLIENT_SECRET_KEY_VAULT_SECRET_NAME: 'teams-bot-client-secret',
+      TEAMS_OPERATOR_ALLOWLIST_KEY_VAULT_SECRET_NAME: 'teams-operator-allowlist',
+    },
   };
 
   const foundation = buildAzureDeploymentParameters({
@@ -43,6 +56,12 @@ try {
   assert.equal(foundation.parameters.containerImage.value, `${release.image}@${digest}`);
   assert.equal(foundation.parameters.deploymentPrincipalId.value, common.deploymentPrincipalId);
   assert.equal(foundation.parameters.releaseSourceCommit.value, commit);
+  assert.equal(foundation.parameters.botClientId.value, common.productionRuntimeConfig.BOT_CLIENT_ID);
+  assert.equal(foundation.parameters.applicationIdUri.value, common.productionRuntimeConfig.APPLICATION_ID_URI);
+  assert.equal(
+    foundation.parameters.botClientSecretKeyVaultSecretName.value,
+    common.productionRuntimeConfig.TEAMS_BOT_CLIENT_SECRET_KEY_VAULT_SECRET_NAME,
+  );
   assert.equal(Object.hasOwn(foundation.parameters, 'workerArtifactUrl'), false);
 
   const workerArtifactUrl = `https://fixture.blob.core.windows.net/runtime/${commit}/worker-runtime-${commit}.tar`;
@@ -127,6 +146,17 @@ try {
     '--container-image', `${release.image}@${digest}`,
     '--deployment-principal-id', common.deploymentPrincipalId,
     '--worker-admin-ssh-public-key', common.workerAdminSshPublicKey,
+    '--teams-app-id', common.productionRuntimeConfig.TEAMS_APP_ID,
+    '--teams-catalog-app-id', common.productionRuntimeConfig.TEAMS_CATALOG_APP_ID,
+    '--bot-id', common.productionRuntimeConfig.BOT_ID,
+    '--tab-domain', common.productionRuntimeConfig.TAB_DOMAIN,
+    '--client-id', common.productionRuntimeConfig.CLIENT_ID,
+    '--bot-client-id', common.productionRuntimeConfig.BOT_CLIENT_ID,
+    '--tenant-id', common.productionRuntimeConfig.TENANT_ID,
+    '--application-id-uri', common.productionRuntimeConfig.APPLICATION_ID_URI,
+    '--teams-user-auth-accepted-audiences', common.productionRuntimeConfig.TEAMS_USER_AUTH_ACCEPTED_AUDIENCES,
+    '--bot-client-secret-key-vault-secret-name', common.productionRuntimeConfig.TEAMS_BOT_CLIENT_SECRET_KEY_VAULT_SECRET_NAME,
+    '--operator-allowlist-key-vault-secret-name', common.productionRuntimeConfig.TEAMS_OPERATOR_ALLOWLIST_KEY_VAULT_SECRET_NAME,
     '--output', outputPath,
   ];
   const createResult = spawnSync(process.execPath, cliArgs, { encoding: 'utf8' });
@@ -147,6 +177,17 @@ try {
     '--container-image', `teamsappfixture.azurecr.io/teamsapp@${digest}`,
     '--deployment-principal-id', common.deploymentPrincipalId,
     '--worker-admin-ssh-public-key', common.workerAdminSshPublicKey,
+    '--teams-app-id', common.productionRuntimeConfig.TEAMS_APP_ID,
+    '--teams-catalog-app-id', common.productionRuntimeConfig.TEAMS_CATALOG_APP_ID,
+    '--bot-id', common.productionRuntimeConfig.BOT_ID,
+    '--tab-domain', common.productionRuntimeConfig.TAB_DOMAIN,
+    '--client-id', common.productionRuntimeConfig.CLIENT_ID,
+    '--bot-client-id', common.productionRuntimeConfig.BOT_CLIENT_ID,
+    '--tenant-id', common.productionRuntimeConfig.TENANT_ID,
+    '--application-id-uri', common.productionRuntimeConfig.APPLICATION_ID_URI,
+    '--teams-user-auth-accepted-audiences', common.productionRuntimeConfig.TEAMS_USER_AUTH_ACCEPTED_AUDIENCES,
+    '--bot-client-secret-key-vault-secret-name', common.productionRuntimeConfig.TEAMS_BOT_CLIENT_SECRET_KEY_VAULT_SECRET_NAME,
+    '--operator-allowlist-key-vault-secret-name', common.productionRuntimeConfig.TEAMS_OPERATOR_ALLOWLIST_KEY_VAULT_SECRET_NAME,
     '--worker-artifact-url', workerArtifactUrl,
     '--worker-artifact-sha256', 'f'.repeat(64),
     '--codex-bin-sha256', '1'.repeat(64),

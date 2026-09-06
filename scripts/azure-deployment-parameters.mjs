@@ -6,6 +6,7 @@ import {
   readAzureReleaseInput,
   validateAzureReleaseInput,
 } from './azure-release-input.mjs';
+import { validateAzureProductionRuntimeConfig } from './azure-production-runtime-config.mjs';
 
 const SHA256 = /^[0-9a-f]{64}$/u;
 const WORKLOAD_NAME = /^[a-z][a-z0-9-]{2,13}$/u;
@@ -55,9 +56,11 @@ export function buildAzureDeploymentParameters({
   workerArtifactSha256,
   codexBinSha256,
   initializeWorkerVm,
+  productionRuntimeConfig,
 }) {
   if (!PHASES.has(phase)) fail('phase must be foundation or workload');
   const release = validateAzureReleaseInput(inputRelease);
+  const runtime = validateAzureProductionRuntimeConfig(productionRuntimeConfig);
   if (!WORKLOAD_NAME.test(String(workloadName ?? ''))) fail('workload name is invalid');
   if (!LOCATION.test(String(location ?? ''))) fail('location is invalid');
   if (!GUID.test(String(deploymentPrincipalId ?? ''))) fail('deployment principal ID is invalid');
@@ -100,6 +103,15 @@ export function buildAzureDeploymentParameters({
     releaseTeamsPackageSha256: parameter(release.teamsPackageSha256),
     releaseClientBundleSha256: parameter(release.clientBundleSha256),
     releaseServerBundleSha256: parameter(release.serverBundleSha256),
+    botClientId: parameter(runtime.botClientId),
+    tenantId: parameter(runtime.tenantId),
+    clientId: parameter(runtime.clientId),
+    applicationIdUri: parameter(runtime.applicationIdUri),
+    teamsCatalogAppId: parameter(runtime.teamsCatalogAppId),
+    tabDomain: parameter(runtime.tabDomain),
+    teamsUserAuthAcceptedAudiences: parameter(runtime.teamsUserAuthAcceptedAudiences),
+    botClientSecretKeyVaultSecretName: parameter(runtime.botClientSecretKeyVaultSecretName),
+    operatorAllowlistKeyVaultSecretName: parameter(runtime.operatorAllowlistKeyVaultSecretName),
   };
   if (phase === 'workload') {
     parameters.workerArtifactUrl = parameter(workerArtifactUrl);
@@ -127,6 +139,17 @@ function parseArguments(args) {
     '--worker-artifact-sha256',
     '--codex-bin-sha256',
     '--initialize-worker-vm',
+    '--teams-app-id',
+    '--teams-catalog-app-id',
+    '--bot-id',
+    '--tab-domain',
+    '--client-id',
+    '--bot-client-id',
+    '--tenant-id',
+    '--application-id-uri',
+    '--teams-user-auth-accepted-audiences',
+    '--bot-client-secret-key-vault-secret-name',
+    '--operator-allowlist-key-vault-secret-name',
     '--output',
   ]);
   const required = new Set([
@@ -137,6 +160,17 @@ function parseArguments(args) {
     '--container-image',
     '--deployment-principal-id',
     '--worker-admin-ssh-public-key',
+    '--teams-app-id',
+    '--teams-catalog-app-id',
+    '--bot-id',
+    '--tab-domain',
+    '--client-id',
+    '--bot-client-id',
+    '--tenant-id',
+    '--application-id-uri',
+    '--teams-user-auth-accepted-audiences',
+    '--bot-client-secret-key-vault-secret-name',
+    '--operator-allowlist-key-vault-secret-name',
     '--output',
   ]);
   if (args.length % 2 !== 0) fail('arguments must be --name value pairs');
@@ -200,6 +234,19 @@ function runCli() {
     containerImage: values.get('--container-image'),
     deploymentPrincipalId: values.get('--deployment-principal-id'),
     workerAdminSshPublicKey: values.get('--worker-admin-ssh-public-key'),
+    productionRuntimeConfig: {
+      TEAMS_APP_ID: values.get('--teams-app-id'),
+      TEAMS_CATALOG_APP_ID: values.get('--teams-catalog-app-id'),
+      BOT_ID: values.get('--bot-id'),
+      TAB_DOMAIN: values.get('--tab-domain'),
+      CLIENT_ID: values.get('--client-id'),
+      BOT_CLIENT_ID: values.get('--bot-client-id'),
+      TENANT_ID: values.get('--tenant-id'),
+      APPLICATION_ID_URI: values.get('--application-id-uri'),
+      TEAMS_USER_AUTH_ACCEPTED_AUDIENCES: values.get('--teams-user-auth-accepted-audiences'),
+      TEAMS_BOT_CLIENT_SECRET_KEY_VAULT_SECRET_NAME: values.get('--bot-client-secret-key-vault-secret-name'),
+      TEAMS_OPERATOR_ALLOWLIST_KEY_VAULT_SECRET_NAME: values.get('--operator-allowlist-key-vault-secret-name'),
+    },
     workerArtifactUrl: values.get('--worker-artifact-url'),
     workerArtifactSha256: values.get('--worker-artifact-sha256'),
     codexBinSha256: values.get('--codex-bin-sha256'),

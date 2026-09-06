@@ -10,6 +10,7 @@ const artifactDigestPattern = /^sha256:[0-9a-f]{64}$/;
 const requiredOutputs = [
   'registryName',
   'registryLoginServer',
+  'keyVaultName',
   'containerAppName',
   'containerAppFqdn',
   'containerAppRevisionName',
@@ -54,6 +55,7 @@ export function parseDeploymentOutputs(value, { requireContainerApp = true } = {
   }
   if (!/^[a-z0-9]{5,50}$/.test(parsed.registryName)) fail('registryName is invalid');
   if (parsed.registryLoginServer !== `${parsed.registryName}.azurecr.io`) fail('registryLoginServer does not match registryName');
+  if (!/^[a-z0-9-]{3,24}$/.test(parsed.keyVaultName)) fail('keyVaultName is invalid');
   if (!/^[0-9a-f-]{36}$/i.test(parsed.appIdentityClientId)) fail('appIdentityClientId is invalid');
   return parsed;
 }
