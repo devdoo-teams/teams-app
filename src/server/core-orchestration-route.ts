@@ -17,6 +17,7 @@ import {
   CoreOrchestrationIdempotencyConflictError,
   CoreOrchestrationProviderCapabilityError,
   CoreOrchestrationProviderUnavailableError,
+  type CoreContinueRequest,
   CoreOrchestrationValidationError,
   type CoreJobRequest,
   type CoreListRequest,
@@ -28,6 +29,7 @@ import {
 export type CoreOrchestrationRouteService = Pick<CoreOrchestrationService,
   | 'submit'
   | 'get'
+  | 'continue'
   | 'list'
   | 'cancel'
   | 'approve'
@@ -95,6 +97,15 @@ export function createCoreOrchestrationRouter(options: CoreOrchestrationRouteOpt
   router.get('/jobs/:jobId', asyncHandler(async (request, response) => {
     assertNoQuery(request);
     const job = options.service.get(scopeFor(options, request, response), jobRequest(request));
+    response.set('Cache-Control', 'no-store').status(200).json({ job: requireJob(job) });
+  }));
+
+  router.post('/jobs/:jobId/continue', asyncHandler(async (request, response) => {
+    assertNoQuery(request);
+    const job = await options.service.continue(
+      scopeFor(options, request, response),
+      continueRequest(request, request.body),
+    );
     response.set('Cache-Control', 'no-store').status(200).json({ job: requireJob(job) });
   }));
 
@@ -185,6 +196,12 @@ function listRequest(request: Request): CoreListRequest {
 
 function jobRequest(request: Request): CoreJobRequest {
   return { jobId: singleParam(request.params.jobId) };
+}
+
+function continueRequest(request: Request, value: unknown): CoreContinueRequest {
+  const body = strictObject(value, ['prompt']);
+  if (typeof body.prompt !== 'string' || !body.prompt.trim()) throw invalidRequest();
+  return { jobId: singleParam(request.params.jobId), prompt: body.prompt };
 }
 
 function provideInputRequest(request: Request, value: unknown): CoreProvideInputRequest {

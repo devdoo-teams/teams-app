@@ -39,6 +39,7 @@ const modelCatalog = parseCodexModelCatalogPayload([{
 
 let submitCalls = 0;
 let executionLaunches = 0;
+let continueCalls = 0;
 const agentService = {
   submit: async (input: {
     prompt: string;
@@ -69,6 +70,19 @@ const agentService = {
     return job;
   },
   get: (id: string, scope: AgentJobScope) => store.get(id, scope),
+  continue: async (id: string, prompt: string, scoped: AgentJobScope): Promise<AgentJob | undefined> => {
+    continueCalls += 1;
+    const previous = store.get(id, scoped);
+    if (!previous?.threadId) return undefined;
+    return store.create({
+      prompt,
+      provider: previous.provider ?? 'codex',
+      mode: previous.mode,
+      scope: scoped,
+      parentJobId: previous.id,
+      threadId: previous.threadId,
+    });
+  },
   list: (scope: AgentJobScope, limit?: number) => store.list(scope, limit),
   cancelStrict: async (id: string, scoped: AgentJobScope) => store.update(id, scoped, {
     status: 'cancelled',
@@ -125,6 +139,25 @@ assert.equal(replay.replayed, true);
 assert.equal(replay.job.id, first.job.id);
 assert.equal(submitCalls, 1, 'an active replay is resolved before AgentService admission or dispatch');
 assert.equal(executionLaunches, 1, 'an idempotent replay does not launch duplicate execution');
+
+const threaded = await store.create({
+  prompt: 'durable conversation seed',
+  provider: 'codex',
+  mode: 'read-only',
+  scope,
+  threadId: 'codex-thread-1',
+});
+const continued = await service.continue(scope, {
+  jobId: threaded.id,
+  prompt: 'resume the selected conversation',
+});
+assert.equal(continued?.parentJobId, threaded.id, 'explicit continuation records the selected parent job');
+assert.equal(continued?.threadId, threaded.threadId, 'explicit continuation reuses the selected durable thread');
+assert.equal(continueCalls, 1, 'explicit continuation calls AgentService exactly once');
+assert.equal(await service.continue(createServerDerivedCoreScope({
+  ...scope,
+  requesterId: 'requester-b',
+}), { jobId: threaded.id, prompt: 'cross-principal' }), undefined);
 
 await assert.rejects(
   service.submit(scope, { ...request, prompt: 'different payload' }),

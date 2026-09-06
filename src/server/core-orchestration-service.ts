@@ -10,6 +10,7 @@ import {
 } from './agent-job-store.js';
 import type {
   CoreJobRequest,
+  CoreContinueRequest,
   CoreListRequest,
   CoreOrchestrationJob,
   CoreOrchestrationProvider,
@@ -68,6 +69,12 @@ export interface CoreAgentServicePort {
     catalogRevision?: string;
   }): Promise<AgentJob>;
   get(id: string, scope: AgentJobScope): AgentJob | undefined;
+  continue(
+    id: string,
+    prompt: string,
+    scope: AgentJobScope,
+    options?: { notify?: boolean; onProgress?: (message: string) => Promise<void> | void },
+  ): Promise<AgentJob | undefined>;
   getForPrincipal?(
     id: string,
     principal: Pick<AgentJobScope, 'tenantId' | 'requesterId'>,
@@ -170,6 +177,21 @@ export class CoreOrchestrationService {
     assertNoClientScope(request);
     const job = this.resolveJob(scope, normalizeJobId(request.jobId));
     return mapOptional(job && storedScopeForPrincipal(job, scope) ? job : undefined);
+  }
+
+  async continue(
+    scope: ServerDerivedCoreScope,
+    request: CoreContinueRequest,
+  ): Promise<CoreOrchestrationJob | undefined> {
+    assertServerScope(scope);
+    assertNoClientScope(request);
+    const normalized = normalizeContinueRequest(request);
+    const job = this.resolveJob(scope, normalized.jobId);
+    if (!job) return undefined;
+    const storedScope = storedScopeForPrincipal(job, scope);
+    if (!storedScope) return undefined;
+    await this.assertProviderCapability(storedScope, this.providerForJob(job), 'submit');
+    return mapOptional(await this.options.agentService.continue(job.id, normalized.prompt, storedScope));
   }
 
   list(scope: ServerDerivedCoreScope, request: CoreListRequest = {}): CoreOrchestrationJob[] {
@@ -489,6 +511,17 @@ function normalizeJobId(value: unknown): string {
     throw new CoreOrchestrationValidationError('jobId must be a non-empty string.');
   }
   return value.trim();
+}
+
+function normalizeContinueRequest(request: CoreContinueRequest): CoreContinueRequest {
+  const jobId = normalizeJobId(request.jobId);
+  if (typeof request.prompt !== 'string'
+    || !request.prompt.trim()
+    || request.prompt.trim().length > MAX_AGENT_PROMPT_LENGTH
+    || UNSUPPORTED_CONTROL_CHARACTERS.test(request.prompt)) {
+    throw new CoreOrchestrationValidationError('prompt must be a non-empty string.');
+  }
+  return { jobId, prompt: request.prompt.trim() };
 }
 
 function assertServerScope(scope: ServerDerivedCoreScope): void {

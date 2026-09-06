@@ -3879,13 +3879,22 @@ async function resolveCoreOrchestrationCommand(
         }, coreOrchestrationCardOptions)
       : coreOrchestrationErrorActivity('현재 배포된 Codex worker 모델 목록을 확인할 수 없습니다.');
   }
-  if (command.kind === 'submit') {
+  if (command.kind === 'submit' || command.kind === 'new') {
     const result = await coreOrchestrationService.submit(serverScope, {
       idempotencyKey: coreOrchestrationActivityIdempotencyKey(activity, scope),
       prompt: command.prompt,
-      mode: command.mode,
+      mode: command.kind === 'new' ? 'read-only' : command.mode,
     });
     return createCoreOrchestrationJobActivity(result.job, coreOrchestrationCardOptions);
+  }
+  if (command.kind === 'continue') {
+    const job = await coreOrchestrationService.continue(serverScope, {
+      jobId: command.jobId,
+      prompt: command.prompt,
+    });
+    return job
+      ? createCoreOrchestrationJobActivity(job, coreOrchestrationCardOptions)
+      : coreOrchestrationErrorActivity('선택한 작업을 이어갈 수 없습니다. 작업 ID와 durable Codex thread를 확인하세요.');
   }
   if (command.kind === 'list') {
     return createCoreOrchestrationListActivity(

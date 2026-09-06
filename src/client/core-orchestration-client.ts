@@ -45,6 +45,7 @@ export class CoreOrchestrationClientError extends Error {
 export type CoreOrchestrationClient = {
   listJobs: (signal?: AbortSignal) => Promise<CoreOrchestrationJobList>;
   getJob: (jobId: string, signal?: AbortSignal) => Promise<CoreOrchestrationJob>;
+  continueJob: (jobId: string, prompt: string, signal?: AbortSignal) => Promise<CoreOrchestrationJobResult>;
   submitJob: (input: CoreSubmitRequest, signal?: AbortSignal) => Promise<CoreSubmitResult>;
   cancelJob: (jobId: string, signal?: AbortSignal) => Promise<CoreOrchestrationJobResult>;
   approveJob: (jobId: string, signal?: AbortSignal) => Promise<CoreOrchestrationJobResult>;
@@ -121,6 +122,13 @@ export function createCoreOrchestrationClient(
     async getJob(jobId, signal) {
       const response = await expectResponse<CoreOrchestrationJobResult>(request, jobPath(jobId), { signal });
       return response.job;
+    },
+    continueJob(jobId, prompt, signal) {
+      return expectResponse<CoreOrchestrationJobResult>(
+        request,
+        jobPath(jobId, 'continue'),
+        jsonPost({ prompt }, signal),
+      );
     },
     submitJob(input, signal) {
       return expectResponse<CoreSubmitResult>(

@@ -89,6 +89,20 @@ const service: CoreOrchestrationRouteService = {
   get(scope, request) {
     return jobs.get(jobKey(scope, request.jobId));
   },
+  async continue(scope, request) {
+    const prior = jobs.get(jobKey(scope, request.jobId));
+    if (!prior) return undefined;
+    const continued: CoreOrchestrationJob = {
+      ...prior,
+      id: `job-${nextId++}`,
+      parentJobId: prior.id,
+      threadId: prior.threadId ?? `thread-${prior.id}`,
+      prompt: request.prompt,
+      status: 'queued',
+    };
+    jobs.set(jobKey(scope, continued.id), continued);
+    return continued;
+  },
   list(scope, request = {}) {
     return [...jobs.entries()]
       .filter(([key]) => key.startsWith(`${scopeKey(scope)}/`))
@@ -241,6 +255,15 @@ try {
   assert.equal(fetched.status, 200);
   assert.equal(JSON.parse(fetched.body).job.id, first.job.id);
   assert.equal((await request('GET', `/jobs/${first.job.id}`, undefined, { ...auth, 'x-test-requester': 'other' })).status, 404);
+
+  const continued = await request('POST', `/jobs/${first.job.id}/continue`, {
+    prompt: 'continue the selected job',
+  }, auth);
+  assert.equal(continued.status, 200);
+  assert.equal(JSON.parse(continued.body).job.parentJobId, first.job.id);
+  assert.equal(JSON.parse(continued.body).job.prompt, 'continue the selected job');
+  assert.equal((await request('POST', `/jobs/${first.job.id}/continue`, { prompt: '' }, auth)).status, 400);
+  assert.equal((await request('POST', `/jobs/${first.job.id}/continue`, { prompt: 'x', extra: true }, auth)).status, 400);
 
   const write = await request('POST', '/jobs', {
     idempotencyKey: 'route-write-1', prompt: 'approved change', mode: 'workspace-write',

@@ -29,6 +29,8 @@ type ApprovalToolArgs = {
 
 export type CoreOrchestrationChatCommand =
   | Readonly<{ kind: 'submit'; mode: 'read-only' | 'workspace-write'; prompt: string }>
+  | Readonly<{ kind: 'new'; prompt: string }>
+  | Readonly<{ kind: 'continue'; jobId: string; prompt: string }>
   | Readonly<{ kind: 'select-submit'; mode: 'read-only'; prompt: string }>
   | Readonly<{ kind: 'status' | 'cancel' | 'approve' | 'retry'; jobId: string }>
   | Readonly<{ kind: 'list' }>
@@ -42,12 +44,16 @@ const CORE_ORCHESTRATION_JOB_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
  * authenticated Teams activity; no client-controlled scope is accepted here.
  */
 export function parseCoreOrchestrationChatCommand(input: string): CoreOrchestrationChatCommand | undefined {
-  const match = /^(?:agent|에이전트)\s+(run|write|choose|선택|status|list|cancel|approve|retry|input)(?:\s+([\s\S]+))?$/i.exec(input.trim());
+  const match = /^(?:agent|에이전트)\s+(new|continue|run|write|choose|선택|status|list|cancel|approve|retry|input)(?:\s+([\s\S]+))?$/i.exec(input.trim());
   if (!match) return undefined;
   const operation = match[1]!.toLowerCase();
   const argument = match[2]?.trim() ?? '';
 
   if (operation === 'list') return argument ? undefined : { kind: 'list' };
+  if (operation === 'new') {
+    if (!argument || argument.length > 2_000) return undefined;
+    return { kind: 'new', prompt: safeText(argument, 2_000) };
+  }
   if (operation === 'run' || operation === 'write') {
     if (!argument || argument.length > 2_000) return undefined;
     return {
@@ -64,6 +70,11 @@ export function parseCoreOrchestrationChatCommand(input: string): CoreOrchestrat
   const separator = argument.indexOf(' ');
   const jobId = (separator === -1 ? argument : argument.slice(0, separator)).trim();
   if (!CORE_ORCHESTRATION_JOB_ID.test(jobId)) return undefined;
+  if (operation === 'continue') {
+    const prompt = separator === -1 ? '' : argument.slice(separator + 1).trim();
+    if (!prompt || prompt.length > 2_000) return undefined;
+    return { kind: 'continue', jobId, prompt: safeText(prompt, 2_000) };
+  }
   if (operation === 'input') {
     const providedInput = separator === -1 ? '' : argument.slice(separator + 1).trim();
     if (!providedInput || providedInput.length > 2_000) return undefined;
@@ -75,6 +86,8 @@ export function parseCoreOrchestrationChatCommand(input: string): CoreOrchestrat
 
 export function coreOrchestrationCommandHelp(): string {
   return [
+    'agent new <새 작업>',
+    'agent continue <작업 ID> <추가 작업>',
     'agent run <작업>',
     'agent write <쓰기 작업>',
     'agent choose <모델·추론 수준을 선택할 읽기 작업>',

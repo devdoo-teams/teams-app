@@ -78,6 +78,7 @@ export type CoreSubmitRequest = Readonly<{
 }>;
 
 export type CoreJobRequest = Readonly<{ jobId: string }>;
+export type CoreContinueRequest = Readonly<{ jobId: string; prompt: string }>;
 export type CoreListRequest = Readonly<{ limit?: number }>;
 export type CoreProvideInputRequest = Readonly<{ jobId: string; input: unknown }>;
 

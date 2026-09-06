@@ -50,6 +50,15 @@ assert.deepEqual(parseCoreOrchestrationChatCommand('agent run 저장소 상태�
   mode: 'read-only',
   prompt: '저장소 상태를 점검해줘',
 });
+assert.deepEqual(parseCoreOrchestrationChatCommand('agent new 새 세션으로 릴리스 상태를 점검해줘'), {
+  kind: 'new',
+  prompt: '새 세션으로 릴리스 상태를 점검해줘',
+});
+assert.deepEqual(parseCoreOrchestrationChatCommand('agent continue job-durable-42 이전 작업을 이어서 검증해줘'), {
+  kind: 'continue',
+  jobId: 'job-durable-42',
+  prompt: '이전 작업을 이어서 검증해줘',
+});
 assert.deepEqual(parseCoreOrchestrationChatCommand('에이전트 write README를 수정해줘'), {
   kind: 'submit',
   mode: 'workspace-write',
@@ -83,9 +92,13 @@ assert.deepEqual(parseCoreOrchestrationChatCommand('agent input job-durable-42 �
   input: '서울로 조회해줘',
 });
 assert.equal(parseCoreOrchestrationChatCommand('agent run'), undefined, 'empty submissions are rejected');
+assert.equal(parseCoreOrchestrationChatCommand('agent new'), undefined, 'empty new submissions are rejected');
+assert.equal(parseCoreOrchestrationChatCommand('agent continue job-durable-42'), undefined, 'continue requires a prompt');
 assert.equal(parseCoreOrchestrationChatCommand('agent status'), undefined, 'job commands require a durable job ID');
 assert.equal(parseCoreOrchestrationChatCommand('status'), undefined, 'legacy status remains outside the orchestration namespace');
 assert.match(coreOrchestrationCommandHelp(), /agent input <작업 ID> <입력>/);
+assert.match(coreOrchestrationCommandHelp(), /agent new <새 작업>/);
+assert.match(coreOrchestrationCommandHelp(), /agent continue <작업 ID> <추가 작업>/);
 
 type AdaptiveCard = {
   type?: string;
@@ -276,7 +289,7 @@ const manifest = JSON.parse(await readFile(new URL('../appPackage/manifest.json'
 const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 assert.equal(manifest.version, packageJson.version, 'manifest version must match the package version');
 const commands = manifest.bots[0].commandLists[0].commands.map((command: { title: string }) => command.title);
-for (const command of ['agent run', 'agent write', 'agent choose', 'agent status', 'agent list', 'agent cancel', 'agent approve', 'agent retry', 'agent input']) {
+for (const command of ['agent run', 'agent new', 'agent continue', 'agent write', 'agent choose', 'agent status', 'agent list', 'agent cancel', 'agent approve', 'agent retry', 'agent input']) {
   assert.ok(commands.includes(command), `manifest discovers ${command}`);
 }
 

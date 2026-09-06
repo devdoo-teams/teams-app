@@ -793,7 +793,7 @@ export class GenUiResponseFactory {
   }
 
   help(): GenUiEnvelopeV1 {
-    const text = '사용 가능한 에이전트 명령: agent run <작업>, agent write <쓰기 작업>, agent status <작업 ID>, agent list, agent cancel <작업 ID>, agent approve <작업 ID>, agent retry <작업 ID>, agent input <작업 ID> <입력>';
+    const text = '사용 가능한 에이전트 명령: agent new <새 작업>, agent continue <작업 ID> <추가 작업>, agent run <작업>, agent write <쓰기 작업>, agent status <작업 ID>, agent list, agent cancel <작업 ID>, agent approve <작업 ID>, agent retry <작업 ID>, agent input <작업 ID> <입력>';
     return this.create({
       kind: 'answer',
       id: 'help',

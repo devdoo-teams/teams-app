@@ -43,6 +43,8 @@
           "scopes": ["personal", "team", "groupChat"],
           "commands": [
             { "title": "help", "description": "사용 가능한 명령을 보여줍니다." },
+            { "title": "agent new", "description": "기존 대화와 분리된 새 읽기 전용 작업을 시작합니다." },
+            { "title": "agent continue", "description": "지정한 작업 ID의 durable Codex 대화를 이어갑니다." },
             { "title": "agent run", "description": "읽기 전용 Core 에이전트 작업을 시작합니다." },
             { "title": "agent write", "description": "승인이 필요한 작업공간 변경 작업을 시작합니다." },
             { "title": "agent choose", "description": "모델과 추론 수준을 선택해 읽기 작업을 시작합니다." },

@@ -124,6 +124,14 @@ const detailed = await client.getJob('task-1');
 assert.equal(detailed.status, 'input_required', 'detail preserves the input-required state');
 assert.deepEqual(requests.at(-1), { path: `${apiBasePath}/jobs/task-1`, method: 'GET', body: undefined });
 
+const continued = await client.continueJob('task-1', 'Continue the selected conversation.');
+assert.equal(continued.job.id, 'task-1', 'explicit continuation returns the shared durable job DTO');
+assert.deepEqual(requests.at(-1), {
+  path: `${apiBasePath}/jobs/task-1/continue`,
+  method: 'POST',
+  body: { prompt: 'Continue the selected conversation.' },
+}, 'continue sends only the selected job and prompt; scope remains server-derived');
+
 const submitted = await client.submitJob({
   provider: 'codex',
   mode: 'read-only',
