@@ -231,6 +231,7 @@ export function createCoreOrchestrationJobActivity(
           { title: '상태', value: identifierText(job.status, 40, 'unknown') },
           { title: '권한', value: identifierText(job.mode, 40, 'unknown') },
           { title: 'Provider', value: identifierText(job.provider, 40, '미지정') },
+          { title: '마지막 갱신', value: identifierText(job.updatedAt, 80, '제공되지 않음') },
           ...(job.provider === 'codex' ? [
             { title: '모델', value: identifierText(job.model, 128, 'Codex CLI 기본값') },
             { title: '추론 수준', value: identifierText(job.reasoningEffort, 40, 'Codex CLI 기본값') },

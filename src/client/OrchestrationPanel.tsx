@@ -421,6 +421,7 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
           <h3 id="orchestration-detail-heading">작업 상세</h3>
           <p><strong>상태:</strong> {statusLabels[props.selectedJob.status]}</p>
           <p><strong>작업 ID:</strong> {props.selectedJob.id}</p>
+          <p><strong>작업 마지막 갱신:</strong> {props.selectedJob.updatedAt ?? '제공되지 않음'}</p>
           <p><strong>프롬프트:</strong> {props.selectedJob.prompt}</p>
           {props.selectedJob.provider === 'codex' ? (
             <>

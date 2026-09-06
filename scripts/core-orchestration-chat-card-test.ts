@@ -43,6 +43,7 @@ const job = (status: CoreOrchestrationJob['status']): CoreOrchestrationJob => ({
     reasoningOutputTokens: 10,
   },
   createdAt: '2026-09-03T00:00:00.000Z',
+  updatedAt: '2026-09-03T00:03:00.000Z',
 });
 
 assert.deepEqual(parseCoreOrchestrationChatCommand('agent run 저장소 상태를 점검해줘'), {
@@ -171,6 +172,7 @@ assert.match(jobCardJson, /high/);
 assert.match(jobCardJson, /100/);
 assert.match(jobCardJson, /30/);
 assert.match(jobCardJson, /잔여.*제공되지 않음/);
+assert.match(jobCardJson, /마지막 갱신/);
 const detailAction = detailCard.actions?.find((action) => action.type === 'Action.ShowCard' && action.title === '프롬프트·도구');
 assert.ok(detailAction, 'every job card exposes progressive prompt and observed-tool details');
 const detailJson = JSON.stringify(detailAction?.card);

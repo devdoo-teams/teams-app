@@ -63,6 +63,8 @@ export type CoreOrchestrationJob = Readonly<{
   /** Exact terminal `turn.completed.usage`; account quota is intentionally not inferred. */
   tokenUsage?: CoreAgentTokenUsage;
   createdAt: string;
+  /** Server-owned durable timestamp of the last meaningful job mutation. */
+  updatedAt?: string;
   startedAt?: string;
   finishedAt?: string;
 }>;

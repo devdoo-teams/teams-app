@@ -84,6 +84,8 @@ export interface AgentJob {
   reasoningEffort?: CoreCodexReasoningEffort;
   catalogRevision?: string;
   createdAt: string;
+  /** Server-owned durable timestamp of the last meaningful job mutation. */
+  updatedAt?: string;
   startedAt?: string;
   finishedAt?: string;
 }
@@ -211,6 +213,7 @@ export class AgentJobStore {
   }): Promise<AgentJob> {
     validateIdempotencyInput(input.idempotencyKey, input.requestHash);
     const selection = readSelectionInput(input);
+    const createdAt = new Date().toISOString();
     const job: AgentJob = {
       id: `task-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`,
       prompt: input.prompt,
@@ -226,7 +229,8 @@ export class AgentJobStore {
       progress: [],
       tools: [],
       ...(selection ?? {}),
-      createdAt: new Date().toISOString(),
+      createdAt,
+      updatedAt: createdAt,
     };
 
     return this.enqueueMutation(() => {
@@ -321,7 +325,11 @@ export class AgentJobStore {
       const index = this.jobs.findIndex((job) => job.id === id && matchesScope(job, scope));
       if (index === -1) return undefined;
 
-      const updated = { ...this.jobs[index], ...patch } as AgentJob;
+      const updated = {
+        ...this.jobs[index],
+        ...patch,
+        updatedAt: new Date().toISOString(),
+      } as AgentJob;
       if ('provider' in patch && patch.provider !== this.jobs[index].provider) {
         throw new Error('agent job provider identity is immutable');
       }
@@ -355,7 +363,11 @@ export class AgentJobStore {
       const job = this.jobs[index];
       if (job.progress.at(-1) === message) return cloneAgentJob(job);
 
-      const updated = { ...job, progress: [...job.progress.slice(-7), message] };
+      const updated = {
+        ...job,
+        progress: [...job.progress.slice(-7), message],
+        updatedAt: new Date().toISOString(),
+      };
       this.jobs = this.jobs.map((candidate, jobIndex) => jobIndex === index ? updated : candidate);
       return cloneAgentJob(updated);
     });
@@ -372,7 +384,7 @@ export class AgentJobStore {
       const job = this.jobs[index];
       const tools = mergeObservedToolUsage(job.tools ?? [], observations);
       if (tools.length === (job.tools?.length ?? 0)) return cloneAgentJob(job);
-      const updated = { ...job, tools };
+      const updated = { ...job, tools, updatedAt: new Date().toISOString() };
       this.jobs = this.jobs.map((candidate, jobIndex) => jobIndex === index ? updated : candidate);
       return cloneAgentJob(updated);
     });
@@ -413,6 +425,7 @@ export class AgentJobStore {
               status: 'failed',
               error: '서버가 재시작되어 작업이 중단되었습니다.',
               finishedAt,
+              updatedAt: finishedAt,
             }
           : job,
       );
@@ -641,8 +654,11 @@ function loadJob(
     throw invalidJob(index, error instanceof Error ? error.message : 'Codex model selection is invalid');
   }
   const createdAt = readTimestamp(value.createdAt, 'createdAt', index, legacy);
+  const updatedAt = readOptionalTimestamp(value, 'updatedAt', index, legacy);
   const startedAt = readOptionalTimestamp(value, 'startedAt', index, legacy);
   const finishedAt = readOptionalTimestamp(value, 'finishedAt', index, legacy);
+  const effectiveUpdatedAt = updatedAt.value ?? finishedAt.value ?? startedAt.value ?? createdAt.value;
+  const updatedAtMigrated = updatedAt.migrated || updatedAt.value === undefined;
 
   if (status === 'completed' && !result.value) {
     if (!legacy) throw invalidJob(index, 'completed jobs must contain a result');
@@ -670,6 +686,7 @@ function loadJob(
     progress.migrated,
     tools.migrated,
     createdAt.migrated,
+    updatedAtMigrated,
     startedAt.migrated,
     finishedAt.migrated,
   ].some(Boolean);
@@ -696,6 +713,7 @@ function loadJob(
     tools: tools.value,
     ...(selection ?? {}),
     createdAt: createdAt.value,
+    updatedAt: effectiveUpdatedAt,
     ...(startedAt.value ? { startedAt: startedAt.value } : {}),
     ...(finishedAt.value ? { finishedAt: finishedAt.value } : {}),
   };

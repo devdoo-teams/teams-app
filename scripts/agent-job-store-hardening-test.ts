@@ -133,6 +133,7 @@ try {
   await assertRejectedUnchanged('non-string-tenant', [currentJob({ tenantId: null as unknown as string })]);
   await assertRejectedUnchanged('invalid-created-at', [currentJob({ createdAt: 'not-a-timestamp' })]);
   await assertRejectedUnchanged('infinite-created-at', [currentJob({ createdAt: 'Infinity' })]);
+  await assertRejectedUnchanged('invalid-updated-at', [currentJob({ updatedAt: 'not-a-timestamp' })]);
   await assertRejectedUnchanged('non-array-progress', [currentJob({ progress: 'not-an-array' as unknown as string[] })]);
   await assertRejectedUnchanged('empty-progress-message', [currentJob({ progress: ['   '] })]);
   await assertRejectedUnchanged(
@@ -197,6 +198,7 @@ try {
   const scopedSnapshot = currentStore.get('task-current-1', scope);
   assert.ok(scopedSnapshot, 'valid current job is readable in its scope');
   assert.equal(scopedSnapshot.tenantId, scope.tenantId, 'valid current job is readable in its scope');
+  assert.equal(scopedSnapshot.updatedAt, scopedSnapshot.createdAt, 'legacy/current records receive a durable update timestamp fallback');
   assert.match(scopedSnapshot.result ?? '', /첫 번째 결과 줄\n두 번째 결과 줄/, 'multiline Codex results remain valid persisted text');
   assert.deepEqual(
     scopedSnapshot.changedPaths,
@@ -230,6 +232,23 @@ try {
     currentStore.get('task-current-1', { ...scope, requesterId: 'other-user' }),
     undefined,
     'requester mismatch remains inaccessible',
+  );
+
+  const fresh = await currentStore.create({
+    prompt: 'durable progress checkpoint',
+    provider: 'codex',
+    mode: 'read-only',
+    scope,
+  });
+  assert.ok(fresh.updatedAt, 'new jobs expose a server-generated update timestamp');
+  const progressed = await currentStore.appendProgress(fresh.id, scope, 'checkpoint persisted');
+  assert.ok(progressed?.updatedAt, 'progress mutations refresh the durable update timestamp');
+  const restartedCurrentStore = new AgentJobStore(currentPath);
+  await restartedCurrentStore.initialize();
+  assert.equal(
+    restartedCurrentStore.get(fresh.id, scope)?.updatedAt,
+    progressed?.updatedAt,
+    'restart read-back preserves the same durable update timestamp',
   );
   await assert.rejects(
     () => currentStore.update('task-current-1', scope, { status: 'completed', result: undefined }),

@@ -560,6 +560,7 @@ function toCoreJob(job: AgentJob): CoreOrchestrationJob {
     ...(job.catalogRevision ? { catalogRevision: job.catalogRevision } : {}),
     ...(job.tokenUsage ? { tokenUsage: { ...job.tokenUsage } } : {}),
     createdAt: job.createdAt,
+    ...(job.updatedAt ? { updatedAt: job.updatedAt } : {}),
     ...(job.startedAt ? { startedAt: job.startedAt } : {}),
     ...(job.finishedAt ? { finishedAt: job.finishedAt } : {}),
   };
