@@ -27,6 +27,7 @@
 | 28 | `45e31b7` | `71df02e`, `1.0.103` | `FAIL` | pre-approval AzureCLI task에서 `HEAD == release commit` 검사가 `az --version` 전에 실패 | source materialization 회귀가 아직 파이프라인에 반영되지 않은 상태 |
 | 29 | `dada852` | `71df02e`, `1.0.103` | `FAIL` | run 28의 동일 불일치를 진단 출력으로 재현. `HEAD`가 CI 커밋이고 receipt는 `71df02e` | `dada852`는 실패 출력 보강만 수행; 근본 수정 아님 |
 | 30 | `18cea41` | `71df02e`, `1.0.103` | `FAIL` | 사용자가 수동 승인한 뒤 `DeployCanaryRevision`의 단일 AzureCLI task가 `Script failed with exit code: 1`로 종료. Run summary와 실패 job log에는 named boundary·durable failure receipt가 없음 | `UNKNOWN_POST_APPROVAL_DEPLOY_BOUNDARY`; 진단 손실을 재현 테스트로 고정하고 secret-free failure receipt/boundary artifact를 추가. exact failing Azure subcommand는 Run 30에서 복구 불가 |
+| 31 | `f6cce7c` | `f6cce7c`를 release artifact로 잘못 지정 | `FAIL_BEFORE_APPROVAL` | authenticated handoff가 `teams-runtime-identity-f6cce7c...`를 0개 반환하고 `ValidateHandoff`에서 종료. GHCR login과 exact source checkout은 통과했고 Azure 승인/변경은 시작하지 않음 | `RELEASE_ARTIFACT_UNAVAILABLE`; pipeline source commit과 deploy-only GitHub release commit을 분리하고 handoff failure receipt/artifact를 보존 |
 
 ## 실패에서 승격한 필수 게이트
 
@@ -41,6 +42,7 @@
 | G7 local proof boundary | 모든 run | 로컬 exit 0, fixture PASS, pipeline status만으로 Azure canary/Teams 설치 완료를 주장하지 않음 | release workflow 및 final identity gates |
 | G8 approval/deploy separation | 30 | manual approval PASS는 deploy PASS가 아니며, 승인 후 실패는 exact task boundary와 Azure revision/log read-back 없이는 원인 확정 금지 | `docs/okf/teamsapp-release/failure-history.md`, Microsoft deployment-job contract |
 | G9 failure receipt | 30 | AzureCLI failure가 발생하면 last named boundary, exit code, source/version/run identity를 secret-free receipt와 pipeline artifact로 보존 | `azure-pipelines.yml`, `scripts/azure-deployment-failure-receipt.mjs`, focused regression |
+| G10 deployable release identity | 31 | pipeline source와 `githubReleaseCommit`을 독립 검증하고, release commit에 대해 정확히 하나의 만료되지 않은 이름·head SHA·digest artifact가 없으면 승인 전에 fail-closed | `azure-github-handoff.mjs`, GitHub artifact API contract, handoff failure receipt regression |
 
 ## 릴리스 진행 전 하드 게이트 목록
 
@@ -106,6 +108,16 @@
 - Failed task: `Script failed with exit code: 1`; log URL: `https://dev.azure.com/devdoo/TeamsApp/_build/results?buildId=30&view=logs&s=4762d5d2-aebb-53b8-a7cb-14d48d3e23e5&j=95b50d7d-ef90-5e8d-33e5-e2c5603024e8`
 - Evidence gap: Run 30 retained no failure receipt or named boundary, so the exact Azure subcommand is `UNVERIFIED`; do not label foundation/workload/revision as the root cause
 - Decision: Run 30 is `FAIL`; do not retry until the failure-receipt fix is committed and the next run publishes its boundary artifact
+
+## 현재 run 31 read-back
+
+- Pipeline source: `f6cce7cc3fc1a3787f4db6e4d104d7b6720417f1`
+- Requested release artifact commit: `f6cce7cc3fc1a3787f4db6e4d104d7b6720417f1` (CI/documentation fix commit; no matching immutable runtime artifact)
+- Exact log evidence: Azure DevOps Run 31 log 11 recorded `Login Succeeded`, exact checkout at `f6cce7c`, then `Invalid GitHub release handoff: expected exactly one unexpired teams-runtime-identity-f6cce7cc3fc1a3787f4db6e4d104d7b6720417f1 artifact, found 0`, followed by `Bash exited with code '1'`
+- Outcome: `FAIL_BEFORE_APPROVAL`; ValidateHandoff stopped before Azure DevOps environment approval and before any Azure mutation
+- Classification: `OFFICIAL CONTRACT` — GitHub's artifact API exposes artifact name filtering, `digest`, and `workflow_run.head_sha`; artifact attestations bind repository/commit/build provenance. `OBSERVED EVIDENCE` — Run 31 authenticated and checked out the requested source but found no deployable artifact. `INFERENCE` — the parameter pair was invalid for a deploy-only artifact handoff; this is not an Azure foundation/revision/health failure.
+- Fix: add named `ValidateHandoff` boundaries and a secret-free `github-handoff-failure-receipt` artifact on failed handoff tasks; preserve the separation between pipeline source and deploy-only release artifact commit.
+- Verification: RED test failed before the change; `npm run test:azure-deployment-failure-receipt`, `node scripts/azure-platform-contract-test.mjs`, and `npm run test:azure-core` are GREEN on the fix commit. A new Azure run is still required to exercise the receipt in hosted execution.
 
 ## 다음 실행 전 필수 명령
 

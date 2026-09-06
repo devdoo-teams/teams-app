@@ -6,12 +6,12 @@ resource: /failure-history.md
 tags: [teamsapp, azure, release, incident, failure, provenance]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T14:08:05Z"
+  at: "2026-09-06T14:50:34Z"
 verified:
   by: "process:release-evidence-reconciliation/1"
-  at: "2026-09-06T14:08:05Z"
+  at: "2026-09-06T14:50:34Z"
 status: stable
-stale_after: "2026-09-13T14:08:05Z"
+stale_after: "2026-09-13T14:50:34Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -33,6 +33,14 @@ sources:
     resource: "https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops"
     title: "Deployment jobs - Azure Pipelines"
     location: "deployment lifecycle hooks and failure handling; observed web lines 55-76"
+  - id: github-artifacts
+    resource: "https://docs.github.com/en/rest/actions/artifacts?apiVersion=2026-03-10"
+    title: "REST API endpoints for GitHub Actions artifacts"
+    location: "artifact lookup, name filtering, digest, workflow_run.head_sha, and read permission; observed web lines 13-18, 34-38, 45-53, 71-78"
+  - id: github-attestations
+    resource: "https://docs.github.com/en/actions/concepts/security/artifact-attestations"
+    title: "Artifact attestations - GitHub Docs"
+    location: "provenance fields and verification boundary; observed web lines 25-32 and 58-63"
   - id: aca-start-failures
     resource: "https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-start-failures"
     title: "Troubleshoot start failures in Azure Container Apps"
@@ -106,6 +114,7 @@ The real Azure failures in the retained run history are:
 3. Run 28: pipeline checkout commit differed from the attested release commit.
 4. Run 29: diagnostic logging improved but the source mismatch remained.
 5. Run 30: the source materialization fix passed pre-approval, the user manually approved the environment, and the post-approval DeployCanary AzureCLI task failed with generic exit code 1.
+6. Run 31: the pipeline source was clean and exact, but the deploy parameter incorrectly selected the CI-only commit as the release artifact commit; authenticated handoff lookup correctly found zero matching immutable artifacts and stopped before approval.
 
 Earlier failures also included FileProvider source instability, missing dependencies, non-live A2A/provider preflight, Teams authentication/session drift, mobile location retry lock, portal-versus-installed identity gaps, DNS/public runtime failure, canary activation failure, and delegated worktree/result reconciliation gaps.
 
@@ -381,6 +390,35 @@ Result:
 - Azure mutation, revision readiness, public health, Teams UI, and mobile remain `UNVERIFIED` for release 1.0.103;
 - no Teams completion message or Jira Done transition is allowed.
 
+## Run 31: release artifact commit was not deployable
+
+Observed:
+- pipeline run `31` / build `20260906.10` used source `f6cce7cc3fc1a3787f4db6e4d104d7b6720417f1`;
+- the template parameter `githubReleaseCommit` was also set to `f6cce7cc3fc1a3787f4db6e4d104d7b6720417f1`, although this commit only carried the pipeline/documentation fix and had no immutable runtime artifact;
+- log 11 recorded `Login Succeeded`, exact checkout at `f6cce7c`, then `Invalid GitHub release handoff: expected exactly one unexpired teams-runtime-identity-f6cce7cc3fc1a3787f4db6e4d104d7b6720417f1 artifact, found 0`, followed by `Bash exited with code '1'`;
+- the run stopped in `ValidateHandoff` before environment approval and before any Azure mutation.
+
+Official evidence:
+- GitHub's artifact API documents name filtering and the artifact response's `digest` and `workflow_run.head_sha` fields.[^github-artifacts]
+- GitHub artifact attestations bind provenance to repository, commit SHA, workflow, and triggering event, and verification is a separate consumer obligation.[^github-attestations]
+
+Classification:
+- `OFFICIAL CONTRACT`: an attested deploy artifact must be resolved by its exact artifact identity and provenance before consumption;
+- `OBSERVED EVIDENCE`: authentication and source checkout succeeded, while the exact requested artifact count was zero;
+- `INFERENCE`: the invocation mixed a pipeline source commit with the deploy-only release artifact commit parameter; this was not an Azure foundation, revision, or health failure;
+- `ROOT CAUSE`: `RELEASE_ARTIFACT_UNAVAILABLE` caused by an invalid release-artifact parameter, with no approval or Azure side effect.
+
+Fix:
+- added a named `ValidateHandoff` boundary and secret-free `github-handoff-failure-receipt` artifact on failed pre-approval handoff tasks;
+- kept pipeline source and deploy-only release artifact identity separate; a CI/documentation commit is not silently promoted to a deployable release;
+- added a RED/GREEN regression to the Azure Core inventory.
+
+Result:
+- Run 31 remains `FAIL_BEFORE_APPROVAL`;
+- the fix is locally GREEN on commit `f06e5f4adcf9cc19c769910b4ea53e32419ed233`;
+- a new hosted run with the known release artifact commit is required to exercise the receipt and observe the Run 30 post-approval boundary;
+- no Azure mutation, Teams package update, completion message, or Jira Done transition is justified.
+
 # Historical failure inventory
 
 | Failure group | Observed evidence | Preventive classification |
@@ -395,15 +433,17 @@ Result:
 | detached worktree and approval backlog | duplicate review, stale branches, pending tasks | direct parent default, bounded dispatch, close/reconcile |
 | authentication boundary confusion | Codex CLI, Teams CLI, Azure, and MFA treated as one login | separate status checks; user-only secret handoff |
 | approval passed but deployment failed generically | Run 30 manual approval followed by one AzureCLI exit code 1 with no durable boundary | named deployment boundaries, secret-free failure receipt, failure artifact, Azure revision/log read-back |
+| release artifact parameter had no immutable artifact | Run 31 handoff lookup found zero artifacts for the requested commit before approval | separate pipeline source/release commit, exact artifact/head SHA/digest lookup, pre-approval handoff failure receipt |
 
-These records do not substitute for current Run 30 evidence.
+These records do not substitute for current Azure run evidence.
 
 # Current judgment
 
-The current state is RELEASE_BLOCKED / RUN 30 FAILED_AFTER_APPROVAL.
+The current state is RELEASE_BLOCKED / RUN 31 FAILED_BEFORE_APPROVAL; Run 30 remains FAILED_AFTER_APPROVAL.
 
 - local/contract/Azure Core evidence: PASS within scope;
-- post-approval Azure mutation: FAILED at an unknown named boundary (Run 30 evidence incomplete);
+- Run 31 release handoff: FAILED before approval because the requested artifact was absent;
+- Run 30 post-approval Azure mutation: FAILED at an unknown named boundary (Run 30 evidence incomplete);
 - healthy revision: UNVERIFIED;
 - public health identity: UNVERIFIED;
 - portal/installed same package: UNVERIFIED;
@@ -416,6 +456,8 @@ The current state is RELEASE_BLOCKED / RUN 30 FAILED_AFTER_APPROVAL.
 [^az-what-if-help]: Azure CLI az deployment group what-if, option table and examples, observed web lines 1016-1042 and 1071-1092. https://learn.microsoft.com/en-us/cli/azure/deployment/group?view=azure-cli-latest
 [^az-approval]: Pipeline deployment approvals, stage pause and approval sections, observed web lines 37-50 and 56-64. https://learn.microsoft.com/en-us/azure/devops/pipelines/process/approvals?view=azure-devops
 [^az-deployment-jobs]: Deployment jobs, rollout lifecycle hooks and `on: failure` handling, observed web lines 55-76. https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops
+[^github-artifacts]: REST API endpoints for GitHub Actions artifacts, artifact lookup/name filtering and response schema including `digest` and `workflow_run.head_sha`, observed web lines 13-18, 34-38, 45-53, 71-78. https://docs.github.com/en/rest/actions/artifacts?apiVersion=2026-03-10
+[^github-attestations]: GitHub artifact attestations, provenance fields and verification boundary, observed web lines 25-32 and 58-63. https://docs.github.com/en/actions/concepts/security/artifact-attestations
 [^aca-start-failures]: Troubleshoot start failures in Azure Container Apps, revision/log diagnosis and common causes, observed web lines 33-80. https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-start-failures
 [^aca-exit-failures]: Troubleshoot Container Exit Failures in Azure Container Apps, exit events and diagnostics, observed web lines 31-55. https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-create-failures
 [^aca-health]: Health probes in Azure Container Apps, probe types and readiness before traffic, observed web lines 36-41 and 187-188. https://learn.microsoft.com/en-us/azure/container-apps/health-probes

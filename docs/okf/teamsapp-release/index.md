@@ -8,7 +8,7 @@ okf_version: 0.2
 
 ## Concepts
 
-* [실패 이력과 원인](failure-history.md) - Run 26–30과 이전에 확인된 실패군, 개선 및 현재 판정
+* [실패 이력과 원인](failure-history.md) - Run 26–31과 이전에 확인된 실패군, 개선 및 현재 판정
 * [팀 배포 FAQ](faq.md) - 공식 계약과 내부 증거를 질문·답변으로 정리한 운영 FAQ
 * [재발 방지 릴리스 게이트](gates.md) - source, artifact, Azure, runtime, Teams, 종료 조건
 * [공식 계약 참조](official-contracts.md) - Google OKF, Microsoft Azure, Teams 공식 문서의 URL·섹션·관찰 line

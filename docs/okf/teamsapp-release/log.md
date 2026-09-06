@@ -15,3 +15,12 @@
 * **Implementation**: Commit `3bfcd676ff510aefdbea6e267c3e238063f9b96f` added `scripts/azure-deployment-failure-receipt.mjs`, named boundaries and safe Azure DevOps log issue in `azure-pipelines.yml`, failure artifact publication, and Azure Core regression inventory.
 * **Verification**: `npm run test:azure-deployment-failure-receipt` GREEN; `npm run test:azure-core-runner` GREEN; `node scripts/azure-platform-contract-test.mjs` GREEN. No Azure mutation or new version was performed.
 * **Next**: commit/publish this CI-only fix, run a new exact release candidate, inspect the retained boundary receipt plus Azure revision/system/application logs, and only then classify/fix the real Azure failure.
+
+## 2026-09-06 — Run 31 pre-approval release-artifact handoff failure
+
+* **Official contract**: GitHub's artifact REST API supports exact name filtering and returns the artifact digest and `workflow_run.head_sha`; artifact attestations bind repository, workflow, environment, commit SHA, and triggering event, and must be verified by consumers.
+* **Observed evidence**: Run 31 (`20260906.10`) checked out source `f6cce7cc3fc1a3787f4db6e4d104d7b6720417f1`, authenticated to GHCR successfully, then logged `Invalid GitHub release handoff: expected exactly one unexpired teams-runtime-identity-f6cce7cc3fc1a3787f4db6e4d104d7b6720417f1 artifact, found 0` and exited with code 1 in `ValidateHandoff` before approval.
+* **Classification**: `FAIL_BEFORE_APPROVAL` / `RELEASE_ARTIFACT_UNAVAILABLE`; the pipeline source commit was incorrectly reused as the deploy-only release artifact commit. No Azure mutation or approval occurred.
+* **Implementation**: Commit `f06e5f4adcf9cc19c769910b4ea53e32419ed233` added named pre-approval handoff boundaries, a secret-free `github-handoff-failure-receipt` artifact, and a focused regression covering the receipt contract. The application version remains `1.0.103`.
+* **Verification**: RED before the change; `npm run test:azure-deployment-failure-receipt`, `node scripts/azure-platform-contract-test.mjs`, and `npm run test:azure-core` GREEN after the change. No Azure mutation or Teams completion message is justified.
+* **Next**: run the pipeline with source `f06e5f4` but the already validated deploy-only release artifact commit `71df02e...`; inspect the new handoff receipt and, if pre-approval passes, the post-approval Azure failure boundary and revision logs.

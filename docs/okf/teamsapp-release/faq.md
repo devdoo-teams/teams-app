@@ -6,12 +6,12 @@ resource: /faq.md
 tags: [faq, incident-response, release, teams, azure]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T14:08:05Z"
+  at: "2026-09-06T14:50:34Z"
 verified:
   by: "process:release-faq-reconciliation/1"
-  at: "2026-09-06T14:08:05Z"
+  at: "2026-09-06T14:50:34Z"
 status: stable
-stale_after: "2026-09-13T14:08:05Z"
+stale_after: "2026-09-13T14:50:34Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -33,6 +33,14 @@ sources:
     resource: "https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops"
     title: "Deployment jobs - Azure Pipelines"
     location: "deployment lifecycle hooks and failure handling; observed web lines 55-76"
+  - id: github-artifacts
+    resource: "https://docs.github.com/en/rest/actions/artifacts?apiVersion=2026-03-10"
+    title: "REST API endpoints for GitHub Actions artifacts"
+    location: "artifact lookup/name filtering and response schema including digest and workflow_run.head_sha; observed web lines 13-18, 34-38, 45-53, 71-78"
+  - id: github-attestations
+    resource: "https://docs.github.com/en/actions/concepts/security/artifact-attestations"
+    title: "Artifact attestations - GitHub Docs"
+    location: "provenance fields and verification boundary; observed web lines 25-32 and 58-63"
   - id: aca-start-failures
     resource: "https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-start-failures"
     title: "Troubleshoot start failures in Azure Container Apps"
@@ -171,6 +179,23 @@ Internal source and verification:
 Limit:
 - This is a diagnostic/reliability improvement, not proof that Azure Run 30 succeeded. A new Azure run is required to observe the real failing boundary and then the revision/health gates.
 
+## Q17. Why did Run 31 fail before approval even though the source checkout was exact?
+
+Run 31 used the CI/documentation fix commit `f6cce7c...` for both the Azure Pipeline source and the deploy-only `githubReleaseCommit` parameter. The authenticated handoff then looked for exactly one unexpired `teams-runtime-identity-f6cce7c...` artifact and found zero. The run stopped in `ValidateHandoff`; no environment approval or Azure mutation occurred.
+
+Official source and location:
+- GitHub's artifact REST contract supports filtering by artifact name and returns `digest` plus `workflow_run.head_sha`, observed web lines 13-18, 34-38, 45-53, and 71-78.[^github-artifacts]
+- GitHub artifact attestations bind repository, workflow, environment, commit SHA, and triggering event to provenance, and consumers must verify them, observed web lines 25-32 and 58-63.[^github-attestations]
+
+Internal evidence:
+- Azure DevOps Run 31, log 11: `Login Succeeded`; exact checkout at `f6cce7c`; `Invalid GitHub release handoff: expected exactly one unexpired teams-runtime-identity-f6cce7... artifact, found 0`; `Bash exited with code '1'`.
+- `scripts/azure-github-handoff.mjs` selects the exact artifact name and requires one unexpired artifact, matching head SHA, immutable digest, and attested subjects.
+
+Action:
+- Keep the pipeline source commit and deploy-only release artifact commit separate.
+- Select only a commit with a retained GitHub immutable release artifact and attestation, such as the previously validated `71df02e...` release identity, for the next diagnostic run.
+- Retain a `github-handoff-failure-receipt` artifact whenever pre-approval handoff fails. This is a diagnostic gate, not a release success signal.
+
 ## Q8. Can what-if replace the real deployment?
 
 No. What-if predicts changes without applying them.
@@ -274,6 +299,8 @@ If any item is FAIL, BLOCKED, UNVERIFIED, or MIXED_IDENTITY, completion is forbi
 [^az-what-if-help]: Azure CLI az deployment group what-if, option table and examples, observed web lines 1016-1042 and 1071-1092. https://learn.microsoft.com/en-us/cli/azure/deployment/group?view=azure-cli-latest
 [^az-approval]: Pipeline deployment approvals, stage pause and checks, observed web lines 37-50 and 56-64. https://learn.microsoft.com/en-us/azure/devops/pipelines/process/approvals?view=azure-devops
 [^az-deployment-jobs]: Deployment jobs, rollout lifecycle hooks and `on: failure` handling, observed web lines 55-76. https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops
+[^github-artifacts]: REST API endpoints for GitHub Actions artifacts, artifact lookup/name filtering and response schema including `digest` and `workflow_run.head_sha`, observed web lines 13-18, 34-38, 45-53, 71-78. https://docs.github.com/en/rest/actions/artifacts?apiVersion=2026-03-10
+[^github-attestations]: GitHub artifact attestations, provenance fields and verification boundary, observed web lines 25-32 and 58-63. https://docs.github.com/en/actions/concepts/security/artifact-attestations
 [^aca-start-failures]: Troubleshoot start failures in Azure Container Apps, revision/log diagnosis and common causes, observed web lines 33-80. https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-start-failures
 [^aca-exit-failures]: Troubleshoot Container Exit Failures in Azure Container Apps, exit events and diagnostics, observed web lines 31-55. https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-create-failures
 [^aca-health]: Health probes in Azure Container Apps, probe types and readiness, observed web lines 36-41 and 187-188. https://learn.microsoft.com/en-us/azure/container-apps/health-probes

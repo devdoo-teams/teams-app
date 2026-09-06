@@ -6,12 +6,12 @@ resource: /gates.md
 tags: [release-gate, azure, teams, provenance, rollback]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T14:08:05Z"
+  at: "2026-09-06T14:50:34Z"
 verified:
   by: "process:release-gate-reconciliation/1"
-  at: "2026-09-06T14:08:05Z"
+  at: "2026-09-06T14:50:34Z"
 status: stable
-stale_after: "2026-09-13T14:08:05Z"
+stale_after: "2026-09-13T14:50:34Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -33,6 +33,14 @@ sources:
     resource: "https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops"
     title: "Deployment jobs - Azure Pipelines"
     location: "deployment lifecycle hooks and failure handling; observed web lines 55-76"
+  - id: github-artifacts
+    resource: "https://docs.github.com/en/rest/actions/artifacts?apiVersion=2026-03-10"
+    title: "REST API endpoints for GitHub Actions artifacts"
+    location: "artifact lookup/name filter and response schema including digest and workflow_run.head_sha; observed web lines 13-18, 34-38, 45-53, 71-78"
+  - id: github-attestations
+    resource: "https://docs.github.com/en/actions/concepts/security/artifact-attestations"
+    title: "Artifact attestations - GitHub Docs"
+    location: "provenance fields and verification boundary; observed web lines 25-32 and 58-63"
   - id: aca-start-failures
     resource: "https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-start-failures"
     title: "Troubleshoot start failures in Azure Container Apps"
@@ -77,6 +85,7 @@ Evidence:
 6. package.json, manifest, and ZIP internal manifest agree on version/app ID/device permissions.
 7. Version bump occurs only for a user-visible feature or reproduced bug fix with RED/GREEN/Core evidence.
 8. No old ZIP, public process, Dev Tunnel, local bypass, or optional provider receipt is reused.
+8a. `githubReleaseCommit` is a deploy-only identity: it must resolve to exactly one unexpired artifact with the expected name, workflow head SHA, immutable digest, extracted release receipt, and verified attestations. A pipeline/documentation source commit without that artifact is not deployable.
 
 Evidence:
 - release receipt
@@ -109,6 +118,7 @@ ARM what-if is non-mutating and predicts changes rather than applying them.[^arm
 21. Existing service remains until the canary is healthy and rollback identity is recorded.
 22. A failed post-approval task writes a secret-free failure receipt containing only stage/job, last named boundary, exit code, source/version/run identity, and next action.
 23. The failure receipt is published with a failure condition even when the mutation task exits nonzero; raw stderr, tokens, secret values, and auth material are not copied into it.
+23a. A failed pre-approval GitHub handoff writes a separate secret-free `github-handoff-failure-receipt` artifact with the last named handoff boundary before approval is retried.
 
 Azure Pipelines approvals control when a stage should run.[^az-approval] Deployment jobs separately model deploy, route/post-route health, and `on: failure` handling.[^az-deployment-jobs]
 
@@ -131,7 +141,7 @@ Container Apps troubleshooting requires revision status and system/application l
 
 # Current run
 
-Run 30 has A–D pre-approval evidence within its declared scope, but post-approval deployment failed with generic exit code 1 and no durable failure boundary. It is FAILED_AFTER_APPROVAL, not release complete.
+Run 31 failed in the release handoff before approval because its requested commit had no immutable artifact; Run 30 remains FAILED_AFTER_APPROVAL with a generic post-approval exit and no durable boundary. Neither is release complete.
 
 # Required commands before a new run
 
@@ -141,6 +151,8 @@ Run 30 has A–D pre-approval evidence within its declared scope, but post-appro
     git status --short --branch
 
 [^az-deployment-jobs]: Deployment jobs, rollout lifecycle hooks and `on: failure` handling, observed web lines 55-76. https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops
+[^github-artifacts]: REST API endpoints for GitHub Actions artifacts, artifact lookup/name filter and response schema including `digest` and `workflow_run.head_sha`, observed web lines 13-18, 34-38, 45-53, 71-78. https://docs.github.com/en/rest/actions/artifacts?apiVersion=2026-03-10
+[^github-attestations]: GitHub artifact attestations, provenance fields and verification boundary, observed web lines 25-32 and 58-63. https://docs.github.com/en/actions/concepts/security/artifact-attestations
 [^aca-start-failures]: Troubleshoot start failures in Azure Container Apps, revision/log diagnosis and common causes, observed web lines 33-80. https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-start-failures
 [^okf-spec]: Open Knowledge Format v0.2 specification, sections 3-5, 8-10, observed web lines 253-327, 370-444, 486-532. https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md
 [^arm-what-if]: ARM what-if operation, What-if operation and Required permissions, observed web lines 29-52. https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-what-if

@@ -6,12 +6,12 @@ resource: /official-contracts.md
 tags: [official-contract, azure, teams, release, evidence]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T14:08:05Z"
+  at: "2026-09-06T14:50:34Z"
 verified:
   by: "process:official-source-research/1"
-  at: "2026-09-06T14:08:05Z"
+  at: "2026-09-06T14:50:34Z"
 status: stable
-stale_after: "2026-09-13T14:08:05Z"
+stale_after: "2026-09-13T14:50:34Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -41,6 +41,14 @@ sources:
     resource: "https://learn.microsoft.com/en-us/azure/devops/pipelines/process/environments?view=azure-devops"
     title: "Use Azure Pipelines environments"
     location: "Environment approvals and deployment history sections; section anchor used because rendered line numbers are not stable"
+  - id: github-artifacts
+    resource: "https://docs.github.com/en/rest/actions/artifacts?apiVersion=2026-03-10"
+    title: "REST API endpoints for GitHub Actions artifacts"
+    location: "artifact lookup/name filter, digest, workflow_run.head_sha, and Actions read permission; observed web lines 13-18, 34-38, 45-53, 71-78 on 2026-09-06"
+  - id: github-attestations
+    resource: "https://docs.github.com/en/actions/concepts/security/artifact-attestations"
+    title: "Artifact attestations - GitHub Docs"
+    location: "provenance fields and verification boundary; observed web lines 25-32 and 58-63 on 2026-09-06"
   - id: aca-probes
     resource: "https://learn.microsoft.com/en-us/azure/container-apps/health-probes"
     title: "Health probes in Azure Container Apps"
@@ -95,6 +103,12 @@ The Google Cloud announcement describes OKF as a vendor-neutral, human- and agen
 
 # Azure release contract
 
+# GitHub release handoff contract
+
+GitHub's Actions artifact API permits an exact artifact-name lookup and returns the artifact digest together with `workflow_run.head_sha`; private repositories require an Actions read permission for the relevant endpoint.[^github-artifacts] GitHub artifact attestations bind repository, workflow, environment, commit SHA, and triggering event to provenance, and verification is required by the consumer rather than implied by artifact existence.[^github-attestations]
+
+For this repository, `githubReleaseCommit` is therefore a deploy-only immutable release identity. It must resolve to exactly one unexpired `teams-runtime-identity-<commit>` artifact whose workflow head SHA, digest, extracted release receipt, package digest, and attestations all match. A pipeline/documentation source commit without that artifact is not a deployable release and must stop before approval.
+
 ARM what-if previews a deployment and does not change existing resources.[^arm-what-if] The Azure CLI help exposes the change types and automation options used by this repository, including no-pretty-print, result-format, and validation-level.[^az-group-what-if]
 
 Azure Pipelines approvals control when a stage should run; they do not assert that every later deployment command succeeded.[^az-approvals] Deployment jobs model deploy, route/post-route health, and `on: failure` lifecycle hooks separately.[^az-deployment-jobs] Azure Container Apps troubleshooting requires revision state plus system/application logs to classify image pull, timeout, crash, ingress, probe, configuration, and secret-reference failures.[^aca-start] Container Apps distinguishes startup, liveness, and readiness; in multiple revision mode readiness must succeed before traffic is shifted.[^aca-probes] A running image or 100 percent traffic indicator is not sufficient when the revision has no healthy replica.
@@ -127,6 +141,8 @@ For every new failure, record all of the following before changing code:
 [^az-group-what-if]: Azure CLI az deployment group what-if, option table and examples, observed web lines 1016-1042 and 1071-1092. https://learn.microsoft.com/en-us/cli/azure/deployment/group?view=azure-cli-latest
 [^az-approvals]: Pipeline deployment approvals, approvals/checks and stage execution, observed web lines 37-50 and 56-64. https://learn.microsoft.com/en-us/azure/devops/pipelines/process/approvals?view=azure-devops
 [^az-deployment-jobs]: Deployment jobs, rollout lifecycle hooks and `on: failure` handling, observed web lines 55-76. https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops
+[^github-artifacts]: REST API endpoints for GitHub Actions artifacts, artifact lookup/name filter and response schema including `digest` and `workflow_run.head_sha`, observed web lines 13-18, 34-38, 45-53, 71-78. https://docs.github.com/en/rest/actions/artifacts?apiVersion=2026-03-10
+[^github-attestations]: GitHub artifact attestations, provenance fields and verification boundary, observed web lines 25-32 and 58-63. https://docs.github.com/en/actions/concepts/security/artifact-attestations
 [^aca-probes]: Health probes in Azure Container Apps, probe types and revision traffic guidance, observed web lines 36-41 and 187-188. https://learn.microsoft.com/en-us/azure/container-apps/health-probes
 [^aca-start]: Troubleshoot start failures in Azure Container Apps, revision/log diagnosis and common causes, observed web lines 33-80. https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-start-failures
 [^aca-exit]: Troubleshoot Container Exit Failures in Azure Container Apps, exit events and diagnostics, observed web lines 31-55. https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-create-failures
