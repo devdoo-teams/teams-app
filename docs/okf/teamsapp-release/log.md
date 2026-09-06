@@ -57,4 +57,10 @@
 * **Verification**: the new assertions were RED before implementation; `npm run test:azure-deployment-failure-receipt` is GREEN after it; `npm run test:azure-core` completed all 27/27 fixtures from the clean commit.
 * **Limit**: this proves source-level failure-evidence behavior only. A fresh hosted run must still read back both the JSON and `.sha256` artifact through Azure DevOps before Run 32's failure evidence is promoted to `VERIFIED`; the workload `Modify` delta remains `UNVERIFIED`.
 
+## 2026-09-07 — Run 32 artifact read-back mismatch rechecked
+
+* **Observed evidence**: Azure DevOps MCP `pipelines_artifact.list` returned Run 32 artifacts `156` and `157` with the previously reported sizes (`29400` and `0` bytes). A read-only `download` call reported success for both, but each local destination contained a 62-byte plain-text `TF400813: The user is not authorized to access this resource.` response rather than a ZIP archive.
+* **Classification**: `ARTIFACT_READBACK_UNVERIFIED`; the MCP wrapper status and downloaded bytes disagree. No property-level what-if delta, failure JSON, or failure SHA was read back.
+* **Action**: preserve the fail-closed gate; do not treat the artifact listing, wrapper success, or filename as content evidence. A valid ZIP/JSON/SHA read-back through an authorized Azure DevOps API or approved immutable copy is still required.
+
 [^az-pipeline-artifacts]: Publish and download pipeline artifacts, stage handoff and workspace guidance, observed web lines 305-355. https://learn.microsoft.com/en-us/azure/devops/pipelines/artifacts/pipeline-artifacts?tabs++=+yaml&view=azure-devops

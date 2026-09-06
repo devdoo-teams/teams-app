@@ -156,7 +156,7 @@ Container Apps troubleshooting requires revision status and system/application l
 
 # Current run
 
-Run 32 failed after approval at the workload what-if classifier before workload mutation. Run 31 failed in the release handoff before approval because its requested commit had no immutable artifact; Run 30 remains FAILED_AFTER_APPROVAL with a generic post-approval exit and no durable boundary. The Run 32 receipt-helper fix is locally verified at `9c793d4`, but hosted proof is still required. None is release complete.
+Run 32 failed after approval at the workload what-if classifier before workload mutation. Run 31 failed in the release handoff before approval because its requested commit had no immutable artifact; Run 30 remains FAILED_AFTER_APPROVAL with a generic post-approval exit and no durable boundary. The Run 32 receipt-helper fixes are locally verified at `3230833` and `ae9ae20`, but hosted artifact read-back is still blocked: the MCP download wrapper reported success while the bytes were `TF400813` authorization text. None is release complete.
 
 # Required commands before a new run
 

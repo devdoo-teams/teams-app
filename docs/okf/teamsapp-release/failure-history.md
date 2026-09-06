@@ -427,6 +427,7 @@ Observed:
 - Azure CLI `2.89.1` / Bicep `0.46.1` reached the post-approval workload what-if and logged `Invalid Azure canary preflight: what-if contains disallowed Modify change for /subscriptions/0e58c3cb-474d-4e70-978a-4939c586f867/resourceGroups/rg-teamsapp-canary/providers/Microsoft.App/containerApps/teamsapp-canary-goictvxm`;
 - the workload evidence artifact `azure-what-if-workload-receipt` was retained as artifact `156` with reported size `29400`; the current Azure DevOps artifact MCP download returned `TF400813`, so the exact property delta inside that artifact is not promoted here;
 - the bounded failure artifact `azure-deployment-failure-receipt` was artifact `157` with reported size `0`; log 46 recorded `Processed 0 files` from the failure directory and `Uploaded 0 out of 61 bytes`.
+- a subsequent read-only MCP `download` for both artifact names returned a wrapper success message, but each local destination was a 62-byte plain-text `TF400813: The user is not authorized to access this resource.` response, not a ZIP; the wrapper result and bytes are therefore classified separately.
 
 Official evidence:
 - ARM what-if is a non-mutating preview and exposes predicted resource change types; a `Modify` result must be evaluated against the deployment's explicit allowlist rather than treated as proof that a mutation occurred.[^arm-what-if]
@@ -449,6 +450,7 @@ Result:
 - Run 32 remains `FAIL_AFTER_APPROVAL` before any workload create/update, revision, traffic, or health proof;
 - the empty receipt defect is fixed in source, but a new hosted run must read back both the JSON and SHA-256 sidecar to prove the artifact is non-empty and usable;
 - the what-if allowlist must not be widened speculatively; inspect artifact `156` or a fresh diagnostic before changing property variants;
+- artifact `156`/`157` content remains `UNVERIFIED` until an authorized read-back returns valid ZIP/JSON/SHA bytes rather than the MCP authorization text;
 - no Teams completion message or Jira Done transition is justified; Jira mapping is `JIRA_SYNC_UNVERIFIED` in this run.
 
 # Historical failure inventory
