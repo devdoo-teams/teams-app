@@ -63,4 +63,12 @@
 * **Classification**: `ARTIFACT_READBACK_UNVERIFIED`; the MCP wrapper status and downloaded bytes disagree. No property-level what-if delta, failure JSON, or failure SHA was read back.
 * **Action**: preserve the fail-closed gate; do not treat the artifact listing, wrapper success, or filename as content evidence. A valid ZIP/JSON/SHA read-back through an authorized Azure DevOps API or approved immutable copy is still required.
 
+## 2026-09-07 — Run 33 pre-approval artifact read-back mismatch
+
+* **Observed evidence**: Run `33` / build `20260906.12` used pipeline source `main@92b95d5364e610c827b7f396c2c832ebc961ad10`, deploy-only release artifact commit `71df02e2ea9e9dbecbe864e0f1c6be3d649cbb4a`, and product version `1.0.103`. The Azure gate job completed its observed pre-approval receipt publication while the build API remained `state=1`; no DeployCanary mutation or public-health result was promoted.
+* **Artifact list**: MCP `pipelines_artifact.list` reported artifact `158` (`approval-configuration-receipt`, 343 bytes), `160` (`azure-platform-preflight-receipt`, 856 bytes), `162` (`azure-rbac-preflight-receipt`, 275 bytes), and `163` (`azure-what-if-preflight-receipt`, 44495 bytes).
+* **Read-back**: MCP download reported success for all four, but each local destination was an ASCII 62-byte file containing `TF400813: The user is not authorized to access this resource.` rather than a ZIP. All four bytes had SHA-256 `3d632e252d055b8f89c79a59b004ea7c747c9ae9b90d47cfaf0445eed56ea52f`.
+* **Classification**: `RUN_IN_PROGRESS` and `ARTIFACT_READBACK_UNVERIFIED`. Artifact-list metadata, wrapper success, and the filename are not content evidence. Approval, RBAC, what-if JSON, checksum, Azure mutation, revision health, and Teams runtime remain separate and unverified.
+* **Action**: the run is not duplicated or cancelled. The artifact authorization/read-back boundary must be restored before using any property delta or widening the what-if allowlist. No version bump or Teams completion message is justified.
+
 [^az-pipeline-artifacts]: Publish and download pipeline artifacts, stage handoff and workspace guidance, observed web lines 305-355. https://learn.microsoft.com/en-us/azure/devops/pipelines/artifacts/pipeline-artifacts?tabs++=+yaml&view=azure-devops

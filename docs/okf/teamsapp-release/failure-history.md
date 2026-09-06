@@ -453,6 +453,28 @@ Result:
 - artifact `156`/`157` content remains `UNVERIFIED` until an authorized read-back returns valid ZIP/JSON/SHA bytes rather than the MCP authorization text;
 - no Teams completion message or Jira Done transition is justified; Jira mapping is `JIRA_SYNC_UNVERIFIED` in this run.
 
+## Run 33: pre-approval artifacts report sizes but return authorization text
+
+Observed:
+- Run `33` / build `20260906.12` used pipeline source `92b95d5364e610c827b7f396c2c832ebc961ad10` (`main`), release artifact commit `71df02e2ea9e9dbecbe864e0f1c6be3d649cbb4a`, and app version `1.0.103`.
+- MCP artifact listing returned `158 approval-configuration-receipt` (343 bytes), `160 azure-platform-preflight-receipt` (856 bytes), `162 azure-rbac-preflight-receipt` (275 bytes), and `163 azure-what-if-preflight-receipt` (44495 bytes).
+- MCP downloads reported success, but all four local outputs were ASCII 62-byte files containing `TF400813: The user is not authorized to access this resource.`, with SHA-256 `3d632e252d055b8f89c79a59b004ea7c747c9ae9b90d47cfaf0445eed56ea52f`; none was a ZIP.
+- The build API remained `state=1` and no final result, DeployCanary mutation, ACA revision, or public health evidence was observed at this checkpoint.
+
+Official evidence:
+- Azure Pipelines documents artifacts as stage handoffs that are published and downloaded through the pipeline workspace; a listed artifact and a task-level download message do not replace read-back of the actual bytes.[^az-pipeline-artifacts]
+- Azure DevOps approvals/checks are a separate resource boundary from deployment execution; an approval or pre-approval receipt cannot be promoted to deployment success.[^az-approval][^az-deployment-jobs]
+
+Classification:
+- `RUN_IN_PROGRESS`: the run has no terminal result at this checkpoint.
+- `ARTIFACT_READBACK_UNVERIFIED`: reported metadata and downloaded bytes disagree. Approval configuration, RBAC, what-if JSON, and checksum are not read-back evidence.
+- `INFERENCE ONLY`: the exact MCP/API authorization or URL translation defect is not identified; no allowlist or Azure parameter change is justified.
+
+Action:
+- keep the single Run 33 execution under observation without duplicating or cancelling it;
+- restore an authorized artifact read-back path and require ZIP/header, internal JSON, schema, and SHA-256 validation;
+- only after terminal run result and Azure logs are read back may DeployCanary, ACA health, public identity, or Teams UI be evaluated.
+
 # Historical failure inventory
 
 | Failure group | Observed evidence | Preventive classification |
@@ -469,16 +491,18 @@ Result:
 | approval passed but deployment failed generically | Run 30 manual approval followed by one AzureCLI exit code 1 with no durable boundary | named deployment boundaries, secret-free failure receipt, failure artifact, Azure revision/log read-back |
 | release artifact parameter had no immutable artifact | Run 31 handoff lookup found zero artifacts for the requested commit before approval | separate pipeline source/release commit, exact artifact/head SHA/digest lookup, pre-approval handoff failure receipt |
 | failure receipt helper disappeared after release checkout | Run 32 workload what-if failed after checkout to `71df02e`; the receipt artifact processed 0 files because the helper existed only in the pipeline source commit | snapshot CI receipt helpers before release checkout, execute the preserved absolute path, and assert ordering in Azure Core |
+| pipeline artifact metadata disagrees with downloaded bytes | Run 33 artifacts 158/160/162/163 reported non-empty sizes but MCP downloads returned the same 62-byte `TF400813` authorization text | fail closed on ZIP/header/schema/SHA read-back; do not promote wrapper success or reported size to content evidence |
 
 These records do not substitute for current Azure run evidence.
 
 # Current judgment
 
-The current state is RELEASE_BLOCKED / RUN 32 FAILED_AFTER_APPROVAL; Run 31 remains FAILED_BEFORE_APPROVAL and Run 30 remains FAILED_AFTER_APPROVAL.
+The current state is RELEASE_BLOCKED / Run 33 RUN_IN_PROGRESS with `ARTIFACT_READBACK_UNVERIFIED`; Run 32 remains FAILED_AFTER_APPROVAL, Run 31 remains FAILED_BEFORE_APPROVAL, and Run 30 remains FAILED_AFTER_APPROVAL.
 
 - local/contract/Azure Core evidence: PASS within scope;
 - Run 32 workload what-if: FAILED after approval at `workload-parameters-and-what-if`; no Azure workload mutation occurred;
 - Run 32 failure receipt: FAILED to retain a non-empty artifact in the run, fixed in source commit `9c793d4` but not yet hosted-verified;
+- Run 33 pre-approval receipt read-back: reported artifact sizes conflict with 62-byte authorization text; no receipt content is verified;
 - Run 31 release handoff: FAILED before approval because the requested artifact was absent;
 - Run 30 post-approval Azure mutation: FAILED at an unknown named boundary (Run 30 evidence incomplete);
 - healthy revision: UNVERIFIED;

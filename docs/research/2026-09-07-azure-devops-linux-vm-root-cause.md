@@ -4,9 +4,9 @@
 
 - 조사일: 2026-09-07 (Asia/Seoul)
 - 대상: `devdoo-teams/teams-app`, canonical worktree `/Users/doosansmacbookpro/Documents/TeamsApp`, `main`
-- 조사 기준 HEAD: `d67a84abff49134021ac3076eb326a076f6dcda8`
+- 조사 기준 HEAD: `92b95d5364e610c827b7f396c2c832ebc961ad10`
 - 제품 버전: `1.0.103` (이번 조사에서는 버전 변경 없음)
-- 운영 사건: Azure DevOps Run 32 / Build `20260906.11`
+- 운영 사건: Azure DevOps Run 32 / Build `20260906.11` 및 Run 33 / Build `20260906.12`
 - 조사 범위: Azure DevOps 승인·배포·아티팩트 계약, ARM what-if 및 Bicep 경계, Azure Container Apps revision/health/traffic, ACR managed identity, Linux VM/cloud-init/Custom Script Extension, 24/7 worker 상태·증거 체인
 - 증거 분류: `OFFICIAL CONTRACT`, `OBSERVED REPOSITORY EVIDENCE`, `INFERENCE / RECOMMENDATION`, `LIVE UNVERIFIED`
 - 이 문서는 읽기·리서치·문서화 결과다. Azure 리소스, Teams 앱, 트래픽, 비밀, Jira, 브라우저 세션은 변경하지 않았다.
@@ -18,7 +18,7 @@
 1. **소스/아티팩트 경계**: deployment job이 release commit으로 `checkout --detach`한 뒤, 그 commit에 없는 실패-receipt helper를 실행하려 했고, `ERR` trap 내부 오류가 억제되어 0-byte receipt가 남았다. 이 구체적 결함은 `9c793d4`에서 helper를 release checkout 전에 `Agent.TempDirectory`로 snapshot하도록 수정했고, RED/GREEN 테스트와 Core 27/27로 확인했다.
 2. **계획/변경 경계**: foundation `create`가 먼저 실행된 뒤 workload `what-if`가 실행된다. 따라서 workload what-if가 `Modify`를 발견해도 이미 foundation 변경이 일어난 뒤이며, “계획→승인→변경”의 단일 경계가 아니다. Run 32는 정확히 이 `workload-parameters-and-what-if`에서 차단됐고 workload create/revision/traffic/public health는 수행되지 않았다.
 3. **플랫폼 책임 경계**: Azure DevOps approval, ARM deployment, ACA revision readiness, VM extension/worker readiness, public functional health가 각각 다른 시스템인데 하나의 `READY`처럼 취급될 위험이 있다. 공식 Azure DevOps 문서는 deployment lifecycle을 `preDeploy → deploy → routeTraffic → postRouteTraffic → success/failure`로 분리한다.
-4. **증거 read-back 경계**: what-if artifact 156은 생성되었지만 MCP download가 `TF400813`으로 거부되어 property delta가 `UNVERIFIED`다. failure artifact 157은 0-byte/0-file로 생성됐다. 플랫폼 상태, exit code, artifact 존재만으로 원인을 확정하면 안 된다.
+4. **증거 read-back 경계**: what-if artifact 156은 생성되었지만 MCP download가 `TF400813`으로 거부되어 property delta가 `UNVERIFIED`다. Run 33의 pre-approval receipt 158, 160, 162, 163도 목록에는 비어 있지 않은 크기로 보였지만 MCP download 결과는 동일한 62-byte authorization text였다. failure artifact 157은 0-byte/0-file로 생성됐다. 플랫폼 상태, exit code, artifact 존재만으로 원인을 확정하면 안 된다.
 
 따라서 지금 필요한 것은 허용목록을 추측으로 넓히는 일이 아니라, **계획·변경·검증·롤백·증거를 단계별로 분리하고 각 단계가 자기 identity와 durable receipt를 갖게 하는 재구성**이다.
 
@@ -50,6 +50,27 @@
 - `d67a84abff49134021ac3076eb326a076f6dcda8` — Run 32와 OKF bundle 기록 문서화
 - 두 커밋은 원격 `main`에 push되었고 현재 worktree와 `origin/main`은 동일하다.
 - 이 수정은 receipt 유실을 고쳤을 뿐이며 Run 32의 `Modify` classification을 해결하거나 Azure deployment success를 증명하지 않는다.
+
+## Run 33의 pre-approval receipt read-back 불일치
+
+### 관찰된 결과
+
+- Run `33` / build `20260906.12`는 pipeline source `main@92b95d5364e610c827b7f396c2c832ebc961ad10`, deploy-only release artifact commit `71df02e2ea9e9dbecbe864e0f1c6be3d649cbb4a`, 제품 버전 `1.0.103`으로 실행되었다.
+- Azure DevOps build log의 마지막 관찰 지점은 사전 승인 Azure gate job의 `Finalize Job`이다. API 상태는 계속 `state=1`이고 이후 DeployCanary/ACA mutation을 수행했다는 로그는 관찰되지 않았다. 환경 check 대기라고 단정하지 않으며 직접 stage status read-back이 없으므로 현재 실행은 `RUN_IN_PROGRESS`로만 분류한다.
+- Azure DevOps MCP `pipelines_artifact.list`는 다음 artifact를 목록과 보고 크기로 반환했다: `158 approval-configuration-receipt` (343), `160 azure-platform-preflight-receipt` (856), `162 azure-rbac-preflight-receipt` (275), `163 azure-what-if-preflight-receipt` (44495).
+- 같은 MCP `pipelines_artifact.download`를 각 artifact에 수행한 뒤 생성된 로컬 파일은 모두 ZIP이 아닌 ASCII 62-byte 파일이었다. 네 파일의 SHA-256은 모두 `3d632e252d055b8f89c79a59b004ea7c747c9ae9b90d47cfaf0445eed56ea52f`이고 내용은 `TF400813: The user is not authorized to access this resource.`였다.
+
+### 판정
+
+- `ARTIFACT_READBACK_UNVERIFIED`: artifact 목록의 reported size와 실제 download bytes가 일치하지 않는다. 이 결과로 approval receipt, RBAC receipt, what-if JSON, checksum을 읽었다고 주장할 수 없다.
+- `RUN_IN_PROGRESS`: Run 33의 실행 상태와 artifact read-back은 별도 경계다. Run이 계속 실행 중이라는 사실은 Azure mutation, ACA revision readiness, public health, Teams UI를 증명하지 않는다.
+- `INFERENCE ONLY`: MCP 인증 범위·download URL·wrapper 변환 중 어느 경계가 62-byte 응답을 만들었는지는 현재 관찰만으로 확정하지 않는다. property delta나 allowlist를 추측으로 바꾸지 않는다.
+
+### 다음 조치
+
+- Run 33을 중복 실행하거나 현재 run을 취소하지 않고 authorized Azure DevOps artifact REST/MCP read-back 경계를 먼저 복구한다.
+- 유효한 ZIP/header와 내부 JSON, sidecar SHA-256을 읽어 back-to-back 검증하기 전까지 pre-approval receipt는 `UNVERIFIED`로 유지한다.
+- Run 33이 종료된 뒤에만 final result, failure receipt, Azure revision/system/application logs를 각각 read-back한다. 그 전에는 Azure mutation·release success·Teams 완료보고를 하지 않는다.
 
 ## 지식그래프
 
@@ -90,9 +111,11 @@ flowchart LR
   X1{{Run 32: Modify blocked}}
   X2{{Run 32: failure receipt 0 bytes}}
   X3{{Artifact 156 read-back TF400813}}
+  X4{{Run 33 artifact list/download mismatch}}
   W -.-> X1
   E -.-> X2
   E -.-> X3
+  E -.-> X4
 ```
 
 ### 그래프에서 반드시 분리해야 하는 상태
@@ -295,7 +318,8 @@ Foundation `create` 이후에 첫 workload what-if를 수행하는 현재 순서
 - Run 32 failure receipt content: source artifact가 0-byte였고 helper fix는 현재 `main`에 있으나 새 CI run에서 retained non-empty read-back은 아직 미검증.
 - Azure CLI/Bicep local help: 이 Mac에는 `az` 실행 파일이 없어 local `az --help`를 확인하지 못했다. Run 32 hosted agent의 `az`는 Azure CLI 2.89.1, azure-devops extension 1.0.7로 관찰되었다.
 - Azure resource create/update, ACA revision/replica, VM extension, public health, worker terminal receipt, Teams desktop/mobile same-release UI: 현재 Run 32에서는 모두 실행 또는 증명되지 않았다.
-- 현 시점에서 `Modify` 허용목록 확대, Azure mutation, release completion, Teams 완료보고는 금지한다.
+- Run 33은 `RUN_IN_PROGRESS`이고 pre-approval artifacts 158/160/162/163의 실제 bytes가 authorization text로 반환되어 `ARTIFACT_READBACK_UNVERIFIED`다.
+- 현 시점에서 `Modify` 허용목록 확대, Azure mutation success, release completion, Teams 완료보고는 금지한다.
 
 ## 공식 출처 원장
 
