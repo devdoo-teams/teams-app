@@ -526,7 +526,7 @@ devtunnel show <tunnel-id> --json
 
 - 승인된 Developer Portal 또는 Teams Admin Center의 배포 대상에 새 ZIP을 업로드한다. 동일 앱 ID 업데이트는 Teams Admin Center의 `앱 관리 → 사용자 지정 앱 검색 → 기존 앱 상세 → 새 버전 → 파일 업로드`를 사용한다. `동작 → 새 앱 업로드`에서 동일 앱 ID 오류가 나면 신규 앱 생성 문제가 아니라 업데이트 경로를 잘못 선택한 것이다.
 - 업로드 후 대상 화면에서 새 버전과 검증 결과를 직접 확인한다.
-- 포털 화면의 게시 표시만으로 설치/등록을 통과 처리하지 않는다. `release:update browser --surface portal --evidence ...`는 같은 앱 ID를 `teams app get --json`으로 읽고, 등록 ZIP을 `teams app package download`로 내려 받아 앱 ID·버전·현재 `/api/messages` endpoint·ZIP SHA-256을 현재 release identity와 대조한다. 등록 패키지가 이전 버전이면 `ETEAMSREGISTRATIONMISMATCH`로 포털 증거를 차단한다. 회귀 검사는 `npm run test:teams-registration`이다.
+- 포털 화면의 게시 표시만으로 설치/등록을 통과 처리하지 않는다. `release:update browser --surface portal --evidence ...`는 같은 앱 ID를 `teams app get --json`으로 읽고, 등록 ZIP을 `teams app package download`로 내려 받아 앱 ID·버전·현재 `/api/messages` endpoint를 확인한다. Teams 서비스가 등록 ZIP의 manifest와 archive metadata를 재직렬화할 수 있으므로 등록 ZIP의 바이트 SHA-256은 별도 증거로 보존하되 후보 ZIP과 반드시 같다고 요구하지 않는다. 대신 manifest identity/의미와 모든 비-`manifest.json` 자산 바이트를 fail-closed로 비교한다. 등록 패키지가 이전 버전이거나 의미/자산이 다르면 `ETEAMSREGISTRATIONMISMATCH`로 포털 증거를 차단한다. 회귀 검사는 `npm run test:teams-registration`이다.
 - 인증·정책·업로드 대상이 없으면 안전한 범위까지만 진행하고 `BLOCKER`로 보고한다. 성공을 추측하지 않는다.
 
 ### 5. 로컬 모드 종료와 공개 프로세스 전환
