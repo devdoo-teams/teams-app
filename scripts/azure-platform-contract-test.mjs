@@ -921,6 +921,17 @@ try {
     deployScript?.includes('cp scripts/azure-canary-preflight.mjs "$what_if_receipt_tools_dir/azure-canary-preflight.mjs"'),
     'deployment must snapshot the CI what-if classifier dependency before release checkout',
   );
+  for (const helper of [
+    'core-test-runner.mjs',
+    'core-test-workspace.mjs',
+    'fileprovider-git-clean.mjs',
+    'child-test-environment.mjs',
+  ]) {
+    assert.ok(
+      deployScript?.includes(`cp scripts/${helper} "$what_if_receipt_tools_dir/${helper}"`),
+      `deployment must snapshot the what-if classifier runtime dependency ${helper}`,
+    );
+  }
   assert.ok(
     deployScript?.includes('git checkout --detach "$commit"'),
     'deployment must check out the exact pre-approved release source',

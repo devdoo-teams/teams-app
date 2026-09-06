@@ -81,6 +81,14 @@
 * **Verification**: `node scripts/azure-platform-contract-test.mjs` was RED before the change and GREEN after it. The application version remains `1.0.103`; no Azure mutation or Teams completion message was performed.
 * **Next**: commit/push this CI handoff fix, rerun the exact release candidate, verify the workload receipt reaches `REVIEW_REQUIRED` rather than classifier failure, then review the nine Unsupported rows and continue only with durable runtime evidence.
 
+## 2026-09-07 — Run 35 second-order what-if helper dependency gap
+
+* **Observed evidence**: Run 35 used pipeline source `44f064dd3f1126696d75752daf73f52c13251b62`; hosted Azure Core passed 26/26. The deploy job reached the preserved what-if helper but failed before classification with `ERR_MODULE_NOT_FOUND` for `core-test-runner.mjs`, imported by the snapshotted `azure-canary-preflight.mjs`.
+* **Root cause**: the first helper snapshot preserved only the top-level what-if files and omitted their local runtime dependency graph. The release checkout therefore still changed the module graph at execution time.
+* **Implementation**: the deploy job now snapshots `core-test-runner.mjs`, `core-test-workspace.mjs`, `fileprovider-git-clean.mjs`, and `child-test-environment.mjs` alongside the classifier and receipt helper. The contract test asserts all five files are copied before release checkout.
+* **Verification**: `node scripts/azure-platform-contract-test.mjs` was RED before the dependency additions and GREEN after them. Run 35 itself failed before Azure mutation; no new revision or traffic change was observed.
+* **Next**: commit/push the dependency-closure fix and queue one final bounded run. If the workload receipt then reaches `REVIEW_REQUIRED`, stop before mutation unless the exact nine Unsupported rows and receipt identity reconcile again.
+
 ## 2026-09-07 — Run 33 pre-approval artifact read-back mismatch
 
 * **Observed evidence**: Run `33` / build `20260906.12` used pipeline source `main@92b95d5364e610c827b7f396c2c832ebc961ad10`, deploy-only release artifact commit `71df02e2ea9e9dbecbe864e0f1c6be3d649cbb4a`, and product version `1.0.103`. The Azure gate job completed its observed pre-approval receipt publication while the build API remained `state=1`; no DeployCanary mutation or public-health result was promoted.

@@ -476,9 +476,17 @@ stages:
                       cp scripts/azure-deployment-failure-receipt.mjs "$failure_receipt_script"
                       cp scripts/azure-what-if-receipt.mjs "$what_if_receipt_tools_dir/azure-what-if-receipt.mjs"
                       cp scripts/azure-canary-preflight.mjs "$what_if_receipt_tools_dir/azure-canary-preflight.mjs"
+                      cp scripts/core-test-runner.mjs "$what_if_receipt_tools_dir/core-test-runner.mjs"
+                      cp scripts/core-test-workspace.mjs "$what_if_receipt_tools_dir/core-test-workspace.mjs"
+                      cp scripts/fileprovider-git-clean.mjs "$what_if_receipt_tools_dir/fileprovider-git-clean.mjs"
+                      cp scripts/child-test-environment.mjs "$what_if_receipt_tools_dir/child-test-environment.mjs"
                       test -s "$failure_receipt_script"
                       test -s "$what_if_receipt_script"
                       test -s "$what_if_receipt_tools_dir/azure-canary-preflight.mjs"
+                      test -s "$what_if_receipt_tools_dir/core-test-runner.mjs"
+                      test -s "$what_if_receipt_tools_dir/core-test-workspace.mjs"
+                      test -s "$what_if_receipt_tools_dir/fileprovider-git-clean.mjs"
+                      test -s "$what_if_receipt_tools_dir/child-test-environment.mjs"
                       write_failure_receipt() {
                         local status="$1"
                         (
