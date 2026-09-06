@@ -27,6 +27,7 @@ export const AZURE_CORE_TESTS = Object.freeze([
   Object.freeze({ script: 'scripts/azure-deployment-rbac-test.mjs', timeoutMs: DEFAULT_TEST_TIMEOUT_MS }),
   Object.freeze({ script: 'scripts/azure-access-token-principal-test.mjs', timeoutMs: DEFAULT_TEST_TIMEOUT_MS }),
   Object.freeze({ script: 'scripts/azure-storage-blob-rbac-probe-test.mjs', timeoutMs: DEFAULT_TEST_TIMEOUT_MS }),
+  Object.freeze({ script: 'scripts/azure-worker-blob-stage-test.mjs', timeoutMs: DEFAULT_TEST_TIMEOUT_MS }),
   Object.freeze({ script: 'scripts/azure-deployment-contract-test.mjs', timeoutMs: DEFAULT_TEST_TIMEOUT_MS }),
   Object.freeze({ script: 'scripts/azure-deployment-failure-receipt-test.mjs', timeoutMs: DEFAULT_TEST_TIMEOUT_MS }),
   Object.freeze({ script: 'scripts/azure-deployment-parameters-test.mjs', timeoutMs: DEFAULT_TEST_TIMEOUT_MS }),

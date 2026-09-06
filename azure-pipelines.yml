@@ -471,9 +471,11 @@ stages:
                       what_if_receipt_tools_dir="$(Agent.TempDirectory)/azure-what-if-receipt-tools"
                       what_if_receipt_script="$what_if_receipt_tools_dir/azure-what-if-receipt.mjs"
                       failure_boundary="bootstrap"
+                      worker_blob_script="$(Agent.TempDirectory)/azure-worker-blob-stage.mjs"
                       mkdir -p "$failure_receipt_dir"
                       mkdir -p "$what_if_receipt_tools_dir"
                       cp scripts/azure-deployment-failure-receipt.mjs "$failure_receipt_script"
+                      cp scripts/azure-worker-blob-stage.mjs "$worker_blob_script"
                       cp scripts/azure-what-if-receipt.mjs "$what_if_receipt_tools_dir/azure-what-if-receipt.mjs"
                       cp scripts/azure-canary-preflight.mjs "$what_if_receipt_tools_dir/azure-canary-preflight.mjs"
                       cp scripts/core-test-runner.mjs "$what_if_receipt_tools_dir/core-test-runner.mjs"
@@ -481,6 +483,7 @@ stages:
                       cp scripts/fileprovider-git-clean.mjs "$what_if_receipt_tools_dir/fileprovider-git-clean.mjs"
                       cp scripts/child-test-environment.mjs "$what_if_receipt_tools_dir/child-test-environment.mjs"
                       test -s "$failure_receipt_script"
+                      test -s "$worker_blob_script"
                       test -s "$what_if_receipt_script"
                       test -s "$what_if_receipt_tools_dir/azure-canary-preflight.mjs"
                       test -s "$what_if_receipt_tools_dir/core-test-runner.mjs"
@@ -738,27 +741,12 @@ stages:
                         --output "$workload_what_if_receipt_dir/azure-what-if-workload-receipt.json"
 
                       failure_boundary="worker-blob"
-                      blob_exists="$(node scripts/azure-storage-blob-rbac-probe.mjs \
+                      node "$worker_blob_script" \
                         --account-name "$worker_storage_account" \
                         --container-name "$worker_artifact_container" \
-                        --blob-name "$worker_blob_name")"
-                      if [[ "$blob_exists" == true ]]; then
-                        existing_sha="$(az storage blob metadata show --auth-mode login --account-name "$worker_storage_account" --container-name "$worker_artifact_container" --name "$worker_blob_name" --query metadata.sha256 --output tsv)"
-                        test "$existing_sha" = "$worker_artifact_sha"
-                      elif [[ "$blob_exists" == false ]]; then
-                        az storage blob upload \
-                          --auth-mode login \
-                          --account-name "$worker_storage_account" \
-                          --container-name "$worker_artifact_container" \
-                          --name "$worker_blob_name" \
-                          --file "$worker_archive" \
-                          --metadata sha256="$worker_artifact_sha" \
-                          --overwrite false \
-                          --output none
-                      else
-                        echo "Unexpected Azure Blob existence result" >&2
-                        exit 1
-                      fi
+                        --blob-name "$worker_blob_name" \
+                        --archive "$worker_archive" \
+                        --sha256 "$worker_artifact_sha"
                       failure_boundary="acr-import"
                       az acr import --name "$registry_name" --source "${source_image}@${source_digest}" --image "teamsapp:${image_tag}" --username "$GHCR_IMPORT_USERNAME" --password "$GHCR_IMPORT_TOKEN" --force
                       imported_digest="$(az acr repository show --name "$registry_name" --image "teamsapp:${image_tag}" --query digest --output tsv)"

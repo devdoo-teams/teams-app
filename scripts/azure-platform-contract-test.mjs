@@ -10,7 +10,9 @@ const mainBicepPath = path.join(root, 'infra', 'azure', 'main.bicep');
 const workerVmBicepPath = path.join(root, 'infra', 'azure', 'modules', 'worker-vm.bicep');
 const canaryParametersPath = path.join(root, 'infra', 'azure', 'parameters', 'canary.bicepparam');
 const pipelinePath = path.join(root, 'azure-pipelines.yml');
+const workerBlobStagePath = path.join(root, 'scripts', 'azure-worker-blob-stage.mjs');
 const workerVmBicepSource = fs.readFileSync(workerVmBicepPath, 'utf8');
+const workerBlobStageSource = fs.readFileSync(workerBlobStagePath, 'utf8');
 const rubyYamlSafeLoadProgram = 'puts JSON.generate(YAML.safe_load(File.read(ARGV[0]), permitted_classes: [], permitted_symbols: [], aliases: true))';
 
 const prerequisiteRecoveryTest = spawnSync('python3', ['scripts/azure-worker-prerequisites-test.py'], {
@@ -918,6 +920,14 @@ try {
     'deployment must snapshot the CI what-if receipt helper before release checkout',
   );
   assert.ok(
+    deployScript?.includes('worker_blob_script="$(Agent.TempDirectory)/azure-worker-blob-stage.mjs"'),
+    'deployment must reserve a pipeline-owned worker Blob staging helper before release checkout',
+  );
+  assert.ok(
+    deployScript?.includes('cp scripts/azure-worker-blob-stage.mjs "$worker_blob_script"'),
+    'deployment must snapshot the worker Blob staging helper before release checkout',
+  );
+  assert.ok(
     deployScript?.includes('cp scripts/azure-canary-preflight.mjs "$what_if_receipt_tools_dir/azure-canary-preflight.mjs"'),
     'deployment must snapshot the CI what-if classifier dependency before release checkout',
   );
@@ -940,6 +950,11 @@ try {
     (deployScript?.indexOf('cp scripts/azure-what-if-receipt.mjs') ?? -1)
       < (deployScript?.indexOf('git checkout --detach "$commit"') ?? -1),
     'what-if helper snapshot must precede release checkout',
+  );
+  assert.ok(
+    (deployScript?.indexOf('cp scripts/azure-worker-blob-stage.mjs') ?? -1)
+      < (deployScript?.indexOf('git checkout --detach "$commit"') ?? -1),
+    'worker Blob staging helper snapshot must precede release checkout',
   );
   assert.ok(
     (deployScript?.indexOf('git checkout --detach "$commit"') ?? -1)
@@ -1026,13 +1041,16 @@ try {
   assert.equal(deployScript?.includes('--codex-bin-sha256 "$CODEX_PACKAGE_SHA256"'), false, 'package archive SHA must never be reused as the extracted executable SHA');
   assert.equal(deployScript?.includes('CODEX_ARTIFACT_'), false, 'legacy single-executable environment names must be removed');
   assert.equal(deployScript?.includes('cp -RL'), false, 'deployment must never copy the hosted Node toolcache');
-  assert.ok(deployScript?.includes('az storage blob upload'), 'deployment must stage the immutable worker archive in private Azure Blob storage');
-  assert.ok(deployScript?.includes('--auth-mode login'), 'artifact staging must use Entra authentication rather than account keys or SAS');
-  assert.ok(deployScript?.includes('scripts/azure-storage-blob-rbac-probe.mjs'), 'deployment must use a bounded Blob RBAC propagation probe before staging');
+  assert.ok(deployScript?.includes('node "$worker_blob_script"'), 'deployment must stage the immutable worker archive through the bounded helper');
+  assert.ok(workerBlobStageSource.includes("'storage', 'blob', 'upload'"), 'Blob staging helper must use the official Azure CLI upload command');
+  assert.ok(workerBlobStageSource.includes("'--auth-mode', 'login'"), 'artifact staging must use Entra authentication rather than account keys or SAS');
+  assert.ok(workerBlobStageSource.includes("'storage', 'blob', 'exists'"), 'Blob staging helper must probe data-plane availability');
+  assert.ok(workerBlobStageSource.includes('metadata.sha256'), 'an existing immutable worker blob must be accepted only when its SHA-256 metadata matches');
   assert.equal(deployScript?.includes('az storage blob exists'), false, 'unbounded inline Blob authorization probes must not bypass the tested helper');
   assert.equal(deployScript?.includes('--auth-mode key'), false, 'deployment must never fall back to shared account keys');
   assert.equal(/--account-key|--sas-token/u.test(deployScript ?? ''), false, 'deployment must never use account keys or SAS tokens');
-  assert.ok(deployScript?.includes('metadata.sha256'), 'an existing immutable worker blob must be accepted only when its SHA-256 metadata matches');
+  assert.equal(workerBlobStageSource.includes("'--auth-mode', 'key'"), false, 'Blob staging helper must never use shared account keys');
+  assert.equal(/--account-key|--sas-token/u.test(workerBlobStageSource), false, 'Blob staging helper must never use account keys or SAS tokens');
   assert.ok(deployScript?.includes('--worker-artifact-sha256 "$worker_artifact_sha"'), 'deployment must bind the worker archive digest into Bicep parameters');
   assert.ok(deployScript?.includes('--codex-bin-sha256 "$codex_bin_sha"'), 'deployment must bind the measured Codex executable digest into Bicep parameters');
   assert.ok(!Object.hasOwn(pipeline.variables ?? {}, 'azureContainerApp'), 'pipeline must not substitute a hard-coded Container App name for Bicep outputs');
