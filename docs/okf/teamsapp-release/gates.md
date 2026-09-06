@@ -6,12 +6,12 @@ resource: /gates.md
 tags: [release-gate, azure, teams, provenance, rollback]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T13:31:30Z"
+  at: "2026-09-06T14:08:05Z"
 verified:
   by: "process:release-gate-reconciliation/1"
-  at: "2026-09-06T13:31:30Z"
+  at: "2026-09-06T14:08:05Z"
 status: stable
-stale_after: "2026-09-13T13:31:30Z"
+stale_after: "2026-09-13T14:08:05Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -29,6 +29,14 @@ sources:
     resource: "https://learn.microsoft.com/en-us/azure/devops/pipelines/process/approvals?view=azure-devops"
     title: "Pipeline deployment approvals - Azure Pipelines"
     location: "stage pause and check categories; observed web lines 37-50"
+  - id: az-deployment-jobs
+    resource: "https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops"
+    title: "Deployment jobs - Azure Pipelines"
+    location: "deployment lifecycle hooks and failure handling; observed web lines 55-76"
+  - id: aca-start-failures
+    resource: "https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-start-failures"
+    title: "Troubleshoot start failures in Azure Container Apps"
+    location: "revision/log diagnosis and common causes; observed web lines 33-80"
   - id: aca-health
     resource: "https://learn.microsoft.com/en-us/azure/container-apps/health-probes"
     title: "Health probes in Azure Container Apps"
@@ -95,33 +103,35 @@ ARM what-if is non-mutating and predicts changes rather than applying them.[^arm
 ## E. Approval and deployment
 
 17. Environment approval is requested only after exact artifact, RBAC, what-if, and secret metadata receipts pass.
-18. Deploy consumes same-run receipts and does not rebuild/repackage after approval.
+18. Approval PASS is never treated as deployment PASS; the post-approval deployment job has separately named mutation, revision, health, and failure boundaries.
 19. Deploy re-materializes and verifies the exact receipt source.
 20. First mutation verifies Bicep output, worker archive/package digest, what-if receipt, and release identity.
 21. Existing service remains until the canary is healthy and rollback identity is recorded.
+22. A failed post-approval task writes a secret-free failure receipt containing only stage/job, last named boundary, exit code, source/version/run identity, and next action.
+23. The failure receipt is published with a failure condition even when the mutation task exits nonzero; raw stderr, tokens, secret values, and auth material are not copied into it.
 
-Azure Pipelines waits for all pending checks before executing a stage, and a failed or timed-out check prevents the stage.[^az-approval]
+Azure Pipelines approvals control when a stage should run.[^az-approval] Deployment jobs separately model deploy, route/post-route health, and `on: failure` handling.[^az-deployment-jobs]
 
 ## F. Runtime and Teams
 
-22. Azure revision has active healthy replicas and startup/liveness/readiness evidence.
-23. Public HTTPS /api/health returns source commit, version, image/server identity matching the receipt.
-24. Portal, downloaded package, installed desktop/mobile app, app ID, version, and SHA agree.
-25. Teams desktop shows the target chat, fresh Bot reply, card/tab/buttons, current accessibility tree, and before/after screenshots.
-26. Mobile permission, GPS, and mobile UI remain separate; no desktop proof is promoted to MOBILE_READY.
+24. Azure revision has active healthy replicas and startup/liveness/readiness evidence.
+25. Public HTTPS /api/health returns source commit, version, image/server identity matching the receipt.
+26. Portal, downloaded package, installed desktop/mobile app, app ID, version, and SHA agree.
+27. Teams desktop shows the target chat, fresh Bot reply, card/tab/buttons, current accessibility tree, and before/after screenshots.
+28. Mobile permission, GPS, and mobile UI remain separate; no desktop proof is promoted to MOBILE_READY.
 
-Container Apps distinguishes startup, liveness, and readiness; readiness must succeed before traffic shift.[^aca-health] Teams upload/update is also a separate package and installed-client process.[^teams-upload]
+Container Apps troubleshooting requires revision status and system/application logs to distinguish image pull, crash, timeout, ingress, probe, configuration, and secret-reference failures.[^aca-start-failures] Container Apps distinguishes startup, liveness, and readiness; readiness must succeed before traffic shift.[^aca-health] Teams upload/update is also a separate package and installed-client process.[^teams-upload]
 
 ## G. Closure and traceability
 
-27. Every reproduced bug/release blocker maps to confirmed Jira key/URL or JIRA_SYNC_UNVERIFIED.
-28. A non-empty durable receipt reconciles process, commit, artifacts, tests, and result.
-29. No Teams completion message, Jira Done, or production promotion before all required gates pass.
-30. Append run ID, source, artifact/ZIP SHA, image digest, result, blocker, and next action to the ledger.
+29. Every reproduced bug/release blocker maps to confirmed Jira key/URL or JIRA_SYNC_UNVERIFIED.
+30. A non-empty durable receipt reconciles process, commit, artifacts, tests, and result.
+31. No Teams completion message, Jira Done, or production promotion before all required gates pass.
+32. Append run ID, source, artifact/ZIP SHA, image digest, result, blocker, and next action to the ledger.
 
 # Current run
 
-Run 30 has A–D pre-approval evidence within its declared scope, but E–G are incomplete. It is WAITING_APPROVAL, not release complete.
+Run 30 has A–D pre-approval evidence within its declared scope, but post-approval deployment failed with generic exit code 1 and no durable failure boundary. It is FAILED_AFTER_APPROVAL, not release complete.
 
 # Required commands before a new run
 
@@ -129,3 +139,12 @@ Run 30 has A–D pre-approval evidence within its declared scope, but E–G are 
     node scripts/azure-platform-contract-test.mjs
     npm run test:azure-core
     git status --short --branch
+
+[^az-deployment-jobs]: Deployment jobs, rollout lifecycle hooks and `on: failure` handling, observed web lines 55-76. https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops
+[^aca-start-failures]: Troubleshoot start failures in Azure Container Apps, revision/log diagnosis and common causes, observed web lines 33-80. https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-start-failures
+[^okf-spec]: Open Knowledge Format v0.2 specification, sections 3-5, 8-10, observed web lines 253-327, 370-444, 486-532. https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md
+[^arm-what-if]: ARM what-if operation, What-if operation and Required permissions, observed web lines 29-52. https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-what-if
+[^az-what-if-help]: Azure CLI az deployment group what-if, option table and examples, observed web lines 1016-1042 and 1071-1092. https://learn.microsoft.com/en-us/cli/azure/deployment/group?view=azure-cli-latest
+[^az-approval]: Pipeline deployment approvals, approvals and check execution, observed web lines 42-58 and 67-77. https://learn.microsoft.com/en-us/azure/devops/pipelines/process/approvals?view=azure-devops
+[^aca-health]: Health probes in Azure Container Apps, probe types and readiness before traffic, observed web lines 36-41 and 187-188. https://learn.microsoft.com/en-us/azure/container-apps/health-probes
+[^teams-upload]: Upload your custom app, upload/update and installed app sections, observed web lines 48-60 and 84-122. https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/deploy-and-publish/apps-upload

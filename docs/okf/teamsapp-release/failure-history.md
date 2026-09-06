@@ -6,12 +6,12 @@ resource: /failure-history.md
 tags: [teamsapp, azure, release, incident, failure, provenance]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T13:31:30Z"
+  at: "2026-09-06T14:08:05Z"
 verified:
   by: "process:release-evidence-reconciliation/1"
-  at: "2026-09-06T13:31:30Z"
+  at: "2026-09-06T14:08:05Z"
 status: stable
-stale_after: "2026-09-13T13:31:30Z"
+stale_after: "2026-09-13T14:08:05Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -29,6 +29,18 @@ sources:
     resource: "https://learn.microsoft.com/en-us/azure/devops/pipelines/process/approvals?view=azure-devops"
     title: "Pipeline deployment approvals - Azure Pipelines"
     location: "approval/check stage pause; observed web lines 37-50 and 56-64"
+  - id: az-deployment-jobs
+    resource: "https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops"
+    title: "Deployment jobs - Azure Pipelines"
+    location: "deployment lifecycle hooks and failure handling; observed web lines 55-76"
+  - id: aca-start-failures
+    resource: "https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-start-failures"
+    title: "Troubleshoot start failures in Azure Container Apps"
+    location: "revision/log diagnosis, common failures, configuration and probe causes; observed web lines 33-80"
+  - id: aca-exit-failures
+    resource: "https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-create-failures"
+    title: "Troubleshoot Container Exit Failures in Azure Container Apps"
+    location: "exit-event causes and diagnostics; observed web lines 31-55"
   - id: aca-health
     resource: "https://learn.microsoft.com/en-us/azure/container-apps/health-probes"
     title: "Health probes in Azure Container Apps"
@@ -60,7 +72,11 @@ sources:
   - id: azure-run-30
     resource: "https://dev.azure.com/devdoo/TeamsApp/_build/results?buildId=30"
     title: "TeamsApp Azure DevOps Run 30"
-    location: "current run status and approval waiting state"
+    location: "run result after manual approval; failed DeployCanary task and linked log"
+  - id: azure-run-30-failed-log
+    resource: "https://dev.azure.com/devdoo/TeamsApp/_build/results?buildId=30&view=logs&s=4762d5d2-aebb-53b8-a7cb-14d48d3e23e5&j=95b50d7d-ef90-5e8d-33e5-e2c5603024e8"
+    title: "TeamsApp Azure DevOps Run 30 failed deployment job log"
+    location: "DeployCanaryRevision AzureCLI task; UI exposed only generic exit code 1"
   - id: pipeline-source
     resource: "https://github.com/devdoo-teams/teams-app/blob/18cea41fd16d97b39038a00761a272ae23d310d5/azure-pipelines.yml"
     title: "TeamsApp Azure pipeline at source-materialization fix"
@@ -85,7 +101,7 @@ The real Azure failures in the retained run history are:
 2. Run 27: current five-secret what-if modifications were not in the classifier allowlist.
 3. Run 28: pipeline checkout commit differed from the attested release commit.
 4. Run 29: diagnostic logging improved but the source mismatch remained.
-5. Run 30: the source materialization fix passed pre-approval, but the run is still waiting for manual approval.
+5. Run 30: the source materialization fix passed pre-approval, the user manually approved the environment, and the post-approval DeployCanary AzureCLI task failed with generic exit code 1.
 
 Earlier failures also included FileProvider source instability, missing dependencies, non-live A2A/provider preflight, Teams authentication/session drift, mobile location retry lock, portal-versus-installed identity gaps, DNS/public runtime failure, canary activation failure, and delegated worktree/result reconciliation gaps.
 
@@ -323,21 +339,41 @@ Result:
 - diagnostics are safer;
 - full release is not complete.
 
-## Run 30: fixed pre-approval, waiting approval
+## Run 30: approval passed, post-approval deployment failed
 
 Observed:
 - pipeline source 18cea41fd16d97b39038a00761a272ae23d310d5;
 - requested release 71df02e, app 1.0.103;
 - authenticated handoff, Azure Core 26/26, RBAC, foundation what-if, worker/RBAC receipt completed;
-- Azure DevOps UI says one approval needs review and deploy is waiting.
+- the user manually approved the pending environment check;
+- Azure DevOps UI then reported `DeployCanary` / `DeployCanaryRevision` failed;
+- failed task text was `Script failed with exit code: 1 Provision and deploy immutable canary revision`;
+- the failed task link was `https://dev.azure.com/devdoo/TeamsApp/_build/results?buildId=30&view=logs&s=4762d5d2-aebb-53b8-a7cb-14d48d3e23e5&j=95b50d7d-ef90-5e8d-33e5-e2c5603024e8`;
+- no `azure-deployment-failure-receipt` artifact or named post-approval failure boundary existed in Run 30;
+- rollback was skipped because the deploy stage failed before a successful canary identity/readiness result.
 
 Official evidence:
-- Azure Pipelines pauses a stage while resource checks are pending; an unsuccessful or timed-out check prevents stage execution.[^az-approval]
+- Azure Pipelines approvals control when a stage should run, but deployment-job lifecycle hooks are the place to separate deployment, post-route health, and failure handling.[^az-approval][^az-deployment-jobs]
+- Microsoft’s Container Apps troubleshooting contract requires revision status plus system/application logs to distinguish image pull, timeout, crash, ingress, probe, configuration, and secret-reference failures.[^aca-start-failures]
+- Container exit diagnostics expose exit events and exit codes; a generic pipeline exit code is not an Azure revision root cause.[^aca-exit-failures]
+
+Classification:
+- `OFFICIAL CONTRACT`: approval is a gate, not a deployment-success assertion; Azure Container Apps failure diagnosis requires revision/log evidence;
+- `OBSERVED EVIDENCE`: Run 30 pre-approval stages passed, the user approved, and the single post-approval AzureCLI task failed with exit code 1;
+- `INFERENCE`: the exact failing subcommand is not recoverable from the retained Run 30 artifact/UI summary; foundation create, Key Vault metadata, workload what-if/blob, ACR import, workload create, revision, health, and final identity remain competing hypotheses;
+- `ROOT CAUSE`: `UNKNOWN_POST_APPROVAL_DEPLOY_BOUNDARY` for Run 30. The confirmed process defect is diagnostic loss: one large task had no named failure boundary or durable failure receipt, so the run cannot distinguish those hypotheses after the fact.
+
+Fix:
+- add a fail-safe `ERR` trap with named boundaries before each Azure mutation/verification boundary;
+- retain a secret-free `azure-deployment-failure-receipt` artifact on task failure with boundary, exit code, source commit, version, and run ID;
+- emit an Azure DevOps safe log issue pointing to the boundary and artifact without copying stderr, tokens, or secret values;
+- add a focused RED/GREEN regression test and include it in the Azure Core test inventory.
 
 Result:
-- pre-approval PASS within its named scope;
-- Azure mutation, revision readiness, public health, Teams UI, and mobile are UNVERIFIED;
-- no Teams completion message.
+- Run 30 remains `FAIL`, not `PASS` or `IN_PROGRESS`;
+- the repository fix is locally GREEN but has not been exercised by a new Azure run yet;
+- Azure mutation, revision readiness, public health, Teams UI, and mobile remain `UNVERIFIED` for release 1.0.103;
+- no Teams completion message or Jira Done transition is allowed.
 
 # Historical failure inventory
 
@@ -352,15 +388,17 @@ Result:
 | Teams card mismatch | duplicate top-level/card text or unsupported mobile subset | canonical card subset and actual client evidence |
 | detached worktree and approval backlog | duplicate review, stale branches, pending tasks | direct parent default, bounded dispatch, close/reconcile |
 | authentication boundary confusion | Codex CLI, Teams CLI, Azure, and MFA treated as one login | separate status checks; user-only secret handoff |
+| approval passed but deployment failed generically | Run 30 manual approval followed by one AzureCLI exit code 1 with no durable boundary | named deployment boundaries, secret-free failure receipt, failure artifact, Azure revision/log read-back |
 
 These records do not substitute for current Run 30 evidence.
 
 # Current judgment
 
-The current state is RELEASE_BLOCKED / RUN 30 WAITING_APPROVAL.
+The current state is RELEASE_BLOCKED / RUN 30 FAILED_AFTER_APPROVAL.
 
 - local/contract/Azure Core evidence: PASS within scope;
-- Azure mutation and healthy revision: NOT STARTED or UNVERIFIED;
+- post-approval Azure mutation: FAILED at an unknown named boundary (Run 30 evidence incomplete);
+- healthy revision: UNVERIFIED;
 - public health identity: UNVERIFIED;
 - portal/installed same package: UNVERIFIED;
 - Teams desktop fresh reply: UNVERIFIED;
@@ -371,6 +409,9 @@ The current state is RELEASE_BLOCKED / RUN 30 WAITING_APPROVAL.
 [^arm-what-if]: Template deployment what-if, What-if operation and permissions, observed web lines 29-52. https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-what-if
 [^az-what-if-help]: Azure CLI az deployment group what-if, option table and examples, observed web lines 1016-1042 and 1071-1092. https://learn.microsoft.com/en-us/cli/azure/deployment/group?view=azure-cli-latest
 [^az-approval]: Pipeline deployment approvals, stage pause and approval sections, observed web lines 37-50 and 56-64. https://learn.microsoft.com/en-us/azure/devops/pipelines/process/approvals?view=azure-devops
+[^az-deployment-jobs]: Deployment jobs, rollout lifecycle hooks and `on: failure` handling, observed web lines 55-76. https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops
+[^aca-start-failures]: Troubleshoot start failures in Azure Container Apps, revision/log diagnosis and common causes, observed web lines 33-80. https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-start-failures
+[^aca-exit-failures]: Troubleshoot Container Exit Failures in Azure Container Apps, exit events and diagnostics, observed web lines 31-55. https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-create-failures
 [^aca-health]: Health probes in Azure Container Apps, probe types and readiness before traffic, observed web lines 36-41 and 187-188. https://learn.microsoft.com/en-us/azure/container-apps/health-probes
 [^key-vault]: Azure Key Vault quickstart, add/retrieve secret sections, observed web lines 80-95. https://learn.microsoft.com/en-us/azure/key-vault/secrets/quick-create-cli
 [^teams-package]: Teams app package, App manifest and publishing choices, observed web lines 45-72. https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/build-and-test/apps-package

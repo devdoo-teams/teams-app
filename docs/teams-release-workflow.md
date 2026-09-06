@@ -48,6 +48,12 @@ CopilotKit, OpenAI API, MCP, 로컬 모델과 Jira/Confluence/Bitbucket adapter�
 
 Azure foundation preflight의 현재 공식 근거는 [ARM what-if operation](https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-what-if), [`az deployment group what-if`](https://learn.microsoft.com/en-us/cli/azure/deployment/group?view=azure-cli-latest), [`az bicep`](https://learn.microsoft.com/en-us/cli/azure/bicep?view=azure-cli-latest)이다. Microsoft 문서상 what-if는 리소스를 변경하지 않고 예측만 하며, `--no-pretty-print`는 프로그램이 평가할 JSON을 반환한다. 설치 help가 `bicep.use_binary_from_path=True`를 보고하면 검증된 Bicep 경로를 Azure CLI 자식 `PATH`에 넣은 뒤 실행한다. Azure Pipeline은 환경 승인 전에 exact-release foundation what-if를 실행하고 커밋·버전·구독·리소스 그룹·Bicep·ARM 파라미터 해시 영수증을 게시해야 한다. 승인 후에는 같은 파라미터를 재생성해 영수증과 대조한 다음 첫 mutation을 수행하고, 실제 foundation 출력으로 만든 workload 파라미터에도 두 번째 what-if를 통과시켜야 한다. `Create`/`Delete`/`Ignore`/`NoChange`/`Modify`/`Deploy`/`Unsupported` 의미는 공식 change-type 계약대로 분류하고, `Delete`/`Modify`/`Deploy`/`Ignore` 및 모호하거나 범위 밖인 결과를 자동 승인하지 않는다.
 
+### 승인 이후 배포 실패 진단 게이트
+
+승인 이후 실패는 승인 실패와 별도 사건으로 기록한다. [Azure Pipelines deployment jobs](https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops)는 deploy, route/post-route health, `on: failure` lifecycle hook을 별도로 모델링하며, [Container Apps start-failure guidance](https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-start-failures)는 revision 상태와 system/application logs로 원인을 분류하도록 한다. 따라서 단일 `exit code: 1`만으로 Azure 원인을 추측하지 않는다.
+
+post-approval AzureCLI는 실행 전 `failure_boundary`를 갱신하고 오류 시 [`azure-deployment-failure-receipt.mjs`](../scripts/azure-deployment-failure-receipt.mjs)가 stage/job, 마지막 boundary, exit code, source/version/run identity만 담은 secret-free receipt를 만든다. `azure-deployment-failure` artifact가 없으면 해당 run의 원인은 `UNVERIFIED`이며, 다음 run에서 receipt와 revision/system/application logs를 read-back하기 전에는 원인 확정·무근거 재시도·완료보고·Jira Done을 진행하지 않는다.
+
 ### Optional Jira/Confluence/Bitbucket MCP 게이트
 
 provider registry 변경은 다음 순서를 추가로 따른다.

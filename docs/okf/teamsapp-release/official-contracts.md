@@ -6,12 +6,12 @@ resource: /official-contracts.md
 tags: [official-contract, azure, teams, release, evidence]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T13:31:30Z"
+  at: "2026-09-06T14:08:05Z"
 verified:
   by: "process:official-source-research/1"
-  at: "2026-09-06T13:31:30Z"
+  at: "2026-09-06T14:08:05Z"
 status: stable
-stale_after: "2026-09-13T13:31:30Z"
+stale_after: "2026-09-13T14:08:05Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -33,6 +33,10 @@ sources:
     resource: "https://learn.microsoft.com/en-us/azure/devops/pipelines/process/approvals?view=azure-devops"
     title: "Pipeline deployment approvals - Azure Pipelines"
     location: "Approvals and checks; observed web lines 37-50 and 56-64 on 2026-09-06"
+  - id: az-deployment-jobs
+    resource: "https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops"
+    title: "Deployment jobs - Azure Pipelines"
+    location: "Deployment lifecycle hooks and `on: failure`; observed web lines 55-76 on 2026-09-06"
   - id: az-environments
     resource: "https://learn.microsoft.com/en-us/azure/devops/pipelines/process/environments?view=azure-devops"
     title: "Use Azure Pipelines environments"
@@ -44,7 +48,11 @@ sources:
   - id: aca-start
     resource: "https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-start-failures"
     title: "Troubleshoot start failures in Azure Container Apps"
-    location: "Health probe failures; observed web line 69 on 2026-09-06"
+    location: "Revision/log diagnosis, common failures, configuration, and probes; observed web lines 33-80 on 2026-09-06"
+  - id: aca-exit
+    resource: "https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-create-failures"
+    title: "Troubleshoot Container Exit Failures in Azure Container Apps"
+    location: "Exit-event causes and diagnostics; observed web lines 31-55 on 2026-09-06"
   - id: key-vault
     resource: "https://learn.microsoft.com/en-us/azure/key-vault/secrets/quick-create-cli"
     title: "Quickstart - Set and retrieve a secret from Azure Key Vault"
@@ -89,7 +97,7 @@ The Google Cloud announcement describes OKF as a vendor-neutral, human- and agen
 
 ARM what-if previews a deployment and does not change existing resources.[^arm-what-if] The Azure CLI help exposes the change types and automation options used by this repository, including no-pretty-print, result-format, and validation-level.[^az-group-what-if]
 
-Azure Pipelines pauses a stage until all resource checks are satisfied; an unsuccessful or timed-out check prevents stage execution.[^az-approvals] Azure Container Apps distinguishes startup, liveness, and readiness; in multiple revision mode readiness must succeed before traffic is shifted.[^aca-probes] A running image or 100 percent traffic indicator is not sufficient when the revision has no healthy replica.
+Azure Pipelines approvals control when a stage should run; they do not assert that every later deployment command succeeded.[^az-approvals] Deployment jobs model deploy, route/post-route health, and `on: failure` lifecycle hooks separately.[^az-deployment-jobs] Azure Container Apps troubleshooting requires revision state plus system/application logs to classify image pull, timeout, crash, ingress, probe, configuration, and secret-reference failures.[^aca-start] Container Apps distinguishes startup, liveness, and readiness; in multiple revision mode readiness must succeed before traffic is shifted.[^aca-probes] A running image or 100 percent traffic indicator is not sufficient when the revision has no healthy replica.
 
 Key Vault documentation shows that secret creation and value retrieval are distinct operations.[^key-vault] This project records only secret name and safe status metadata; it never records the value.
 
@@ -118,7 +126,10 @@ For every new failure, record all of the following before changing code:
 [^arm-what-if]: ARM what-if operation, What-if operation and Required permissions, observed web lines 29-52. https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-what-if
 [^az-group-what-if]: Azure CLI az deployment group what-if, option table and examples, observed web lines 1016-1042 and 1071-1092. https://learn.microsoft.com/en-us/cli/azure/deployment/group?view=azure-cli-latest
 [^az-approvals]: Pipeline deployment approvals, approvals/checks and stage execution, observed web lines 37-50 and 56-64. https://learn.microsoft.com/en-us/azure/devops/pipelines/process/approvals?view=azure-devops
+[^az-deployment-jobs]: Deployment jobs, rollout lifecycle hooks and `on: failure` handling, observed web lines 55-76. https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops
 [^aca-probes]: Health probes in Azure Container Apps, probe types and revision traffic guidance, observed web lines 36-41 and 187-188. https://learn.microsoft.com/en-us/azure/container-apps/health-probes
+[^aca-start]: Troubleshoot start failures in Azure Container Apps, revision/log diagnosis and common causes, observed web lines 33-80. https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-start-failures
+[^aca-exit]: Troubleshoot Container Exit Failures in Azure Container Apps, exit events and diagnostics, observed web lines 31-55. https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-create-failures
 [^key-vault]: Azure Key Vault quickstart, add/retrieve secret sections, observed web lines 80-95. https://learn.microsoft.com/en-us/azure/key-vault/secrets/quick-create-cli
 [^teams-package]: Teams app package, App manifest and publishing choices, observed web lines 45-72. https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/build-and-test/apps-package
 [^teams-upload]: Upload your custom app, upload/access/update sections, observed web lines 48-60 and 84-122. https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/deploy-and-publish/apps-upload

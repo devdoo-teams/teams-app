@@ -26,7 +26,7 @@
 | 27 | `71df02e` | `71df02e`, `1.0.103` | `FAIL` | 현재 5개 Key Vault secret reference 변경이 `Modify`로 나타났지만 preflight allowlist가 구형 3개만 허용 | `45e31b7`의 `azure-canary-preflight` allowlist + `azure-what-if-receipt-test` 회귀 |
 | 28 | `45e31b7` | `71df02e`, `1.0.103` | `FAIL` | pre-approval AzureCLI task에서 `HEAD == release commit` 검사가 `az --version` 전에 실패 | source materialization 회귀가 아직 파이프라인에 반영되지 않은 상태 |
 | 29 | `dada852` | `71df02e`, `1.0.103` | `FAIL` | run 28의 동일 불일치를 진단 출력으로 재현. `HEAD`가 CI 커밋이고 receipt는 `71df02e` | `dada852`는 실패 출력 보강만 수행; 근본 수정 아님 |
-| 30 | `18cea41` | `71df02e`, `1.0.103` | `IN_PROGRESS` | pre-approval task가 `71df02e`를 fetch/checkout하고 Core 26/26, RBAC, what-if diagnostic, worker/RBAC receipt를 생성 | `18cea41`의 exact-release source materialization. 승인 후 deploy 및 live gates 대기 |
+| 30 | `18cea41` | `71df02e`, `1.0.103` | `FAIL` | 사용자가 수동 승인한 뒤 `DeployCanaryRevision`의 단일 AzureCLI task가 `Script failed with exit code: 1`로 종료. Run summary와 실패 job log에는 named boundary·durable failure receipt가 없음 | `UNKNOWN_POST_APPROVAL_DEPLOY_BOUNDARY`; 진단 손실을 재현 테스트로 고정하고 secret-free failure receipt/boundary artifact를 추가. exact failing Azure subcommand는 Run 30에서 복구 불가 |
 
 ## 실패에서 승격한 필수 게이트
 
@@ -39,6 +39,8 @@
 | G5 secret metadata | 26 | workload mutation 전에 필요한 Key Vault secret의 이름/상태 metadata를 확인하며 secret value를 읽거나 로그에 남기지 않음 | deploy AzureCLI task, `teams-bot-client-secret` 생성 확인 |
 | G6 same-run handoff | 27–30 | deploy가 현재 run의 platform/RBAC/worker/what-if receipt만 다운로드하고 receipt commit과 archive digest를 대조 | `azure-pipelines.yml`, `azure-deployment-contract.mjs` |
 | G7 local proof boundary | 모든 run | 로컬 exit 0, fixture PASS, pipeline status만으로 Azure canary/Teams 설치 완료를 주장하지 않음 | release workflow 및 final identity gates |
+| G8 approval/deploy separation | 30 | manual approval PASS는 deploy PASS가 아니며, 승인 후 실패는 exact task boundary와 Azure revision/log read-back 없이는 원인 확정 금지 | `docs/okf/teamsapp-release/failure-history.md`, Microsoft deployment-job contract |
+| G9 failure receipt | 30 | AzureCLI failure가 발생하면 last named boundary, exit code, source/version/run identity를 secret-free receipt와 pipeline artifact로 보존 | `azure-pipelines.yml`, `scripts/azure-deployment-failure-receipt.mjs`, focused regression |
 
 ## 릴리스 진행 전 하드 게이트 목록
 
@@ -100,8 +102,10 @@
 - Pipeline source: `18cea41fd16d97b39038a00761a272ae23d310d5`
 - Requested release: `71df02e2ea9e9dbecbe864e0f1c6be3d649cbb4a`, app `1.0.103`
 - Completed: authenticated GitHub handoff; Azure Core 26/26; Azure RBAC receipt; foundation what-if diagnostic/receipt; worker runtime receipt
-- Current: Azure DevOps UI says `1 approval needs your review`; deploy stage `Provision and deploy immutable canary revision` is `Waiting`
-- Decision: approval and deployment are deliberately held until this gate list is accepted and the same-run receipts are reconciled
+- Outcome: user manually approved the environment; Azure DevOps UI then shows `Provision and deploy immutable canary revision` / `DeployCanaryRevision` as `Failed`
+- Failed task: `Script failed with exit code: 1`; log URL: `https://dev.azure.com/devdoo/TeamsApp/_build/results?buildId=30&view=logs&s=4762d5d2-aebb-53b8-a7cb-14d48d3e23e5&j=95b50d7d-ef90-5e8d-33e5-e2c5603024e8`
+- Evidence gap: Run 30 retained no failure receipt or named boundary, so the exact Azure subcommand is `UNVERIFIED`; do not label foundation/workload/revision as the root cause
+- Decision: Run 30 is `FAIL`; do not retry until the failure-receipt fix is committed and the next run publishes its boundary artifact
 
 ## 다음 실행 전 필수 명령
 
@@ -126,5 +130,8 @@ Azure DevOps 큐잉 후에는 다음 순서로 read-back한다.
 - [`az deployment group what-if`](https://learn.microsoft.com/en-us/cli/azure/deployment/group?view=azure-cli-latest)
 - [Azure Key Vault secrets with Azure CLI](https://learn.microsoft.com/en-us/azure/key-vault/secrets/quick-create-cli)
 - [Azure DevOps approvals and checks](https://learn.microsoft.com/en-us/azure/devops/pipelines/process/approvals?view=azure-devops)
+- [Azure Pipelines deployment jobs and failure hooks](https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops)
+- [Troubleshoot start failures in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-start-failures)
+- [Troubleshoot Container Exit Failures in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-create-failures)
 
-이 문서의 `IN_PROGRESS` 항목은 실제 run read-back이 끝난 뒤에만 `PASS` 또는 구체적 `FAIL/BLOCKED`로 갱신한다. 완료 메시지나 Jira Done 전환의 근거로 `IN_PROGRESS`를 사용하지 않는다.
+이 문서의 `IN_PROGRESS` 항목은 실제 run read-back이 끝난 뒤에만 `PASS` 또는 구체적 `FAIL/BLOCKED`로 갱신한다. 승인 성공은 배포 성공이 아니며, failure receipt와 Azure revision/log read-back이 없으면 원인을 확정하지 않는다. 완료 메시지나 Jira Done 전환의 근거로 `IN_PROGRESS` 또는 generic exit code만 사용하지 않는다.

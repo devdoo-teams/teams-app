@@ -6,12 +6,12 @@ resource: /faq.md
 tags: [faq, incident-response, release, teams, azure]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T13:31:30Z"
+  at: "2026-09-06T14:08:05Z"
 verified:
   by: "process:release-faq-reconciliation/1"
-  at: "2026-09-06T13:31:30Z"
+  at: "2026-09-06T14:08:05Z"
 status: stable
-stale_after: "2026-09-13T13:31:30Z"
+stale_after: "2026-09-13T14:08:05Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -29,6 +29,18 @@ sources:
     resource: "https://learn.microsoft.com/en-us/azure/devops/pipelines/process/approvals?view=azure-devops"
     title: "Pipeline deployment approvals - Azure Pipelines"
     location: "stage pause and checks; observed web lines 37-50 and 56-64"
+  - id: az-deployment-jobs
+    resource: "https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops"
+    title: "Deployment jobs - Azure Pipelines"
+    location: "deployment lifecycle hooks and failure handling; observed web lines 55-76"
+  - id: aca-start-failures
+    resource: "https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-start-failures"
+    title: "Troubleshoot start failures in Azure Container Apps"
+    location: "revision/log diagnosis and common causes; observed web lines 33-80"
+  - id: aca-exit-failures
+    resource: "https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-create-failures"
+    title: "Troubleshoot Container Exit Failures in Azure Container Apps"
+    location: "exit-event causes and diagnostics; observed web lines 31-55"
   - id: aca-health
     resource: "https://learn.microsoft.com/en-us/azure/container-apps/health-probes"
     title: "Health probes in Azure Container Apps"
@@ -129,17 +141,34 @@ Action:
 - fetch and checkout the exact receipt commit in every source-consuming task.
 - Treat diagnostics-only and behavioral fixes as separate change types.
 
-## Q7. Is Run 30 complete?
+## Q7. Is Run 30 complete after the manual approval?
 
-No. Pre-approval passed within scope; Azure DevOps currently waits for one manual approval. Deploy, revision health, public health, portal/install identity, and Teams UI are not yet observed.
+No. The manual approval only allowed the deployment stage to execute. Run 30 then failed inside its single post-approval AzureCLI task with `Script failed with exit code: 1`. Because the run retained no named failure boundary or durable failure receipt, the exact Azure subcommand is unknown rather than silently treated as a foundation, workload, ACR, revision, or health failure.
 
 Official source and location:
-- Azure Pipelines approvals, stage pause and checks, observed web lines 37-50 and 56-64.[^az-approval]
-- Internal: docs/azure-release-run-ledger.md lines 98-101.
+- Azure Pipelines approvals control when a stage should run, observed web lines 42-58 and 67-77.[^az-approval]
+- Deployment jobs define separate deploy/health/failure lifecycle hooks, observed web lines 55-76.[^az-deployment-jobs]
+- Azure Container Apps requires revision status and system/application logs to diagnose startup failures, observed web lines 33-80.[^aca-start-failures]
+- Internal: docs/azure-release-run-ledger.md lines 98-107 and docs/okf/teamsapp-release/failure-history.md Run 30 section.
 
 Action:
-- Do not send the Teams completion message.
-- Do not mark Jira Done or promote production.
+- Keep Run 30 `FAIL` and do not infer the root cause from its generic exit code.
+- Use the next run's `azure-deployment-failure-receipt` artifact and exact Azure revision/log read-back to classify the boundary.
+- Do not send the Teams completion message, mark Jira Done, or promote production.
+
+## Q16. What changed after Run 30?
+
+The release pipeline now names its last execution boundary and writes a secret-free failure receipt on an AzureCLI error. The receipt contains only stage/job, boundary, exit code, source commit, release version, run ID, timestamp, and a next-action pointer; raw stderr and secret material are not persisted. A failed-task artifact is published with `condition: failed()`.
+
+Internal source and verification:
+- `azure-pipelines.yml` DeployCanary AzureCLI block and failure artifact step.
+- `scripts/azure-deployment-failure-receipt.mjs` and `scripts/azure-deployment-failure-receipt-test.mjs`.
+- `npm run test:azure-deployment-failure-receipt` — GREEN.
+- `npm run test:azure-core-runner` — GREEN; the new regression is in the Azure Core inventory.
+- `node scripts/azure-platform-contract-test.mjs` — GREEN.
+
+Limit:
+- This is a diagnostic/reliability improvement, not proof that Azure Run 30 succeeded. A new Azure run is required to observe the real failing boundary and then the revision/health gates.
 
 ## Q8. Can what-if replace the real deployment?
 
@@ -243,6 +272,9 @@ If any item is FAIL, BLOCKED, UNVERIFIED, or MIXED_IDENTITY, completion is forbi
 [^arm-what-if]: ARM what-if operation, What-if operation and permissions, observed web lines 29-52. https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-what-if
 [^az-what-if-help]: Azure CLI az deployment group what-if, option table and examples, observed web lines 1016-1042 and 1071-1092. https://learn.microsoft.com/en-us/cli/azure/deployment/group?view=azure-cli-latest
 [^az-approval]: Pipeline deployment approvals, stage pause and checks, observed web lines 37-50 and 56-64. https://learn.microsoft.com/en-us/azure/devops/pipelines/process/approvals?view=azure-devops
+[^az-deployment-jobs]: Deployment jobs, rollout lifecycle hooks and `on: failure` handling, observed web lines 55-76. https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops
+[^aca-start-failures]: Troubleshoot start failures in Azure Container Apps, revision/log diagnosis and common causes, observed web lines 33-80. https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-start-failures
+[^aca-exit-failures]: Troubleshoot Container Exit Failures in Azure Container Apps, exit events and diagnostics, observed web lines 31-55. https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-create-failures
 [^aca-health]: Health probes in Azure Container Apps, probe types and readiness, observed web lines 36-41 and 187-188. https://learn.microsoft.com/en-us/azure/container-apps/health-probes
 [^key-vault]: Azure Key Vault quickstart, add/retrieve secret sections, observed web lines 80-95. https://learn.microsoft.com/en-us/azure/key-vault/secrets/quick-create-cli
 [^teams-package]: Teams app package, App manifest and publishing choices, observed web lines 45-72. https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/build-and-test/apps-package

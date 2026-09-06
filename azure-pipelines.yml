@@ -435,7 +435,28 @@ stages:
                     scriptLocation: inlineScript
                     addSpnToEnvironment: true
                     inlineScript: |
-                      set -euo pipefail
+                      set -Eeuo pipefail
+                      failure_receipt_dir="$(Pipeline.Workspace)/azure-deployment-failure"
+                      failure_receipt="$failure_receipt_dir/azure-deployment-failure-receipt.json"
+                      failure_boundary="bootstrap"
+                      mkdir -p "$failure_receipt_dir"
+                      write_failure_receipt() {
+                        local status="$1"
+                        (
+                          set +e
+                          node scripts/azure-deployment-failure-receipt.mjs \
+                            --output "$failure_receipt" \
+                            --stage "DeployCanary" \
+                            --job "DeployCanaryRevision" \
+                            --boundary "${failure_boundary:-bootstrap}" \
+                            --exit-code "$status" \
+                            --source-commit "${commit:-unknown}" \
+                            --release-version "${version:-unknown}" \
+                            --pipeline-run-id "${BUILD_BUILDID:-unknown}" >/dev/null 2>&1
+                          printf '##vso[task.logissue type=error;code=TEAMSAPP_AZURE_DEPLOYMENT_BOUNDARY;]boundary=%s exitCode=%s; inspect azure-deployment-failure-receipt artifact and this task stderr.\n' "${failure_boundary:-bootstrap}" "$status"
+                        ) || true
+                      }
+                      trap 'status=$?; write_failure_receipt "$status"; exit "$status"' ERR
                       test "$(az account show --query id --output tsv)" = "$AZURE_SUBSCRIPTION_ID"
                       test -n "$WORKER_ADMIN_SSH_PUBLIC_KEY"
                       [[ "$CODEX_PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]]
@@ -455,11 +476,14 @@ stages:
                       worker_vm_inventory="$(Agent.TempDirectory)/worker-vm-inventory.json"
                       mkdir -p "$workload_what_if_receipt_dir"
                       trap 'rm -f "$foundation_parameters" "$workload_parameters" "$workload_what_if" "$worker_vm_inventory"' EXIT
+                      failure_boundary="release-receipt"
                       node scripts/azure-release-input.mjs "$receipt"
                       commit="$(jq -er '.commit' "$receipt")"
+                      failure_boundary="materialize-release-source"
                       git fetch --no-tags origin "$commit" --depth=1
                       git checkout --detach "$commit"
                       worker_archive="$(Pipeline.Workspace)/azure-worker-runtime-package/worker-runtime-${commit}.tar"
+                      failure_boundary="verify-preapproval-receipts"
                       node scripts/azure-worker-runtime-package.mjs verify \
                         --archive "$worker_archive" \
                         --receipt "$worker_receipt" \
@@ -484,6 +508,7 @@ stages:
                       version="$(jq -er '.version' "$receipt")"
                       source_image="$(jq -er '.image' "$receipt")"
                       source_digest="$(jq -er '.imageDigest' "$receipt")"
+                      failure_boundary="azure-identity"
                       deployment_principal_id="$(
                         az account get-access-token --resource-type arm --subscription "$AZURE_SUBSCRIPTION_ID" --query accessToken --output tsv |
                           node scripts/azure-access-token-principal.mjs --expected-tenant "$tenantId" --expected-client "$servicePrincipalId"
@@ -492,6 +517,7 @@ stages:
                       test -n "$GHCR_IMPORT_TOKEN"
                       test "$(git rev-parse HEAD)" = "$commit"
                       test -z "$(git status --porcelain=v1 --untracked-files=no)"
+                      failure_boundary="resolve-azure-toolchain"
                       az --version
                       az bicep version
                       if command -v bicep >/dev/null 2>&1; then
@@ -504,6 +530,7 @@ stages:
                       export PATH="$PATH:$(dirname "$BICEP_BIN")"
                       "$BICEP_BIN" --version
 
+                      failure_boundary="foundation-parameters"
                       node scripts/azure-deployment-parameters.mjs \
                         --phase foundation \
                         --release-receipt "$receipt" \
@@ -533,6 +560,7 @@ stages:
                         --resource-group "$AZURE_RESOURCE_GROUP" \
                         --template infra/azure/main.bicep \
                         --parameters "$foundation_parameters"
+                      failure_boundary="foundation-deployment"
                       az deployment group create \
                         --name teamsapp-platform-foundation \
                         --subscription "$AZURE_SUBSCRIPTION_ID" \
@@ -544,6 +572,7 @@ stages:
                         --validation-level Provider \
                         --only-show-errors \
                         --query properties.outputs --output json > "$(Agent.TempDirectory)/foundation-outputs.json"
+                      failure_boundary="foundation-output-and-secret-metadata"
                       node scripts/azure-deployment-contract.mjs outputs "$(Agent.TempDirectory)/foundation-outputs.json" foundation > "$(Agent.TempDirectory)/foundation.json"
                       registry_name="$(jq -er '.registryName' "$(Agent.TempDirectory)/foundation.json")"
                       registry_server="$(jq -er '.registryLoginServer' "$(Agent.TempDirectory)/foundation.json")"
@@ -558,6 +587,7 @@ stages:
                           --only-show-errors \
                           --output tsv)"
                       done
+                      failure_boundary="worker-vm-state"
                       worker_storage_account="$(jq -er '.workerArtifactStorageAccountName.value' "$(Agent.TempDirectory)/foundation-outputs.json")"
                       worker_artifact_container="$(jq -er '.workerArtifactContainerName.value' "$(Agent.TempDirectory)/foundation-outputs.json")"
                       worker_artifact_base_url="$(jq -er '.workerArtifactContainerUrl.value' "$(Agent.TempDirectory)/foundation-outputs.json")"
@@ -583,6 +613,7 @@ stages:
                       image_tag="${commit:0:12}"
                       deployed_image="${registry_server}/teamsapp@${source_digest}"
 
+                      failure_boundary="workload-parameters-and-what-if"
                       node scripts/azure-deployment-parameters.mjs \
                         --phase workload \
                         --release-receipt "$receipt" \
@@ -641,6 +672,7 @@ stages:
                         --parameters "$workload_parameters" \
                         --output "$workload_what_if_receipt_dir/azure-what-if-workload-receipt.json"
 
+                      failure_boundary="worker-blob"
                       blob_exists="$(node scripts/azure-storage-blob-rbac-probe.mjs \
                         --account-name "$worker_storage_account" \
                         --container-name "$worker_artifact_container" \
@@ -662,11 +694,13 @@ stages:
                         echo "Unexpected Azure Blob existence result" >&2
                         exit 1
                       fi
+                      failure_boundary="acr-import"
                       az acr import --name "$registry_name" --source "${source_image}@${source_digest}" --image "teamsapp:${image_tag}" --username "$GHCR_IMPORT_USERNAME" --password "$GHCR_IMPORT_TOKEN" --force
                       imported_digest="$(az acr repository show --name "$registry_name" --image "teamsapp:${image_tag}" --query digest --output tsv)"
                       test "$imported_digest" = "$source_digest"
                       test "$deployed_image" = "${registry_server}/teamsapp@${imported_digest}"
 
+                      failure_boundary="workload-deployment"
                       az deployment group create \
                         --name teamsapp-platform-current \
                         --subscription "$AZURE_SUBSCRIPTION_ID" \
@@ -684,8 +718,10 @@ stages:
                       app_name="$(jq -er '.containerAppName' "$(Agent.TempDirectory)/deployment.json")"
                       revision_name="$(jq -er '.containerAppRevisionName' "$(Agent.TempDirectory)/deployment.json")"
                       fqdn="$(jq -er '.containerAppFqdn' "$(Agent.TempDirectory)/deployment.json")"
+                      failure_boundary="revision-and-health"
                       az containerapp revision show --resource-group "$AZURE_RESOURCE_GROUP" --name "$app_name" --revision "$revision_name" --output json > "$(Agent.TempDirectory)/revision.json"
                       curl --fail --retry 12 --retry-all-errors --retry-delay 5 --output "$(Agent.TempDirectory)/health.json" "https://${fqdn}/api/health"
+                      failure_boundary="final-identity-contract"
                       node scripts/azure-deployment-contract.mjs verify "$receipt" "$provenance" "$(Agent.TempDirectory)/revision.json" "$(Agent.TempDirectory)/health.json" "$registry_server"
                   env:
                     AZURE_LOCATION: $(azureLocation)
@@ -715,6 +751,12 @@ stages:
                   inputs:
                     targetPath: $(Pipeline.Workspace)/azure-what-if-workload
                     artifact: azure-what-if-workload-receipt
+                - task: PublishPipelineArtifact@1
+                  displayName: Retain bounded deployment failure receipt
+                  condition: failed()
+                  inputs:
+                    targetPath: $(Pipeline.Workspace)/azure-deployment-failure
+                    artifact: azure-deployment-failure-receipt
 
   - stage: RollbackCanary
     displayName: Roll back the current traffic-serving revision

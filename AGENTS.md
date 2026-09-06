@@ -1,6 +1,7 @@
 # Project delivery instructions
 
 - Teams 앱 변경 요청은 아래의 필수 릴리스 워크플로우를 따른다. 구현만 끝내거나 로컬 테스트 결과만으로 완료 처리하지 않는다.
+- 수동/환경 승인 성공은 배포 성공이 아니다. 승인 후 job이 generic nonzero exit만 반환하면 retained failure receipt와 Azure revision/system/application logs를 read-back하기 전까지 정확한 Azure boundary를 `UNVERIFIED`로 유지하며 foundation, ACR, workload, revision, health 원인을 추측하지 않는다.
 - 현재 기술 제약에서는 `Teams Core`가 기준 제품이다. Microsoft Teams SDK + TypeScript/React 개인 탭 + Express/결정형 서버 + Adaptive Cards를 API 키 없이 먼저 구현한다. CopilotKit, OpenAI API, 로컬 모델, MCP는 Core 기능이 안정된 뒤 명시적 feature flag와 별도 검증으로만 추가하며, API 키가 없다는 이유로 Core 기능을 대체 응답·가짜 완료로 처리하지 않는다. 상세 단계는 [`docs/api-free-teams-roadmap.md`](docs/api-free-teams-roadmap.md)를 따른다.
 - MCP/MCP Apps는 Teams 모바일 UI 자체로 간주하지 않는다. Teams 탭은 TeamsJS/React WebView를 사용한다. Core 오케스트레이션 Bot 카드는 canonical Microsoft Teams `en-us` 문서가 현재 Teams 모바일에 명시한 Adaptive Cards 1.6으로 선언하고, `FactSet`, `Input.ChoiceSet`, `Input.Text`, `Action.Submit`, `Action.ShowCard`, `Action.OpenUrl`의 제한된 subset만 사용한다. Teams가 지원하지 않는 `positive`/`destructive` action style은 넣지 않는다. 지역화 문서가 canonical 문서와 다르면 `CONTRACT_DRIFT_BLOCKED`로 기록하고 canonical 원문과 실제 클라이언트 검증을 우선한다. MCP는 구체적인 서버 tool 연결이 확인된 뒤 서버 측 adapter로만 검토한다.
 - 기본 `npm run build`와 기본 실행은 Core만 대상으로 한다. 선택 provider는 `build:optional`, `build:all`, `TEAMS_OPTIONAL_RUNTIME=true`처럼 명시적으로 요청한 경우에만 로드한다.
