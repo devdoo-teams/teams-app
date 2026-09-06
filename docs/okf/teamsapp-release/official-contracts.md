@@ -6,12 +6,12 @@ resource: /official-contracts.md
 tags: [official-contract, azure, teams, release, evidence]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T14:50:34Z"
+  at: "2026-09-07T15:30:00Z"
 verified:
   by: "process:official-source-research/1"
-  at: "2026-09-06T14:50:34Z"
+  at: "2026-09-07T15:30:00Z"
 status: stable
-stale_after: "2026-09-13T14:50:34Z"
+stale_after: "2026-09-14T15:30:00Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -37,6 +37,34 @@ sources:
     resource: "https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops"
     title: "Deployment jobs - Azure Pipelines"
     location: "Deployment lifecycle hooks and `on: failure`; observed web lines 55-76 on 2026-09-06"
+  - id: az-pipeline-artifacts
+    resource: "https://learn.microsoft.com/en-us/azure/devops/pipelines/artifacts/pipeline-artifacts?tabs++=+yaml&view=azure-devops"
+    title: "Publish and download pipeline artifacts - Azure Pipelines"
+    location: "Use Artifacts across stages and migration guidance; observed web lines 305-355 on 2026-09-07"
+  - id: az-artifact-rest
+    resource: "https://learn.microsoft.com/en-us/rest/api/azure/devops/build/artifacts/get-artifact?view=azure-devops-rest-7.1"
+    title: "Artifacts - Get Artifact REST API"
+    location: "Get Artifact operation, buildId/artifactName query, API version 7.1; observed current page on 2026-09-07"
+  - id: aca-blue-green
+    resource: "https://learn.microsoft.com/en-us/azure/container-apps/blue-green-deployment"
+    title: "Blue-Green Deployment in Azure Container Apps"
+    location: "Blue/green responsibilities, labels, zero-traffic verification, traffic switch, rollback; observed web lines 31-57 on 2026-09-07"
+  - id: vm-custom-script
+    resource: "https://learn.microsoft.com/en-us/azure/virtual-machines/extensions/custom-script-linux"
+    title: "Run Custom Script Extension on Linux VMs in Azure"
+    location: "Tips, managedIdentity protected settings, and troubleshooting logs; observed web lines 68-81, 203-243, 383-413 on 2026-09-07"
+  - id: aca-managed-identity-pull
+    resource: "https://learn.microsoft.com/en-us/azure/container-apps/managed-identity-image-pull"
+    title: "Azure Container Apps image pull with managed identity"
+    location: "User-assigned identity, AcrPull, and revision image pull flow; observed web lines 31-37, 47-62, 95-140 on 2026-09-07"
+  - id: official-aca-bicep-examples
+    resource: "https://github.com/microsoft/azure-container-apps/tree/main/templates/bicep"
+    title: "microsoft/azure-container-apps Bicep templates"
+    location: "Public main tree with main.bicep, workloadProfiles, ruleBasedRouting, and ingress examples; observed 2026-09-07"
+  - id: official-azure-pipelines-deployment-example
+    resource: "https://github.com/microsoft/azure-pipelines-yaml/blob/master/design/deployment.md"
+    title: "microsoft/azure-pipelines-yaml deployment design"
+    location: "A deployment job, environment history, runOnce lifecycle; observed web lines 196-243 on 2026-09-07"
   - id: az-environments
     resource: "https://learn.microsoft.com/en-us/azure/devops/pipelines/process/environments?view=azure-devops"
     title: "Use Azure Pipelines environments"
@@ -115,6 +143,8 @@ Azure Pipelines approvals control when a stage should run; they do not assert th
 
 Key Vault documentation shows that secret creation and value retrieval are distinct operations.[^key-vault] This project records only secret name and safe status metadata; it never records the value.
 
+Azure DevOps pipeline artifacts are a stage handoff, not automatic proof that a file is readable: the producer must publish and the consumer must download/read back the exact artifact.[^az-pipeline-artifacts][^az-artifact-rest] Container Apps blue-green guidance keeps the stable revision serving traffic while a labeled green revision is tested before promotion and preserves rollback.[^aca-blue-green] Linux Custom Script Extension guidance requires idempotent, noninteractive scripts and identifies `/var/log/waagent.log` and `/var/log/azure/custom-script/handler.log` as diagnostic boundaries.[^vm-custom-script] ACR managed identity and `AcrPull` prove a separate image pull authorization boundary, not revision readiness.[^aca-managed-identity-pull]
+
 # Teams distribution contract
 
 The Teams package document says the package contains the manifest and icons while application logic and data are hosted elsewhere over HTTPS.[^teams-package] The custom app document separates upload prerequisites, installed app management, and update behavior.[^teams-upload] Organization publication and user installation/update are therefore separate evidence boundaries.[^teams-publish]
@@ -141,12 +171,17 @@ For every new failure, record all of the following before changing code:
 [^az-group-what-if]: Azure CLI az deployment group what-if, option table and examples, observed web lines 1016-1042 and 1071-1092. https://learn.microsoft.com/en-us/cli/azure/deployment/group?view=azure-cli-latest
 [^az-approvals]: Pipeline deployment approvals, approvals/checks and stage execution, observed web lines 37-50 and 56-64. https://learn.microsoft.com/en-us/azure/devops/pipelines/process/approvals?view=azure-devops
 [^az-deployment-jobs]: Deployment jobs, rollout lifecycle hooks and `on: failure` handling, observed web lines 55-76. https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops
+[^az-pipeline-artifacts]: Publish and download pipeline artifacts, stage handoff and workspace guidance, observed web lines 305-355. https://learn.microsoft.com/en-us/azure/devops/pipelines/artifacts/pipeline-artifacts?tabs++=+yaml&view=azure-devops
+[^az-artifact-rest]: Artifacts - Get Artifact REST API, API version 7.1 and artifact lookup contract. https://learn.microsoft.com/en-us/rest/api/azure/devops/build/artifacts/get-artifact?view=azure-devops-rest-7.1
 [^github-artifacts]: REST API endpoints for GitHub Actions artifacts, artifact lookup/name filter and response schema including `digest` and `workflow_run.head_sha`, observed web lines 13-18, 34-38, 45-53, 71-78. https://docs.github.com/en/rest/actions/artifacts?apiVersion=2026-03-10
 [^github-attestations]: GitHub artifact attestations, provenance fields and verification boundary, observed web lines 25-32 and 58-63. https://docs.github.com/en/actions/concepts/security/artifact-attestations
 [^aca-probes]: Health probes in Azure Container Apps, probe types and revision traffic guidance, observed web lines 36-41 and 187-188. https://learn.microsoft.com/en-us/azure/container-apps/health-probes
+[^aca-blue-green]: Blue-Green Deployment in Azure Container Apps, stable/green revision, labels, traffic switch and rollback, observed web lines 31-57. https://learn.microsoft.com/en-us/azure/container-apps/blue-green-deployment
 [^aca-start]: Troubleshoot start failures in Azure Container Apps, revision/log diagnosis and common causes, observed web lines 33-80. https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-start-failures
 [^aca-exit]: Troubleshoot Container Exit Failures in Azure Container Apps, exit events and diagnostics, observed web lines 31-55. https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-create-failures
 [^key-vault]: Azure Key Vault quickstart, add/retrieve secret sections, observed web lines 80-95. https://learn.microsoft.com/en-us/azure/key-vault/secrets/quick-create-cli
+[^vm-custom-script]: Run Custom Script Extension on Linux VMs, idempotence tips, managed identity protected settings, and troubleshooting logs, observed web lines 68-81, 203-243, 383-413. https://learn.microsoft.com/en-us/azure/virtual-machines/extensions/custom-script-linux
+[^aca-managed-identity-pull]: Azure Container Apps image pull with managed identity, identity/AcrPull/revision flow, observed web lines 31-37, 47-62, 95-140. https://learn.microsoft.com/en-us/azure/container-apps/managed-identity-image-pull
 [^teams-package]: Teams app package, App manifest and publishing choices, observed web lines 45-72. https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/build-and-test/apps-package
 [^teams-upload]: Upload your custom app, upload/access/update sections, observed web lines 48-60 and 84-122. https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/deploy-and-publish/apps-upload
 [^teams-publish]: Publish your Microsoft Teams agent or app, Before you publish, observed web lines 52-69. https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/deploy-and-publish/apps-publish-overview

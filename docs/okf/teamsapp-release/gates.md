@@ -33,6 +33,18 @@ sources:
     resource: "https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops"
     title: "Deployment jobs - Azure Pipelines"
     location: "deployment lifecycle hooks and failure handling; observed web lines 55-76"
+  - id: az-pipeline-artifacts
+    resource: "https://learn.microsoft.com/en-us/azure/devops/pipelines/artifacts/pipeline-artifacts?tabs++=+yaml&view=azure-devops"
+    title: "Publish and download pipeline artifacts - Azure Pipelines"
+    location: "stage artifact handoff and `$(Pipeline.Workspace)`; observed web lines 305-355 on 2026-09-07"
+  - id: aca-blue-green
+    resource: "https://learn.microsoft.com/en-us/azure/container-apps/blue-green-deployment"
+    title: "Blue-Green Deployment in Azure Container Apps"
+    location: "stable/green labels, traffic switch and rollback; observed web lines 31-57 on 2026-09-07"
+  - id: vm-custom-script
+    resource: "https://learn.microsoft.com/en-us/azure/virtual-machines/extensions/custom-script-linux"
+    title: "Run Custom Script Extension on Linux VMs in Azure"
+    location: "idempotence, managed identity and diagnostic logs; observed web lines 68-81, 203-243, 383-413 on 2026-09-07"
   - id: github-artifacts
     resource: "https://docs.github.com/en/rest/actions/artifacts?apiVersion=2026-03-10"
     title: "REST API endpoints for GitHub Actions artifacts"
@@ -120,12 +132,14 @@ ARM what-if is non-mutating and predicts changes rather than applying them.[^arm
 23. The failure receipt is published with a failure condition even when the mutation task exits nonzero; raw stderr, tokens, secret values, and auth material are not copied into it.
 23a. A failed pre-approval GitHub handoff writes a separate secret-free `github-handoff-failure-receipt` artifact with the last named handoff boundary before approval is retried.
 23b. The post-approval failure-receipt helper is copied from the pipeline source into an agent-temporary absolute path before the task checks out the deploy-only release commit; the failure trap executes that preserved helper, so receipt generation cannot depend on release-source contents.
+23c. Every failure artifact is non-empty, schema-valid, SHA-256 recorded, and read back through the Azure DevOps artifact API or an approved immutable copy. Artifact task completion or an artifact listing alone is not PASS.
 
-Azure Pipelines approvals control when a stage should run.[^az-approval] Deployment jobs separately model deploy, route/post-route health, and `on: failure` handling.[^az-deployment-jobs]
+Azure Pipelines approvals control when a stage should run.[^az-approval] Deployment jobs separately model deploy, route/post-route health, and `on: failure` handling.[^az-deployment-jobs] Pipeline artifacts require an explicit stage handoff and read-back.[^az-pipeline-artifacts] Container Apps blue-green guidance keeps stable traffic while green is tested before promotion and rollback.[^aca-blue-green] Linux Custom Script Extension requires idempotent scripts and exposes agent/handler logs for diagnosis.[^vm-custom-script]
 
 ## F. Runtime and Teams
 
 24. Azure revision has active healthy replicas and startup/liveness/readiness evidence.
+24a. Multiple-revision canary keeps the known-good revision serving traffic while a labeled green revision is independently readiness- and function-tested; traffic promotion and rollback are separate actions.
 25. Public HTTPS /api/health returns source commit, version, image/server identity matching the receipt.
 26. Portal, downloaded package, installed desktop/mobile app, app ID, version, and SHA agree.
 27. Teams desktop shows the target chat, fresh Bot reply, card/tab/buttons, current accessibility tree, and before/after screenshots.
@@ -153,6 +167,9 @@ Run 32 failed after approval at the workload what-if classifier before workload 
     git status --short --branch
 
 [^az-deployment-jobs]: Deployment jobs, rollout lifecycle hooks and `on: failure` handling, observed web lines 55-76. https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops
+[^az-pipeline-artifacts]: Publish and download pipeline artifacts, stage handoff and workspace guidance, observed web lines 305-355. https://learn.microsoft.com/en-us/azure/devops/pipelines/artifacts/pipeline-artifacts?tabs++=+yaml&view=azure-devops
+[^aca-blue-green]: Blue-Green Deployment in Azure Container Apps, stable/green revision, labels, traffic switch and rollback, observed web lines 31-57. https://learn.microsoft.com/en-us/azure/container-apps/blue-green-deployment
+[^vm-custom-script]: Run Custom Script Extension on Linux VMs, idempotence tips, managed identity protected settings, and troubleshooting logs, observed web lines 68-81, 203-243, 383-413. https://learn.microsoft.com/en-us/azure/virtual-machines/extensions/custom-script-linux
 [^github-artifacts]: REST API endpoints for GitHub Actions artifacts, artifact lookup/name filter and response schema including `digest` and `workflow_run.head_sha`, observed web lines 13-18, 34-38, 45-53, 71-78. https://docs.github.com/en/rest/actions/artifacts?apiVersion=2026-03-10
 [^github-attestations]: GitHub artifact attestations, provenance fields and verification boundary, observed web lines 25-32 and 58-63. https://docs.github.com/en/actions/concepts/security/artifact-attestations
 [^aca-start-failures]: Troubleshoot start failures in Azure Container Apps, revision/log diagnosis and common causes, observed web lines 33-80. https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-start-failures
