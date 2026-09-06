@@ -781,10 +781,37 @@ stages:
                       test "$(jq -er '.registryName' "$(Agent.TempDirectory)/deployment.json")" = "$registry_name"
                       test "$(jq -er '.registryLoginServer' "$(Agent.TempDirectory)/deployment.json")" = "$registry_server"
                       app_name="$(jq -er '.containerAppName' "$(Agent.TempDirectory)/deployment.json")"
-                      revision_name="$(jq -er '.containerAppRevisionName' "$(Agent.TempDirectory)/deployment.json")"
                       fqdn="$(jq -er '.containerAppFqdn' "$(Agent.TempDirectory)/deployment.json")"
                       failure_boundary="revision-and-health"
-                      az containerapp revision show --resource-group "$AZURE_RESOURCE_GROUP" --name "$app_name" --revision "$revision_name" --output json > "$(Agent.TempDirectory)/revision.json"
+                      expected_revision_name="${app_name}--${commit:0:10}"
+                      revision_ready="false"
+                      for revision_attempt in $(seq 1 30); do
+                        if az containerapp revision show \
+                            --resource-group "$AZURE_RESOURCE_GROUP" \
+                            --name "$app_name" \
+                            --revision "$expected_revision_name" \
+                            --output json > "$(Agent.TempDirectory)/revision.json" 2>"$(Agent.TempDirectory)/revision.stderr"; then
+                          if jq -e \
+                              --arg expected_revision "$expected_revision_name" \
+                              '(.name == $expected_revision)
+                              and (.properties.active == true)
+                              and (.properties.provisioningState == "Succeeded")
+                              and (.properties.runningState == "Running")
+                              and (((.properties.trafficWeight // 0) | tonumber) == 100)' \
+                              "$(Agent.TempDirectory)/revision.json" >/dev/null; then
+                            revision_ready="true"
+                            break
+                          fi
+                        fi
+                        sleep 10
+                      done
+                      if [[ "$revision_ready" != true ]]; then
+                        echo "Expected release revision did not reach Running/Succeeded/100%: $expected_revision_name" >&2
+                        if test -s "$(Agent.TempDirectory)/revision.stderr"; then
+                          sed -n '1,80p' "$(Agent.TempDirectory)/revision.stderr" >&2
+                        fi
+                        exit 1
+                      fi
                       curl --fail --retry 12 --retry-all-errors --retry-delay 5 --output "$(Agent.TempDirectory)/health.json" "https://${fqdn}/api/health"
                       failure_boundary="final-identity-contract"
                       node scripts/azure-deployment-contract.mjs verify "$receipt" "$provenance" "$(Agent.TempDirectory)/revision.json" "$(Agent.TempDirectory)/health.json" "$registry_server"

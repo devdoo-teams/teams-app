@@ -958,6 +958,14 @@ try {
     'worker package verification must occur before the first Azure resource mutation',
   );
   assert.ok(deployScript?.includes('scripts/azure-what-if-receipt.mjs verify'), 'deployment must verify the pre-approval what-if receipt');
+  assert.ok(deployScript?.includes('expected_revision_name="${app_name}--${commit:0:10}"'), 'deployment must derive the expected revision from the attested release commit');
+  assert.ok(deployScript?.includes('az containerapp revision show'), 'deployment must read back the expected Container App revision');
+  assert.ok(deployScript?.includes('revision_ready="false"'), 'deployment must initialize a bounded revision-readiness poll');
+  assert.ok(deployScript?.includes('sleep 10'), 'revision-readiness polling must use a bounded delay');
+  assert.ok(deployScript?.includes('.properties.runningState == "Running"'), 'revision-readiness poll must require Running state');
+  assert.ok(deployScript?.includes('.properties.provisioningState == "Succeeded"'), 'revision-readiness poll must require Succeeded provisioning');
+  assert.ok(deployScript?.includes('trafficWeight // 0'), 'revision-readiness poll must require observed traffic weight');
+  assert.ok(deployScript?.includes('revision_ready" != true'), 'deployment must fail closed when the expected revision never becomes ready');
   assert.ok(
     deployScript.indexOf('scripts/azure-what-if-receipt.mjs verify') < deployScript.indexOf('az deployment group create'),
     'foundation what-if receipt verification must occur before the first Azure resource mutation',
