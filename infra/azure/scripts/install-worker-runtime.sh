@@ -37,7 +37,9 @@ done
 [[ "$azure_client_id" =~ ^[0-9a-fA-F-]{36}$ ]] || { echo 'Azure client ID is invalid' >&2; exit 1; }
 [[ "$queue_endpoint" == https://*.queue.core.windows.net/* ]] || { echo 'dispatch queue endpoint is invalid' >&2; exit 1; }
 [[ "$poison_queue_endpoint" == https://*.queue.core.windows.net/* ]] || { echo 'poison queue endpoint is invalid' >&2; exit 1; }
-[[ "$cosmos_endpoint" == https://*.documents.azure.com/ ]] || { echo 'Cosmos endpoint is invalid' >&2; exit 1; }
+# ARM documentEndpoint may include the explicit default HTTPS port.
+# Keep a single account hostname and reject credentials, extra paths and env injection.
+[[ "$cosmos_endpoint" =~ ^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?\.documents\.azure\.com(:443)?/$ ]] || { echo 'Cosmos endpoint is invalid' >&2; exit 1; }
 [[ "$cosmos_database" =~ ^[A-Za-z0-9_-]+$ && "$cosmos_container" =~ ^[A-Za-z0-9_-]+$ ]] || { echo 'Cosmos resource name is invalid' >&2; exit 1; }
 
 actual_archive_sha256=$(sha256sum "$archive" | awk '{print $1}')

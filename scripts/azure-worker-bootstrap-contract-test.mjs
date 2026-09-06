@@ -109,6 +109,44 @@ try {
   assert.match(fs.readFileSync(systemctlLog, 'utf8'), /daemon-reload/);
   assert.match(fs.readFileSync(systemctlLog, 'utf8'), /enable --now teamsapp-worker\.service/);
 
+  // ARM documentEndpoint includes the explicit HTTPS port in its official example.
+  // Exercise the real installer, not a duplicate of its validation expression.
+  for (const endpoint of ['https://example.documents.azure.com:443/']) {
+    const endpointArgs = [...args];
+    endpointArgs[endpointArgs.indexOf('--cosmos-endpoint') + 1] = endpoint;
+    const result = spawnSync('bash', endpointArgs, {
+      encoding: 'utf8', timeout: 20_000,
+      env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH}` },
+    });
+    assert.equal(result.status, 0, `documented Cosmos endpoint must install: ${result.stderr}`);
+    assert.ok(fs.readFileSync(envPath, 'utf8').split('\n').includes(`AZURE_COSMOS_ENDPOINT=${endpoint}`));
+  }
+  const beforeEnv = fs.readFileSync(envPath, 'utf8');
+  const beforeService = fs.readFileSync(systemctlLog, 'utf8');
+  for (const endpoint of [
+    'http://example.documents.azure.com/',
+    'https://example.documents.azure.com:444/',
+    'https://user@example.documents.azure.com/',
+    'https://example.documents.azure.com.evil.test/',
+    'https://evil.test/path.documents.azure.com/',
+    'https://example.documents.azure.com/path',
+    'https://example.documents.azure.com/?q=1',
+    'https://example.documents.azure.com/#fragment',
+    'https://example.documents.azure.com/\nINJECTED=true',
+    'https://.documents.azure.com/',
+  ]) {
+    const endpointArgs = [...args];
+    endpointArgs[endpointArgs.indexOf('--cosmos-endpoint') + 1] = endpoint;
+    const result = spawnSync('bash', endpointArgs, {
+      encoding: 'utf8', timeout: 20_000,
+      env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH}` },
+    });
+    assert.equal(result.status, 1, 'unsafe Cosmos endpoint must be rejected');
+    assert.match(result.stderr, /Cosmos endpoint is invalid/);
+    assert.equal(fs.readFileSync(envPath, 'utf8'), beforeEnv);
+    assert.equal(fs.readFileSync(systemctlLog, 'utf8'), beforeService);
+  }
+
   const rejectedArgs = [...args];
   rejectedArgs[rejectedArgs.indexOf('--archive-sha256') + 1] = 'f'.repeat(64);
   const rejected = spawnSync('bash', rejectedArgs, {
