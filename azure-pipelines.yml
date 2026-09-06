@@ -148,6 +148,7 @@ stages:
               expected_codex_package_url="https://github.com/openai/codex/releases/download/rust-v${CODEX_PACKAGE_VERSION}/codex-package-x86_64-unknown-linux-musl.tar.gz"
               test "$CODEX_PACKAGE_URL" = "$expected_codex_package_url"
               release_receipt="$(Pipeline.Workspace)/validated-github-handoff/dist/evidence/azure-release-receipt.json"
+              pipeline_source_commit="$(git rev-parse HEAD)"
               commit="$(jq -er '.commit' "$release_receipt")"
               git fetch --no-tags origin "$commit" --depth=1
               git checkout --detach "$commit"
@@ -210,7 +211,11 @@ stages:
                 --expected-node-version 24.19.0 > "$(Agent.TempDirectory)/worker-runtime-verify-receipt.json"
               worker_archive_sha="$(jq -er '.archiveSha256' "$worker_receipt")"
               codex_bin_sha="$(jq -er '.codexBinSha256' "$worker_receipt")"
-              test "$(git rev-parse HEAD)" = "$commit"
+              # The next task runs in this same checkout. Restore the pipeline
+              # source so deployment helpers and Bicep match the YAML run,
+              # while the worker artifact remains bound to the attested release.
+              git checkout --detach "$pipeline_source_commit"
+              test "$(git rev-parse HEAD)" = "$pipeline_source_commit"
               test -z "$(git status --porcelain=v1 --untracked-files=no)"
               jq -n \
                 --arg sourceCommit "$commit" \

@@ -735,6 +735,13 @@ try {
   const platformScript = platformScripts.find((script) => script.includes('npm run test:azure-core'));
   assert.ok(platformScript, 'Azure Core must run before the deployment environment approval is requested');
   assert.ok(platformScript?.includes('git checkout --detach "$commit"'), 'pre-approval Azure tests must use the exact attested source commit');
+  assert.ok(platformScript?.includes('pipeline_source_commit="$(git rev-parse HEAD)"'), 'pre-approval must retain the pipeline checkout identity before materializing the release source');
+  assert.ok(platformScript?.includes('git checkout --detach "$pipeline_source_commit"'), 'pre-approval must restore the pipeline checkout before the next task reuses the working directory');
+  assert.ok(
+    (platformScript?.indexOf('git checkout --detach "$pipeline_source_commit"') ?? -1)
+      > (platformScript?.indexOf('npm run build:worker') ?? -1),
+    'pipeline checkout restoration must occur after the exact release worker build',
+  );
   assert.ok(platformScript?.includes('az bicep version'), 'pre-approval Azure tests must validate Azure CLI Bicep integration');
   assert.ok(platformScript?.includes('command -v bicep'), 'pre-approval Azure tests must resolve the hosted Bicep executable');
   assert.ok(platformScript?.includes('npm run build:worker'), 'pre-approval Azure tests must build the Linux worker');
