@@ -369,6 +369,20 @@ Fix:
 
 The source tests are GREEN, but Run 40 itself remains failed and cannot verify the fix. Azure Container Apps scaling and revision lifecycle are documented in [Set scaling rules](https://learn.microsoft.com/en-us/azure/container-apps/scale-app), lines 31-56, and [Update and deploy changes](https://learn.microsoft.com/en-us/azure/container-apps/revisions), lines 48-72 and 128-138. Deployment approval and failure lifecycle remain separate according to [Deployment jobs](https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops), lines 55-76.
 
+## Q19. What did Run 41 prove, and what remains unverified?
+
+Run 41 proved that the receipt-loss fix is working: after the bounded revision check failed, the Azure DevOps log reported `receiptWriteStatus=READY`, the artifact page showed a 476-byte JSON plus a 65-byte SHA-256 sidecar, and the JSON body read back with `pipelineRunId=41` and `boundary=revision-and-health`. It did not prove the Azure deployment failed to start.
+
+Run 41 used source `3a554977` before the subsequent `Provisioned`-state and redacted revision-diagnostic change. Its exact `revision.json` state was not retained, so the reason the corrected `ScaledToZero + Healthy` predicate still did not match is `REVIEW_REQUIRED`, not a confirmed root cause. The official Microsoft revision contract lists `Provisioned` as the successful provisioning state; the next run must record that field before any further change is accepted.
+
+Required separation:
+
+- `VERIFIED`: same-run source and identity, preflight, approval, worker Blob SHA, and non-empty failure receipt read-back;
+- `INFERENCE`: the old `Succeeded`-only provisioning predicate likely rejected the live `Provisioned` state;
+- `UNVERIFIED`: hosted success, public `/api/health`, 24/7 `minReplicas >= 1`, worker VM heartbeat/restart recovery, Teams package/desktop/mobile, and live A2A.
+
+The source correction is intentionally bounded: it accepts official `Provisioned` and legacy `Succeeded`, accepts `ScaledToZero` only with `Healthy`, prints only safe revision state fields on failure, and preserves the original exit code through the nonzero `EXIT` trap. It does not raise the application version because this is CI/release-gate behavior, not a user-visible application change. See [Update and deploy changes in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/revisions), lines 48-72 and 128-138.
+
 [^okf-spec]: Open Knowledge Format v0.2 specification, sections 3-5 and 8-9, observed web lines 253-327, 370-444, 486-513. https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md
 [^arm-what-if]: ARM what-if operation, What-if operation and permissions, observed web lines 29-52. https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-what-if
 [^az-what-if-help]: Azure CLI az deployment group what-if, option table and examples, observed web lines 1016-1042 and 1071-1092. https://learn.microsoft.com/en-us/cli/azure/deployment/group?view=azure-cli-latest

@@ -131,6 +131,18 @@
 - Source correction: shared `ScaledToZero + Healthy` readiness contract and nonzero `EXIT` receipt trap are locally GREEN; no version bump or Teams upload
 - Decision: retain Run 40 as failed; run `npm run test:azure-core` from the clean correction commit, then use one bounded hosted rerun. Do not claim 24/7 until `minReplicas >= 1` and worker evidence pass.
 
+## 현재 run 41 read-back
+
+- Pipeline source: `3a5549770d25ce914959653bdb1fe9acc11b8bae`
+- Requested release artifact: `71df02e2ea9e9dbecbe864e0f1c6be3d649cbb4a`, app `1.0.103`, same attested image digest
+- Outcome: `FAIL_AFTER_APPROVAL` at `revision-and-health`; handoff, preflight, manual approval, and worker Blob SHA passed
+- Exact task output: `Expected release revision did not reach Running/Succeeded/100%: teamsapp-canary-goictvxm--71df02e2ea`
+- Failure receipt: artifact `229`, UI `541 B` total (`476 B` JSON + `65 B` SHA sidecar); JSON read-back confirmed `pipelineRunId=41`, `boundary=revision-and-health`, `exitCode=1`; task SHA `aaa1fb75a08c5b8dd3ff7141c36cee72fa401a07590cdb73bb8de5b9012c65f3`
+- Cross-check: existing Ego Lite Azure Container Apps UI showed `Healthy`, `ScaledToZero`, traffic `100`, replicas `0`
+- Classification: receipt evidence `VERIFIED`; exact raw revision provisioning state `UNVERIFIED` because Run 41 predates the safe state diagnostic. Official `Provisioned` mismatch is `REVIEW_REQUIRED`, not confirmed live root cause.
+- Source correction pending: accept `Provisioned` and legacy `Succeeded`, log safe state fields, preserve `ScaledToZero + Healthy`; no version bump or Teams upload
+- Decision: after clean Core 28/28 from the correction commit, run one bounded Run 42 and read back the safe state diagnostic before promotion.
+
 ## 다음 실행 전 필수 명령
 
 ```bash

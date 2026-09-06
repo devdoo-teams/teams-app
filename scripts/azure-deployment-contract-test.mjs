@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { parseDeploymentOutputs, selectRollbackRevisions, validateReleaseDeployment } from './azure-deployment-contract.mjs';
+import { isRevisionReadyForRelease, parseDeploymentOutputs, selectRollbackRevisions, validateReleaseDeployment } from './azure-deployment-contract.mjs';
 
 const commit = 'a'.repeat(40);
 const receipt = {
@@ -38,9 +38,9 @@ assert.throws(() => parseDeploymentOutputs({ ...outputs, registryName: undefined
 const currentName = 'teamsapp--current';
 const previousName = 'teamsapp--previous';
 const revisions = [
-  { name: previousName, properties: { active: false, provisioningState: 'Succeeded', runningState: 'Stopped', createdTime: '2026-09-01T00:00:00Z', lastActiveTime: '2026-09-02T00:00:00Z', trafficWeight: 0 } },
-  { name: currentName, properties: { active: true, provisioningState: 'Succeeded', runningState: 'Running', createdTime: '2026-09-02T00:00:00Z', trafficWeight: 100 } },
-  { name: 'teamsapp--newer-no-traffic', properties: { active: true, provisioningState: 'Succeeded', runningState: 'Running', createdTime: '2026-09-03T00:00:00Z', trafficWeight: 0 } },
+  { name: previousName, properties: { active: false, provisioningState: 'Provisioned', runningState: 'Stopped', createdTime: '2026-09-01T00:00:00Z', lastActiveTime: '2026-09-02T00:00:00Z', trafficWeight: 0 } },
+  { name: currentName, properties: { active: true, provisioningState: 'Provisioned', runningState: 'Running', createdTime: '2026-09-02T00:00:00Z', trafficWeight: 100 } },
+  { name: 'teamsapp--newer-no-traffic', properties: { active: true, provisioningState: 'Provisioned', runningState: 'Running', createdTime: '2026-09-03T00:00:00Z', trafficWeight: 0 } },
 ];
 assert.deepEqual(selectRollbackRevisions(revisions), { currentRevision: currentName, previousRevision: previousName });
 assert.deepEqual(
@@ -74,7 +74,7 @@ const revision = {
   name: 'teamsapp-canary-abc123--aaaaaaaaaa',
   properties: {
     active: true,
-    provisioningState: 'Succeeded',
+    provisioningState: 'Provisioned',
     runningState: 'Running',
     trafficWeight: 100,
     template: { containers: [{ name: 'teams-core', image: `teamsappabc123.azurecr.io/teamsapp@${receipt.imageDigest}`, env: releaseEnv }] },
@@ -106,6 +106,11 @@ assert.equal(
   }),
   true,
   'a healthy scale-to-zero revision must pass the final identity contract after public health succeeds',
+);
+assert.equal(
+  isRevisionReadyForRelease({ ...revision, properties: { ...revision.properties, provisioningState: 'Succeeded' } }),
+  true,
+  'legacy Succeeded provisioning state remains compatible with existing release fixtures',
 );
 assert.throws(
   () => validateReleaseDeployment({

@@ -78,6 +78,12 @@ assert.match(pipeline, /artifact: azure-deployment-failure-receipt/u, 'deploy mu
 assert.match(pipeline, /condition: failed\(\)/u, 'failure receipt publication must run after a failed deployment task');
 assert.match(pipeline, /--boundary "\$\{failure_boundary:-bootstrap\}"/u, 'receipt must record the last named boundary without assuming release variables exist');
 assert.match(pipeline, /--exit-code "\$status"/u, 'receipt must record the failing command exit status');
+assert.match(deployCanary, /\.properties\.provisioningState == "Provisioned"/u, 'revision-readiness must accept the official Provisioned state');
+assert.match(
+  deployCanary,
+  /jq -c '\{name, properties: \{active, provisioningState, runningState, healthState, trafficWeight, replicas\}\}'/u,
+  'revision-readiness failures must retain safe state diagnostics without environment values',
+);
 assert.doesNotMatch(pipeline, /--error "\$\{[^}]*stderr/iu, 'raw stderr must not be copied into the durable receipt');
 
 const { createAzureDeploymentFailureReceipt, writeAzureDeploymentFailureReceipt } = await import('./azure-deployment-failure-receipt.mjs');

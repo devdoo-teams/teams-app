@@ -7,6 +7,7 @@ const sha256Pattern = /^[0-9a-f]{64}$/;
 const imageDigestPattern = /^sha256:[0-9a-f]{64}$/;
 const commitPattern = /^[0-9a-f]{40}$/;
 const artifactDigestPattern = /^sha256:[0-9a-f]{64}$/;
+const provisionedStates = new Set(['Provisioned', 'Succeeded']);
 const requiredOutputs = [
   'registryName',
   'registryLoginServer',
@@ -45,7 +46,7 @@ function readJson(filePath) {
 export function isRevisionReadyForRelease(revision) {
   const properties = revision?.properties;
   return properties?.active === true
-    && properties.provisioningState === 'Succeeded'
+    && provisionedStates.has(properties.provisioningState)
     && (
       properties.runningState === 'Running'
       || (properties.runningState === 'ScaledToZero' && properties.healthState === 'Healthy')
@@ -78,7 +79,7 @@ export function selectRollbackRevisions(revisions) {
   const currentCreated = Date.parse(current.properties.createdTime);
   if (!Number.isFinite(currentCreated)) fail('traffic-serving revision lacks a valid createdTime');
   const predecessors = revisions
-    .filter((revision) => revision?.name !== current.name && revision?.properties?.provisioningState === 'Succeeded')
+    .filter((revision) => revision?.name !== current.name && provisionedStates.has(revision?.properties?.provisioningState))
     .map((revision) => ({ revision, created: Date.parse(revision.properties.createdTime) }))
     .filter(({ created }) => Number.isFinite(created) && created < currentCreated)
     .sort((left, right) => right.created - left.created);
