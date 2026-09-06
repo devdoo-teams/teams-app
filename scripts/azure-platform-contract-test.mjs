@@ -977,7 +977,9 @@ try {
   assert.ok(deployScript?.includes('az containerapp revision show'), 'deployment must read back the expected Container App revision');
   assert.ok(deployScript?.includes('revision_ready="false"'), 'deployment must initialize a bounded revision-readiness poll');
   assert.ok(deployScript?.includes('sleep 10'), 'revision-readiness polling must use a bounded delay');
-  assert.ok(deployScript?.includes('.properties.runningState == "Running"'), 'revision-readiness poll must require Running state');
+  assert.ok(deployScript?.includes('.properties.runningState == "Running"'), 'revision-readiness poll must accept Running state');
+  assert.ok(deployScript?.includes('.properties.runningState == "ScaledToZero"'), 'revision-readiness poll must recognize the observed scale-to-zero state');
+  assert.ok(deployScript?.includes('.properties.healthState == "Healthy"'), 'scale-to-zero readiness must require Healthy health state');
   assert.ok(deployScript?.includes('.properties.provisioningState == "Succeeded"'), 'revision-readiness poll must require Succeeded provisioning');
   assert.ok(deployScript?.includes('trafficWeight // 0'), 'revision-readiness poll must require observed traffic weight');
   assert.ok(deployScript?.includes('revision_ready" != true'), 'deployment must fail closed when the expected revision never becomes ready');

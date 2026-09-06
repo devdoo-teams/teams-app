@@ -6,12 +6,12 @@ resource: /gates.md
 tags: [release-gate, azure, teams, provenance, rollback]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T15:22:25Z"
+  at: "2026-09-06T22:31:00Z"
 verified:
   by: "process:release-gate-reconciliation/1"
-  at: "2026-09-06T15:22:25Z"
+  at: "2026-09-06T22:31:00Z"
 status: stable
-stale_after: "2026-09-13T15:22:25Z"
+stale_after: "2026-09-13T22:31:00Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -61,6 +61,14 @@ sources:
     resource: "https://learn.microsoft.com/en-us/azure/container-apps/health-probes"
     title: "Health probes in Azure Container Apps"
     location: "probe types and readiness; observed web lines 36-41 and 187-188"
+  - id: aca-scaling
+    resource: "https://learn.microsoft.com/en-us/azure/container-apps/scale-app"
+    title: "Set scaling rules in Azure Container Apps"
+    location: "minimum replicas, scale-to-zero, and always-running guidance; observed web lines 31-56 on 2026-09-07"
+  - id: aca-revisions
+    resource: "https://learn.microsoft.com/en-us/azure/container-apps/revisions"
+    title: "Update and deploy changes in Azure Container Apps"
+    location: "revision running states, Scale to 0, readiness, and multiple-revision traffic; observed web lines 48-72 and 128-138 on 2026-09-07"
   - id: teams-upload
     resource: "https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/deploy-and-publish/apps-upload"
     title: "Upload your custom app"
@@ -133,12 +141,14 @@ ARM what-if is non-mutating and predicts changes rather than applying them.[^arm
 23a. A failed pre-approval GitHub handoff writes a separate secret-free `github-handoff-failure-receipt` artifact with the last named handoff boundary before approval is retried.
 23b. The post-approval failure-receipt helper is copied from the pipeline source into an agent-temporary absolute path before the task checks out the deploy-only release commit; the failure trap executes that preserved helper, so receipt generation cannot depend on release-source contents.
 23c. Every failure artifact is non-empty, schema-valid, SHA-256 recorded, and read back through the Azure DevOps artifact API or an approved immutable copy. Artifact task completion or an artifact listing alone is not PASS.
+23d. The post-approval receipt writer is invoked by a nonzero `EXIT` trap that also preserves the original exit status; an `ERR` trap alone is insufficient because an explicit `exit 1` path can bypass it. The focused regression must exercise an explicit exit path.
 
 Azure Pipelines approvals control when a stage should run.[^az-approval] Deployment jobs separately model deploy, route/post-route health, and `on: failure` handling.[^az-deployment-jobs] Pipeline artifacts require an explicit stage handoff and read-back.[^az-pipeline-artifacts] Container Apps blue-green guidance keeps stable traffic while green is tested before promotion and rollback.[^aca-blue-green] Linux Custom Script Extension requires idempotent scripts and exposes agent/handler logs for diagnosis.[^vm-custom-script]
 
 ## F. Runtime and Teams
 
-24. Azure revision has active healthy replicas and startup/liveness/readiness evidence.
+24. Azure revision has active healthy state and startup/liveness/readiness evidence. For the current HTTP canary, `Running` or the observed `ScaledToZero` is accepted only when provisioning is `Succeeded`, the revision is active, `healthState` is `Healthy` for `ScaledToZero`, and traffic is 100%; public health must still return successfully.
+24b. The 24/7 promoted service is a separate gate: its deployed scale configuration must have `minReplicas >= 1`, because a healthy `ScaledToZero` revision is not an always-running worker. This requires its own what-if and runtime read-back.
 24a. Multiple-revision canary keeps the known-good revision serving traffic while a labeled green revision is independently readiness- and function-tested; traffic promotion and rollback are separate actions.
 25. Public HTTPS /api/health returns source commit, version, image/server identity matching the receipt.
 26. Portal, downloaded package, installed desktop/mobile app, app ID, version, and SHA agree.
@@ -156,12 +166,13 @@ Container Apps troubleshooting requires revision status and system/application l
 
 # Current run
 
-Run 32 failed after approval at the workload what-if classifier before workload mutation. Run 31 failed in the release handoff before approval because its requested commit had no immutable artifact; Run 30 remains FAILED_AFTER_APPROVAL with a generic post-approval exit and no durable boundary. The Run 32 receipt-helper fixes are locally verified at `3230833` and `ae9ae20`, but hosted artifact read-back is still blocked: the MCP download wrapper reported success while the bytes were `TF400813` authorization text. None is release complete.
+Run 40 failed after approval at the revision-and-health boundary after worker Blob staging succeeded. Azure Portal read-back showed the expected revision `Healthy / ScaledToZero / traffic 100% / replicas 0`, while the old gate required `Running`; its failure artifact was also reported as zero bytes because the task used an `ERR` trap and explicitly called `exit 1`. The source corrections are locally verified but not hosted-verified. Run 40 is not release complete.
 
 # Required commands before a new run
 
     git diff --check
     node scripts/azure-platform-contract-test.mjs
+    node scripts/azure-deployment-contract-test.mjs
     npm run test:azure-deployment-failure-receipt
     npm run test:azure-core
     git status --short --branch

@@ -6,12 +6,12 @@ resource: /faq.md
 tags: [faq, incident-response, release, teams, azure]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T22:01:14Z"
+  at: "2026-09-06T22:31:00Z"
 verified:
   by: "process:release-faq-reconciliation/1"
-  at: "2026-09-06T22:01:14Z"
+  at: "2026-09-06T22:31:00Z"
 status: stable
-stale_after: "2026-09-13T22:01:14Z"
+stale_after: "2026-09-13T22:31:00Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -53,6 +53,14 @@ sources:
     resource: "https://learn.microsoft.com/en-us/azure/container-apps/health-probes"
     title: "Health probes in Azure Container Apps"
     location: "probe types and readiness; observed web lines 36-41 and 187-188"
+  - id: aca-scaling
+    resource: "https://learn.microsoft.com/en-us/azure/container-apps/scale-app"
+    title: "Set scaling rules in Azure Container Apps"
+    location: "minimum replicas, scale-to-zero, and always-running guidance; observed web lines 31-56 on 2026-09-07"
+  - id: aca-revisions
+    resource: "https://learn.microsoft.com/en-us/azure/container-apps/revisions"
+    title: "Update and deploy changes in Azure Container Apps"
+    location: "revision running states, Scale to 0, readiness, and multiple-revision traffic; observed web lines 48-72 and 128-138 on 2026-09-07"
   - id: key-vault
     resource: "https://learn.microsoft.com/en-us/azure/key-vault/secrets/quick-create-cli"
     title: "Quickstart - Set and retrieve a secret from Azure Key Vault"
@@ -339,6 +347,27 @@ Fix:
 - `npm run test:azure-core` must be run from the clean correction commit before the next hosted run.
 
 Do not delete or overwrite a mismatched Blob based only on a false empty query. Read the top-level metadata correctly first; if it then mismatches, retain the exact evidence and treat the object as an independently reviewed immutable-artifact conflict.
+
+## Q18. Why did Run 40 fail even though Azure Portal showed the revision as Healthy?
+
+Two independent defects were exposed. The canary's Bicep template intentionally sets `minReplicas: 0`, so the portal reported `Healthy`, `ScaledToZero`, `traffic 100%`, and `replicas 0`. Azure's current revision guidance defines Scale to 0 as zero running replicas that can be created again by a scale rule, while its scaling guidance says `minReplicas >= 1` is required for an always-running instance. The old pipeline treated only `runningState == Running` as ready, so it produced a false negative for a healthy HTTP canary. This must not be confused with the separate 24/7 requirement.
+
+The same task then executed an explicit `exit 1` after the 30-poll readiness loop. The failure writer was attached only to an `ERR` trap, so it did not run for that explicit exit path. Azure DevOps consequently retained the named failure artifact with `0` bytes even though the helper had been copied before release checkout.
+
+Evidence:
+
+- Run 40 / build `20260906.19`, log 44: worker Blob succeeded, then `Expected release revision did not reach Running/Succeeded/100%: teamsapp-canary-goictvxm--71df02e2ea`, followed by `Script failed with exit code: 1`.
+- Existing Ego Lite Azure Container Apps revision read-back: `Healthy`, `ScaledToZero`, `100%`, `0` replicas.
+- Run 40 artifact list: artifact `220` (`azure-what-if-workload-receipt`, `51956` bytes) and artifact `221` (`azure-deployment-failure-receipt`, `0` bytes); log 46 recorded `Processed 0 files`.
+- Internal sources: `azure-pipelines.yml:497-534,784-805`, `scripts/azure-deployment-contract.mjs:45-53,73-76,125-130`, and the focused regressions in `scripts/azure-deployment-failure-receipt-test.mjs:118-129` and `scripts/azure-deployment-contract-test.mjs:46-63,98-107`.
+
+Fix:
+
+- Accept only `Running`, or `ScaledToZero` with `Healthy`, `Succeeded`, active, and 100% traffic for the HTTP canary; retain public `/api/health` and release-identity verification as separate gates.
+- Use one nonzero `EXIT` trap that writes the secret-free JSON receipt and SHA-256 sidecar before cleanup while preserving the original exit code.
+- Keep `minReplicas >= 1` as a separate 24/7 promotion gate; changing that setting requires its own what-if and cost/runtime review.
+
+The source tests are GREEN, but Run 40 itself remains failed and cannot verify the fix. Azure Container Apps scaling and revision lifecycle are documented in [Set scaling rules](https://learn.microsoft.com/en-us/azure/container-apps/scale-app), lines 31-56, and [Update and deploy changes](https://learn.microsoft.com/en-us/azure/container-apps/revisions), lines 48-72 and 128-138. Deployment approval and failure lifecycle remain separate according to [Deployment jobs](https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops), lines 55-76.
 
 [^okf-spec]: Open Knowledge Format v0.2 specification, sections 3-5 and 8-9, observed web lines 253-327, 370-444, 486-513. https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md
 [^arm-what-if]: ARM what-if operation, What-if operation and permissions, observed web lines 29-52. https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-what-if

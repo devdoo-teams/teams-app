@@ -42,6 +42,16 @@ function readJson(filePath) {
   return JSON.parse(fs.readFileSync(path.resolve(filePath), 'utf8'));
 }
 
+export function isRevisionReadyForRelease(revision) {
+  const properties = revision?.properties;
+  return properties?.active === true
+    && properties.provisioningState === 'Succeeded'
+    && (
+      properties.runningState === 'Running'
+      || (properties.runningState === 'ScaledToZero' && properties.healthState === 'Healthy')
+    );
+}
+
 export function parseDeploymentOutputs(value, { requireContainerApp = true } = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail('Bicep deployment outputs must be an object');
   const parsed = {};
@@ -62,12 +72,7 @@ export function parseDeploymentOutputs(value, { requireContainerApp = true } = {
 
 export function selectRollbackRevisions(revisions) {
   if (!Array.isArray(revisions)) fail('revision list must be an array');
-  const trafficServing = revisions.filter((revision) => (
-    revision?.properties?.active === true
-    && revision.properties.runningState === 'Running'
-    && revision.properties.provisioningState === 'Succeeded'
-    && Number(revision.properties.trafficWeight) === 100
-  ));
+  const trafficServing = revisions.filter((revision) => isRevisionReadyForRelease(revision) && Number(revision.properties.trafficWeight) === 100);
   if (trafficServing.length !== 1) fail(`expected exactly one traffic-serving revision, found ${trafficServing.length}`);
   const current = trafficServing[0];
   const currentCreated = Date.parse(current.properties.createdTime);
@@ -120,9 +125,7 @@ function validateProvenance(provenance, receipt) {
 export function validateReleaseDeployment({ receipt, provenance, revision, health, registryLoginServer, requireTraffic = true }) {
   validateProvenance(provenance, receipt);
   if (
-    revision?.properties?.active !== true
-    || revision.properties.provisioningState !== 'Succeeded'
-    || revision.properties.runningState !== 'Running'
+    !isRevisionReadyForRelease(revision)
     || (requireTraffic && Number(revision.properties.trafficWeight) !== 100)
   ) fail('revision readiness or traffic state is not complete');
   const deployed = releaseIdentityFromRevision(revision);

@@ -43,6 +43,20 @@ const revisions = [
   { name: 'teamsapp--newer-no-traffic', properties: { active: true, provisioningState: 'Succeeded', runningState: 'Running', createdTime: '2026-09-03T00:00:00Z', trafficWeight: 0 } },
 ];
 assert.deepEqual(selectRollbackRevisions(revisions), { currentRevision: currentName, previousRevision: previousName });
+assert.deepEqual(
+  selectRollbackRevisions(revisions.map((revision) => revision.name === currentName
+    ? { ...revision, properties: { ...revision.properties, runningState: 'ScaledToZero', healthState: 'Healthy' } }
+    : revision)),
+  { currentRevision: currentName, previousRevision: previousName },
+  'a healthy scale-to-zero revision can still be the traffic-serving revision',
+);
+assert.throws(
+  () => selectRollbackRevisions(revisions.map((revision) => revision.name === currentName
+    ? { ...revision, properties: { ...revision.properties, runningState: 'ScaledToZero', healthState: 'Unhealthy' } }
+    : revision)),
+  /traffic-serving/i,
+  'an unhealthy scale-to-zero revision must not be accepted as traffic-serving',
+);
 assert.throws(
   () => selectRollbackRevisions(revisions.map((revision) => ({ ...revision, properties: { ...revision.properties, trafficWeight: 0 } }))),
   /traffic-serving/i,
@@ -82,6 +96,17 @@ const health = {
 };
 
 assert.equal(validateReleaseDeployment({ receipt, provenance, revision, health, registryLoginServer: 'teamsappabc123.azurecr.io' }), true);
+assert.equal(
+  validateReleaseDeployment({
+    receipt,
+    provenance,
+    revision: { ...revision, properties: { ...revision.properties, runningState: 'ScaledToZero', healthState: 'Healthy' } },
+    health,
+    registryLoginServer: 'teamsappabc123.azurecr.io',
+  }),
+  true,
+  'a healthy scale-to-zero revision must pass the final identity contract after public health succeeds',
+);
 assert.throws(
   () => validateReleaseDeployment({
     receipt,

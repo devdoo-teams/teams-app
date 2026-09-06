@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -48,6 +49,16 @@ assert.match(
   deployCanary,
   /test\s+-s\s+"\$failure_receipt_sha256"/u,
   'deploy failure handling must reject a missing receipt checksum sidecar',
+);
+assert.match(
+  deployCanary,
+  /trap 'status=\$\?; if \[\[ "\$status" -ne 0 \]\]; then write_failure_receipt "\$status"; fi; cleanup_deployment_temp_files; exit "\$status"' EXIT/u,
+  'deploy failure handling must use an EXIT trap so explicit exit 1 paths retain a receipt',
+);
+assert.doesNotMatch(
+  deployCanary,
+  /trap '[^\n]*' ERR/u,
+  'deploy failure handling must not rely on ERR trap semantics for explicit exit paths',
 );
 const validateHandoff = pipeline.slice(
   pipeline.indexOf('  - stage: ValidateHandoff'),
@@ -103,6 +114,19 @@ try {
   assert.equal(writeAzureDeploymentFailureReceipt(outputPath, { boundary: 'bootstrap', exitCode: 1 }), outputPath);
   assert.equal(fs.statSync(outputPath).mode & 0o777, 0o600);
   assert.throws(() => writeAzureDeploymentFailureReceipt(outputPath, { boundary: 'bootstrap', exitCode: 1 }), /EEXIST|exists/i);
+
+  const explicitExitReceipt = path.join(temporaryDirectory, 'explicit-exit-receipt.json');
+  const shell = [
+    'set -Eeuo pipefail',
+    `receipt=${JSON.stringify(explicitExitReceipt)}`,
+    'write_failure_receipt() { printf "{\\"status\\":\\"FAIL\\",\\"exitCode\\":%s}\\n" "$1" > "$receipt"; }',
+    'cleanup_deployment_temp_files() { :; }',
+    'trap \'status=$?; if [[ "$status" -ne 0 ]]; then write_failure_receipt "$status"; fi; cleanup_deployment_temp_files; exit "$status"\' EXIT',
+    'exit 1',
+  ].join('\n');
+  const shellResult = spawnSync('/bin/bash', ['-c', shell], { encoding: 'utf8' });
+  assert.equal(shellResult.status, 1, 'explicit exit must preserve the original failure status');
+  assert.deepEqual(JSON.parse(fs.readFileSync(explicitExitReceipt, 'utf8')), { status: 'FAIL', exitCode: 1 });
 } finally {
   fs.rmSync(temporaryDirectory, { recursive: true, force: true });
 }

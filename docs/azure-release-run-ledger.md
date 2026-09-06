@@ -82,11 +82,12 @@
 18. deploy job은 새 source build/npm install/package download를 하지 않고, 같은 run의 platform/RBAC/worker/what-if artifact를 검증한다.
 19. deploy task도 receipt commit을 fetch/checkout하고 `HEAD`/worktree를 재검증한 뒤 Bicep을 실행한다.
 20. 첫 Azure mutation 전 worker archive digest, Codex package version/digest, Bicep output, foundation what-if receipt를 모두 비교한다.
-21. 기존 서비스는 canary revision이 ready/healthy하고 rollback identity가 확보될 때까지 변경하지 않는다. `activation failed`, `0 replicas`, readiness timeout은 즉시 BLOCKED이다.
+21. 기존 서비스는 canary revision이 ready/healthy하고 rollback identity가 확보될 때까지 변경하지 않는다. `activation failed`와 readiness timeout은 즉시 BLOCKED이다. `ScaledToZero`/`0 replicas`는 Azure의 정상 HTTP scale-to-zero 상태일 수 있으므로 `healthState`, provisioning, active, traffic, public health를 함께 확인한다.
 
 ### F. 공개 런타임과 Teams 사용자 증거
 
-22. Azure revision이 실제 replica를 가지고 readiness/liveness를 통과한다.
+22. Azure revision이 readiness/liveness를 통과한다. HTTP canary는 `Running` 또는 관찰된 `ScaledToZero + Healthy`를 허용하되 public health와 identity를 별도로 확인한다.
+22a. 24/7 promoted service는 별도 조건으로 deployed `minReplicas >= 1`, worker VM service/heartbeat, restart recovery, and durable terminal receipt를 read-back한다. HTTP canary의 scale-to-zero PASS를 24/7 PASS로 승격하지 않는다.
 23. 공개 HTTPS `/api/health`가 응답하고 `sourceCommit`, app version, image digest/server bundle identity가 같은 release identity와 일치한다. DNS failure, stale process, old Dev Tunnel, localhost는 PASS가 아니다.
 24. Teams 포털 등록/다운로드 ZIP/설치 desktop/mobile의 버전과 app ID가 ZIP/health와 일치한다. 조직 게시 상태만으로 설치본 성공을 주장하지 않는다.
 25. Teams 데스크톱에서 대상 채팅, 실제 Bot reply, 카드/탭/핵심 버튼을 최신 AX tree와 before/after screenshot으로 확인한다.
@@ -119,11 +120,24 @@
 - Fix: add named `ValidateHandoff` boundaries and a secret-free `github-handoff-failure-receipt` artifact on failed handoff tasks; preserve the separation between pipeline source and deploy-only release artifact commit.
 - Verification: RED test failed before the change; `npm run test:azure-deployment-failure-receipt`, `node scripts/azure-platform-contract-test.mjs`, and `npm run test:azure-core` are GREEN on the fix commit. A new Azure run is still required to exercise the receipt in hosted execution.
 
+## 현재 run 40 read-back
+
+- Pipeline source: `e91b7aa020cf44f53727616194cc19c225df100a`
+- Requested release: `71df02e2ea9e9dbecbe864e0f1c6be3d649cbb4a`, app `1.0.103`, image digest `sha256:a52d4d53baee73cd3769ac297b723f8b05883500692d2ce4b4eb856f07ee1f27`
+- Outcome: `FAIL_AFTER_APPROVAL` at `revision-and-health`; worker Blob staging passed with `fe36475c64b74a39876df0734569ad9f880089f37413299035f783598cddc74b`
+- Exact failure: `Expected release revision did not reach Running/Succeeded/100%: teamsapp-canary-goictvxm--71df02e2ea`
+- Azure Portal read-back: latest revision `Healthy`, `ScaledToZero`, traffic `100`, replicas `0`
+- Failure artifact: artifact `221`, reported size `0`; log 46 `Processed 0 files`, because explicit `exit 1` did not invoke the prior `ERR` trap
+- Source correction: shared `ScaledToZero + Healthy` readiness contract and nonzero `EXIT` receipt trap are locally GREEN; no version bump or Teams upload
+- Decision: retain Run 40 as failed; run `npm run test:azure-core` from the clean correction commit, then use one bounded hosted rerun. Do not claim 24/7 until `minReplicas >= 1` and worker evidence pass.
+
 ## 다음 실행 전 필수 명령
 
 ```bash
 git diff --check
 node scripts/azure-platform-contract-test.mjs
+node scripts/azure-deployment-contract-test.mjs
+npm run test:azure-deployment-failure-receipt
 npm run test:azure-core
 git status --short --branch
 ```

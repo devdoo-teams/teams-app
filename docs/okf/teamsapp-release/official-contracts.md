@@ -6,12 +6,12 @@ resource: /official-contracts.md
 tags: [official-contract, azure, teams, release, evidence]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T15:30:00Z"
+  at: "2026-09-06T22:31:00Z"
 verified:
   by: "process:official-source-research/1"
-  at: "2026-09-07T15:30:00Z"
+  at: "2026-09-06T22:31:00Z"
 status: stable
-stale_after: "2026-09-14T15:30:00Z"
+stale_after: "2026-09-13T22:31:00Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -81,6 +81,14 @@ sources:
     resource: "https://learn.microsoft.com/en-us/azure/container-apps/health-probes"
     title: "Health probes in Azure Container Apps"
     location: "Types of probes and multiple revision traffic guidance; observed web lines 36-41 and 187-188 on 2026-09-06"
+  - id: aca-scaling
+    resource: "https://learn.microsoft.com/en-us/azure/container-apps/scale-app"
+    title: "Set scaling rules in Azure Container Apps"
+    location: "minimum replicas, scale-to-zero, and always-running guidance; observed web lines 31-56 on 2026-09-07"
+  - id: aca-revisions
+    resource: "https://learn.microsoft.com/en-us/azure/container-apps/revisions"
+    title: "Update and deploy changes in Azure Container Apps"
+    location: "revision running states, Scale to 0, readiness, and multiple-revision traffic; observed web lines 48-72 and 128-138 on 2026-09-07"
   - id: aca-start
     resource: "https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-start-failures"
     title: "Troubleshoot start failures in Azure Container Apps"

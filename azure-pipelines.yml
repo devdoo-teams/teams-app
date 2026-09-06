@@ -472,6 +472,10 @@ stages:
                       what_if_receipt_script="$what_if_receipt_tools_dir/azure-what-if-receipt.mjs"
                       failure_boundary="bootstrap"
                       worker_blob_script="$(Agent.TempDirectory)/azure-worker-blob-stage.mjs"
+                      foundation_parameters="$(Agent.TempDirectory)/foundation.parameters.json"
+                      workload_parameters="$(Agent.TempDirectory)/workload.parameters.json"
+                      workload_what_if="$(Agent.TempDirectory)/workload.what-if.json"
+                      worker_vm_inventory="$(Agent.TempDirectory)/worker-vm-inventory.json"
                       mkdir -p "$failure_receipt_dir"
                       mkdir -p "$what_if_receipt_tools_dir"
                       cp scripts/azure-deployment-failure-receipt.mjs "$failure_receipt_script"
@@ -524,7 +528,10 @@ stages:
                           printf '##vso[task.logissue type=error;code=TEAMSAPP_AZURE_DEPLOYMENT_BOUNDARY;]boundary=%s exitCode=%s; inspect azure-deployment-failure-receipt artifact and this task stderr.\n' "${failure_boundary:-bootstrap}" "$status"
                         ) || true
                       }
-                      trap 'status=$?; write_failure_receipt "$status"; exit "$status"' ERR
+                      cleanup_deployment_temp_files() {
+                        rm -f "$foundation_parameters" "$workload_parameters" "$workload_what_if" "$worker_vm_inventory"
+                      }
+                      trap 'status=$?; if [[ "$status" -ne 0 ]]; then write_failure_receipt "$status"; fi; cleanup_deployment_temp_files; exit "$status"' EXIT
                       test "$(az account show --query id --output tsv)" = "$AZURE_SUBSCRIPTION_ID"
                       test -n "$WORKER_ADMIN_SSH_PUBLIC_KEY"
                       [[ "$CODEX_PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]]
@@ -538,12 +545,7 @@ stages:
                       worker_receipt="$(Pipeline.Workspace)/azure-worker-runtime-package/worker-runtime-receipt.json"
                       foundation_what_if_receipt="$(Pipeline.Workspace)/azure-what-if-preflight-receipt/azure-what-if-preflight-receipt.json"
                       workload_what_if_receipt_dir="$(Pipeline.Workspace)/azure-what-if-workload"
-                      foundation_parameters="$(Agent.TempDirectory)/foundation.parameters.json"
-                      workload_parameters="$(Agent.TempDirectory)/workload.parameters.json"
-                      workload_what_if="$(Agent.TempDirectory)/workload.what-if.json"
-                      worker_vm_inventory="$(Agent.TempDirectory)/worker-vm-inventory.json"
                       mkdir -p "$workload_what_if_receipt_dir"
-                      trap 'rm -f "$foundation_parameters" "$workload_parameters" "$workload_what_if" "$worker_vm_inventory"' EXIT
                       failure_boundary="release-receipt"
                       node scripts/azure-release-input.mjs "$receipt"
                       commit="$(jq -er '.commit' "$receipt")"
@@ -784,7 +786,8 @@ stages:
                               '(.name == $expected_revision)
                               and (.properties.active == true)
                               and (.properties.provisioningState == "Succeeded")
-                              and (.properties.runningState == "Running")
+                              and ((.properties.runningState == "Running")
+                                or (.properties.runningState == "ScaledToZero" and .properties.healthState == "Healthy"))
                               and (((.properties.trafficWeight // 0) | tonumber) == 100)' \
                               "$(Agent.TempDirectory)/revision.json" >/dev/null; then
                             revision_ready="true"

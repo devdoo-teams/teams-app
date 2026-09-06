@@ -6,12 +6,12 @@ resource: /failure-history.md
 tags: [teamsapp, azure, release, incident, failure, provenance]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T22:01:14Z"
+  at: "2026-09-06T22:31:00Z"
 verified:
   by: "process:release-evidence-reconciliation/1"
-  at: "2026-09-06T22:01:14Z"
+  at: "2026-09-06T22:31:00Z"
 status: stable
-stale_after: "2026-09-13T22:01:14Z"
+stale_after: "2026-09-13T22:31:00Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -53,6 +53,14 @@ sources:
     resource: "https://learn.microsoft.com/en-us/azure/container-apps/health-probes"
     title: "Health probes in Azure Container Apps"
     location: "probe types and readiness before traffic; observed web lines 36-41 and 187-188"
+  - id: aca-scaling
+    resource: "https://learn.microsoft.com/en-us/azure/container-apps/scale-app"
+    title: "Set scaling rules in Azure Container Apps"
+    location: "minimum replicas, scale-to-zero, and always-running guidance; observed web lines 31-56 on 2026-09-07"
+  - id: aca-revisions
+    resource: "https://learn.microsoft.com/en-us/azure/container-apps/revisions"
+    title: "Update and deploy changes in Azure Container Apps"
+    location: "revision running states, Scale to 0, readiness, and multiple-revision traffic; observed web lines 48-72 and 128-138 on 2026-09-07"
   - id: az-storage-blob-cli-source
     resource: "https://github.com/Azure/azure-cli/blob/dev/src/azure-cli/azure/cli/command_modules/storage/commands.py"
     title: "Azure CLI Storage command registration"
@@ -505,12 +513,14 @@ These records do not substitute for current Azure run evidence.
 
 # Current judgment
 
-The current state is RELEASE_BLOCKED / Run 39 FAILED_AFTER_APPROVAL at `worker-blob`; Run 38 remains FAILED_AFTER_APPROVAL at the same boundary, Run 32 remains FAILED_AFTER_APPROVAL, Run 31 remains FAILED_BEFORE_APPROVAL, and Run 30 remains FAILED_AFTER_APPROVAL.
+The current state is RELEASE_BLOCKED / Run 40 FAILED_AFTER_APPROVAL at `revision-and-health`; Run 39 remains FAILED_AFTER_APPROVAL at `worker-blob`, Run 38 remains FAILED_AFTER_APPROVAL at the same boundary, Run 32 remains FAILED_AFTER_APPROVAL, Run 31 remains FAILED_BEFORE_APPROVAL, and Run 30 remains FAILED_AFTER_APPROVAL.
 
 - local/contract/Azure Core evidence: PASS within scope;
 - Run 32 workload what-if: FAILED after approval at `workload-parameters-and-what-if`; no Azure workload mutation occurred;
 - Run 32 failure receipt: FAILED to retain a non-empty artifact in the run, fixed in source commit `9c793d4` but not yet hosted-verified;
-- Run 39 worker Blob metadata query: FAILED because the nested `metadata.sha256` query produced a false empty value; correction is pending a fresh hosted run;
+- Run 39 worker Blob metadata query: FAILED because the nested `metadata.sha256` query produced a false empty value; Run 40 proves the corrected top-level query passes;
+- Run 40 revision readiness: FAILED because healthy `ScaledToZero` was excluded by the `Running`-only predicate; source correction is pending a fresh hosted run;
+- Run 40 failure receipt: FAILED to retain a non-empty artifact because explicit `exit 1` bypassed the `ERR` trap; the `EXIT`-trap correction is pending a fresh hosted run;
 - Run 33 pre-approval receipt read-back: reported artifact sizes conflict with 62-byte authorization text; no receipt content is verified;
 - Run 31 release handoff: FAILED before approval because the requested artifact was absent;
 - Run 30 post-approval Azure mutation: FAILED at an unknown named boundary (Run 30 evidence incomplete);
@@ -533,6 +543,23 @@ The current state is RELEASE_BLOCKED / Run 39 FAILED_AFTER_APPROVAL at `worker-b
 **FIX AND VERIFICATION.** Commit `6edcdbc6576ae9585f43ca6dc4fd2241262cc78e` introduced the single bounded worker-Blob staging helper and redacted diagnostics. The follow-up correction changes the query to `sha256` and adds a RED regression that rejects `metadata.sha256`; the focused helper, platform-contract, and core-runner tests are GREEN after the correction. Version remains `1.0.103`; no package or Teams upload is warranted for this CI-only repair.
 
 **CURRENT JUDGMENT.** Run 39 remains `FAIL_AFTER_APPROVAL` and is not a verification pass for the correction. The exact invalid query is now identified; the existing Blob is preserved until a fresh run successfully reads the correct metadata. Azure revision/public health/Teams UI/mobile/A2A remain `UNVERIFIED`.
+
+## 2026-09-07 — Run 40 healthy scale-to-zero misclassified and explicit-exit receipt loss
+
+**OFFICIAL CONTRACT.** Azure Container Apps documents `Scale to 0` as a running status with zero replicas that can create replicas again when a scale rule is triggered, and states that `minReplicas` defaults to 0; an always-running instance requires `minReplicas` of 1 or higher ([scaling](https://learn.microsoft.com/en-us/azure/container-apps/scale-app), lines 31-56; [revisions](https://learn.microsoft.com/en-us/azure/container-apps/revisions), lines 48-72). The same revision guidance says readiness and startup probes must pass before traffic is shifted (revisions, lines 128-138; [health probes](https://learn.microsoft.com/en-us/azure/container-apps/health-probes), lines 36-47 and 187-188). Azure Pipelines deployment jobs separate deploy, post-route health, and failure lifecycle hooks ([deployment jobs](https://learn.microsoft.com/en-us/azure/devops/pipelines/process/deployment-jobs?view=azure-devops), lines 55-76).
+
+**OBSERVED EVIDENCE.** Run 40 / build `20260906.19` used pipeline source `e91b7aa020cf44f53727616194cc19c225df100a`, deploy-only release commit `71df02e2ea9e9dbecbe864e0f1c6be3d649cbb4a`, version `1.0.103`, and image `ghcr.io/devdoo-teams/teams-app@sha256:a52d4d53baee73cd3769ac297b723f8b05883500692d2ce4b4eb856f07ee1f27`. The hosted Azure CLI was `2.89.1`, Azure DevOps extension `1.0.7`, Bicep `0.46.1`; the log first reached `Azure worker Blob staging: existing; sha256=fe36475c64b74a39876df0734569ad9f880089f37413299035f783598cddc74b`. It then failed at `revision-and-health` with `Expected release revision did not reach Running/Succeeded/100%: teamsapp-canary-goictvxm--71df02e2ea`. The existing Ego Lite Azure Container Apps page read back that revision as `Healthy`, `ScaledToZero`, traffic `100`, replicas `0`, with the same revision shown as latest.
+
+The run's Azure DevOps artifact list reported `azure-what-if-workload-receipt` artifact `220` at `51956` bytes and `azure-deployment-failure-receipt` artifact `221` at `0` bytes. Log 46 recorded `Processed 0 files` and `Uploaded 0 out of 61 bytes`. Log 44 ended with explicit `exit 1`; it did not contain the new `receiptWriteStatus=READY` warning. This is a separate evidence-loss failure from the revision-state classification.
+
+**CLASSIFICATION.** Two `CONFIRMED_ROOT_CAUSE` findings are recorded:
+
+1. `ACA_SCALE_TO_ZERO_READINESS_FALSE_NEGATIVE`: the pipeline and shared deployment contract accepted only `runningState == Running`, although the deployed revision was healthy, active, provisioned, traffic-serving, and intentionally configured with `minReplicas: 0`. This does not prove 24/7 operation; the 24/7 gate remains blocked until `minReplicas >= 1` and the worker runtime are read back.
+2. `EXPLICIT_EXIT_BYPASSES_ERR_RECEIPT_TRAP`: the task's `ERR` trap did not write a receipt for the explicit `exit 1` branch, leaving the failure artifact empty despite the helper being present before release checkout. The prior helper-provenance fix was therefore not sufficient for every failure path.
+
+**FIX AND VERIFICATION.** The source correction adds `isRevisionReadyForRelease` in `scripts/azure-deployment-contract.mjs:45-53`, reuses it for rollback and final identity validation at `:73-76` and `:125-130`, and updates the deploy poll in `azure-pipelines.yml:784-791` to allow only `ScaledToZero` with `healthState == Healthy`. The failure handler now declares cleanup paths before the trap and uses a single nonzero `EXIT` trap at `azure-pipelines.yml:497-534`; the dedicated test includes a real `/bin/bash` explicit-exit regression at `scripts/azure-deployment-failure-receipt-test.mjs:118-129`. `scripts/azure-deployment-contract-test.mjs` covers healthy and unhealthy scale-to-zero cases at `:46-63` and `:98-107`; `scripts/azure-platform-contract-test.mjs:980-982` checks the pipeline predicate. All three focused commands were GREEN after the change: `node scripts/azure-deployment-failure-receipt-test.mjs`, `node scripts/azure-deployment-contract-test.mjs`, and `node scripts/azure-platform-contract-test.mjs`. No application version bump or Teams package upload was performed.
+
+**CURRENT JUDGMENT.** Run 40 remains `FAIL_AFTER_APPROVAL`; its healthy revision observation is not a hosted verification of the source fix, and its empty failure artifact is not promoted to a usable receipt. After the clean commit passes `npm run test:azure-core`, one bounded hosted rerun is required. A successful rerun must read back a non-empty failure receipt if it fails, or pass the corrected readiness predicate, public health, and identity contract if it succeeds. The 24/7 worker, Teams portal/package, desktop, mobile, and live A2A gates remain `UNVERIFIED`.
 
 [^okf-spec]: Open Knowledge Format v0.2 specification, sections 1, 3, 4, 5, 8, 9, observed web lines 197-204, 253-327, 370-444, 486-513. https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md
 [^arm-what-if]: Template deployment what-if, What-if operation and permissions, observed web lines 29-52. https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-what-if

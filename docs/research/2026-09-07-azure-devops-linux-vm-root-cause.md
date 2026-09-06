@@ -354,3 +354,9 @@ identity -> plan -> approval -> mutation -> ACA readiness + VM worker readiness
 ```
 
 Until the `Modify` delta and retained failure receipt are read back from a new verified run, Azure and Teams release status remains `BLOCKED/UNVERIFIED`.
+
+## Run 40 correction record
+
+Run 40 reached the post-approval revision boundary after the worker Blob metadata query correction succeeded. The hosted task rejected `teamsapp-canary-goictvxm--71df02e2ea` because the poll accepted only `Running`; the existing Ego Lite Azure Container Apps read-back showed `Healthy`, `ScaledToZero`, `100%` traffic, and `0` replicas. Microsoft documents zero running replicas as the `Scale to 0` state and separately states that `minReplicas >= 1` is required to keep an instance always running. This is therefore a false-negative readiness classification for the HTTP canary, not evidence of a crash; it is not 24/7 proof.
+
+The same Run 40 failure showed that a non-empty failure receipt cannot be guaranteed by an `ERR` trap alone: the explicit `exit 1` branch ended with artifact `221` reported at zero bytes and log 46 recording `Processed 0 files`. The correction uses one nonzero `EXIT` trap for receipt generation plus cleanup and adds an explicit-exit shell regression. These findings are now linked from the OKF `failure-history.md`, `faq.md`, `gates.md`, and `log.md`; the source tests are green, but hosted verification remains pending.
