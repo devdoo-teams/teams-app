@@ -6,12 +6,12 @@ resource: /official-contracts.md
 tags: [official-contract, azure, teams, release, evidence]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T16:42:13Z"
+  at: "2026-09-07T18:00:24Z"
 verified:
   by: "process:official-source-research/1"
-  at: "2026-09-07T16:42:13Z"
+  at: "2026-09-07T18:00:24Z"
 status: stable
-stale_after: "2026-09-14T16:42:13Z"
+stale_after: "2026-09-14T18:00:24Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -101,6 +101,10 @@ sources:
     resource: "https://learn.microsoft.com/en-us/cli/azure/containerapp/revision?view=azure-cli-latest"
     title: "az containerapp revision"
     location: "Commands table; `az containerapp revision list` required/optional parameters and `az containerapp revision show` example/parameters; current page read 2026-09-08 (rendered line numbers are not stable)"
+  - id: az-aca-revision-rest
+    resource: "https://learn.microsoft.com/en-us/rest/api/resource-manager/containerapps/container-apps-revisions/list-revisions?view=rest-resource-manager-containerapps-2026-01-01"
+    title: "Container Apps Revisions - List Revisions - REST API"
+    location: "RevisionCollection.value envelope and Revision fields `properties.active`, `healthState`, `provisioningState`, `runningState`, `replicas`, and `trafficWeight`; observed web result on 2026-09-08"
   - id: aca-start
     resource: "https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-start-failures"
     title: "Troubleshoot start failures in Azure Container Apps"

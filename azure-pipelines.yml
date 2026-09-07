@@ -471,6 +471,7 @@ stages:
                       what_if_receipt_tools_dir="$(Agent.TempDirectory)/azure-what-if-receipt-tools"
                       what_if_receipt_script="$what_if_receipt_tools_dir/azure-what-if-receipt.mjs"
                       deployment_contract_script="$what_if_receipt_tools_dir/azure-deployment-contract.mjs"
+                      revision_readback_script="$(Agent.TempDirectory)/azure-revision-readback.mjs"
                       worker_runtime_probe_script="$(Agent.TempDirectory)/azure-worker-runtime-probe.mjs"
                       worker_runtime_probe_response="$(Agent.TempDirectory)/azure-worker-runtime-probe-response.json"
                       worker_runtime_probe_dir="$(Pipeline.Workspace)/azure-worker-runtime-probe"
@@ -479,6 +480,7 @@ stages:
                       foundation_parameters="$(Agent.TempDirectory)/foundation.parameters.json"
                       workload_parameters="$(Agent.TempDirectory)/workload.parameters.json"
                       workload_what_if="$(Agent.TempDirectory)/workload.what-if.json"
+                      revision_list_normalized="$(Agent.TempDirectory)/revisions.normalized.json"
                       worker_vm_inventory="$(Agent.TempDirectory)/worker-vm-inventory.json"
                       mkdir -p "$failure_receipt_dir"
                       mkdir -p "$what_if_receipt_tools_dir"
@@ -486,6 +488,7 @@ stages:
                       cp scripts/azure-deployment-failure-receipt.mjs "$failure_receipt_script"
                       cp scripts/azure-worker-blob-stage.mjs "$worker_blob_script"
                       cp scripts/azure-worker-runtime-probe.mjs "$worker_runtime_probe_script"
+                      cp scripts/azure-revision-readback.mjs "$revision_readback_script"
                       cp scripts/azure-what-if-receipt.mjs "$what_if_receipt_tools_dir/azure-what-if-receipt.mjs"
                       cp scripts/azure-deployment-contract.mjs "$deployment_contract_script"
                       cp scripts/azure-release-input.mjs "$what_if_receipt_tools_dir/azure-release-input.mjs"
@@ -497,6 +500,7 @@ stages:
                       test -s "$failure_receipt_script"
                       test -s "$worker_blob_script"
                       test -s "$worker_runtime_probe_script"
+                      test -s "$revision_readback_script"
                       test -s "$what_if_receipt_script"
                       test -s "$deployment_contract_script"
                       test -s "$what_if_receipt_tools_dir/azure-release-input.mjs"
@@ -540,7 +544,7 @@ stages:
                         ) || true
                       }
                       cleanup_deployment_temp_files() {
-                        rm -f "$foundation_parameters" "$workload_parameters" "$workload_what_if" "$worker_vm_inventory"
+                        rm -f "$foundation_parameters" "$workload_parameters" "$workload_what_if" "$revision_list_normalized" "$worker_vm_inventory"
                       }
                       trap 'status=$?; if [[ "$status" -ne 0 ]]; then write_failure_receipt "$status"; fi; cleanup_deployment_temp_files; exit "$status"' EXIT
                       test "$(az account show --query id --output tsv)" = "$AZURE_SUBSCRIPTION_ID"
@@ -788,6 +792,7 @@ stages:
                       revision_list="$(Agent.TempDirectory)/revisions.json"
                       revision_list_stderr="$(Agent.TempDirectory)/revision-list.stderr"
                       revision_state_receipt="$workload_what_if_receipt_dir/azure-revision-state.json"
+                      revision_list_shape="unavailable"
                       revision_ready="false"
                       for revision_attempt in $(seq 1 30); do
                         if az containerapp revision show \
@@ -814,7 +819,12 @@ stages:
                             --name "$app_name" \
                             --all \
                             --output json > "$revision_list" 2>"$revision_list_stderr"; then
-                          if jq -e \
+                          revision_list_shape="$(node "$revision_readback_script" describe "$revision_list" 2>/dev/null || printf 'invalid')"
+                          if node "$revision_readback_script" normalize "$revision_list" > "$revision_list_normalized"; then
+                            echo "Azure revision list response normalized: array (shape=$revision_list_shape)"
+                          fi
+                          if test -s "$revision_list_normalized" && jq -e 'type == "array"' "$revision_list_normalized" >/dev/null 2>&1; then
+                            if jq -e \
                               --arg expected_revision "$expected_revision_name" \
                               '[ .[] | select(.name == $expected_revision)
                                 | select((.properties.active == true)
@@ -824,36 +834,42 @@ stages:
                                     or (.properties.runningState == "ScaledToZero" and .properties.healthState == "Healthy"))
                                   and (((.properties.trafficWeight // 0) | tonumber) == 100))
                               ] | length == 1' \
-                              "$revision_list" >/dev/null; then
+                              "$revision_list_normalized" >/dev/null; then
                             jq -e \
                               --arg expected_revision "$expected_revision_name" \
                               '[ .[] | select(.name == $expected_revision) ][0]' \
-                              "$revision_list" > "$(Agent.TempDirectory)/revision.json"
+                              "$revision_list_normalized" > "$(Agent.TempDirectory)/revision.json"
                             revision_ready="true"
                             break
+                            fi
                           fi
                         fi
                         sleep 10
                       done
-                      if test -s "$revision_list" && jq -e 'type == "array"' "$revision_list" >/dev/null 2>&1; then
+                      if test -s "$revision_list_normalized" && jq -e 'type == "array"' "$revision_list_normalized" >/dev/null 2>&1; then
                         jq -c \
                           --arg expected_revision "$expected_revision_name" \
-                          '{schemaVersion: 1, expectedRevision: $expected_revision, candidates: [
+                          --arg revision_list_shape "$revision_list_shape" \
+                          '{schemaVersion: 1, expectedRevision: $expected_revision, revisionListResponseShape: $revision_list_shape, candidates: [
                             .[] | select(.name == $expected_revision) |
                             {name, properties: {active, provisioningState, runningState, healthState, trafficWeight, replicas}}
                           ]}' \
-                          "$revision_list" > "$revision_state_receipt" || true
+                          "$revision_list_normalized" > "$revision_state_receipt" || true
                       elif test -s "$(Agent.TempDirectory)/revision.json"; then
                         jq -c \
                           --arg expected_revision "$expected_revision_name" \
-                          '{schemaVersion: 1, expectedRevision: $expected_revision, candidates: [
+                          --arg revision_list_shape "$revision_list_shape" \
+                          '{schemaVersion: 1, expectedRevision: $expected_revision, revisionListResponseShape: $revision_list_shape, candidates: [
                             {name, properties: {active, provisioningState, runningState, healthState, trafficWeight, replicas}}
                           ]}' \
                           "$(Agent.TempDirectory)/revision.json" > "$revision_state_receipt" || true
                       fi
                       if ! test -s "$revision_state_receipt"; then
-                        printf '{"schemaVersion":1,"expectedRevision":"%s","candidates":[]}\n' \
-                          "$expected_revision_name" > "$revision_state_receipt"
+                        jq -cn \
+                          --arg expected_revision "$expected_revision_name" \
+                          --arg revision_list_shape "$revision_list_shape" \
+                          '{schemaVersion: 1, expectedRevision: $expected_revision, revisionListResponseShape: $revision_list_shape, candidates: []}' \
+                          > "$revision_state_receipt"
                       fi
                       chmod 600 "$revision_state_receipt"
                       if [[ "$revision_ready" != true ]]; then

@@ -1027,6 +1027,14 @@ try {
     deployScript?.includes('test -s "$what_if_receipt_tools_dir/azure-release-input.mjs"'),
     'deployment must reject an empty final identity contract local import snapshot',
   );
+  assert.ok(
+    deployScript?.includes('cp scripts/azure-revision-readback.mjs "$revision_readback_script"'),
+    'deployment must snapshot the revision read-back normalizer before release checkout',
+  );
+  assert.ok(
+    deployScript?.includes('test -s "$revision_readback_script"'),
+    'deployment must reject an empty revision read-back normalizer snapshot',
+  );
   assert.ok(deployScript?.includes('node "$deployment_contract_script" verify'), 'deployment must execute the snapshotted final identity contract');
   assert.ok(
     deployScript.indexOf('cp scripts/azure-deployment-contract.mjs "$deployment_contract_script"') < deployScript.indexOf('git checkout --detach "$commit"'),
@@ -1035,6 +1043,10 @@ try {
   assert.ok(
     deployScript.indexOf('cp scripts/azure-release-input.mjs "$what_if_receipt_tools_dir/azure-release-input.mjs"') < deployScript.indexOf('git checkout --detach "$commit"'),
     'final identity contract import snapshot must precede release checkout',
+  );
+  assert.ok(
+    deployScript.indexOf('cp scripts/azure-revision-readback.mjs "$revision_readback_script"') < deployScript.indexOf('git checkout --detach "$commit"'),
+    'revision read-back normalizer snapshot must precede release checkout',
   );
   const finalIdentityHelperSources = new Map([
     ['azure-deployment-contract.mjs', fs.readFileSync(path.join(root, 'scripts', 'azure-deployment-contract.mjs'), 'utf8')],
@@ -1069,6 +1081,10 @@ try {
   assert.ok(deployScript?.includes('az containerapp revision show'), 'deployment must read back the expected Container App revision');
   assert.ok(deployScript?.includes('az containerapp revision list'), 'deployment must fall back to the official Container Apps revision list read-back');
   assert.ok(deployScript?.includes('--all'), 'revision list fallback must include inactive revisions when diagnosing the exact expected revision');
+  assert.ok(deployScript?.includes('node "$revision_readback_script" normalize "$revision_list"'), 'revision list responses must be normalized before jq readiness evaluation');
+  assert.ok(deployScript?.includes('node "$revision_readback_script" describe "$revision_list"'), 'revision list response shape must be recorded without persisting raw response data');
+  assert.ok(deployScript?.includes('revision_list_normalized'), 'deployment must retain a normalized revision list path');
+  assert.ok(deployScript?.includes('revisionListResponseShape'), 'revision state receipt must retain the normalized response shape');
   assert.ok(deployScript?.includes('revision_list'), 'deployment must retain a separate revision list response for read-back diagnostics');
   assert.ok(deployScript?.includes('azure-revision-state.json'), 'deployment must retain a value-free revision state receipt');
   assert.ok(deployScript?.includes('revision_ready="false"'), 'deployment must initialize a bounded revision-readiness poll');

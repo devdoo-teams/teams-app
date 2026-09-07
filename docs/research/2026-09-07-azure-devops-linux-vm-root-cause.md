@@ -2,11 +2,11 @@
 
 ## 문서 메타데이터
 
-- 조사일: 2026-09-07 (Asia/Seoul)
+- 조사일: 2026-09-08 (Asia/Seoul)
 - 대상: `devdoo-teams/teams-app`, canonical worktree `/Users/doosansmacbookpro/Documents/TeamsApp`, `main`
-- 조사 기준 HEAD: `f17e40ac57905735aa5218efcd9399977822fc35` (2026-09-08 what-if allowlist correction)
+- 조사 기준 HEAD: `bb157147b8ddf4f980114dc9a30321274562c734` (2026-09-08 revision read-back normalization correction; hosted verification pending)
 - 제품 버전: `1.0.103` (이번 조사에서는 버전 변경 없음)
-- 운영 사건: Azure DevOps Run 32 / Build `20260906.11`부터 Run 50 / Build `20260907.6`까지
+- 운영 사건: Azure DevOps Run 32 / Build `20260906.11`부터 Run 51 / Build `20260907.7`까지
 - 조사 범위: Azure DevOps 승인·배포·아티팩트 계약, ARM what-if 및 Bicep 경계, Azure Container Apps revision/health/traffic, ACR managed identity, Linux VM/cloud-init/Custom Script Extension, 24/7 worker 상태·증거 체인
 - 증거 분류: `OFFICIAL CONTRACT`, `OBSERVED REPOSITORY EVIDENCE`, `INFERENCE / RECOMMENDATION`, `LIVE UNVERIFIED`
 - 이 문서는 읽기·리서치·문서화 결과다. 이번 문서 갱신 자체는 Azure 리소스, Teams 앱, 트래픽, 비밀, Jira, 브라우저 세션을 변경하지 않았으며, Run 43의 pipeline 배포·실패 read-back은 아래에 별도 기록한다.
@@ -447,3 +447,13 @@ Run 50 / Azure DevOps build `20260907.6` used source/release commit `9cbed6663f3
 The read-back workload diagnostic artifact `292` reported `status=BLOCKED`, `whatIf.status=Succeeded`, and change counts `Modify:6`, `NoChange:20`, `Ignore:2`, `Unsupported:9`. The exact Container App delta was the Run 37 legacy env/secret reconciliation plus `env[19]`, `env[21]`, `image`, and `properties.template.revisionSuffix`; it did not include `properties.template.scale.minReplicas`, because Run 49 had already applied that intended change. Failure artifact `293` was retained; the task recorded receipt SHA `21fb7a533cd6350ed7d0a4d5cce62fc1db8f4b3e9dc3e0baa4b5a403bc2adfdd`.
 
 This is `CONFIRMED_ROOT_CAUSE / WORKLOAD_WHAT_IF_MISSING_STEADY_STATE_VARIANT`: an exact state-transition fixture gap, not evidence that the list fallback failed or that the source commit was ignored. The remediation is to keep both the initial promoted transition and post-transition steady-state multisets explicit and value-free. No application version bump or full-release claim is justified.
+
+## Run 51 — revision collection envelope read-back gap
+
+Run 51 / Azure DevOps build `20260907.7` used source/release commit `bb157147b8ddf4f980114dc9a30321274562c734`, application version `1.0.103`, and the matching immutable GitHub handoff. Hosted Core `30/30`, RBAC, approval, workload what-if, worker Blob staging, and workload mutation completed. The deployment task then failed at `revision-and-health` for `teamsapp-canary-goictvxm--bb157147b8`; the value-free `azure-revision-state.json` contained the expected name but null values for `active`, `provisioningState`, `runningState`, `healthState`, `trafficWeight`, and `replicas`.
+
+The public FQDN independently returned HTTP 200 with `ok=true`, version `1.0.103`, source commit `bb157147b8ddf4f980114dc9a30321274562c734`, server bundle SHA `c7be700...`, and authenticated Teams Core. Worker heartbeat/readiness and A2A remained unavailable. Failure artifact `301` contained a 476-byte JSON receipt and 65-byte sidecar; the task recorded SHA `ca67a517e84443b38a94a82427b4f86726ac0e01aa43d91c049d4ba51b290b11`.
+
+Microsoft's CLI contract exposes both named `revision show` and `revision list --all`, while the current Container Apps REST schema describes list responses as a `RevisionCollection` with a `value` array. The pipeline previously applied `jq '.[]'` directly to the list response and retained no response-shape metadata. Because Run 51 did not preserve the raw `show` or `list` bodies, the exact provider response is `ROOT_CAUSE_REVIEW_REQUIRED`; the code-path defect is confirmed, but the particular Run 51 envelope is not.
+
+The remediation adds `scripts/azure-revision-readback.mjs`, tests top-level arrays, `RevisionCollection.value`, and malformed envelopes, snapshots the helper before release checkout, normalizes before the unchanged readiness predicate, and records only `revisionListResponseShape` in the value-free receipt. This preserves fail-closed behavior and makes the next failure diagnosable without storing raw revision payloads. The app version remains `1.0.103`; hosted verification of this correction is the next gate.

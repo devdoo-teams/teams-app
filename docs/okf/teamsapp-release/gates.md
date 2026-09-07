@@ -6,12 +6,12 @@ resource: /gates.md
 tags: [release-gate, azure, teams, provenance, rollback]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T17:17:32Z"
+  at: "2026-09-07T18:00:24Z"
 verified:
   by: "process:release-gate-reconciliation/1"
-  at: "2026-09-07T17:17:32Z"
+  at: "2026-09-07T18:00:24Z"
 status: stable
-stale_after: "2026-09-14T17:17:32Z"
+stale_after: "2026-09-14T18:00:24Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -161,6 +161,7 @@ Azure Pipelines approvals control when a stage should run.[^az-approval] Deploym
 
 24. Azure revision has active healthy state and startup/liveness/readiness evidence. For the current HTTP canary, `Running` or the observed `ScaledToZero` is accepted only when provisioning is `Succeeded`, the revision is active, `healthState` is `Healthy` for `ScaledToZero`, and traffic is 100%; public health must still return successfully.
 24d. Revision readiness reads the exact revision with `az containerapp revision show` and, when that response is temporarily incomplete, reads `az containerapp revision list --all` and applies the identical active/provisioned/running-or-healthy/100%-traffic predicate. A list fallback is not a readiness relaxation; an exact matching record is still required, and a value-free revision-state receipt is retained.[^az-aca-revision-cli]
+24e. Revision read-back normalizes both a top-level array and the official `RevisionCollection.value` envelope before applying the predicate; malformed or unknown envelopes fail closed. The value-free receipt records the response shape, never raw revision payloads.[^az-aca-revision-rest]
 24b. The 24/7 promoted service is a separate gate: its deployed scale configuration must have `minReplicas >= 1`, because a healthy `ScaledToZero` revision is not an always-running worker. This requires its own what-if and runtime read-back.
 24c. Before final identity, the deployment must invoke the exact Azure VM through non-interactive `RunShellScript` and verify a redacted worker-runtime receipt: systemd enabled/active/running, current release commit and installed manifest commit, Codex executable path/digest, owner-only regular `auth.json` metadata, and `codex login status` under `teamsworker`. Missing auth or a failed login is `BLOCKED`, not a retryable Azure health warning. The helper is snapshotted before release checkout and its receipt is published only on success.
 24a. Multiple-revision canary keeps the known-good revision serving traffic while a labeled green revision is independently readiness- and function-tested; traffic promotion and rollback are separate actions.
@@ -181,7 +182,7 @@ Container Apps troubleshooting requires revision status and system/application l
 
 # Current run
 
-Run 50 is the current Azure canary attempt: it passed the exact GitHub handoff, hosted Azure Core/RBAC, and manual approval, then failed before workload mutation at `workload-parameters-and-what-if`. The source read-back was `9cbed666`; after Run 49 had already applied the promoted minimum replica, the provider returned the steady-state release-identity shape without `properties.template.scale.minReplicas`, which was not yet represented in the exact fixture. The workload diagnostic and failure receipt are retained; Azure HTTP, worker-runtime, Teams package, desktop/mobile, and A2A promotion remain `BLOCKED` or `UNVERIFIED`. Run 49 remains the revision read-back inconsistency, Run 46 the historical worker-runtime `auth_file` blocker, and Run 45 an invalid queue-parameter attempt. Run 44's `PASS` remains historical canary evidence without the worker gate.
+Run 51 is the current Azure canary attempt: it passed the exact GitHub handoff, hosted Azure Core/RBAC, manual approval, workload what-if, Blob staging, and workload mutation, then failed at `revision-and-health` after the safe revision candidate fields were all null. Public `/api/health` independently served the same `bb15714` identity, so the run is not a source mismatch or server-outage proof. The raw `show/list` bodies were not retained; response shape is `ROOT_CAUSE_REVIEW_REQUIRED`. The new exact normalizer and response-shape receipt are committed locally but not yet hosted-verified. Worker-runtime, Teams package, desktop/mobile, and A2A promotion remain `BLOCKED` or `UNVERIFIED`; no app version bump, upload, or completion message is allowed.
 
 # Required commands before a new run
 
@@ -204,6 +205,7 @@ Run 50 is the current Azure canary attempt: it passed the exact GitHub handoff, 
 [^arm-what-if]: ARM what-if operation, What-if operation and Required permissions, observed web lines 29-52. https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-what-if
 [^az-what-if-help]: Azure CLI az deployment group what-if, option table and examples, observed web lines 1016-1042 and 1071-1092. https://learn.microsoft.com/en-us/cli/azure/deployment/group?view=azure-cli-latest
 [^az-aca-revision-cli]: Azure CLI az containerapp revision, `list` and `show` commands, required parameters, `--all`, and examples, current page read 2026-09-08 (rendered line numbers are not stable). https://learn.microsoft.com/en-us/cli/azure/containerapp/revision?view=azure-cli-latest
+[^az-aca-revision-rest]: Container Apps Revisions - List Revisions - REST API, `RevisionCollection.value` envelope and revision state fields, observed web result on 2026-09-08. https://learn.microsoft.com/en-us/rest/api/resource-manager/containerapps/container-apps-revisions/list-revisions?view=rest-resource-manager-containerapps-2026-01-01
 [^az-approval]: Pipeline deployment approvals, approvals and check execution, observed web lines 42-58 and 67-77. https://learn.microsoft.com/en-us/azure/devops/pipelines/process/approvals?view=azure-devops
 [^aca-health]: Health probes in Azure Container Apps, probe types and readiness before traffic, observed web lines 36-41 and 187-188. https://learn.microsoft.com/en-us/azure/container-apps/health-probes
 [^teams-upload]: Upload your custom app, upload/update and installed app sections, observed web lines 48-60 and 84-122. https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/deploy-and-publish/apps-upload

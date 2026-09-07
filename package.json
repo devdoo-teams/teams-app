@@ -34,6 +34,7 @@
     "test:package-output-determinism": "node scripts/package-app-output-determinism-test.mjs",
     "test:package-atomic": "node scripts/package-app-atomic-test.mjs",
     "test:azure-platform-contract": "node scripts/azure-platform-contract-test.mjs",
+    "test:azure-revision-readback": "node scripts/azure-revision-readback-test.mjs",
     "test:azure-codex-package": "node scripts/azure-codex-package-test.mjs",
     "test:azure-worker-runtime-package": "node scripts/azure-worker-runtime-package-test.mjs",
     "test:azure-worker-runtime-probe": "node scripts/azure-worker-runtime-probe-test.mjs",

@@ -6,12 +6,12 @@ resource: /faq.md
 tags: [faq, incident-response, release, teams, azure]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T16:42:13Z"
+  at: "2026-09-07T18:00:24Z"
 verified:
   by: "process:release-faq-reconciliation/1"
-  at: "2026-09-07T16:42:13Z"
+  at: "2026-09-07T18:00:24Z"
 status: stable
-stale_after: "2026-09-14T16:42:13Z"
+stale_after: "2026-09-14T18:00:24Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -527,3 +527,11 @@ The prevention is to query the exact revision with both the documented `show` an
 Run 50 reached a different, earlier boundary. After Run 49 had already applied `minReplicas: 1`, Azure's next what-if no longer contained that path; it reported the steady-state release identity delta instead. The exact allowlist intentionally rejected it because only the initial transition shape had been recorded. This confirms that the earlier Run 49 mutation changed the next what-if, rather than proving that the new source or fallback was absent.
 
 The fix is a second exact value-free steady-state variant alongside the initial transition variant. Both are tested independently; arbitrary new property changes remain blocked. The revision list fallback will be evaluated only after this pre-mutation gate passes.
+
+## Q32. Why did Run 51 still fail after the steady-state what-if fix?
+
+Run 51 passed the handoff, hosted Core `30/30`, RBAC, approval, what-if, Blob staging, and workload mutation. It failed later at `revision-and-health`: the safe receipt had the expected revision name but all state fields were `null`. Public `/api/health` independently served the same `bb15714` identity, so this is not evidence of a source mismatch or a server outage.
+
+The exact raw Azure response was intentionally not persisted, so the provider's response shape remains `ROOT_CAUSE_REVIEW_REQUIRED`. The source did, however, have a concrete read-back gap: it accepted only a top-level array from `revision list`, while the official REST contract models `RevisionCollection.value`. The remediation normalizes both forms, records the response shape without raw revision data, and retains the same strict readiness predicate. This does not relax the gate and does not prove the Run 51 raw response had that envelope.
+
+Official basis: [az containerapp revision](https://learn.microsoft.com/en-us/cli/azure/containerapp/revision?view=azure-cli-latest) and [Container Apps Revisions - List Revisions - REST API](https://learn.microsoft.com/en-us/rest/api/resource-manager/containerapps/container-apps-revisions/list-revisions?view=rest-resource-manager-containerapps-2026-01-01).

@@ -6,12 +6,12 @@ resource: /failure-history.md
 tags: [teamsapp, azure, release, incident, failure, provenance]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T17:17:32Z"
+  at: "2026-09-07T18:00:24Z"
 verified:
   by: "process:release-evidence-reconciliation/1"
-  at: "2026-09-07T17:17:32Z"
+  at: "2026-09-07T18:00:24Z"
 status: stable
-stale_after: "2026-09-14T17:17:32Z"
+stale_after: "2026-09-14T18:00:24Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -750,3 +750,15 @@ The exact Container App delta was the Run 37 legacy env/secret reconciliation pl
 **CLASSIFICATION.** `CONFIRMED_ROOT_CAUSE / WORKLOAD_WHAT_IF_MISSING_STEADY_STATE_VARIANT`. This is not evidence that the source commit was ignored, that the revision list fallback failed, or that the app version must change. It is a deterministic state-transition fixture gap discovered before workload mutation.
 
 **FIX AND PREVENTION.** Add explicit exact, value-free transition and steady-state variants to `scripts/azure-canary-preflight.mjs`, with a RED/GREEN regression for the steady-state shape. Keep arbitrary env/image/scale changes blocked and require a new clean Core gate plus immutable handoff before another hosted run.
+
+## 2026-09-08 — Run 51 revision collection envelope read-back gap
+
+**OFFICIAL CONTRACT.** Microsoft documents `az containerapp revision show` for a named revision and `az containerapp revision list --all` for the revisions of a Container App ([az containerapp revision](https://learn.microsoft.com/en-us/cli/azure/containerapp/revision?view=azure-cli-latest)). The Container Apps revision REST contract models a `RevisionCollection` with a `value` array and exposes the state fields used by the readiness gate: `active`, `healthState`, `provisioningState`, `runningState`, `replicas`, and `trafficWeight` ([Container Apps Revisions - List Revisions - REST API](https://learn.microsoft.com/en-us/rest/api/resource-manager/containerapps/container-apps-revisions/list-revisions?view=rest-resource-manager-containerapps-2026-01-01), `RevisionCollection` and `Revision` schemas).
+
+**OBSERVED EVIDENCE.** Run 51 / `20260907.7` used source/release commit `bb157147b8ddf4f980114dc9a30321274562c734`, app `1.0.103`, and a matching immutable handoff. Hosted Core `30/30`, RBAC, approval, workload what-if, Blob staging, and workload mutation completed. The task then exhausted `revision-and-health` for `teamsapp-canary-goictvxm--bb157147b8`; the value-free artifact recorded `active`, `provisioningState`, `runningState`, `healthState`, `trafficWeight`, and `replicas` as `null`.
+
+The workload artifact `300` contained `azure-revision-state.json` (271 B), the diagnostic (25 KB), and the workload receipt (28 KB). The failure artifact `301` contained a 476-byte JSON receipt and a 65-byte SHA sidecar; the task recorded receipt SHA `ca67a517e84443b38a94a82427b4f86726ac0e01aa43d91c049d4ba51b290b11`. The public FQDN independently returned HTTP 200 with `ok=true`, version `1.0.103`, source commit `bb15714`, server bundle SHA `c7be700...`, and authenticated Teams Core. Worker heartbeat/readiness and A2A remained unavailable.
+
+**CLASSIFICATION.** `CONFIRMED_FAILURE_BOUNDARY / REVISION_READBACK_INCONSISTENCY`. The exact Run 51 `show` and `list` bodies were not retained, so the provider response shape is `ROOT_CAUSE_REVIEW_REQUIRED`, not a confirmed Azure API defect. A confirmed code-path gap existed: the pipeline accepted only a top-level array from `revision list` and could fall back to the named `show` body, which explains how an envelope mismatch could yield a name-only/null safe receipt. This is a remediation hypothesis grounded in the source and official `RevisionCollection.value` contract, not a retroactive claim about the missing raw body.
+
+**FIX AND PREVENTION.** Added `scripts/azure-revision-readback.mjs` with RED/GREEN coverage for top-level arrays, `RevisionCollection.value`, malformed envelopes, and its CLI path. The deployment now snapshots this helper before release checkout, normalizes the list response before applying the unchanged readiness predicate, and records only `revisionListResponseShape` in the value-free receipt. The app version remains `1.0.103`; no Teams package upload or completion message is justified. A fresh immutable handoff and hosted run must pass this gate and the separate worker-runtime gate before release promotion.
