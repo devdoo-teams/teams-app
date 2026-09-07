@@ -6,12 +6,12 @@ resource: /official-contracts.md
 tags: [official-contract, azure, teams, release, evidence]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T01:17:35Z"
+  at: "2026-09-07T14:42:00Z"
 verified:
   by: "process:official-source-research/1"
-  at: "2026-09-07T01:17:35Z"
+  at: "2026-09-07T14:42:00Z"
 status: stable
-stale_after: "2026-09-14T01:17:35Z"
+stale_after: "2026-09-14T14:42:00Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -129,6 +129,14 @@ sources:
     resource: "https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/device-capabilities/location-capability"
     title: "Location capability in Teams"
     location: "Location API support and browser fallback sections; section anchor used because rendered line numbers are not stable"
+  - id: apple-sleep-settings
+    resource: "https://support.apple.com/en-ie/guide/mac-help/mchle41a6ccd/mac"
+    title: "Set sleep and wake settings for your Mac"
+    location: "Set your Mac to go to sleep after inactivity and Specify sleep and wake settings; observed web lines 296-320 on 2026-09-07"
+  - id: apple-lock-screen
+    resource: "https://support.apple.com/en-euro/guide/mac-help/-mh11784/mac"
+    title: "Change Lock Screen settings on Mac"
+    location: "Lock Screen options, including Require password after screen saver begins or display is turned off; observed web lines 274-292 on 2026-09-07"
   - id: teams-permissions
     resource: "https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/device-capabilities/browser-device-permissions"
     title: "Browser device permissions in Teams"
@@ -173,6 +181,12 @@ Teams browser/OS permission, host context, and HTML5 geolocation are separate ru
 
 # Citation discipline
 
+## Remote display and lock evidence
+
+Apple documents power/sleep timing separately from Lock Screen password behavior.[^apple-sleep-settings][^apple-lock-screen] The installed `pmset` help likewise defines `-g assertions` as a power-assertion report, while `screencapture` is a screen-capture utility. Neither contract says that a power assertion, a black capture, or a failed automation control proves the state of a different remote display session.
+
+This repository therefore keeps the following evidence boundaries distinct: `POWER_ASSERTION_ACTIVE` for `pmset`/Caffeine power assertions, `REMOTE_CAPTURE_UNAVAILABLE` for a black local capture, `CUA_CONTROL_UNAVAILABLE` for a Computer Use control failure, and `USER_REMOTE_VIEW` for a user-provided remote screenshot at its capture time. Only corroborated same-host/same-session direct lock evidence is `CONFIRMED_SCREEN_LOCK`. A conflict is `REMOTE_SESSION_MISMATCH`, not a license to infer that the user locked the Mac or to ask for unlock.
+
 For every new failure, record all of the following before changing code:
 
 1. Official URL and exact section title.
@@ -205,3 +219,5 @@ For every new failure, record all of the following before changing code:
 [^teams-publish]: Publish your Microsoft Teams agent or app, Before you publish, observed web lines 52-69. https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/deploy-and-publish/apps-publish-overview
 [^teams-permissions]: Browser device permissions in Teams, declare permission and reload guidance sections. https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/device-capabilities/browser-device-permissions
 [^teams-location]: Location capability in Teams, location support and browser fallback sections. https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/device-capabilities/location-capability
+[^apple-sleep-settings]: Apple Support, Set sleep and wake settings for your Mac, observed web lines 296-320 on 2026-09-07. https://support.apple.com/en-ie/guide/mac-help/mchle41a6ccd/mac
+[^apple-lock-screen]: Apple Support, Change Lock Screen settings on Mac, observed web lines 274-292 on 2026-09-07. https://support.apple.com/en-euro/guide/mac-help/-mh11784/mac

@@ -238,6 +238,22 @@ Core 서버 번들은 Teams SDK·Express 등 필수 런타임을 포함하고 Co
 
 화면이 잠겨 있으면 `COMMAND_ONLY` 단계는 진행하고, 네이티브 UI 단계만 해당 상태로 보류한다. 잠금 해제·비밀번호·Auth 앱 승인·파일 선택을 자동화하거나 우회하지 않는다.
 
+#### 원격 화면·잠금·캡처 증거 판정
+
+원격 Mac에서 도구별 화면 신호가 서로 다른 계층을 관찰할 수 있으므로, 하나의 신호를 다른 신호의 대리 증거로 사용하지 않는다. 이 표의 분류명을 릴리스 ledger·실패 receipt·사용자 안내에 그대로 사용한다.
+
+| 관찰 | 기록 상태 | 실제로 증명하는 범위 | 증명하지 않는 것 |
+|---|---|---|---|
+| `pmset -g assertions`에 Caffeine/`caffeinate`의 `Prevent*Sleep`가 있음 | `POWER_ASSERTION_ACTIVE` | 해당 프로세스가 절전 또는 디스플레이 절전을 막는 power assertion을 보유함 | 화면 잠금, 원격 캡처 가능, 특정 로그인 세션의 가시성 |
+| 로컬 `screencapture`가 검은 프레임/무의미한 프레임을 반환함 | `REMOTE_CAPTURE_UNAVAILABLE` | 현재 캡처 경로가 화면 내용을 전달하지 못함 | 사용자의 원격 데스크톱이 잠겼다는 사실 |
+| Computer Use가 `locked` 또는 자동 unlock 불가를 반환함 | `CUA_CONTROL_UNAVAILABLE` | 해당 CUA 제어 경로가 현재 앱 상태를 읽거나 조작하지 못함 | 같은 호스트의 실제 화면 잠금 |
+| 사용자가 제공한 Jump Desktop 등 원격 데스크톱 캡처에 바탕화면/앱이 보임 | `USER_REMOTE_VIEW` | 명시된 캡처 시각에 사용자가 본 원격 화면이 잠겨 있지 않았음 | 그 이후의 현재 화면 상태, CUA 제어 가능 여부 |
+| 같은 호스트·세션의 직접 잠금 화면과 독립적인 세션 상태가 일치함 | `CONFIRMED_SCREEN_LOCK` | 해당 시각의 네이티브 UI 단계가 실제 잠금 상태임 | 다른 호스트·다른 로그인 세션의 상태 |
+
+판정 순서는 다음과 같다. (1) 신호마다 `host`, `session`(알 수 없으면 `unknown`), 시각, 표면(`remote screenshot`, `local capture`, `CUA`, `CLI`)을 기록한다. (2) `USER_REMOTE_VIEW`와 도구 오류가 충돌하면 `REMOTE_SESSION_MISMATCH`로 보존하고 사용자 화면을 잠겼다고 단정하지 않는다. (3) 같은 호스트·세션에 결합된 직접 잠금 화면/세션 상태와 독립 신호가 모두 없으면 잠금 해제를 요청하지 않는다. (4) 기존 Ego DOM, CLI, 공개 HTTP 등 비네이티브 검증을 먼저 진행하고, 네이티브 UI만 `DESKTOP_UNVERIFIED`로 분리한다. (5) 캡처 경계 자체가 복구되기 전까지 `CUA_CONTROL_UNAVAILABLE`나 `REMOTE_CAPTURE_UNAVAILABLE`를 애플리케이션·Azure·Teams 서버 결함으로 승격하지 않는다.
+
+공식 근거와 설치 도움말도 분리한다. Apple은 전원 설정에서 디스플레이/시스템 절전 타이머를 조정하는 것과 Lock Screen의 “Require password…” 설정을 별도 항목으로 설명한다 ([Set sleep and wake settings for your Mac](https://support.apple.com/en-ie/guide/mac-help/mchle41a6ccd/mac), sections “Set your Mac to go to sleep after inactivity”/“Specify sleep and wake settings”, observed web lines 296-320; [Change Lock Screen settings on Mac](https://support.apple.com/en-euro/guide/mac-help/-mh11784/mac), Lock Screen options, observed web lines 274-292). 설치된 `pmset` 도움말도 `-g assertions`를 power assertion 조회로 설명하며, `screencapture` 도움말은 화면 캡처 유틸리티의 동작만 정의한다. 따라서 이 도구들의 출력만으로 원격 세션의 잠금 상태를 추론하지 않는다.
+
 #### FileProvider/dataless 파일과 장시간 대기
 
 macOS FileProvider가 원본 작업공간의 파일을 placeholder 상태로 만들면 코드 오류가 아니라 로컬 바이트 접근 문제일 수 있다. 빌드 전 `package.json`, `package-lock.json`, `appPackage/manifest.json`, `src/`, `scripts/`, `types/`와 실제 ZIP의 `stat` `blocks`·플래그를 확인한다. 파일 크기는 존재하지만 `blocks=0`이고 dataless/FileProvider 플래그가 있으면 `SOURCE_IO_BLOCKED`로 기록한다.

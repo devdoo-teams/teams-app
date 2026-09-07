@@ -6,12 +6,12 @@ resource: /gates.md
 tags: [release-gate, azure, teams, provenance, rollback]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T01:17:35Z"
+  at: "2026-09-07T14:42:00Z"
 verified:
   by: "process:release-gate-reconciliation/1"
-  at: "2026-09-07T01:17:35Z"
+  at: "2026-09-07T14:42:00Z"
 status: stable
-stale_after: "2026-09-14T01:17:35Z"
+stale_after: "2026-09-14T14:42:00Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -81,6 +81,14 @@ sources:
     resource: "https://github.com/devdoo-teams/teams-app/blob/main/docs/teams-release-workflow.md"
     title: "TeamsApp release workflow"
     location: "same-release, official-contract, and completion sections"
+  - id: apple-sleep-settings
+    resource: "https://support.apple.com/en-ie/guide/mac-help/mchle41a6ccd/mac"
+    title: "Set sleep and wake settings for your Mac"
+    location: "Set your Mac to go to sleep after inactivity and Specify sleep and wake settings; observed web lines 296-320 on 2026-09-07"
+  - id: apple-lock-screen
+    resource: "https://support.apple.com/en-euro/guide/mac-help/-mh11784/mac"
+    title: "Change Lock Screen settings on Mac"
+    location: "Lock Screen options; observed web lines 274-292 on 2026-09-07"
 ---
 
 # Gate policy
@@ -159,6 +167,7 @@ Azure Pipelines approvals control when a stage should run.[^az-approval] Deploym
 26. Portal, downloaded package, installed desktop/mobile app, app ID, version, and SHA agree.
 27. Teams desktop shows the target chat, fresh Bot reply, card/tab/buttons, current accessibility tree, and before/after screenshots.
 28. Mobile permission, GPS, and mobile UI remain separate; no desktop proof is promoted to MOBILE_READY.
+28a. Remote display evidence is classified before any native-UI handoff: `pmset`/Caffeine is `POWER_ASSERTION_ACTIVE`, black local capture is `REMOTE_CAPTURE_UNAVAILABLE`, CUA lock/unlock failure is `CUA_CONTROL_UNAVAILABLE`, and a user-provided remote desktop screenshot is `USER_REMOTE_VIEW` at its capture time. Only same-host/same-session direct lock evidence plus an independent corroborating signal is `CONFIRMED_SCREEN_LOCK`; conflicts are `REMOTE_SESSION_MISMATCH` and do not justify an unlock request.
 
 Container Apps troubleshooting requires revision status and system/application logs to distinguish image pull, crash, timeout, ingress, probe, configuration, and secret-reference failures.[^aca-start-failures] Container Apps distinguishes startup, liveness, and readiness; readiness must succeed before traffic shift.[^aca-health] Teams upload/update is also a separate package and installed-client process.[^teams-upload]
 
@@ -196,3 +205,5 @@ Run 46 is the current Azure canary attempt: it passed handoff, hosted Core `29/2
 [^az-approval]: Pipeline deployment approvals, approvals and check execution, observed web lines 42-58 and 67-77. https://learn.microsoft.com/en-us/azure/devops/pipelines/process/approvals?view=azure-devops
 [^aca-health]: Health probes in Azure Container Apps, probe types and readiness before traffic, observed web lines 36-41 and 187-188. https://learn.microsoft.com/en-us/azure/container-apps/health-probes
 [^teams-upload]: Upload your custom app, upload/update and installed app sections, observed web lines 48-60 and 84-122. https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/deploy-and-publish/apps-upload
+[^apple-sleep-settings]: Apple Support, Set sleep and wake settings for your Mac, observed web lines 296-320 on 2026-09-07. https://support.apple.com/en-ie/guide/mac-help/mchle41a6ccd/mac
+[^apple-lock-screen]: Apple Support, Change Lock Screen settings on Mac, observed web lines 274-292 on 2026-09-07. https://support.apple.com/en-euro/guide/mac-help/-mh11784/mac

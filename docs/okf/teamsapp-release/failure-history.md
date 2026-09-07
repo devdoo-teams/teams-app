@@ -6,12 +6,12 @@ resource: /failure-history.md
 tags: [teamsapp, azure, release, incident, failure, provenance]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T01:17:35Z"
+  at: "2026-09-07T14:42:00Z"
 verified:
   by: "process:release-evidence-reconciliation/1"
-  at: "2026-09-07T01:17:35Z"
+  at: "2026-09-07T14:42:00Z"
 status: stable
-stale_after: "2026-09-14T01:17:35Z"
+stale_after: "2026-09-14T14:42:00Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -133,6 +133,14 @@ sources:
     resource: "https://github.com/devdoo-teams/teams-app/blob/main/docs/teams-release-workflow.md"
     title: "TeamsApp release workflow"
     location: "official-contract debugging and same-release evidence rules"
+  - id: apple-sleep-settings
+    resource: "https://support.apple.com/en-ie/guide/mac-help/mchle41a6ccd/mac"
+    title: "Set sleep and wake settings for your Mac"
+    location: "Set your Mac to go to sleep after inactivity and Specify sleep and wake settings; observed web lines 296-320 on 2026-09-07"
+  - id: apple-lock-screen
+    resource: "https://support.apple.com/en-euro/guide/mac-help/-mh11784/mac"
+    title: "Change Lock Screen settings on Mac"
+    location: "Lock Screen options; observed web lines 274-292 on 2026-09-07"
 ---
 
 # Executive finding
@@ -680,3 +688,15 @@ The Azure DevOps artifact UI showed `azure-deployment-failure-receipt` at `536 B
 **FIX AND VERIFICATION.** Commit `930d4f7` adds `scripts/azure-worker-runtime-probe.mjs`, a RED/GREEN parser and shell-syntax regression, includes it in the 29-test Azure Core inventory, snapshots it before the deploy-only release checkout, invokes Azure `RunShellScript`, validates service/release/Codex/auth metadata without reading auth contents, and retains a success receipt only when `codex login status` passes under `teamsworker`. `npm run test:azure-core` passed `29/29`; Run 46 hosted execution confirmed the gate stops at the correct boundary.
 
 **CURRENT JUDGMENT.** `AZURE_CANARY_HTTP_PASS / WORKER_RUNTIME_GATE_BLOCKED / RELEASE_BLOCKED`. The next action is user-only out-of-band Codex login on the existing VM, followed by a bounded read-only probe. Do not copy a Mac credential, put `auth.json` in Git/artifacts, bypass the probe, bump the Teams version, upload a package, or report 24/7/A2A completion until the same release identity passes the worker probe and terminal execution evidence.
+
+## 2026-09-07 — Remote capture was over-promoted to a lock diagnosis
+
+**OFFICIAL CONTRACT.** Apple documents power/sleep timing and Lock Screen password behavior as separate settings and behaviors ([Set sleep and wake settings for your Mac](https://support.apple.com/en-ie/guide/mac-help/mchle41a6ccd/mac), observed web lines 296-320; [Change Lock Screen settings on Mac](https://support.apple.com/en-euro/guide/mac-help/-mh11784/mac), observed web lines 274-292). Installed `pmset` help defines `-g assertions` as a power-assertion report; installed `screencapture` help defines a screen-capture utility. These contracts do not make a capture/control failure a lock-state read-back.
+
+**OBSERVED EVIDENCE.** In this turn the user supplied a remote-desktop screenshot with the Mac desktop and application windows visible (`USER_REMOTE_VIEW`, valid for the supplied capture time). The local host separately reported Caffeine/`caffeinate` `PreventUserIdleSystemSleep`, `PreventUserIdleDisplaySleep`, and `PreventSystemSleep` through `pmset -g assertions` (`POWER_ASSERTION_ACTIVE`). The local `screencapture` path had previously produced a black frame (`REMOTE_CAPTURE_UNAVAILABLE`), and Computer Use had returned an automatic-unlock/locked error (`CUA_CONTROL_UNAVAILABLE`). These observations came from different surfaces and were not a same-session lock proof.
+
+**CLASSIFICATION.** `REMOTE_SESSION_MISMATCH / CAPTURE_BOUNDARY_UNAVAILABLE`; `CONFIRMED_SCREEN_LOCK` was not established. The previous interpretation that the user's Mac was locked was an evidence overclaim. It was not evidence that Caffeine had stopped working, that the Azure/Teams server was down, or that the user had to unlock the computer.
+
+**PREVENTION.** The workflow now requires host/session/time/surface labels for each signal; `pmset`, black capture, and CUA errors cannot trigger an unlock request on their own. A direct lock-screen/session signal plus an independent same-host/same-session signal is required for `CONFIRMED_SCREEN_LOCK`. If the signals conflict, preserve the conflict, continue command-only/Ego DOM/public HTTP work, and leave only native UI as `DESKTOP_UNVERIFIED`. See [원격 화면·잠금·캡처 증거 판정](../../teams-release-workflow.md#원격-화면잠금캡처-증거-판정) and [Apple Lock Screen settings](https://support.apple.com/en-euro/guide/mac-help/-mh11784/mac).
+
+**CURRENT JUDGMENT.** The supplied remote screenshot is valid evidence of the visible remote desktop at its capture time. Current command/capture/Computer Use surfaces must be reported separately; no further unlock request or lock-setting mutation is justified by the prior signals alone.

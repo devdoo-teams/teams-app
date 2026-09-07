@@ -6,12 +6,12 @@ resource: /faq.md
 tags: [faq, incident-response, release, teams, azure]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T01:17:35Z"
+  at: "2026-09-07T14:42:00Z"
 verified:
   by: "process:release-faq-reconciliation/1"
-  at: "2026-09-07T01:17:35Z"
+  at: "2026-09-07T14:42:00Z"
 status: stable
-stale_after: "2026-09-14T01:17:35Z"
+stale_after: "2026-09-14T14:42:00Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -93,6 +93,14 @@ sources:
     resource: "https://learn.microsoft.com/en-us/cli/azure/storage/blob?view=azure-cli-latest"
     title: "az storage blob"
     location: "metadata show/update and upload options; observed current CLI reference"
+  - id: apple-sleep-settings
+    resource: "https://support.apple.com/en-ie/guide/mac-help/mchle41a6ccd/mac"
+    title: "Set sleep and wake settings for your Mac"
+    location: "Set your Mac to go to sleep after inactivity and Specify sleep and wake settings; observed web lines 296-320 on 2026-09-07"
+  - id: apple-lock-screen
+    resource: "https://support.apple.com/en-euro/guide/mac-help/-mh11784/mac"
+    title: "Change Lock Screen settings on Mac"
+    location: "Lock Screen options; observed web lines 274-292 on 2026-09-07"
 ---
 
 # How to use this FAQ
@@ -470,3 +478,18 @@ The queue gate is now explicit: after every queue call, read back source commit,
 ## Q25. What is required to unblock the worker gate?
 
 The Codex VM login remains an out-of-band user-presence step. The operator must authenticate the existing VM worker account through the approved Codex device-login flow; the pipeline must never copy a Mac credential, print auth contents, store a device code, or perform MFA. After the user confirms that login is complete, rerun only the bounded worker probe or the same release deployment gate. A successful probe still does not prove 24/7 until the ACA promoted configuration has `minReplicas >= 1` and a real terminal worker receipt is read back.
+
+## Q26. Does a black screenshot or CUA "locked" error prove that the remote Mac is locked?
+
+No. They are separate capture/control boundaries and must not be promoted to a screen-lock fact.
+
+Evidence classification:
+
+- `pmset -g assertions` or Caffeine `Prevent*Sleep` output is `POWER_ASSERTION_ACTIVE`. It shows a power assertion, not whether a remote display session is locked.
+- A local `screencapture` black frame is `REMOTE_CAPTURE_UNAVAILABLE`. It shows that this capture path did not deliver pixels, not that the user's remote desktop is locked.
+- A Computer Use `locked`/automatic-unlock error is `CUA_CONTROL_UNAVAILABLE`. It shows that this control path cannot operate now, not the state of another session.
+- A user-provided remote desktop screenshot showing the desktop is `USER_REMOTE_VIEW` for that capture time. It is evidence of what the user saw then, not a guarantee about a later instant.
+
+Only a direct lock-screen/session signal and an independent signal tied to the same host and session may be recorded as `CONFIRMED_SCREEN_LOCK`. If signals disagree, record `REMOTE_SESSION_MISMATCH`, preserve the original evidence, continue command-only/Ego DOM/public HTTP checks, and keep only the native UI row `DESKTOP_UNVERIFIED`. Do not ask the user to unlock based on one tool error.
+
+Official basis: Apple separates power/sleep timing from Lock Screen password behavior ([Set sleep and wake settings for your Mac](https://support.apple.com/en-ie/guide/mac-help/mchle41a6ccd/mac), observed web lines 296-320; [Change Lock Screen settings on Mac](https://support.apple.com/en-euro/guide/mac-help/-mh11784/mac), observed web lines 274-292). Installed help also defines `pmset -g assertions` as power-assertion reporting and `screencapture` as screen capture. Internal rule: [remote screen evidence section](../../teams-release-workflow.md#원격-화면잠금캡처-증거-판정).

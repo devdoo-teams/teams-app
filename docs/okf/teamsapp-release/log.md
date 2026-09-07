@@ -166,3 +166,10 @@
 * **Receipt**: Ego Lite read back the `471 B` JSON and `65 B` SHA sidecar from the `536 B` artifact. The JSON SHA matched `f8975bcf...`; receipt boundary `worker-runtime`, exit `1`, `rawErrorPersisted=false`.
 * **Decision**: `AZURE_CANARY_HTTP_PASS / WORKER_RUNTIME_GATE_BLOCKED / RELEASE_BLOCKED`. The worker auth is out-of-band and user-only. No version bump, package upload, Teams completion message, or Jira Done.
 * **Next**: authenticate the existing VM Codex home without copying or logging credential contents, rerun the bounded probe, then require live terminal worker evidence. `minReplicas >= 1`, A2A, Teams portal/desktop/mobile remain separate gates.
+
+## 2026-09-07 — Remote screen-lock misclassification corrected
+
+* **Official contract**: Apple separates power/sleep timing from Lock Screen password behavior ([sleep and wake settings](https://support.apple.com/en-ie/guide/mac-help/mchle41a6ccd/mac), observed web lines 296-320; [Lock Screen settings](https://support.apple.com/en-euro/guide/mac-help/-mh11784/mac), observed web lines 274-292). Installed `pmset` help defines `-g assertions` as power-assertion reporting; installed `screencapture` help defines screen capture.
+* **Observed**: the user's supplied remote screenshot showed the Mac desktop (`USER_REMOTE_VIEW`); local `pmset` showed Caffeine/`caffeinate` `Prevent*Sleep` (`POWER_ASSERTION_ACTIVE`); local black capture and CUA automatic-unlock error were separate (`REMOTE_CAPTURE_UNAVAILABLE` and `CUA_CONTROL_UNAVAILABLE`).
+* **Correction**: no `CONFIRMED_SCREEN_LOCK` was established. The prior unlock interpretation was an evidence overclaim caused by mixing host/session/capture boundaries, not an observed user action or server diagnosis.
+* **Prevention**: require host/session/time/surface labels, two corroborating same-host/same-session signals before an unlock request, and use `REMOTE_SESSION_MISMATCH` for conflicts. Continue command-only, existing Ego DOM, and public HTTP checks while native UI is separately `DESKTOP_UNVERIFIED`.
