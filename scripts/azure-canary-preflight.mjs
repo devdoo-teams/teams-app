@@ -577,6 +577,15 @@ const workloadContainerAppRun48ReleaseUpdatePropertyChanges = Object.freeze([
   Object.freeze({ path: 'properties.template.revisionSuffix', propertyChangeType: 'Modify' }),
 ]);
 
+// Run 50 observed the steady-state form after the promoted minimum replica
+// had already been reconciled. Keep both transition and steady-state forms
+// explicit so a later release does not assume the previous delta is repeated.
+const workloadContainerAppRun50ReleaseUpdatePropertyChanges = Object.freeze(
+  workloadContainerAppRun48ReleaseUpdatePropertyChanges.filter(
+    ({ path: propertyPath }) => propertyPath !== 'properties.template.scale.minReplicas',
+  ),
+);
+
 const workloadContainerAppReleaseUpdateVariants = Object.freeze([
   workloadContainerAppReleaseUpdatePropertyChanges,
   // ARM what-if can omit this service-defaulted Delete noise; keep both complete observed multisets exact.
@@ -591,6 +600,7 @@ const workloadContainerAppReleaseUpdateVariants = Object.freeze([
   workloadContainerAppRun37ReleaseUpdatePropertyChanges,
   workloadContainerAppRun47ReleaseUpdatePropertyChanges,
   workloadContainerAppRun48ReleaseUpdatePropertyChanges,
+  workloadContainerAppRun50ReleaseUpdatePropertyChanges,
 ]);
 
 const plannedChangeRules = Object.freeze([

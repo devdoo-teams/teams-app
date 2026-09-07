@@ -521,3 +521,9 @@ This is a confirmed allowlist fixture gap, not a source mismatch and not a succe
 Run 49's named `revision show` poll exhausted while every safe state field was null. Afterward, the existing Azure Portal read-back showed the exact latest revision name and `provisioningState=Succeeded`, and `/api/health` returned the same release identity. This proves a read-back timing/response inconsistency is plausible, but the original revision body was not retained, so the precise transient cause remains `ROOT_CAUSE_REVIEW_REQUIRED`.
 
 The prevention is to query the exact revision with both the documented `show` and `list --all` paths, apply the same active/provisioned/running-or-healthy/100%-traffic predicate to either response, and retain only a value-free candidate receipt. A healthy public endpoint does not by itself make the failed pipeline run or the worker/A2A gates pass.
+
+## Q31. Why did Run 50 fail before the revision fallback could be tested?
+
+Run 50 reached a different, earlier boundary. After Run 49 had already applied `minReplicas: 1`, Azure's next what-if no longer contained that path; it reported the steady-state release identity delta instead. The exact allowlist intentionally rejected it because only the initial transition shape had been recorded. This confirms that the earlier Run 49 mutation changed the next what-if, rather than proving that the new source or fallback was absent.
+
+The fix is a second exact value-free steady-state variant alongside the initial transition variant. Both are tested independently; arbitrary new property changes remain blocked. The revision list fallback will be evaluated only after this pre-mutation gate passes.

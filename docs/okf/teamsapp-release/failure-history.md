@@ -6,12 +6,12 @@ resource: /failure-history.md
 tags: [teamsapp, azure, release, incident, failure, provenance]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T16:42:13Z"
+  at: "2026-09-07T17:17:32Z"
 verified:
   by: "process:release-evidence-reconciliation/1"
-  at: "2026-09-07T16:42:13Z"
+  at: "2026-09-07T17:17:32Z"
 status: stable
-stale_after: "2026-09-14T16:42:13Z"
+stale_after: "2026-09-14T17:17:32Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -738,3 +738,15 @@ The exact Container App `Modify` multiset was the known Run 37 legacy env/secret
 **CLASSIFICATION.** `CONFIRMED_FAILURE_BOUNDARY / REVISION_READBACK_INCONSISTENCY`; not a source-commit mismatch and not a full 24/7/worker success. The current Azure service is live on the same identity, but Run 49 itself is not a release pass.
 
 **FIX AND PREVENTION.** Add an official `revision list --all` fallback that applies the identical readiness predicate and retain a value-free `azure-revision-state.json` in the always-published workload evidence. Add platform/failure-receipt regressions for the fallback and safe receipt. Keep version `1.0.103`; perform a clean Core gate and one bounded hosted rerun before any Teams completion or worker/A2A promotion.
+
+## 2026-09-08 — Run 50 exposed the steady-state what-if variant
+
+**OFFICIAL CONTRACT.** The Azure CLI documents `az containerapp revision list` as the way to list a Container App's revisions and `az containerapp revision show` as the way to show one named revision ([az containerapp revision](https://learn.microsoft.com/en-us/cli/azure/containerapp/revision?view=azure-cli-latest), `list` and `show` sections; current page read 2026-09-08). The internal gate must compare exact provider-reported property changes with the current template rather than assume the previous attempt's delta repeats.
+
+**OBSERVED EVIDENCE.** Run 50 / `20260907.6` used source/release commit `9cbed6663f34b9e8e0ac88508d5d7a9b63c44a5c`, app `1.0.103`, and a matching immutable handoff. Hosted Core/RBAC and approval passed, but the task stopped before workload mutation at `workload-parameters-and-what-if`. The authenticated Ego Lite read-back of workload diagnostic artifact `292` reported `status=BLOCKED`, `whatIf.status=Succeeded`, and `Modify:6`, `NoChange:20`, `Ignore:2`, `Unsupported:9`.
+
+The exact Container App delta was the Run 37 legacy env/secret reconciliation plus release identity updates at `env[19]`, `env[21]`, `image`, and `properties.template.revisionSuffix`. It did not include `properties.template.scale.minReplicas`, because that intentional change had already been applied by Run 49's workload mutation. Failure receipt artifact `293` was retained; the build summary recorded receipt SHA `21fb7a533cd6350ed7d0a4d5cce62fc1db8f4b3e9dc3e0baa4b5a403bc2adfdd`.
+
+**CLASSIFICATION.** `CONFIRMED_ROOT_CAUSE / WORKLOAD_WHAT_IF_MISSING_STEADY_STATE_VARIANT`. This is not evidence that the source commit was ignored, that the revision list fallback failed, or that the app version must change. It is a deterministic state-transition fixture gap discovered before workload mutation.
+
+**FIX AND PREVENTION.** Add explicit exact, value-free transition and steady-state variants to `scripts/azure-canary-preflight.mjs`, with a RED/GREEN regression for the steady-state shape. Keep arbitrary env/image/scale changes blocked and require a new clean Core gate plus immutable handoff before another hosted run.

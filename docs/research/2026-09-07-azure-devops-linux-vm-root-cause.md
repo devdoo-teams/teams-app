@@ -6,7 +6,7 @@
 - 대상: `devdoo-teams/teams-app`, canonical worktree `/Users/doosansmacbookpro/Documents/TeamsApp`, `main`
 - 조사 기준 HEAD: `f17e40ac57905735aa5218efcd9399977822fc35` (2026-09-08 what-if allowlist correction)
 - 제품 버전: `1.0.103` (이번 조사에서는 버전 변경 없음)
-- 운영 사건: Azure DevOps Run 32 / Build `20260906.11`부터 Run 48 / Build `20260907.4`까지
+- 운영 사건: Azure DevOps Run 32 / Build `20260906.11`부터 Run 50 / Build `20260907.6`까지
 - 조사 범위: Azure DevOps 승인·배포·아티팩트 계약, ARM what-if 및 Bicep 경계, Azure Container Apps revision/health/traffic, ACR managed identity, Linux VM/cloud-init/Custom Script Extension, 24/7 worker 상태·증거 체인
 - 증거 분류: `OFFICIAL CONTRACT`, `OBSERVED REPOSITORY EVIDENCE`, `INFERENCE / RECOMMENDATION`, `LIVE UNVERIFIED`
 - 이 문서는 읽기·리서치·문서화 결과다. 이번 문서 갱신 자체는 Azure 리소스, Teams 앱, 트래픽, 비밀, Jira, 브라우저 세션을 변경하지 않았으며, Run 43의 pipeline 배포·실패 read-back은 아래에 별도 기록한다.
@@ -439,3 +439,11 @@ The failure receipt artifact `285` contained a 476-byte JSON receipt and a 65-by
 An independent read after failure is consistent with a timing/response gap: the existing Azure Portal showed `latestRevisionName=teamsapp-canary-goictvxm--fb02f7a7df` and Container App `provisioningState=Succeeded`, while public `/api/health` returned HTTP 200 with the same commit, version, image digest, package/bundle identity, authenticated Teams Core, and reachable queue/state dependencies. The worker heartbeat/readiness remained unavailable and A2A remained unavailable. This is `CONFIRMED_FAILURE_BOUNDARY / REVISION_READBACK_INCONSISTENCY`, not a full release pass.
 
 The prevention is to use the documented `az containerapp revision list --all` alongside `revision show` when the named response is incomplete, evaluate the same exact readiness predicate on either response, and retain a value-free candidate receipt. This preserves fail-closed behavior while making eventual-consistency or command-response gaps observable. A fresh clean Core gate and one bounded hosted rerun from the new source are required.
+
+## Run 50 — steady-state release identity delta
+
+Run 50 / Azure DevOps build `20260907.6` used source/release commit `9cbed6663f34b9e8e0ac88508d5d7a9b63c44a5c`, application version `1.0.103`, and the matching immutable handoff. Handoff, hosted Azure Core/RBAC, and approval passed. The deployment task stopped before workload mutation at `workload-parameters-and-what-if`.
+
+The read-back workload diagnostic artifact `292` reported `status=BLOCKED`, `whatIf.status=Succeeded`, and change counts `Modify:6`, `NoChange:20`, `Ignore:2`, `Unsupported:9`. The exact Container App delta was the Run 37 legacy env/secret reconciliation plus `env[19]`, `env[21]`, `image`, and `properties.template.revisionSuffix`; it did not include `properties.template.scale.minReplicas`, because Run 49 had already applied that intended change. Failure artifact `293` was retained; the task recorded receipt SHA `21fb7a533cd6350ed7d0a4d5cce62fc1db8f4b3e9dc3e0baa4b5a403bc2adfdd`.
+
+This is `CONFIRMED_ROOT_CAUSE / WORKLOAD_WHAT_IF_MISSING_STEADY_STATE_VARIANT`: an exact state-transition fixture gap, not evidence that the list fallback failed or that the source commit was ignored. The remediation is to keep both the initial promoted transition and post-transition steady-state multisets explicit and value-free. No application version bump or full-release claim is justified.

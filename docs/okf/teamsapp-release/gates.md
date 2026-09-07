@@ -6,12 +6,12 @@ resource: /gates.md
 tags: [release-gate, azure, teams, provenance, rollback]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T16:42:13Z"
+  at: "2026-09-07T17:17:32Z"
 verified:
   by: "process:release-gate-reconciliation/1"
-  at: "2026-09-07T16:42:13Z"
+  at: "2026-09-07T17:17:32Z"
 status: stable
-stale_after: "2026-09-14T16:42:13Z"
+stale_after: "2026-09-14T17:17:32Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -181,7 +181,7 @@ Container Apps troubleshooting requires revision status and system/application l
 
 # Current run
 
-Run 48 is the current Azure canary attempt: it passed the exact GitHub handoff, hosted Azure Core/RBAC, and manual approval, then failed before workload mutation at `workload-parameters-and-what-if`. The hosted log confirms it ran source `f17e40ac`; the exact Container App what-if shape included the intentional `minReplicas: 1` change plus release identity `env[19]`/`env[21]`, image, and revision-suffix changes that were not yet represented in the Run 47 fixture. The workload diagnostic and failure receipt are retained; Azure HTTP, worker-runtime, Teams package, desktop/mobile, and A2A promotion remain `BLOCKED` or `UNVERIFIED`. Run 46 remains the historical worker-runtime `auth_file` blocker; Run 45 is an invalid queue-parameter attempt. Run 44's `PASS` remains historical canary evidence without the worker gate.
+Run 50 is the current Azure canary attempt: it passed the exact GitHub handoff, hosted Azure Core/RBAC, and manual approval, then failed before workload mutation at `workload-parameters-and-what-if`. The source read-back was `9cbed666`; after Run 49 had already applied the promoted minimum replica, the provider returned the steady-state release-identity shape without `properties.template.scale.minReplicas`, which was not yet represented in the exact fixture. The workload diagnostic and failure receipt are retained; Azure HTTP, worker-runtime, Teams package, desktop/mobile, and A2A promotion remain `BLOCKED` or `UNVERIFIED`. Run 49 remains the revision read-back inconsistency, Run 46 the historical worker-runtime `auth_file` blocker, and Run 45 an invalid queue-parameter attempt. Run 44's `PASS` remains historical canary evidence without the worker gate.
 
 # Required commands before a new run
 

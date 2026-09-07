@@ -530,6 +530,29 @@ try {
     'workload-container-app-release-update',
   ]);
 
+  // Run 50 observed the steady-state form after minReplicas was already
+  // applied by the previous attempt: the exact Run 48 shape without the
+  // already-reconciled minimum-replica change.
+  const run50ContainerAppPropertyChanges = run48ContainerAppPropertyChanges.filter(
+    ({ path: propertyPath }) => propertyPath !== 'properties.template.scale.minReplicas',
+  );
+  const run50ContainerAppOnly = createAzureWhatIfReceipt({
+    ...workloadIdentity,
+    whatIf: {
+      status: 'Succeeded',
+      changes: [{
+        resourceId: `${scope}/providers/Microsoft.App/containerApps/teamsapp-canary-goictvxm`,
+        changeType: 'Modify',
+        delta: run50ContainerAppPropertyChanges,
+      }],
+    },
+    checkedAt: '2026-09-08T02:00:00.000Z',
+  });
+  assert.equal(run50ContainerAppOnly.status, 'READY');
+  assert.deepEqual(run50ContainerAppOnly.whatIf.approvedPlannedChanges.map(({ rule }) => rule), [
+    'workload-container-app-release-update',
+  ]);
+
   for (const unsafeWorkloadChanges of [
     [{ ...workloadObservedChanges[0], resourceId: `${scope}/providers/Microsoft.App/containerApps/teamsapp-production-goictvxm` }],
     [{ ...workloadObservedChanges[0], delta: undefined }],
