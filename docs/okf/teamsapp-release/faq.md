@@ -6,12 +6,12 @@ resource: /faq.md
 tags: [faq, incident-response, release, teams, azure]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T23:41:31Z"
+  at: "2026-09-07T00:00:27Z"
 verified:
   by: "process:release-faq-reconciliation/1"
-  at: "2026-09-06T23:41:31Z"
+  at: "2026-09-07T00:00:27Z"
 status: stable
-stale_after: "2026-09-13T23:41:31Z"
+stale_after: "2026-09-14T00:00:27Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -422,6 +422,18 @@ Fix and gate:
 - Keep the closure explicit and minimal; do not copy the whole repository or alter the release commit to hide a missing helper.
 
 Run 43 remains failed. No application version bump or Teams upload is appropriate for this CI-only repair. A clean Core gate and one bounded hosted rerun are required before this release can advance.
+
+## Q22. What did Run 44 actually prove?
+
+Run 44 proved the repaired Azure canary deployment path for the existing `1.0.103` release identity. The hosted final task loaded the complete preserved helper closure and verified the release commit, version, image digest, revision state, traffic, and public health identity in one run. The Azure DevOps build itself is `Succeeded`; this is not inferred from an exit code alone.
+
+Independent read-back:
+
+- The public health endpoint returned HTTP 200 with `ok=true`, version `1.0.103`, source commit `71df02e2…`, server bundle SHA, `auth=teams-authenticated`, `userAuth=entra-sso`, `bot=teams-sdk`, and `outbound=teams-sdk`.
+- Ego Lite's existing ACA revision page showed `teamsapp-canary-goictvxm--71df02e2ea`, `ScaledToZero`, `Healthy`, traffic `100`, and replicas `0`.
+- The response still reports worker heartbeat `not-observed`, worker readiness `unavailable`, execution boundary `external-linux-worker-unverified`, and A2A `unavailable`.
+
+Therefore Run44 is `AZURE_CANARY_DEPLOYMENT_PASS`, not full product release completion. Microsoft distinguishes scale-to-zero from an always-running instance; `minReplicas >= 1` is still required for the 24/7 gate ([Set scaling rules](https://learn.microsoft.com/en-us/azure/container-apps/scale-app), lines 31-56). Teams package registration, installed desktop UI, mobile UI, and live worker/A2A evidence remain open.
 
 [^okf-spec]: Open Knowledge Format v0.2 specification, sections 3-5 and 8-9, observed web lines 253-327, 370-444, 486-513. https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md
 [^arm-what-if]: ARM what-if operation, What-if operation and permissions, observed web lines 29-52. https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-what-if

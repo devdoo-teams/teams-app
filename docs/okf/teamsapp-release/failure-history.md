@@ -6,12 +6,12 @@ resource: /failure-history.md
 tags: [teamsapp, azure, release, incident, failure, provenance]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T23:41:31Z"
+  at: "2026-09-07T00:00:27Z"
 verified:
   by: "process:release-evidence-reconciliation/1"
-  at: "2026-09-06T23:41:31Z"
+  at: "2026-09-07T00:00:27Z"
 status: stable
-stale_after: "2026-09-13T23:41:31Z"
+stale_after: "2026-09-14T00:00:27Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -517,7 +517,7 @@ These records do not substitute for current Azure run evidence.
 
 # Current judgment
 
-The current state is RELEASE_BLOCKED / Run 43 FAILED_AFTER_APPROVAL at `final-identity-contract`; Run 42 remains FAILED_AFTER_APPROVAL at the same boundary, Run 41 remains FAILED_AFTER_APPROVAL at `revision-and-health`, Run 40 remains FAILED_AFTER_APPROVAL at `revision-and-health`, Run 39 remains FAILED_AFTER_APPROVAL at `worker-blob`, Run 38 remains FAILED_AFTER_APPROVAL at the same boundary, Run 32 remains FAILED_AFTER_APPROVAL, Run 31 remains FAILED_BEFORE_APPROVAL, and Run 30 remains FAILED_AFTER_APPROVAL.
+The current state is `AZURE_CANARY_DEPLOYMENT_PASS / RELEASE_BLOCKED`: Run 44 passed the final identity contract with the preserved helper closure; Run 43 remains FAILED_AFTER_APPROVAL at `final-identity-contract`, Run 42 remains FAILED_AFTER_APPROVAL at the same boundary, Run 41 remains FAILED_AFTER_APPROVAL at `revision-and-health`, Run 40 remains FAILED_AFTER_APPROVAL at `revision-and-health`, Run 39 remains FAILED_AFTER_APPROVAL at `worker-blob`, Run 38 remains FAILED_AFTER_APPROVAL at the same boundary, Run 32 remains FAILED_AFTER_APPROVAL, Run 31 remains FAILED_BEFORE_APPROVAL, and Run 30 remains FAILED_AFTER_APPROVAL.
 
 - local/contract/Azure Core evidence: PASS within scope;
 - Run 32 workload what-if: FAILED after approval at `workload-parameters-and-what-if`; no Azure workload mutation occurred;
@@ -529,12 +529,15 @@ The current state is RELEASE_BLOCKED / Run 43 FAILED_AFTER_APPROVAL at `final-id
 - Run 42 failure receipt: retained with `receiptWriteStatus=READY` and checksum `6e8a536eccb8da674b37f33b3b60dc713ab637a72a572e759ebc61addbb846af`; receipt integrity is verified, but release success is not;
 - Run 43 final identity: FAILED because the preserved `azure-deployment-contract.mjs` imported `./azure-release-input.mjs`, but that dependency was not included in the temporary snapshot; the source snapshot closure is now incomplete by direct hosted evidence;
 - Run 43 failure receipt: artifact `245` reported `545 B`; the task logged `receiptWriteStatus=READY` with checksum `2651ec69422d53fa8a0674ff4101c195e16b2fc4c778c61e57a80950dabd2019`;
+- Run 44 final identity: PASS for the Azure canary deployment; the preserved helper closure loaded successfully and logged the exact release commit, version, and image digest;
+- Run 44 public health and ACA revision: PASS within the HTTP canary boundary; health returned `ok=true`, version `1.0.103`, release source identity, authenticated Teams Core fields, and the existing revision read-back was `Healthy / ScaledToZero / traffic 100% / replicas 0`;
 - Run 33 pre-approval receipt read-back: reported artifact sizes conflict with 62-byte authorization text; no receipt content is verified;
 - Run 31 release handoff: FAILED before approval because the requested artifact was absent;
 - Run 30 post-approval Azure mutation: FAILED at an unknown named boundary (Run 30 evidence incomplete);
 - Run 39 deployment receipt: valid, non-empty, checksum-backed, with exact failure boundary;
 - healthy revision: observed as `Healthy / ScaledToZero / traffic 100% / replicas 0`, but same-run final identity reconciliation: UNVERIFIED;
 - public health: HTTP 200 and core identity observed in Run 42; same-release final identity: UNVERIFIED;
+- public health: HTTP 200 and same-release core identity observed in Run 44; external worker/A2A readiness remains UNVERIFIED;
 - portal/installed same package: UNVERIFIED;
 - Teams desktop fresh reply: UNVERIFIED;
 - mobile: MOBILE_UNVERIFIED;
@@ -610,6 +613,16 @@ The failure artifact list showed `azure-deployment-failure-receipt` artifact `24
 **FIX REQUIRED.** Add `scripts/azure-release-input.mjs` to the same pipeline-owned temporary directory before `git checkout --detach "$commit"`, assert that it is non-empty, and add a RED regression that executes the snapshotted `azure-deployment-contract.mjs` with a valid fixture receipt after the source checkout. The test must fail if any local relative import required by the helper is missing. Do not solve this by copying arbitrary repository files or by changing the release commit; use an explicit, reviewed helper closure (or an immutable helper bundle).
 
 **CURRENT JUDGMENT.** Run 43 remains `FAIL_AFTER_APPROVAL` with verified non-empty failure evidence. No version bump or Teams upload is justified. Update this record again only after the closure test is GREEN, clean Core passes, and one bounded hosted rerun proves the final identity helper can load and validate the same release.
+
+## 2026-09-07 — Run 44 Azure canary deployment identity verified
+
+**OBSERVED EVIDENCE.** Run 44 / build `20260906.23` used pipeline source `95771889b31b42ffca8a218315e2bff1dfd50557`, deploy-only release commit `71df02e2ea9e9dbecbe864e0f1c6be3d649cbb4a`, version `1.0.103`, and image digest `sha256:a52d4d53baee73cd3769ac297b723f8b05883500692d2ce4b4eb856f07ee1f27`. It passed handoff, hosted Core `26/26`, environment approval, worker Blob staging, workload deployment, accepted revision readiness, and the final identity contract. The final task log recorded `Azure release deployment verified: 71df02e2ea9e9dbecbe864e0f1c6be3d649cbb4a, 1.0.103, sha256:a52d4d53baee73cd3769ac297b723f8b05883500692d2ce4b4eb856f07ee1f27`.
+
+The independent public health read-back returned HTTP 200 with `ok=true`, version `1.0.103`, source commit `71df02e2ea9e9dbecbe864e0f1c6be3d649cbb4a`, server bundle SHA `c7be7000078e7f1d439c8700cff30445515c1f4a1e34c04152a97b42612948b4`, `environment=production`, `auth=teams-authenticated`, `userAuth=entra-sso`, `bot=teams-sdk`, and `outbound=teams-sdk`. The same health response reported queue submission ready, worker heartbeat `not-observed`, worker readiness `unavailable`, execution boundary `external-linux-worker-unverified`, and A2A `unavailable`; optional/Grok and MCP paths remained disabled.
+
+The existing ACA revision page in the same Ego Lite task space read back `teamsapp-canary-goictvxm--71df02e2ea` as `ScaledToZero`, `Healthy`, traffic weight `100`, replicas `0`. Microsoft documents `minReplicas >= 1` as the always-running condition, so this is an Azure HTTP canary identity pass, not proof of the requested 24/7 Linux worker or live A2A service. Teams portal package registration, installed desktop UI, mobile UI, and live worker evidence are still separate gates.
+
+**CURRENT JUDGMENT.** Run 44 resolves the Run 42/43 helper provenance failures for the tested release identity. No application version bump was made because the changes were CI/release-gate repairs. Continue only with worker 24/7/A2A and same-release Teams package/desktop/mobile verification; do not send a Teams completion report while those gates remain `UNVERIFIED`.
 
 [^okf-spec]: Open Knowledge Format v0.2 specification, sections 1, 3, 4, 5, 8, 9, observed web lines 197-204, 253-327, 370-444, 486-513. https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md
 [^arm-what-if]: Template deployment what-if, What-if operation and permissions, observed web lines 29-52. https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-what-if

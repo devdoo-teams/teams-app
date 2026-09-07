@@ -6,12 +6,12 @@ resource: /gates.md
 tags: [release-gate, azure, teams, provenance, rollback]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T23:41:31Z"
+  at: "2026-09-07T00:00:27Z"
 verified:
   by: "process:release-gate-reconciliation/1"
-  at: "2026-09-06T23:41:31Z"
+  at: "2026-09-07T00:00:27Z"
 status: stable
-stale_after: "2026-09-13T23:41:31Z"
+stale_after: "2026-09-14T00:00:27Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -166,7 +166,7 @@ Container Apps troubleshooting requires revision status and system/application l
 
 # Current run
 
-Run 43 is the current failed run: it passed handoff, approval, worker Blob, workload deployment, the updated revision poll, and public health fetch, then failed at `final-identity-contract` because the preserved deployment-contract helper could not load its unsnapshotted `azure-release-input.mjs` dependency. Run 43 retained a non-empty failure receipt, and the source-level dependency-closure correction is not yet implemented or hosted-verified. Run 43 is not release complete. Run42's top-level-helper drift and the earlier Run40 scale-to-zero/empty-receipt failures remain historical incidents, not current pass evidence.
+Run 44 is the current Azure canary result: it passed handoff, hosted Core, approval, worker Blob, workload deployment, the revised revision poll, public health, and final identity verification using the complete preserved helper closure. The Azure canary boundary is `PASS`, but the product release remains `BLOCKED` by worker 24/7/A2A and Teams package/desktop/mobile gates. Run43's incomplete closure, Run42's top-level-helper drift, and the earlier Run40 scale-to-zero/empty-receipt failures remain historical incidents, not current pass evidence.
 
 # Required commands before a new run
 

@@ -168,6 +168,17 @@
 - Public health: 2920-byte response fetched before final identity module-load failure; HTTP/API core evidence is separate from release completion
 - Decision: Run43 remains failed; add/test the explicit dependency closure, update docs, commit/push, run clean Core, then one bounded rerun. No version bump or Teams upload.
 
+## 현재 run 44 read-back
+
+- Pipeline source: `95771889b31b42ffca8a218315e2bff1dfd50557`
+- Requested release artifact: `71df02e2ea9e9dbecbe864e0f1c6be3d649cbb4a`, app `1.0.103`, image digest `sha256:a52d4d53baee73cd3769ac297b723f8b05883500692d2ce4b4eb856f07ee1f27`
+- Outcome: `SUCCEEDED` / Azure canary deployment identity verified
+- Completed boundaries: handoff, hosted Core `26/26`, approval, worker Blob SHA, workload deployment, revision readiness, public health, and final identity contract
+- Exact final log: `Azure release deployment verified: 71df02e2ea9e9dbecbe864e0f1c6be3d649cbb4a, 1.0.103, sha256:a52d4d53baee73cd3769ac297b723f8b05883500692d2ce4b4eb856f07ee1f27`
+- Public health: HTTP 200, `ok=true`, version `1.0.103`, source commit `71df02e2...`, server bundle SHA `c7be700...`, production authenticated Teams Core; external worker/A2A readiness unavailable
+- ACA revision read-back: `teamsapp-canary-goictvxm--71df02e2ea`, `Healthy`, `ScaledToZero`, traffic `100`, replicas `0`
+- Decision: Azure canary gate PASS only. Continue with 24/7 worker/A2A and same-release Teams package/desktop/mobile evidence; no version bump or completion message yet.
+
 ## 다음 실행 전 필수 명령
 
 ```bash

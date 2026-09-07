@@ -6,12 +6,12 @@ resource: /official-contracts.md
 tags: [official-contract, azure, teams, release, evidence]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-06T23:41:31Z"
+  at: "2026-09-07T00:00:27Z"
 verified:
   by: "process:official-source-research/1"
-  at: "2026-09-06T23:41:31Z"
+  at: "2026-09-07T00:00:27Z"
 status: stable
-stale_after: "2026-09-13T23:41:31Z"
+stale_after: "2026-09-14T00:00:27Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"

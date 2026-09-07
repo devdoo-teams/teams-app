@@ -144,3 +144,11 @@
 * **Receipt**: failure artifact `245` was listed at `545 B`; task checksum was `2651ec69422d53fa8a0674ff4101c195e16b2fc4c778c61e57a80950dabd2019` and `receiptWriteStatus=READY`.
 * **Classification**: `CONFIRMED_ROOT_CAUSE` / `INCOMPLETE_RELEASE_CRITICAL_HELPER_CLOSURE`. This is a new direct failure, not a repeat of Run42's top-level helper drift.
 * **Next**: add and test the explicit `azure-release-input.mjs` dependency closure before release checkout, run focused RED/GREEN verification, update the ledger, commit/push, run clean Core, then queue one bounded hosted rerun. No version bump, Teams upload, or completion message.
+
+## 2026-09-07 — Run 44 Azure canary identity verification
+
+* **Observed evidence**: Run 44 / build `20260906.23` used pipeline source `95771889b31b42ffca8a218315e2bff1dfd50557`, release `71df02e2ea9e9dbecbe864e0f1c6be3d649cbb4a`, version `1.0.103`, and image digest `sha256:a52d4d53baee73cd3769ac297b723f8b05883500692d2ce4b4eb856f07ee1f27`.
+* **Hosted result**: Azure DevOps build `Succeeded`; handoff, hosted Core `26/26`, approval, worker Blob staging, workload deployment, accepted revision readiness, and final identity all passed. Log 44 recorded `Azure release deployment verified` with the exact release identity.
+* **Independent live evidence**: public health returned HTTP 200 with `ok=true`, `1.0.103`, release source identity, authenticated Teams Core fields, and server bundle SHA `c7be7000078e7f1d439c8700cff30445515c1f4a1e34c04152a97b42612948b4`. Existing Ego Lite ACA page showed revision `71df02e2ea`, `Healthy`, `ScaledToZero`, traffic `100`, replicas `0`.
+* **Boundary**: `AZURE_CANARY_DEPLOYMENT_PASS`; worker heartbeat/readiness, Linux 24/7, A2A, Teams package registration, installed desktop, and mobile remain `UNVERIFIED`.
+* **Policy**: no application version bump, Teams upload, Jira Done, or Teams completion message; this was CI/release-gate repair and canary verification only.
