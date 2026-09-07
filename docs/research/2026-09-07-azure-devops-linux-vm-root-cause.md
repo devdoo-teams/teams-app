@@ -4,9 +4,9 @@
 
 - 조사일: 2026-09-07 (Asia/Seoul)
 - 대상: `devdoo-teams/teams-app`, canonical worktree `/Users/doosansmacbookpro/Documents/TeamsApp`, `main`
-+ 조사 기준 HEAD: `930d4f7125b25a9b96ad2a11df1203a99b397903`
+- 조사 기준 HEAD: `0fff1b2d9195707d8c3363f2249955aed0eb559b` (2026-09-08 source correction)
 - 제품 버전: `1.0.103` (이번 조사에서는 버전 변경 없음)
-+ 운영 사건: Azure DevOps Run 32 / Build `20260906.11`부터 Run 46 / Build `20260907.2`까지
+- 운영 사건: Azure DevOps Run 32 / Build `20260906.11`부터 Run 47 / Build `20260907.3`까지
 - 조사 범위: Azure DevOps 승인·배포·아티팩트 계약, ARM what-if 및 Bicep 경계, Azure Container Apps revision/health/traffic, ACR managed identity, Linux VM/cloud-init/Custom Script Extension, 24/7 worker 상태·증거 체인
 - 증거 분류: `OFFICIAL CONTRACT`, `OBSERVED REPOSITORY EVIDENCE`, `INFERENCE / RECOMMENDATION`, `LIVE UNVERIFIED`
 - 이 문서는 읽기·리서치·문서화 결과다. 이번 문서 갱신 자체는 Azure 리소스, Teams 앱, 트래픽, 비밀, Jira, 브라우저 세션을 변경하지 않았으며, Run 43의 pipeline 배포·실패 read-back은 아래에 별도 기록한다.
@@ -410,3 +410,9 @@ Run 46 / `20260907.2` used source `930d4f7`, release commit `71df02e2`, version 
 The failure receipt was read back through the existing Ego Lite Azure DevOps tab: artifact UI `536 B`, JSON `471 B`, sidecar `65 B`; body boundary `worker-runtime`, exit `1`, source commit `71df02e...`, release version `1.0.103`, pipeline run `46`, and `rawErrorPersisted=false`. The JSON SHA matched the sidecar prefix `f8975bcf...`. The probe never reads auth contents; it checks regular owner-only metadata and runs `codex login status` as `teamsworker` with a bounded timeout.
 
 Root cause is now separated from earlier Azure canary status: Run44's successful `Succeeded` was only an ACA HTTP canary result because worker auth/readiness was not a pipeline gate. The VM systemd service was active, but the auth home was missing. This is `CONFIRMED_ROOT_CAUSE` / `WORKER_AUTH_OUT_OF_BAND_MISSING`. Current state is `AZURE_CANARY_HTTP_PASS / WORKER_RUNTIME_GATE_BLOCKED / RELEASE_BLOCKED`; no version bump or Teams package upload is justified.
+
+## Run 47 — promoted 24/7 replica what-if allowlist gap
+
+Run 47 / `20260907.3` used source and release commit `0fff1b2d9195707d8c3363f2249955aed0eb559b`, application version `1.0.103`, and the new GitHub immutable handoff. GitHub artifact and Azure DevOps handoff/Core/RBAC/approval boundaries passed. The deployment task stopped before `az deployment group create` at `workload-parameters-and-what-if` because the existing canary Container App's exact legacy env/secret property multiset gained the intentional `properties.template.scale.minReplicas` / `Modify` path.
+
+This is `CONFIRMED_ROOT_CAUSE` / `WORKLOAD_WHAT_IF_ALLOWLIST_MISSING_MIN_REPLICAS`, not evidence that Azure rejects `minReplicas: 1`. The workload diagnostic and failure receipt were both retained. The source adds a separate exact Run 47 multiset and a RED/GREEN regression; arbitrary Container App scale or environment modifications remain blocked. The next run must execute from a clean commit and read back the same exact what-if before any deployment or 24/7 claim.

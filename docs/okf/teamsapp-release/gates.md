@@ -6,12 +6,12 @@ resource: /gates.md
 tags: [release-gate, azure, teams, provenance, rollback]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T14:42:00Z"
+  at: "2026-09-07T15:41:29Z"
 verified:
   by: "process:release-gate-reconciliation/1"
-  at: "2026-09-07T14:42:00Z"
+  at: "2026-09-07T15:41:29Z"
 status: stable
-stale_after: "2026-09-14T14:42:00Z"
+stale_after: "2026-09-14T15:41:29Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -180,7 +180,7 @@ Container Apps troubleshooting requires revision status and system/application l
 
 # Current run
 
-Run 46 is the current Azure canary attempt: it passed handoff, hosted Core `29/29`, approval, worker Blob, workload deployment, the revised revision poll, and public health, then failed at the new `worker-runtime` gate because the VM `auth.json` is missing. The Azure HTTP canary boundary is `PASS`, but the worker/runtime boundary and product release remain `BLOCKED`. Run 45 is recorded as an invalid queue-parameter attempt. Run44's `PASS` remains historical canary evidence without the new worker gate; Run43's incomplete closure, Run42's top-level-helper drift, and the earlier Run40 scale-to-zero/empty-receipt failures remain historical incidents, not current pass evidence.
+Run 47 is the current Azure canary attempt: it passed the exact GitHub handoff, hosted Azure Core/RBAC, and manual approval, then failed before Azure mutation at `workload-parameters-and-what-if` because the exact Container App what-if shape added the intentional `properties.template.scale.minReplicas` change without a matching allowlist fixture. The workload diagnostic and failure receipt are retained; Azure HTTP, worker-runtime, Teams package, desktop/mobile, and A2A promotion remain `BLOCKED` or `UNVERIFIED`. Run 46 remains the historical worker-runtime `auth_file` blocker; Run 45 is an invalid queue-parameter attempt. Run44's `PASS` remains historical canary evidence without the worker gate.
 
 # Required commands before a new run
 

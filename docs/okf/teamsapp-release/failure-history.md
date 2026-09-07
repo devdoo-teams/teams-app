@@ -6,12 +6,12 @@ resource: /failure-history.md
 tags: [teamsapp, azure, release, incident, failure, provenance]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T15:04:50Z"
+  at: "2026-09-07T15:41:29Z"
 verified:
   by: "process:release-evidence-reconciliation/1"
-  at: "2026-09-07T15:04:50Z"
+  at: "2026-09-07T15:41:29Z"
 status: stable
-stale_after: "2026-09-14T15:04:50Z"
+stale_after: "2026-09-14T15:41:29Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -77,6 +77,10 @@ sources:
     resource: "https://dev.azure.com/devdoo/TeamsApp/_build/results?buildId=46"
     title: "TeamsApp Azure DevOps Run 46"
     location: "same-release worker runtime probe, failure boundary, and retained receipt"
+  - id: azure-run-47
+    resource: "https://dev.azure.com/devdoo/TeamsApp/_build/results?buildId=47"
+    title: "TeamsApp Azure DevOps Run 47"
+    location: "promoted 24/7 minReplicas what-if boundary and retained failure receipt"
   - id: az-storage-blob-cli-source
     resource: "https://github.com/Azure/azure-cli/blob/dev/src/azure-cli/azure/cli/command_modules/storage/commands.py"
     title: "Azure CLI Storage command registration"
@@ -700,3 +704,13 @@ The Azure DevOps artifact UI showed `azure-deployment-failure-receipt` at `536 B
 **PREVENTION.** The workflow now requires host/session/time/surface labels for each signal; `pmset`, black capture, and CUA errors cannot trigger an unlock request on their own. A direct lock-screen/session signal plus an independent same-host/same-session signal is required for `CONFIRMED_SCREEN_LOCK`. If the signals conflict, preserve the conflict, continue command-only/Ego DOM/public HTTP work, and leave only native UI as `DESKTOP_UNVERIFIED`. See [원격 화면·잠금·캡처 증거 판정](../../teams-release-workflow.md#원격-화면잠금캡처-증거-판정) and [Apple Lock Screen settings](https://support.apple.com/en-euro/guide/mac-help/-mh11784/mac).
 
 **CURRENT JUDGMENT.** The supplied remote screenshot is valid evidence of the visible remote desktop at its capture time. Current command/capture/Computer Use surfaces must be reported separately; no further unlock request or lock-setting mutation is justified by the prior signals alone.
+
+## 2026-09-08 — Run 47 exposed the 24/7 what-if allowlist gap
+
+**OFFICIAL CONTRACT.** Azure ARM what-if is a non-mutating preview and its property-change details must be reviewed against the intended template change before mutation ([Template deployment what-if](https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-what-if), What-if operation and change details, observed web lines 29-52). The repository's exact-change allowlist is an internal fail-closed policy, not an Azure approval guarantee.
+
+**OBSERVED EVIDENCE.** Run 47 / `20260907.3` used source and release commit `0fff1b2d9195707d8c3363f2249955aed0eb559b`, app `1.0.103`, and passed GitHub handoff, Azure Core/RBAC, and manual approval. The deployment task stopped before Azure mutation at `workload-parameters-and-what-if` after the workload diagnostic recorded `BLOCKED`. The exact Container App change included the previously observed Run 37 legacy env/secret multiset plus `properties.template.scale.minReplicas` / `Modify`. Artifact `268` was reported at `25,531` bytes and failure artifact `269` at `553` bytes; the task recorded failure receipt SHA `33d4245cb056122ade21d5e9c9fe170275efcd54c4ba9562a08805ef062ade37`.
+
+**CLASSIFICATION.** `CONFIRMED_ROOT_CAUSE / WORKLOAD_WHAT_IF_ALLOWLIST_MISSING_MIN_REPLICAS`. The release was blocked because the new intentional 24/7 property was not represented in the exact allowlist. This is not evidence that `minReplicas: 1` is invalid, nor evidence that Azure deployment or 24/7 runtime succeeded.
+
+**FIX AND VERIFICATION.** Added a separate exact Run 47 property multiset and a regression in `scripts/azure-what-if-receipt-test.mjs`; the regression was first RED against the old classifier and GREEN after the minimal `scripts/azure-canary-preflight.mjs` fixture addition. The application version remains unchanged. A fresh clean Core gate and one bounded hosted rerun are required; do not widen the allowlist to arbitrary `Modify` or bypass the what-if gate.

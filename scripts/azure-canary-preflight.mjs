@@ -554,6 +554,14 @@ const workloadContainerAppRun37ReleaseUpdatePropertyChanges = Object.freeze([
   Object.freeze({ path: 'properties.workloadProfileName', propertyChangeType: 'Delete' }),
 ]);
 
+// Run 47 adds the promoted 24/7 minimum-replica change to Run 37's exact
+// legacy env/secret reconciliation shape. Keep the new path in a separate
+// complete multiset so unrelated scale or environment changes remain blocked.
+const workloadContainerAppRun47ReleaseUpdatePropertyChanges = Object.freeze([
+  ...workloadContainerAppRun37ReleaseUpdatePropertyChanges,
+  Object.freeze({ path: 'properties.template.scale.minReplicas', propertyChangeType: 'Modify' }),
+]);
+
 const workloadContainerAppReleaseUpdateVariants = Object.freeze([
   workloadContainerAppReleaseUpdatePropertyChanges,
   // ARM what-if can omit this service-defaulted Delete noise; keep both complete observed multisets exact.
@@ -566,6 +574,7 @@ const workloadContainerAppReleaseUpdateVariants = Object.freeze([
   )),
   workloadContainerAppRun33ReleaseUpdatePropertyChanges,
   workloadContainerAppRun37ReleaseUpdatePropertyChanges,
+  workloadContainerAppRun47ReleaseUpdatePropertyChanges,
 ]);
 
 const plannedChangeRules = Object.freeze([

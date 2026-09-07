@@ -180,3 +180,10 @@
 * **Implemented**: the minimal Bicep correction sets `minReplicas: 1` while retaining `maxReplicas: 1`; platform contract and worker-runtime focused tests are GREEN.
 * **Boundary**: `SOURCE_24_7_READY_FOR_HOSTED_PREFLIGHT`; Azure has not read back this source state. Run 46 remains blocked at `worker-runtime` with missing VM auth metadata.
 * **Policy**: no application version bump, package generation/upload, or Teams completion message. Fresh same-commit handoff, what-if, cost/runtime review, Azure read-back, public identity, and worker receipt remain required.
+
+## 2026-09-08 — Run 47 24/7 what-if allowlist gap
+
+* **Observed**: Run 47 used source/release `0fff1b2d…`, passed GitHub handoff, Azure Core/RBAC, and approval, then failed before Azure mutation at `workload-parameters-and-what-if`.
+* **Evidence**: workload diagnostic `BLOCKED`; exact Container App delta was the Run 37 legacy env/secret shape plus `properties.template.scale.minReplicas` / `Modify`; workload artifact `268` was 25,531 bytes and failure artifact `269` was 553 bytes with receipt SHA `33d4245cb056122ade21d5e9c9fe170275efcd54c4ba9562a08805ef062ade37`.
+* **Classification**: `CONFIRMED_ROOT_CAUSE / WORKLOAD_WHAT_IF_ALLOWLIST_MISSING_MIN_REPLICAS`; this is an exact fixture gap, not evidence that `minReplicas: 1` is invalid or deployed.
+* **Fix**: add the exact combined multiset and RED/GREEN regression; keep arbitrary Container App `Modify` blocked. No version bump or Teams completion message.

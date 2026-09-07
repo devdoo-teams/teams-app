@@ -235,3 +235,12 @@ Azure DevOps 큐잉 후에는 다음 순서로 read-back한다.
 - Identity policy: app/package/Teams version remains `1.0.103`; this is an infrastructure/availability change, so no version bump, ZIP upload, or Teams completion message is justified.
 - Hosted boundary: Run 46 still used source `930d4f7` and deployed release `71df02e2`; its VM `worker-runtime` gate failed because `auth_file=missing`. The new `minReplicas: 1` source has not been deployed or read back in Azure yet.
 - Decision: `SOURCE_24_7_READY_FOR_HOSTED_PREFLIGHT / AZURE_24_7_UNVERIFIED / WORKER_RUNTIME_GATE_BLOCKED`. Before any Azure mutation, commit/push this source, run fresh Azure Core, generate a same-commit immutable handoff, and perform a non-mutating what-if plus explicit cost/runtime review. Keep the existing service untouched.
+
+## 현재 run 47 — promoted 24/7 what-if allowlist gap
+
+- Source/release: `0fff1b2d9195707d8c3363f2249955aed0eb559b`, app `1.0.103`, GitHub artifact handoff verified; Azure CLI `2.89.1`, Azure DevOps extension `1.0.7`, Bicep `0.46.1`.
+- Outcome: `FAIL_AFTER_APPROVAL` at `workload-parameters-and-what-if`; Azure mutation did not start. Foundation what-if was `REVIEW_REQUIRED`, worker state reported `initialize=false`, and the workload diagnostic was retained before the deployment command.
+- Exact observed delta: the existing canary Container App had the known Run 37 legacy env/secret reconciliation shape plus `properties.template.scale.minReplicas` with property change type `Modify`. The exact resource was `.../Microsoft.App/containerApps/teamsapp-canary-goictvxm`.
+- Failure receipt: `azure-what-if-workload-receipt` artifact `268` reported `25,531` bytes; `azure-deployment-failure-receipt` artifact `269` reported `553` bytes. The failure receipt SHA logged by the task was `33d4245cb056122ade21d5e9c9fe170275efcd54c4ba9562a08805ef062ade37`.
+- Classification: `CONFIRMED_ROOT_CAUSE / WORKLOAD_WHAT_IF_ALLOWLIST_MISSING_MIN_REPLICAS`. This is an allowlist fixture gap, not evidence that `minReplicas: 1` is invalid or that Azure mutation succeeded.
+- Fix in progress: add the exact Run 47 property multiset as a separate planned-change fixture and a RED/GREEN regression; do not accept arbitrary Container App scale/environment changes. Keep version unchanged and do not retry until the clean fix is committed and hosted verification is performed.

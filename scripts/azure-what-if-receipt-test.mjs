@@ -476,6 +476,30 @@ try {
     'workload-container-app-release-update',
   ]);
 
+  // Run 47 adds the promoted 24/7 minimum-replica change to the exact
+  // legacy env/secret reconciliation shape. Keep this value-free multiset
+  // explicit; do not broaden the release allowlist to arbitrary scale edits.
+  const run47ContainerAppPropertyChanges = [
+    ...run37ContainerAppPropertyChanges,
+    { path: 'properties.template.scale.minReplicas', propertyChangeType: 'Modify' },
+  ];
+  const run47ContainerAppOnly = createAzureWhatIfReceipt({
+    ...workloadIdentity,
+    whatIf: {
+      status: 'Succeeded',
+      changes: [{
+        resourceId: `${scope}/providers/Microsoft.App/containerApps/teamsapp-canary-goictvxm`,
+        changeType: 'Modify',
+        delta: run47ContainerAppPropertyChanges,
+      }],
+    },
+    checkedAt: '2026-09-08T00:30:00.000Z',
+  });
+  assert.equal(run47ContainerAppOnly.status, 'READY');
+  assert.deepEqual(run47ContainerAppOnly.whatIf.approvedPlannedChanges.map(({ rule }) => rule), [
+    'workload-container-app-release-update',
+  ]);
+
   for (const unsafeWorkloadChanges of [
     [{ ...workloadObservedChanges[0], resourceId: `${scope}/providers/Microsoft.App/containerApps/teamsapp-production-goictvxm` }],
     [{ ...workloadObservedChanges[0], delta: undefined }],

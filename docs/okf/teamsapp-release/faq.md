@@ -6,12 +6,12 @@ resource: /faq.md
 tags: [faq, incident-response, release, teams, azure]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T15:04:50Z"
+  at: "2026-09-07T15:41:29Z"
 verified:
   by: "process:release-faq-reconciliation/1"
-  at: "2026-09-07T15:04:50Z"
+  at: "2026-09-07T15:41:29Z"
 status: stable
-stale_after: "2026-09-14T15:04:50Z"
+stale_after: "2026-09-14T15:41:29Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -69,6 +69,10 @@ sources:
     resource: "https://learn.microsoft.com/en-us/azure/virtual-machines/linux/run-command"
     title: "Run scripts in a Linux VM by using action Run Commands"
     location: "VM agent, RunShellScript, restrictions, and Azure CLI sections; observed 2026-09-07"
+  - id: azure-run-47
+    resource: "https://dev.azure.com/devdoo/TeamsApp/_build/results?buildId=47"
+    title: "TeamsApp Azure DevOps Run 47"
+    location: "promoted 24/7 minReplicas what-if boundary and retained failure receipt"
   - id: key-vault
     resource: "https://learn.microsoft.com/en-us/azure/key-vault/secrets/quick-create-cli"
     title: "Quickstart - Set and retrieve a secret from Azure Key Vault"
@@ -499,3 +503,9 @@ Official basis: Apple separates power/sleep timing from Lock Screen password beh
 No. It makes the promoted source intent match the Azure always-running requirement, but it is still only source evidence until the exact commit is handed off, the non-mutating what-if and cost/runtime review pass, Azure reads back `minReplicas: 1`, the revision is active, public health matches the release identity, and the separate Linux worker gate passes.
 
 The previous `Healthy / ScaledToZero / replicas 0` observation was a valid HTTP canary result, not 24/7 proof. Development/cost profiles may retain scale-to-zero only when explicitly labeled as such. The app version remains unchanged because this is infrastructure-only.
+
+## Q28. Why did the first 24/7 attempt fail after the source change?
+
+Run 47 reached the correct source and release identity, passed the pre-approval checks and manual approval, then stopped before Azure mutation because the exact workload what-if contained a new intentional path: `properties.template.scale.minReplicas` with `Modify`. The fail-closed allowlist knew the older legacy env/secret shape but not this combined shape.
+
+The fix is a separate exact Run 47 multiset fixture plus a regression test. It does not accept arbitrary Container App `Modify` changes. The run remains failed until the clean fix is committed, the full Azure Core gate passes, and a fresh hosted run reads back the exact what-if and subsequent runtime identity.
