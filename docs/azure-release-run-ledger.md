@@ -209,3 +209,21 @@ Azure DevOps 큐잉 후에는 다음 순서로 read-back한다.
 - [Troubleshoot Container Exit Failures in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-create-failures)
 
 이 문서의 `IN_PROGRESS` 항목은 실제 run read-back이 끝난 뒤에만 `PASS` 또는 구체적 `FAIL/BLOCKED`로 갱신한다. 승인 성공은 배포 성공이 아니며, failure receipt와 Azure revision/log read-back이 없으면 원인을 확정하지 않는다. 완료 메시지나 Jira Done 전환의 근거로 `IN_PROGRESS` 또는 generic exit code만 사용하지 않는다.
+
+## 현재 run 45 — invalid queue parameters
+
+- Source: `930d4f7125b25a9b96ad2a11df1203a99b397903`, build `20260907.1`
+- Outcome: `FAIL_BEFORE_MUTATION` at `ValidateHandoff/bootstrap`
+- Evidence: MCP queue read-back contained empty `githubReleaseCommit`, `azureDevOpsEnvironmentId`, and Codex package URL/digest/version
+- Classification: `CONFIRMED_OPERATOR_INVOCATION_ERROR`; no Azure mutation, approval, or release identity evidence
+- Prevention: queue result must be reconciled for all template parameters before monitoring or approval
+
+## 현재 run 46 — worker runtime gate
+
+- Source: `930d4f7125b25a9b96ad2a11df1203a99b397903`; release `71df02e2ea9e9dbecbe864e0f1c6be3d649cbb4a`; app `1.0.103`; image `sha256:a52d4d53...`
+- Outcome: `FAIL_AFTER_APPROVAL` at `worker-runtime` after handoff, Azure Core `29/29`, approval, what-if, Blob, workload deploy, revision readiness, and public health
+- Probe: Azure VM `RunShellScript`; service/release/Codex/auth metadata check; failed `auth_file=missing`
+- Failure receipt: artifact UI `536 B` total (`471 B` JSON + `65 B` sidecar), body and SHA sidecar read back in Ego Lite; JSON SHA matched `f8975bcf...`
+- Classification: `CONFIRMED_ROOT_CAUSE / WORKER_AUTH_OUT_OF_BAND_MISSING`; existing VM worker service is active but cannot authenticate Codex
+- Status: `AZURE_CANARY_HTTP_PASS / WORKER_RUNTIME_GATE_BLOCKED / RELEASE_BLOCKED`; no version bump, Teams upload, or completion report
+- Next: user-only Codex device login on the existing VM, then bounded probe read-back; do not copy or log auth contents. Official Run Command contract: https://learn.microsoft.com/en-us/azure/virtual-machines/linux/run-command

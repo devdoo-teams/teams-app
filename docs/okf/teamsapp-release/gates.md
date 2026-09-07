@@ -6,12 +6,12 @@ resource: /gates.md
 tags: [release-gate, azure, teams, provenance, rollback]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T00:00:27Z"
+  at: "2026-09-07T01:17:35Z"
 verified:
   by: "process:release-gate-reconciliation/1"
-  at: "2026-09-07T00:00:27Z"
+  at: "2026-09-07T01:17:35Z"
 status: stable
-stale_after: "2026-09-14T00:00:27Z"
+stale_after: "2026-09-14T01:17:35Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -69,6 +69,10 @@ sources:
     resource: "https://learn.microsoft.com/en-us/azure/container-apps/revisions"
     title: "Update and deploy changes in Azure Container Apps"
     location: "revision running states, Scale to 0, readiness, and multiple-revision traffic; observed web lines 48-72 and 128-138 on 2026-09-07"
+  - id: az-vm-run-command
+    resource: "https://learn.microsoft.com/en-us/azure/virtual-machines/linux/run-command"
+    title: "Run scripts in a Linux VM by using action Run Commands"
+    location: "VM agent execution, RunShellScript, bounded output/time, and non-interactive restrictions; observed 2026-09-07"
   - id: teams-upload
     resource: "https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/deploy-and-publish/apps-upload"
     title: "Upload your custom app"
@@ -149,6 +153,7 @@ Azure Pipelines approvals control when a stage should run.[^az-approval] Deploym
 
 24. Azure revision has active healthy state and startup/liveness/readiness evidence. For the current HTTP canary, `Running` or the observed `ScaledToZero` is accepted only when provisioning is `Succeeded`, the revision is active, `healthState` is `Healthy` for `ScaledToZero`, and traffic is 100%; public health must still return successfully.
 24b. The 24/7 promoted service is a separate gate: its deployed scale configuration must have `minReplicas >= 1`, because a healthy `ScaledToZero` revision is not an always-running worker. This requires its own what-if and runtime read-back.
+24c. Before final identity, the deployment must invoke the exact Azure VM through non-interactive `RunShellScript` and verify a redacted worker-runtime receipt: systemd enabled/active/running, current release commit and installed manifest commit, Codex executable path/digest, owner-only regular `auth.json` metadata, and `codex login status` under `teamsworker`. Missing auth or a failed login is `BLOCKED`, not a retryable Azure health warning. The helper is snapshotted before release checkout and its receipt is published only on success.
 24a. Multiple-revision canary keeps the known-good revision serving traffic while a labeled green revision is independently readiness- and function-tested; traffic promotion and rollback are separate actions.
 25. Public HTTPS /api/health returns source commit, version, image/server identity matching the receipt.
 26. Portal, downloaded package, installed desktop/mobile app, app ID, version, and SHA agree.
@@ -166,7 +171,7 @@ Container Apps troubleshooting requires revision status and system/application l
 
 # Current run
 
-Run 44 is the current Azure canary result: it passed handoff, hosted Core, approval, worker Blob, workload deployment, the revised revision poll, public health, and final identity verification using the complete preserved helper closure. The Azure canary boundary is `PASS`, but the product release remains `BLOCKED` by worker 24/7/A2A and Teams package/desktop/mobile gates. Run43's incomplete closure, Run42's top-level-helper drift, and the earlier Run40 scale-to-zero/empty-receipt failures remain historical incidents, not current pass evidence.
+Run 46 is the current Azure canary attempt: it passed handoff, hosted Core `29/29`, approval, worker Blob, workload deployment, the revised revision poll, and public health, then failed at the new `worker-runtime` gate because the VM `auth.json` is missing. The Azure HTTP canary boundary is `PASS`, but the worker/runtime boundary and product release remain `BLOCKED`. Run 45 is recorded as an invalid queue-parameter attempt. Run44's `PASS` remains historical canary evidence without the new worker gate; Run43's incomplete closure, Run42's top-level-helper drift, and the earlier Run40 scale-to-zero/empty-receipt failures remain historical incidents, not current pass evidence.
 
 # Required commands before a new run
 
@@ -174,6 +179,7 @@ Run 44 is the current Azure canary result: it passed handoff, hosted Core, appro
     node scripts/azure-platform-contract-test.mjs
     node scripts/azure-deployment-contract-test.mjs
     npm run test:azure-deployment-failure-receipt
+    npm run test:azure-worker-runtime-probe
     npm run test:azure-core
     git status --short --branch
 

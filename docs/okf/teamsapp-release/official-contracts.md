@@ -6,12 +6,12 @@ resource: /official-contracts.md
 tags: [official-contract, azure, teams, release, evidence]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T00:00:27Z"
+  at: "2026-09-07T01:17:35Z"
 verified:
   by: "process:official-source-research/1"
-  at: "2026-09-07T00:00:27Z"
+  at: "2026-09-07T01:17:35Z"
 status: stable
-stale_after: "2026-09-14T00:00:27Z"
+stale_after: "2026-09-14T01:17:35Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -53,6 +53,10 @@ sources:
     resource: "https://learn.microsoft.com/en-us/azure/container-apps/blue-green-deployment"
     title: "Blue-Green Deployment in Azure Container Apps"
     location: "Blue/green responsibilities, labels, zero-traffic verification, traffic switch, rollback; observed web lines 31-57 on 2026-09-07"
+  - id: az-vm-run-command
+    resource: "https://learn.microsoft.com/en-us/azure/virtual-machines/linux/run-command"
+    title: "Run scripts in a Linux VM by using action Run Commands"
+    location: "VM agent execution, RunShellScript, bounded output/time, and non-interactive restrictions; observed 2026-09-07"
   - id: vm-custom-script
     resource: "https://learn.microsoft.com/en-us/azure/virtual-machines/extensions/custom-script-linux"
     title: "Run Custom Script Extension on Linux VMs in Azure"
@@ -142,6 +146,8 @@ Google's canonical OKF v0.2 specification says that a knowledge bundle is a dire
 The Google Cloud announcement describes OKF as a vendor-neutral, human- and agent-friendly, portable format rather than a runtime or required SDK.[^okf-blog] Therefore this bundle uses plain Markdown/YAML and does not claim that OKF itself validates Azure or Teams behavior.
 
 # Azure release contract
+
+The Linux VM worker has a separate runtime gate from ACA HTTP health. Microsoft documents that VM Run Command uses the VM agent, supports the `RunShellScript` command for Linux, limits output and execution time, and does not support interactive prompts. The release pipeline therefore runs a non-interactive probe only: it reads systemd state and release metadata, hashes the installed Codex executable, checks owner-only `auth.json` metadata without reading its contents, and runs `codex login status` as the service user. User login, device code, password, and MFA remain outside the pipeline. Source: [Run scripts in a Linux VM by using action Run Commands](https://learn.microsoft.com/en-us/azure/virtual-machines/linux/run-command), Benefits, Restrictions, Available commands, and Azure CLI sections observed on 2026-09-07.
 
 # GitHub release handoff contract
 

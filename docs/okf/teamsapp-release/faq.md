@@ -6,12 +6,12 @@ resource: /faq.md
 tags: [faq, incident-response, release, teams, azure]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T00:00:27Z"
+  at: "2026-09-07T01:17:35Z"
 verified:
   by: "process:release-faq-reconciliation/1"
-  at: "2026-09-07T00:00:27Z"
+  at: "2026-09-07T01:17:35Z"
 status: stable
-stale_after: "2026-09-14T00:00:27Z"
+stale_after: "2026-09-14T01:17:35Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -65,6 +65,10 @@ sources:
     resource: "https://learn.microsoft.com/en-us/azure/container-apps/revisions"
     title: "Update and deploy changes in Azure Container Apps"
     location: "revision running states, Scale to 0, readiness, and multiple-revision traffic; observed web lines 48-72 and 128-138 on 2026-09-07"
+  - id: az-vm-run-command
+    resource: "https://learn.microsoft.com/en-us/azure/virtual-machines/linux/run-command"
+    title: "Run scripts in a Linux VM by using action Run Commands"
+    location: "VM agent, RunShellScript, restrictions, and Azure CLI sections; observed 2026-09-07"
   - id: key-vault
     resource: "https://learn.microsoft.com/en-us/azure/key-vault/secrets/quick-create-cli"
     title: "Quickstart - Set and retrieve a secret from Azure Key Vault"
@@ -448,3 +452,21 @@ Therefore Run44 is `AZURE_CANARY_DEPLOYMENT_PASS`, not full product release comp
 [^key-vault]: Azure Key Vault quickstart, add/retrieve secret sections, observed web lines 80-95. https://learn.microsoft.com/en-us/azure/key-vault/secrets/quick-create-cli
 [^teams-package]: Teams app package, App manifest and publishing choices, observed web lines 45-72. https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/build-and-test/apps-package
 [^teams-upload]: Upload your custom app, upload/update sections, observed web lines 48-60 and 84-122. https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/deploy-and-publish/apps-upload
+
+## Q23. Why did Run 44 pass while Run 46 failed?
+
+Run 44 passed only the Azure HTTP canary identity. Its health response explicitly reported worker heartbeat `not-observed`, worker readiness `unavailable`, and A2A `unavailable`. The old pipeline had no VM runtime/auth gate, so an ACA revision/public health pass could be mistaken for a 24/7 agent pass.
+
+Run 46 adds the missing boundary. After the same release identity reached public health, Azure VM `RunShellScript` executed a non-interactive probe. The probe checks systemd enabled/active state, installed release commit and manifest, Codex executable digest, owner-only auth-file metadata, and `codex login status` under `teamsworker`. It failed closed at `worker-runtime` because `auth_file=missing`. This is the intended result: the pipeline now exposes the real blocker instead of reporting a false success.
+
+Official basis: Microsoft documents that Run Command uses the VM agent to execute Linux scripts, supports `RunShellScript`, does not support interactive prompts, and has bounded output/time behavior ([Run scripts in a Linux VM by using action Run Commands](https://learn.microsoft.com/en-us/azure/virtual-machines/linux/run-command), Benefits, Restrictions, Available commands, and Azure CLI sections).
+
+## Q24. Why did Run 45 fail immediately?
+
+Run 45 was queued through MCP with empty required template parameters. The run read-back showed blank `githubReleaseCommit`, `azureDevOpsEnvironmentId`, and Codex package fields, so `ValidateHandoff/bootstrap` failed before any Azure mutation. This is an operator invocation error, not a product or Azure runtime error.
+
+The queue gate is now explicit: after every queue call, read back source commit, release commit, environment ID, Codex URL, package version, and package SHA-256. If any is empty or mismatched, cancel/classify the run and do not retry blindly.
+
+## Q25. What is required to unblock the worker gate?
+
+The Codex VM login remains an out-of-band user-presence step. The operator must authenticate the existing VM worker account through the approved Codex device-login flow; the pipeline must never copy a Mac credential, print auth contents, store a device code, or perform MFA. After the user confirms that login is complete, rerun only the bounded worker probe or the same release deployment gate. A successful probe still does not prove 24/7 until the ACA promoted configuration has `minReplicas >= 1` and a real terminal worker receipt is read back.

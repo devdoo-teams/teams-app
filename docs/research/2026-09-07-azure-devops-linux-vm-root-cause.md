@@ -4,9 +4,9 @@
 
 - 조사일: 2026-09-07 (Asia/Seoul)
 - 대상: `devdoo-teams/teams-app`, canonical worktree `/Users/doosansmacbookpro/Documents/TeamsApp`, `main`
-- 조사 기준 HEAD: `10d340b5f7bd04b3d14f2e407c02e567ed2eef5c`
++ 조사 기준 HEAD: `930d4f7125b25a9b96ad2a11df1203a99b397903`
 - 제품 버전: `1.0.103` (이번 조사에서는 버전 변경 없음)
-- 운영 사건: Azure DevOps Run 32 / Build `20260906.11`부터 Run 43 / Build `20260906.22`까지
++ 운영 사건: Azure DevOps Run 32 / Build `20260906.11`부터 Run 46 / Build `20260907.2`까지
 - 조사 범위: Azure DevOps 승인·배포·아티팩트 계약, ARM what-if 및 Bicep 경계, Azure Container Apps revision/health/traffic, ACR managed identity, Linux VM/cloud-init/Custom Script Extension, 24/7 worker 상태·증거 체인
 - 증거 분류: `OFFICIAL CONTRACT`, `OBSERVED REPOSITORY EVIDENCE`, `INFERENCE / RECOMMENDATION`, `LIVE UNVERIFIED`
 - 이 문서는 읽기·리서치·문서화 결과다. 이번 문서 갱신 자체는 Azure 리소스, Teams 앱, 트래픽, 비밀, Jira, 브라우저 세션을 변경하지 않았으며, Run 43의 pipeline 배포·실패 read-back은 아래에 별도 기록한다.
@@ -390,3 +390,15 @@ Run 44 / build `20260906.23` used pipeline source `95771889b31b42ffca8a218315e2b
 Independent public health returned HTTP 200 with `ok=true`, the same application version and source commit, server bundle SHA `c7be7000078e7f1d439c8700cff30445515c1f4a1e34c04152a97b42612948b4`, `environment=production`, `auth=teams-authenticated`, `userAuth=entra-sso`, `bot=teams-sdk`, and `outbound=teams-sdk`. The existing Ego Lite ACA page showed `teamsapp-canary-goictvxm--71df02e2ea` as `Healthy`, `ScaledToZero`, traffic `100`, replicas `0`.
 
 This resolves the Run42/43 final-identity helper provenance failures for the tested HTTP canary. It does not prove the requested 24/7 worker: the health response still reported worker heartbeat `not-observed`, worker readiness `unavailable`, execution boundary `external-linux-worker-unverified`, and A2A `unavailable`. Teams package registration, installed desktop/mobile UI, and live Linux worker evidence remain `UNVERIFIED`; the overall release is `AZURE_CANARY_DEPLOYMENT_PASS / RELEASE_BLOCKED`.
+
+## Run 45 invalid queue parameters
+
+The Azure DevOps pipeline MCP queue call for Run 45 / `20260907.1` returned empty required template parameters: `githubReleaseCommit`, `azureDevOpsEnvironmentId`, `codexPackageUrl`, `codexPackageSha256`, and `codexPackageVersion`. The source version was `930d4f7`, but `ValidateHandoff/bootstrap` failed before GitHub handoff or Azure mutation. This is a confirmed operator invocation error, not an Azure runtime failure. The prevention is a queue read-back gate that rejects empty or mismatched template parameters before monitoring or approval.
+
+## Run 46 worker runtime readiness gate
+
+Run 46 / `20260907.2` used source `930d4f7`, release commit `71df02e2`, version `1.0.103`, and the same image digest. It passed handoff, hosted Azure Core `29/29`, approval configuration, manual approval, workload what-if, Blob staging, workload deployment, ACA revision readiness, and public health. The newly enforced VM gate then executed Azure Linux VM `RunShellScript` through the VM agent and failed closed with `auth_file was "missing"; expected "present"`. Microsoft documents the Run Command VM-agent and non-interactive `RunShellScript` contract at https://learn.microsoft.com/en-us/azure/virtual-machines/linux/run-command.
+
+The failure receipt was read back through the existing Ego Lite Azure DevOps tab: artifact UI `536 B`, JSON `471 B`, sidecar `65 B`; body boundary `worker-runtime`, exit `1`, source commit `71df02e...`, release version `1.0.103`, pipeline run `46`, and `rawErrorPersisted=false`. The JSON SHA matched the sidecar prefix `f8975bcf...`. The probe never reads auth contents; it checks regular owner-only metadata and runs `codex login status` as `teamsworker` with a bounded timeout.
+
+Root cause is now separated from earlier Azure canary status: Run44's successful `Succeeded` was only an ACA HTTP canary result because worker auth/readiness was not a pipeline gate. The VM systemd service was active, but the auth home was missing. This is `CONFIRMED_ROOT_CAUSE` / `WORKER_AUTH_OUT_OF_BAND_MISSING`. Current state is `AZURE_CANARY_HTTP_PASS / WORKER_RUNTIME_GATE_BLOCKED / RELEASE_BLOCKED`; no version bump or Teams package upload is justified.

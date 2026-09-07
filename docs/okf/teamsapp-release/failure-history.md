@@ -6,12 +6,12 @@ resource: /failure-history.md
 tags: [teamsapp, azure, release, incident, failure, provenance]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T00:00:27Z"
+  at: "2026-09-07T01:17:35Z"
 verified:
   by: "process:release-evidence-reconciliation/1"
-  at: "2026-09-07T00:00:27Z"
+  at: "2026-09-07T01:17:35Z"
 status: stable
-stale_after: "2026-09-14T00:00:27Z"
+stale_after: "2026-09-14T01:17:35Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -65,6 +65,18 @@ sources:
     resource: "https://learn.microsoft.com/en-us/azure/container-apps/revisions"
     title: "Update and deploy changes in Azure Container Apps"
     location: "revision running states, Scale to 0, readiness, and multiple-revision traffic; observed web lines 48-72 and 128-138 on 2026-09-07"
+  - id: az-vm-run-command
+    resource: "https://learn.microsoft.com/en-us/azure/virtual-machines/linux/run-command"
+    title: "Run scripts in a Linux VM by using Run Commands"
+    location: "VM-agent execution, RunShellScript, output/timeout restrictions, and non-interactive execution; observed web sections Benefits, Restrictions, and Azure CLI on 2026-09-07"
+  - id: azure-run-45
+    resource: "https://dev.azure.com/devdoo/TeamsApp/_build/results?buildId=45"
+    title: "TeamsApp Azure DevOps Run 45"
+    location: "invalid MCP queue parameter read-back and ValidateHandoff bootstrap failure"
+  - id: azure-run-46
+    resource: "https://dev.azure.com/devdoo/TeamsApp/_build/results?buildId=46"
+    title: "TeamsApp Azure DevOps Run 46"
+    location: "same-release worker runtime probe, failure boundary, and retained receipt"
   - id: az-storage-blob-cli-source
     resource: "https://github.com/Azure/azure-cli/blob/dev/src/azure-cli/azure/cli/command_modules/storage/commands.py"
     title: "Azure CLI Storage command registration"
@@ -517,7 +529,7 @@ These records do not substitute for current Azure run evidence.
 
 # Current judgment
 
-The current state is `AZURE_CANARY_DEPLOYMENT_PASS / RELEASE_BLOCKED`: Run 44 passed the final identity contract with the preserved helper closure; Run 43 remains FAILED_AFTER_APPROVAL at `final-identity-contract`, Run 42 remains FAILED_AFTER_APPROVAL at the same boundary, Run 41 remains FAILED_AFTER_APPROVAL at `revision-and-health`, Run 40 remains FAILED_AFTER_APPROVAL at `revision-and-health`, Run 39 remains FAILED_AFTER_APPROVAL at `worker-blob`, Run 38 remains FAILED_AFTER_APPROVAL at the same boundary, Run 32 remains FAILED_AFTER_APPROVAL, Run 31 remains FAILED_BEFORE_APPROVAL, and Run 30 remains FAILED_AFTER_APPROVAL.
+The current state is `AZURE_CANARY_PASS / WORKER_RUNTIME_GATE_BLOCKED / RELEASE_BLOCKED`: Run 46 passed the pre-approval Core/RBAC, approval, workload deployment, revision, public-health, and what-if boundaries, then failed at the newly enforced `worker-runtime` gate because the VM has no `auth.json`; Run 45 was an invalid queue attempt with empty required template parameters and failed before mutation. Run 44 remains the last canary PASS without the worker gate. Run 43 remains FAILED_AFTER_APPROVAL at `final-identity-contract`, Run 42 remains FAILED_AFTER_APPROVAL at the same boundary, Run 41 remains FAILED_AFTER_APPROVAL at `revision-and-health`, Run 40 remains FAILED_AFTER_APPROVAL at `revision-and-health`, Run 39 remains FAILED_AFTER_APPROVAL at `worker-blob`, Run 38 remains FAILED_AFTER_APPROVAL at the same boundary, Run 32 remains FAILED_AFTER_APPROVAL, Run 31 remains FAILED_BEFORE_APPROVAL, and Run 30 remains FAILED_AFTER_APPROVAL.
 
 - local/contract/Azure Core evidence: PASS within scope;
 - Run 32 workload what-if: FAILED after approval at `workload-parameters-and-what-if`; no Azure workload mutation occurred;
@@ -531,6 +543,9 @@ The current state is `AZURE_CANARY_DEPLOYMENT_PASS / RELEASE_BLOCKED`: Run 44 pa
 - Run 43 failure receipt: artifact `245` reported `545 B`; the task logged `receiptWriteStatus=READY` with checksum `2651ec69422d53fa8a0674ff4101c195e16b2fc4c778c61e57a80950dabd2019`;
 - Run 44 final identity: PASS for the Azure canary deployment; the preserved helper closure loaded successfully and logged the exact release commit, version, and image digest;
 - Run 44 public health and ACA revision: PASS within the HTTP canary boundary; health returned `ok=true`, version `1.0.103`, release source identity, authenticated Teams Core fields, and the existing revision read-back was `Healthy / ScaledToZero / traffic 100% / replicas 0`;
+- Run 45 queue: FAILED at `ValidateHandoff/bootstrap` because the MCP queue call supplied empty `githubReleaseCommit`, `azureDevOpsEnvironmentId`, and Codex package parameters. It was not a deployment or application failure.
+- Run 46 worker runtime: FAILED at `worker-runtime` after public health with `auth_file="missing"; expected "present"`. The exact failure receipt JSON was read back in Ego Lite, its SHA-256 sidecar matched (prefix `f8975bcf...`), and the receipt bound the failure to source `71df02e2...`, version `1.0.103`, pipeline run `46`.
+- Run 46 artifact/UI: the Azure DevOps artifact page showed `azure-deployment-failure-receipt` at `536 B`, containing JSON `471 B` and SHA sidecar `65 B`; the JSON body read back as `boundary=worker-runtime`, `exitCode=1`, `rawErrorPersisted=false`.
 - Run 33 pre-approval receipt read-back: reported artifact sizes conflict with 62-byte authorization text; no receipt content is verified;
 - Run 31 release handoff: FAILED before approval because the requested artifact was absent;
 - Run 30 post-approval Azure mutation: FAILED at an unknown named boundary (Run 30 evidence incomplete);
@@ -538,6 +553,7 @@ The current state is `AZURE_CANARY_DEPLOYMENT_PASS / RELEASE_BLOCKED`: Run 44 pa
 - healthy revision: observed as `Healthy / ScaledToZero / traffic 100% / replicas 0`, but same-run final identity reconciliation: UNVERIFIED;
 - public health: HTTP 200 and core identity observed in Run 42; same-release final identity: UNVERIFIED;
 - public health: HTTP 200 and same-release core identity observed in Run 44; external worker/A2A readiness remains UNVERIFIED;
+- worker runtime: `BLOCKED` until the existing VM has an out-of-band owner-only Codex `auth.json` and `codex login status` passes under `teamsworker`; the new probe is now a mandatory deployment boundary.
 - portal/installed same package: UNVERIFIED;
 - Teams desktop fresh reply: UNVERIFIED;
 - mobile: MOBILE_UNVERIFIED;
@@ -637,3 +653,30 @@ The existing ACA revision page in the same Ego Lite task space read back `teamsa
 [^key-vault]: Azure Key Vault quickstart, add/retrieve secret sections, observed web lines 80-95. https://learn.microsoft.com/en-us/azure/key-vault/secrets/quick-create-cli
 [^teams-package]: Teams app package, App manifest and publishing choices, observed web lines 45-72. https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/build-and-test/apps-package
 [^teams-upload]: Upload your custom app, upload/access/update sections, observed web lines 48-60 and 84-122. https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/deploy-and-publish/apps-upload
+
+## 2026-09-07 — Run 45 invalid queue parameters
+
+**OBSERVED EVIDENCE.** Run 45 / build `20260907.1` was queued through the Azure DevOps pipeline MCP with empty `githubReleaseCommit`, `azureDevOpsEnvironmentId`, and Codex package template parameters. The run source was `930d4f7125b25a9b96ad2a11df1203a99b397903`, but `ValidateHandoff` failed at `bootstrap` before artifact handoff or Azure mutation. The run was then terminally read back as `Build Failed`.
+
+**CLASSIFICATION.** `CONFIRMED_OPERATOR_INVOCATION_ERROR`, not an application, Azure, or worker failure. The queue response must be read back before accepting a run: source commit, release commit, environment ID, Codex URL, package digest, and package version must all be non-empty and match the intended release. A queue call with missing template parameters is not a valid retry.
+
+**PREVENTION.** The correct Run 46 invocation explicitly supplied all seven template parameters and read them back before monitoring. The pipeline queueing checklist now records this as a separate pre-run gate.
+
+## 2026-09-07 — Run 46 worker runtime readiness gate
+
+**OFFICIAL CONTRACT.** Microsoft documents that Linux VM Run Command executes scripts through the VM agent, supports the `RunShellScript` command, has bounded output/time restrictions, and does not support interactive prompts ([Run scripts in a Linux VM by using action Run Commands](https://learn.microsoft.com/en-us/azure/virtual-machines/linux/run-command), sections Benefits, Restrictions, Available commands, and Azure CLI). The pipeline therefore uses a non-interactive, secret-free probe and never attempts to perform Codex login or MFA itself.
+
+**OBSERVED EVIDENCE.** Run 46 / build `20260907.2` used pipeline source `930d4f7125b25a9b96ad2a11df1203a99b397903`, the same deploy-only release commit `71df02e2ea9e9dbecbe864e0f1c6be3d649cbb4a`, app `1.0.103`, and image `sha256:a52d4d53baee73cd3769ac297b723f8b05883500692d2ce4b4eb856f07ee1f27`. Handoff, hosted Azure Core `29/29`, approval configuration, manual environment approval, workload what-if, worker Blob staging, workload deployment, accepted ACA revision readiness, and public health completed. The new worker runtime probe then failed with:
+
+~~~text
+Invalid Azure worker runtime probe: auth_file was "missing"; expected "present"
+boundary=worker-runtime exitCode=1
+~~~
+
+The Azure DevOps artifact UI showed `azure-deployment-failure-receipt` at `536 B`, containing `471 B` JSON plus a `65 B` SHA-256 sidecar. Ego Lite read back the JSON body with `boundary=worker-runtime`, `exitCode=1`, and `rawErrorPersisted=false`. The sidecar matched the SHA-256 of the JSON bytes (prefix `f8975bcf...`). No worker probe success artifact was published, and no Teams completion message was sent.
+
+**ROOT CAUSE.** The prior pipeline had no VM runtime/auth gate; `Succeeded` therefore meant only the ACA HTTP canary path passed. The live VM service was previously observed `active/running`, but `/var/lib/teamsapp/codex-home/auth.json` was absent. Run 46 converts that silent mismatch into a deterministic release blocker.
+
+**FIX AND VERIFICATION.** Commit `930d4f7` adds `scripts/azure-worker-runtime-probe.mjs`, a RED/GREEN parser and shell-syntax regression, includes it in the 29-test Azure Core inventory, snapshots it before the deploy-only release checkout, invokes Azure `RunShellScript`, validates service/release/Codex/auth metadata without reading auth contents, and retains a success receipt only when `codex login status` passes under `teamsworker`. `npm run test:azure-core` passed `29/29`; Run 46 hosted execution confirmed the gate stops at the correct boundary.
+
+**CURRENT JUDGMENT.** `AZURE_CANARY_HTTP_PASS / WORKER_RUNTIME_GATE_BLOCKED / RELEASE_BLOCKED`. The next action is user-only out-of-band Codex login on the existing VM, followed by a bounded read-only probe. Do not copy a Mac credential, put `auth.json` in Git/artifacts, bypass the probe, bump the Teams version, upload a package, or report 24/7/A2A completion until the same release identity passes the worker probe and terminal execution evidence.

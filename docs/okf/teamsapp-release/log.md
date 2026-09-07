@@ -152,3 +152,17 @@
 * **Independent live evidence**: public health returned HTTP 200 with `ok=true`, `1.0.103`, release source identity, authenticated Teams Core fields, and server bundle SHA `c7be7000078e7f1d439c8700cff30445515c1f4a1e34c04152a97b42612948b4`. Existing Ego Lite ACA page showed revision `71df02e2ea`, `Healthy`, `ScaledToZero`, traffic `100`, replicas `0`.
 * **Boundary**: `AZURE_CANARY_DEPLOYMENT_PASS`; worker heartbeat/readiness, Linux 24/7, A2A, Teams package registration, installed desktop, and mobile remain `UNVERIFIED`.
 * **Policy**: no application version bump, Teams upload, Jira Done, or Teams completion message; this was CI/release-gate repair and canary verification only.
+
+## 2026-09-07 — Run 45 invalid queue parameters
+
+* **Observed**: Azure DevOps MCP queue response for Run 45 / `20260907.1` returned empty `githubReleaseCommit`, `azureDevOpsEnvironmentId`, and Codex package parameters. The run source was `930d4f7`, but `ValidateHandoff/bootstrap` failed before handoff or Azure mutation.
+* **Classification**: `CONFIRMED_OPERATOR_INVOCATION_ERROR`; this was not an Azure or application failure.
+* **Prevention**: Run 46 was queued only after all seven template parameters and the source version were read back non-empty and exact.
+
+## 2026-09-07 — Run 46 worker runtime gate
+
+* **Official contract**: Microsoft Linux VM Run Command uses the VM agent, supports `RunShellScript`, has bounded output/time restrictions, and does not support interactive prompts: https://learn.microsoft.com/en-us/azure/virtual-machines/linux/run-command.
+* **Observed**: Run 46 / `20260907.2`, pipeline source `930d4f7`, release `71df02e2`, version `1.0.103`, passed handoff, Azure Core `29/29`, approval, what-if, worker Blob, workload deploy, revision readiness, and public health. The new probe failed at `worker-runtime` with `auth_file was "missing"; expected "present"`.
+* **Receipt**: Ego Lite read back the `471 B` JSON and `65 B` SHA sidecar from the `536 B` artifact. The JSON SHA matched `f8975bcf...`; receipt boundary `worker-runtime`, exit `1`, `rawErrorPersisted=false`.
+* **Decision**: `AZURE_CANARY_HTTP_PASS / WORKER_RUNTIME_GATE_BLOCKED / RELEASE_BLOCKED`. The worker auth is out-of-band and user-only. No version bump, package upload, Teams completion message, or Jira Done.
+* **Next**: authenticate the existing VM Codex home without copying or logging credential contents, rerun the bounded probe, then require live terminal worker evidence. `minReplicas >= 1`, A2A, Teams portal/desktop/mobile remain separate gates.
