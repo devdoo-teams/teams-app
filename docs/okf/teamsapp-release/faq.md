@@ -6,12 +6,12 @@ resource: /faq.md
 tags: [faq, incident-response, release, teams, azure]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T18:00:24Z"
+  at: "2026-09-07T18:41:50Z"
 verified:
   by: "process:release-faq-reconciliation/1"
-  at: "2026-09-07T18:00:24Z"
+  at: "2026-09-07T18:41:50Z"
 status: stable
-stale_after: "2026-09-14T18:00:24Z"
+stale_after: "2026-09-14T18:41:50Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -535,3 +535,11 @@ Run 51 passed the handoff, hosted Core `30/30`, RBAC, approval, what-if, Blob st
 The exact raw Azure response was intentionally not persisted, so the provider's response shape remains `ROOT_CAUSE_REVIEW_REQUIRED`. The source did, however, have a concrete read-back gap: it accepted only a top-level array from `revision list`, while the official REST contract models `RevisionCollection.value`. The remediation normalizes both forms, records the response shape without raw revision data, and retains the same strict readiness predicate. This does not relax the gate and does not prove the Run 51 raw response had that envelope.
 
 Official basis: [az containerapp revision](https://learn.microsoft.com/en-us/cli/azure/containerapp/revision?view=azure-cli-latest) and [Container Apps Revisions - List Revisions - REST API](https://learn.microsoft.com/en-us/rest/api/resource-manager/containerapps/container-apps-revisions/list-revisions?view=rest-resource-manager-containerapps-2026-01-01).
+
+## Q33. Why did Run 52 still fail after the revision-list normalizer was added?
+
+Run 52 proved that the normalizer accepted the hosted list response as a top-level `array` and found the expected revision name. It did not prove that the revision became ready: the bounded `revision-and-health` predicate still failed, and the worker-runtime probe was never reached. The value-free receipt then reported all state fields as `null`, but that diagnostic was itself defective: its jq shorthand read fields from the resource root even though Microsoft's contract places them under `properties.*`. The raw provider payload was not retained, so the actual Azure state at the poll time remains `ROOT_CAUSE_REVIEW_REQUIRED`.
+
+The prevention is now explicit and test-backed: receipt generation uses `scripts/azure-revision-readback.mjs` to read only the nested documented properties, supports both a normalized list and a single `revision show` response, emits an unquoted response-shape value for shell assignment, and rejects malformed revision properties. The pipeline contract test rejects the old root-level shorthand. This improves diagnosis without weakening readiness, bypassing what-if, or converting a failed run into a release. The application version remains `1.0.103`; a fresh clean Core gate and hosted rerun are required.
+
+Official basis: [Container Apps Revisions - List Revisions - REST API](https://learn.microsoft.com/en-us/rest/api/resource-manager/containerapps/container-apps-revisions/list-revisions?view=rest-resource-manager-containerapps-2026-01-01), `Revision` schema (`properties.active`, `properties.healthState`, `properties.provisioningState`, `properties.runningState`, `properties.replicas`, `properties.trafficWeight`), and [az containerapp revision](https://learn.microsoft.com/en-us/cli/azure/containerapp/revision?view=azure-cli-latest), `list`/`show` command sections.

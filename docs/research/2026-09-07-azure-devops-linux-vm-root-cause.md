@@ -4,9 +4,9 @@
 
 - 조사일: 2026-09-08 (Asia/Seoul)
 - 대상: `devdoo-teams/teams-app`, canonical worktree `/Users/doosansmacbookpro/Documents/TeamsApp`, `main`
-- 조사 기준 HEAD: `bb157147b8ddf4f980114dc9a30321274562c734` (2026-09-08 revision read-back normalization correction; hosted verification pending)
+- 조사 기준 HEAD: `39aa6f5b9ef90cb45ecae585e40e741ebf27eaed` (2026-09-08 revision read-back and diagnostic receipt correction; hosted verification failed at revision-and-health)
 - 제품 버전: `1.0.103` (이번 조사에서는 버전 변경 없음)
-- 운영 사건: Azure DevOps Run 32 / Build `20260906.11`부터 Run 51 / Build `20260907.7`까지
+- 운영 사건: Azure DevOps Run 32 / Build `20260906.11`부터 Run 52 / Build `20260907.8`까지
 - 조사 범위: Azure DevOps 승인·배포·아티팩트 계약, ARM what-if 및 Bicep 경계, Azure Container Apps revision/health/traffic, ACR managed identity, Linux VM/cloud-init/Custom Script Extension, 24/7 worker 상태·증거 체인
 - 증거 분류: `OFFICIAL CONTRACT`, `OBSERVED REPOSITORY EVIDENCE`, `INFERENCE / RECOMMENDATION`, `LIVE UNVERIFIED`
 - 이 문서는 읽기·리서치·문서화 결과다. 이번 문서 갱신 자체는 Azure 리소스, Teams 앱, 트래픽, 비밀, Jira, 브라우저 세션을 변경하지 않았으며, Run 43의 pipeline 배포·실패 read-back은 아래에 별도 기록한다.
@@ -457,3 +457,15 @@ The public FQDN independently returned HTTP 200 with `ok=true`, version `1.0.103
 Microsoft's CLI contract exposes both named `revision show` and `revision list --all`, while the current Container Apps REST schema describes list responses as a `RevisionCollection` with a `value` array. The pipeline previously applied `jq '.[]'` directly to the list response and retained no response-shape metadata. Because Run 51 did not preserve the raw `show` or `list` bodies, the exact provider response is `ROOT_CAUSE_REVIEW_REQUIRED`; the code-path defect is confirmed, but the particular Run 51 envelope is not.
 
 The remediation adds `scripts/azure-revision-readback.mjs`, tests top-level arrays, `RevisionCollection.value`, and malformed envelopes, snapshots the helper before release checkout, normalizes before the unchanged readiness predicate, and records only `revisionListResponseShape` in the value-free receipt. This preserves fail-closed behavior and makes the next failure diagnosable without storing raw revision payloads. The app version remains `1.0.103`; hosted verification of this correction is the next gate.
+
+## Run 52 — normalizer exercised, diagnostic projection was wrong
+
+Run 52 / Azure DevOps build `20260907.8` used source/release commit `39aa6f5b9ef90cb45ecae585e40e741ebf27eaed`, application version `1.0.103`, and the matching immutable GitHub handoff. It passed the handoff, hosted Core/RBAC, approval, workload what-if, Blob staging, and workload mutation boundaries. It failed at `revision-and-health` for `teamsapp-canary-goictvxm--39aa6f5b9e`; the worker-runtime probe was not reached.
+
+The hosted task repeatedly logged `Azure revision list response normalized: array (shape="array")`, and the expected revision name was found. This means the newly added normalizer was exercised on a top-level array; Run 52 does not confirm that its provider response used the earlier hypothesized `RevisionCollection.value` envelope. The value-free receipt nevertheless showed all six state fields as null. The build summary recorded `boundary=revision-and-health exitCode=1`, and the task recorded failure receipt SHA `add6d495e1a20aea59e9da1c336e016e94b6ec637556b47a3c47fe628568580f`.
+
+The null receipt fields were a separate source defect, not a confirmed provider response: the jq projection used `{active, provisioningState, runningState, healthState, trafficWeight, replicas}` inside a nested `properties` object. In jq those shorthand names refer to the current resource root, so the diagnostic discarded the actual nested values. The response-shape variable also contained JSON quotation marks because the CLI `describe` output was JSON-encoded before shell assignment. The actual readiness state at the poll time remains `ROOT_CAUSE_REVIEW_REQUIRED` because raw `show/list` payloads were not retained; the failure boundary itself is confirmed.
+
+The minimal correction replaces both jq receipt branches with the snapshotted `scripts/azure-revision-readback.mjs` helper. `summarizeAzureRevision` projects only the documented `revision.properties.*` fields, `createAzureRevisionStateReceipt` supports both a list and a single named-show object, and `describe` emits a shell-safe unquoted shape. The RED test first failed on missing exports; the focused unit test and `azure-platform-contract-test.mjs` then passed after implementation. The deployment gate remains strict and unchanged: a diagnostic receipt is not readiness evidence, and a hosted run must still prove the active/provisioned/running-or-healthy/100%-traffic predicate before the VM worker gate can start.
+
+This correction does not change the app version, package, or Teams UI. The next controlled sequence is: clean commit and push, clean Azure Core gate, fresh immutable handoff, one bounded hosted rerun, then read back the corrected revision receipt before any worker, 24/7, A2A, portal, desktop, or mobile claim.

@@ -6,12 +6,12 @@ resource: /failure-history.md
 tags: [teamsapp, azure, release, incident, failure, provenance]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T18:00:24Z"
+  at: "2026-09-07T18:41:50Z"
 verified:
   by: "process:release-evidence-reconciliation/1"
-  at: "2026-09-07T18:00:24Z"
+  at: "2026-09-07T18:41:50Z"
 status: stable
-stale_after: "2026-09-14T18:00:24Z"
+stale_after: "2026-09-14T18:41:50Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -762,3 +762,15 @@ The workload artifact `300` contained `azure-revision-state.json` (271 B), the d
 **CLASSIFICATION.** `CONFIRMED_FAILURE_BOUNDARY / REVISION_READBACK_INCONSISTENCY`. The exact Run 51 `show` and `list` bodies were not retained, so the provider response shape is `ROOT_CAUSE_REVIEW_REQUIRED`, not a confirmed Azure API defect. A confirmed code-path gap existed: the pipeline accepted only a top-level array from `revision list` and could fall back to the named `show` body, which explains how an envelope mismatch could yield a name-only/null safe receipt. This is a remediation hypothesis grounded in the source and official `RevisionCollection.value` contract, not a retroactive claim about the missing raw body.
 
 **FIX AND PREVENTION.** Added `scripts/azure-revision-readback.mjs` with RED/GREEN coverage for top-level arrays, `RevisionCollection.value`, malformed envelopes, and its CLI path. The deployment now snapshots this helper before release checkout, normalizes the list response before applying the unchanged readiness predicate, and records only `revisionListResponseShape` in the value-free receipt. The app version remains `1.0.103`; no Teams package upload or completion message is justified. A fresh immutable handoff and hosted run must pass this gate and the separate worker-runtime gate before release promotion.
+
+## 2026-09-08 — Run 52 exposed a nested-property receipt projection bug
+
+**OFFICIAL CONTRACT.** The current Microsoft Container Apps revision schema places `active`, `healthState`, `provisioningState`, `runningState`, `replicas`, and `trafficWeight` under `Revision.properties`; the list response is a `RevisionCollection` whose revisions are in `value`. The CLI exposes both `revision show` and `revision list --all`: [Azure CLI revision commands](https://learn.microsoft.com/en-us/cli/azure/containerapp/revision?view=azure-cli-latest), [Container Apps revision list REST schema](https://learn.microsoft.com/en-us/rest/api/resource-manager/containerapps/container-apps-revisions/list-revisions?view=rest-resource-manager-containerapps-2026-01-01).
+
+**OBSERVED EVIDENCE.** Run 52 / Azure DevOps build `20260907.8` used source/release commit `39aa6f5b9ef90cb45ecae585e40e741ebf27eaed`, app `1.0.103`, and the matching immutable handoff. Hosted Core, RBAC, approval, workload what-if, Blob staging, and workload mutation passed. The task then failed at `revision-and-health` after the bounded poll for `teamsapp-canary-goictvxm--39aa6f5b9e`. The new normalizer logged `Azure revision list response normalized: array (shape="array")` repeatedly, so this run exercised a top-level array rather than proving a `RevisionCollection.value` envelope. The expected revision name was present in the value-free candidate, but all six candidate state fields were logged as `null`. The build summary recorded `boundary=revision-and-health exitCode=1`; the task recorded receipt SHA `add6d495e1a20aea59e9da1c336e016e94b6ec637556b47a3c47fe628568580f`. The worker-runtime probe was not reached.
+
+**ROOT CAUSE AND LIMIT.** `CONFIRMED_FAILURE_BOUNDARY / RECEIPT_DIAGNOSTIC_BUG`; the actual provider state at the poll time remains `ROOT_CAUSE_REVIEW_REQUIRED`. The null candidate fields were produced by the receipt projection `{name, properties: {active, ...}}`, whose shorthand names refer to the resource root in jq; it did not read `.properties.active`, `.properties.provisioningState`, and the other documented nested fields. Therefore the receipt's nulls are not evidence that Azure returned nulls. Separately, the readiness predicate still failed after 30 attempts, so this correction did not establish a successful revision or release.
+
+**FIX AND PREVENTION.** The pipeline now delegates receipt creation to the snapshotted `scripts/azure-revision-readback.mjs` helper. Its `summarizeAzureRevision` function reads only the documented nested properties and its `createAzureRevisionStateReceipt` supports both normalized lists and a single `revision show` response. The CLI `describe` path now emits an unquoted shape suitable for shell assignment. RED/GREEN coverage includes nested-property preservation, single-show diagnostics, exact shape output, malformed properties, and a pipeline contract assertion that rejects the old root-level shorthand. The version remains `1.0.103`; no package upload or Teams completion message is justified.
+
+**CURRENT JUDGMENT.** Run 52 remains `AZURE_CANARY_REVISION_GATE_FAILED / WORKER_RUNTIME_GATE_UNREACHED / RELEASE_BLOCKED`. Commit and push the fix, run the clean Azure Core gate, create a fresh immutable handoff, and perform one bounded hosted rerun. Until that run passes revision readiness and the separate VM worker receipt, 24/7, A2A, portal, desktop, and mobile remain blocked or unverified.

@@ -8,11 +8,11 @@ okf_version: 0.2
 
 ## Concepts
 
-* [실패 이력과 원인](failure-history.md) - Run 26–51와 이전에 확인된 실패군, 개선 및 현재 판정
+* [실패 이력과 원인](failure-history.md) - Run 26–52와 이전에 확인된 실패군, 개선 및 현재 판정
 * [팀 배포 FAQ](faq.md) - 공식 계약과 내부 증거를 질문·답변으로 정리한 운영 FAQ
 * [재발 방지 릴리스 게이트](gates.md) - source, artifact, Azure, runtime, Teams, 종료 조건
 * [공식 계약 참조](official-contracts.md) - Google OKF, Microsoft Azure, Teams 공식 문서의 URL·섹션·관찰 line
-* [Azure DevOps·Linux VM/ACA 근본원인 지식그래프](../../research/2026-09-07-azure-devops-linux-vm-root-cause.md) - Run 32–51와 Azure 배포 책임 경계의 공식 계약 대조, root-cause 분류, 목표 구조
+* [Azure DevOps·Linux VM/ACA 근본원인 지식그래프](../../research/2026-09-07-azure-devops-linux-vm-root-cause.md) - Run 32–52와 Azure 배포 책임 경계의 공식 계약 대조, root-cause 분류, 목표 구조
 
 ## Reading order
 

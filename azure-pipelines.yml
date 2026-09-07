@@ -847,22 +847,15 @@ stages:
                         sleep 10
                       done
                       if test -s "$revision_list_normalized" && jq -e 'type == "array"' "$revision_list_normalized" >/dev/null 2>&1; then
-                        jq -c \
-                          --arg expected_revision "$expected_revision_name" \
-                          --arg revision_list_shape "$revision_list_shape" \
-                          '{schemaVersion: 1, expectedRevision: $expected_revision, revisionListResponseShape: $revision_list_shape, candidates: [
-                            .[] | select(.name == $expected_revision) |
-                            {name, properties: {active, provisioningState, runningState, healthState, trafficWeight, replicas}}
-                          ]}' \
-                          "$revision_list_normalized" > "$revision_state_receipt" || true
+                        node "$revision_readback_script" receipt \
+                          "$revision_list_normalized" \
+                          "$expected_revision_name" \
+                          "$revision_list_shape" > "$revision_state_receipt" || true
                       elif test -s "$(Agent.TempDirectory)/revision.json"; then
-                        jq -c \
-                          --arg expected_revision "$expected_revision_name" \
-                          --arg revision_list_shape "$revision_list_shape" \
-                          '{schemaVersion: 1, expectedRevision: $expected_revision, revisionListResponseShape: $revision_list_shape, candidates: [
-                            {name, properties: {active, provisioningState, runningState, healthState, trafficWeight, replicas}}
-                          ]}' \
-                          "$(Agent.TempDirectory)/revision.json" > "$revision_state_receipt" || true
+                        node "$revision_readback_script" receipt \
+                          "$(Agent.TempDirectory)/revision.json" \
+                          "$expected_revision_name" \
+                          "revision-show" > "$revision_state_receipt" || true
                       fi
                       if ! test -s "$revision_state_receipt"; then
                         jq -cn \

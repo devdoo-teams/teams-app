@@ -1083,6 +1083,19 @@ try {
   assert.ok(deployScript?.includes('--all'), 'revision list fallback must include inactive revisions when diagnosing the exact expected revision');
   assert.ok(deployScript?.includes('node "$revision_readback_script" normalize "$revision_list"'), 'revision list responses must be normalized before jq readiness evaluation');
   assert.ok(deployScript?.includes('node "$revision_readback_script" describe "$revision_list"'), 'revision list response shape must be recorded without persisting raw response data');
+  assert.ok(
+    deployScript?.includes('node "$revision_readback_script" receipt'),
+    'revision state diagnostics must use the tested nested-properties receipt helper',
+  );
+  assert.ok(
+    deployScript?.includes('"revision-show"'),
+    'single revision show diagnostics must retain an explicit response source shape',
+  );
+  assert.equal(
+    deployScript?.includes('{name, properties: {active, provisioningState, runningState, healthState, trafficWeight, replicas}}'),
+    false,
+    'revision diagnostics must not read readiness fields from the resource root',
+  );
   assert.ok(deployScript?.includes('revision_list_normalized'), 'deployment must retain a normalized revision list path');
   assert.ok(deployScript?.includes('revisionListResponseShape'), 'revision state receipt must retain the normalized response shape');
   assert.ok(deployScript?.includes('revision_list'), 'deployment must retain a separate revision list response for read-back diagnostics');
