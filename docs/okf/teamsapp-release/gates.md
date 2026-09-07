@@ -6,12 +6,12 @@ resource: /gates.md
 tags: [release-gate, azure, teams, provenance, rollback]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T16:01:02Z"
+  at: "2026-09-07T16:42:13Z"
 verified:
   by: "process:release-gate-reconciliation/1"
-  at: "2026-09-07T16:01:02Z"
+  at: "2026-09-07T16:42:13Z"
 status: stable
-stale_after: "2026-09-14T16:01:02Z"
+stale_after: "2026-09-14T16:42:13Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -160,6 +160,7 @@ Azure Pipelines approvals control when a stage should run.[^az-approval] Deploym
 ## F. Runtime and Teams
 
 24. Azure revision has active healthy state and startup/liveness/readiness evidence. For the current HTTP canary, `Running` or the observed `ScaledToZero` is accepted only when provisioning is `Succeeded`, the revision is active, `healthState` is `Healthy` for `ScaledToZero`, and traffic is 100%; public health must still return successfully.
+24d. Revision readiness reads the exact revision with `az containerapp revision show` and, when that response is temporarily incomplete, reads `az containerapp revision list --all` and applies the identical active/provisioned/running-or-healthy/100%-traffic predicate. A list fallback is not a readiness relaxation; an exact matching record is still required, and a value-free revision-state receipt is retained.[^az-aca-revision-cli]
 24b. The 24/7 promoted service is a separate gate: its deployed scale configuration must have `minReplicas >= 1`, because a healthy `ScaledToZero` revision is not an always-running worker. This requires its own what-if and runtime read-back.
 24c. Before final identity, the deployment must invoke the exact Azure VM through non-interactive `RunShellScript` and verify a redacted worker-runtime receipt: systemd enabled/active/running, current release commit and installed manifest commit, Codex executable path/digest, owner-only regular `auth.json` metadata, and `codex login status` under `teamsworker`. Missing auth or a failed login is `BLOCKED`, not a retryable Azure health warning. The helper is snapshotted before release checkout and its receipt is published only on success.
 24a. Multiple-revision canary keeps the known-good revision serving traffic while a labeled green revision is independently readiness- and function-tested; traffic promotion and rollback are separate actions.
@@ -202,6 +203,7 @@ Run 48 is the current Azure canary attempt: it passed the exact GitHub handoff, 
 [^okf-spec]: Open Knowledge Format v0.2 specification, sections 3-5, 8-10, observed web lines 253-327, 370-444, 486-532. https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md
 [^arm-what-if]: ARM what-if operation, What-if operation and Required permissions, observed web lines 29-52. https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-what-if
 [^az-what-if-help]: Azure CLI az deployment group what-if, option table and examples, observed web lines 1016-1042 and 1071-1092. https://learn.microsoft.com/en-us/cli/azure/deployment/group?view=azure-cli-latest
+[^az-aca-revision-cli]: Azure CLI az containerapp revision, `list` and `show` commands, required parameters, `--all`, and examples, current page read 2026-09-08 (rendered line numbers are not stable). https://learn.microsoft.com/en-us/cli/azure/containerapp/revision?view=azure-cli-latest
 [^az-approval]: Pipeline deployment approvals, approvals and check execution, observed web lines 42-58 and 67-77. https://learn.microsoft.com/en-us/azure/devops/pipelines/process/approvals?view=azure-devops
 [^aca-health]: Health probes in Azure Container Apps, probe types and readiness before traffic, observed web lines 36-41 and 187-188. https://learn.microsoft.com/en-us/azure/container-apps/health-probes
 [^teams-upload]: Upload your custom app, upload/update and installed app sections, observed web lines 48-60 and 84-122. https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/deploy-and-publish/apps-upload

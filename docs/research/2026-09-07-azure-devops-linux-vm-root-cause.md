@@ -424,3 +424,18 @@ Run 48 / Azure DevOps build `20260907.4` was queued and executed from source/rel
 The read-back workload diagnostic artifact `276` reported `status=BLOCKED`, `whatIf.status=Succeeded`, and change counts `Modify:6`, `NoChange:20`, `Ignore:2`, `Unsupported:9`. The exact Container App property multiset was the Run 37 legacy env/secret reconciliation plus release identity updates at `env[19]` and `env[21]`, `image`, `properties.template.revisionSuffix`, and `properties.template.scale.minReplicas`. Mapping the array indexes against `infra/azure/modules/container-app.bicep:99-180` shows that `env[19]` is `RELEASE_SOURCE_COMMIT` and `env[21]` is `RELEASE_IMAGE_DIGEST`; the remaining paths are also declared release-controlled fields. The diagnostic and failure receipt `277` were read through the existing authenticated Ego Lite tab; the task recorded receipt SHA `bce72eb23cf742f3bec6722d0091dbbb312a3a7c5b741bd4dac5dcc10c184f3a`.
 
 This is `CONFIRMED_ROOT_CAUSE / WORKLOAD_WHAT_IF_ALLOWLIST_MISSING_RUN48_RELEASE_IDENTITY_SHAPE`. The source commit was not mismatched; the previously added Run 47 fixture was simply incomplete for the next observed provider state shape. The correct remediation is not a broad `Modify` exception. The source now adds one complete, value-free Run 48 multiset to `scripts/azure-canary-preflight.mjs`, with a RED regression in `scripts/azure-what-if-receipt-test.mjs` followed by GREEN focused tests. A clean full Azure Core gate and one bounded hosted rerun from the new commit are still required. No app version bump, package upload, or 24/7/A2A completion claim is justified.
+
+## Run 49 — revision state read-back inconsistency
+
+Run 49 / Azure DevOps build `20260907.5` used source/release commit `fb02f7a7dfa72637cfe19a3784fde0490c576418`, app `1.0.103`, and the matching immutable GitHub handoff. It passed the hosted Core/RBAC gates, manual approval, workload what-if, and Blob staging. The workload deployment task then stopped at `revision-and-health` after 30 attempts. Its final safe diagnostic was:
+
+```text
+Expected release revision did not reach an accepted ready state/100%: teamsapp-canary-goictvxm--fb02f7a7df
+{"name":"teamsapp-canary-goictvxm--fb02f7a7df","properties":{"active":null,"provisioningState":null,"runningState":null,"healthState":null,"trafficWeight":null,"replicas":null}}
+```
+
+The failure receipt artifact `285` contained a 476-byte JSON receipt and a 65-byte checksum sidecar; the task recorded receipt SHA `1147c9218e16ef9788dca1ea6ebb99c7a7c1a33e643ece007d801e990a810d94`. The run did not retain a raw revision body or list response, so the exact cause of the null fields at the poll time is not promoted beyond `ROOT_CAUSE_REVIEW_REQUIRED`.
+
+An independent read after failure is consistent with a timing/response gap: the existing Azure Portal showed `latestRevisionName=teamsapp-canary-goictvxm--fb02f7a7df` and Container App `provisioningState=Succeeded`, while public `/api/health` returned HTTP 200 with the same commit, version, image digest, package/bundle identity, authenticated Teams Core, and reachable queue/state dependencies. The worker heartbeat/readiness remained unavailable and A2A remained unavailable. This is `CONFIRMED_FAILURE_BOUNDARY / REVISION_READBACK_INCONSISTENCY`, not a full release pass.
+
+The prevention is to use the documented `az containerapp revision list --all` alongside `revision show` when the named response is incomplete, evaluate the same exact readiness predicate on either response, and retain a value-free candidate receipt. This preserves fail-closed behavior while making eventual-consistency or command-response gaps observable. A fresh clean Core gate and one bounded hosted rerun from the new source are required.

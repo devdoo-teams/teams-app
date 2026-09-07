@@ -6,12 +6,12 @@ resource: /faq.md
 tags: [faq, incident-response, release, teams, azure]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T16:01:02Z"
+  at: "2026-09-07T16:42:13Z"
 verified:
   by: "process:release-faq-reconciliation/1"
-  at: "2026-09-07T16:01:02Z"
+  at: "2026-09-07T16:42:13Z"
 status: stable
-stale_after: "2026-09-14T16:01:02Z"
+stale_after: "2026-09-14T16:42:13Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -515,3 +515,9 @@ The fix is a separate exact Run 47 multiset fixture plus a regression test. It d
 Because the hosted Run 48 did execute the new f17 commit, but Azure returned a larger exact property-change multiset than the Run 47 fixture represented. The existing Container App reported the Run 37 legacy reconciliation plus two release-identity env updates (`env[19]` and `env[21]`), `image`, `properties.template.revisionSuffix`, and `properties.template.scale.minReplicas`. The source Bicep declares each of those release-controlled fields, but the fail-closed classifier had not yet recorded this combined observed shape.
 
 This is a confirmed allowlist fixture gap, not a source mismatch and not a successful deployment. The prevention is to retain the exact value-free provider multiset as a regression, map each newly accepted path to a current template field, and continue rejecting any extra/unobserved `Modify` entry. Run 48 remains `FAIL_AFTER_APPROVAL` until a clean commit passes the full Azure Core gate and one bounded hosted rerun reaches the next real boundary.
+
+## Q30. Why did Run 49 fail when the Portal and public health later showed the revision?
+
+Run 49's named `revision show` poll exhausted while every safe state field was null. Afterward, the existing Azure Portal read-back showed the exact latest revision name and `provisioningState=Succeeded`, and `/api/health` returned the same release identity. This proves a read-back timing/response inconsistency is plausible, but the original revision body was not retained, so the precise transient cause remains `ROOT_CAUSE_REVIEW_REQUIRED`.
+
+The prevention is to query the exact revision with both the documented `show` and `list --all` paths, apply the same active/provisioned/running-or-healthy/100%-traffic predicate to either response, and retain only a value-free candidate receipt. A healthy public endpoint does not by itself make the failed pipeline run or the worker/A2A gates pass.

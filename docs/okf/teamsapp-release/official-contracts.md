@@ -6,12 +6,12 @@ resource: /official-contracts.md
 tags: [official-contract, azure, teams, release, evidence]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T14:42:00Z"
+  at: "2026-09-07T16:42:13Z"
 verified:
   by: "process:official-source-research/1"
-  at: "2026-09-07T14:42:00Z"
+  at: "2026-09-07T16:42:13Z"
 status: stable
-stale_after: "2026-09-14T14:42:00Z"
+stale_after: "2026-09-14T16:42:13Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -97,6 +97,10 @@ sources:
     resource: "https://learn.microsoft.com/en-us/azure/container-apps/revisions"
     title: "Update and deploy changes in Azure Container Apps"
     location: "revision running states, Scale to 0, readiness, and multiple-revision traffic; observed web lines 48-72 and 128-138 on 2026-09-07"
+  - id: az-aca-revision-cli
+    resource: "https://learn.microsoft.com/en-us/cli/azure/containerapp/revision?view=azure-cli-latest"
+    title: "az containerapp revision"
+    location: "Commands table; `az containerapp revision list` required/optional parameters and `az containerapp revision show` example/parameters; current page read 2026-09-08 (rendered line numbers are not stable)"
   - id: aca-start
     resource: "https://learn.microsoft.com/en-us/azure/container-apps/troubleshoot-container-start-failures"
     title: "Troubleshoot start failures in Azure Container Apps"

@@ -1067,6 +1067,10 @@ try {
   }
   assert.ok(deployScript?.includes('expected_revision_name="${app_name}--${commit:0:10}"'), 'deployment must derive the expected revision from the attested release commit');
   assert.ok(deployScript?.includes('az containerapp revision show'), 'deployment must read back the expected Container App revision');
+  assert.ok(deployScript?.includes('az containerapp revision list'), 'deployment must fall back to the official Container Apps revision list read-back');
+  assert.ok(deployScript?.includes('--all'), 'revision list fallback must include inactive revisions when diagnosing the exact expected revision');
+  assert.ok(deployScript?.includes('revision_list'), 'deployment must retain a separate revision list response for read-back diagnostics');
+  assert.ok(deployScript?.includes('azure-revision-state.json'), 'deployment must retain a value-free revision state receipt');
   assert.ok(deployScript?.includes('revision_ready="false"'), 'deployment must initialize a bounded revision-readiness poll');
   assert.ok(deployScript?.includes('sleep 10'), 'revision-readiness polling must use a bounded delay');
   assert.ok(deployScript?.includes('.properties.runningState == "Running"'), 'revision-readiness poll must accept Running state');

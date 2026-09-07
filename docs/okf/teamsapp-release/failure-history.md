@@ -6,12 +6,12 @@ resource: /failure-history.md
 tags: [teamsapp, azure, release, incident, failure, provenance]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T16:01:02Z"
+  at: "2026-09-07T16:42:13Z"
 verified:
   by: "process:release-evidence-reconciliation/1"
-  at: "2026-09-07T16:01:02Z"
+  at: "2026-09-07T16:42:13Z"
 status: stable
-stale_after: "2026-09-14T16:01:02Z"
+stale_after: "2026-09-14T16:42:13Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -726,3 +726,15 @@ The exact Container App `Modify` multiset was the known Run 37 legacy env/secret
 **CLASSIFICATION.** `CONFIRMED_ROOT_CAUSE / WORKLOAD_WHAT_IF_ALLOWLIST_MISSING_RUN48_RELEASE_IDENTITY_SHAPE`. The Run 47 fixture was an incomplete representation of the provider's next observed state shape. This is not a source-commit mismatch, not evidence that `minReplicas: 1` is invalid, and not evidence of a successful Azure deployment.
 
 **FIX AND PREVENTION.** Added an exact, value-free Run 48 multiset fixture to `scripts/azure-canary-preflight.mjs` and a RED/GREEN regression to `scripts/azure-what-if-receipt-test.mjs`. The fixture names the release identity paths explicitly and continues to reject arbitrary environment, image, and scale edits. The app version remains `1.0.103`; no package upload or completion report is justified. A clean full Azure Core gate and one bounded hosted rerun from the new commit are required before any further mutation.
+
+## 2026-09-08 — Run 49 revision read-back inconsistency
+
+**OFFICIAL CONTRACT.** Microsoft exposes both `az containerapp revision show` for one named revision and `az containerapp revision list --all` for the revisions associated with a Container App ([az containerapp revision](https://learn.microsoft.com/en-us/cli/azure/containerapp/revision?view=azure-cli-latest), `list` and `show` command sections; current page read 2026-09-08). The release gate must still require an exact active/provisioned/running-or-healthy/100%-traffic record; switching from `show` to `list` is only a read-back path, not a readiness relaxation.
+
+**OBSERVED EVIDENCE.** Run 49 / `20260907.5` used source/release commit `fb02f7a7dfa72637cfe19a3784fde0490c576418`, app `1.0.103`, and the newly generated immutable handoff. The workload what-if was `OBSERVED`, the worker Blob was staged with the expected archive SHA, and the task then exhausted the exact revision poll at `revision-and-health`. The logged expected revision was `teamsapp-canary-goictvxm--fb02f7a7df`; the final safe fields were all `null`. The task retained failure artifact `285` (`476 B` JSON plus `65 B` checksum sidecar) and recorded receipt SHA `1147c9218e16ef9788dca1ea6ebb99c7a7c1a33e643ece007d801e990a810d94`.
+
+**INDEPENDENT READ-BACK.** After the run, the existing Azure Portal Container App page showed `latestRevisionName=teamsapp-canary-goictvxm--fb02f7a7df` and Container App `provisioningState=Succeeded`. Public `/api/health` returned HTTP 200 with the same commit, version, immutable image/package/bundle identity, authenticated Teams Core, and reachable queue/state dependencies. The response still reported worker heartbeat/readiness unavailable and A2A unavailable. Because the run did not retain a list response or raw revision body at the failure time, the exact transient cause of the null `show` response remains `ROOT_CAUSE_REVIEW_REQUIRED`.
+
+**CLASSIFICATION.** `CONFIRMED_FAILURE_BOUNDARY / REVISION_READBACK_INCONSISTENCY`; not a source-commit mismatch and not a full 24/7/worker success. The current Azure service is live on the same identity, but Run 49 itself is not a release pass.
+
+**FIX AND PREVENTION.** Add an official `revision list --all` fallback that applies the identical readiness predicate and retain a value-free `azure-revision-state.json` in the always-published workload evidence. Add platform/failure-receipt regressions for the fallback and safe receipt. Keep version `1.0.103`; perform a clean Core gate and one bounded hosted rerun before any Teams completion or worker/A2A promotion.

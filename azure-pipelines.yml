@@ -785,6 +785,9 @@ stages:
                       fqdn="$(jq -er '.containerAppFqdn' "$(Agent.TempDirectory)/deployment.json")"
                       failure_boundary="revision-and-health"
                       expected_revision_name="${app_name}--${commit:0:10}"
+                      revision_list="$(Agent.TempDirectory)/revisions.json"
+                      revision_list_stderr="$(Agent.TempDirectory)/revision-list.stderr"
+                      revision_state_receipt="$workload_what_if_receipt_dir/azure-revision-state.json"
                       revision_ready="false"
                       for revision_attempt in $(seq 1 30); do
                         if az containerapp revision show \
@@ -806,16 +809,63 @@ stages:
                             break
                           fi
                         fi
+                        if az containerapp revision list \
+                            --resource-group "$AZURE_RESOURCE_GROUP" \
+                            --name "$app_name" \
+                            --all \
+                            --output json > "$revision_list" 2>"$revision_list_stderr"; then
+                          if jq -e \
+                              --arg expected_revision "$expected_revision_name" \
+                              '[ .[] | select(.name == $expected_revision)
+                                | select((.properties.active == true)
+                                  and ((.properties.provisioningState == "Provisioned")
+                                    or (.properties.provisioningState == "Succeeded"))
+                                  and ((.properties.runningState == "Running")
+                                    or (.properties.runningState == "ScaledToZero" and .properties.healthState == "Healthy"))
+                                  and (((.properties.trafficWeight // 0) | tonumber) == 100))
+                              ] | length == 1' \
+                              "$revision_list" >/dev/null; then
+                            jq -e \
+                              --arg expected_revision "$expected_revision_name" \
+                              '[ .[] | select(.name == $expected_revision) ][0]' \
+                              "$revision_list" > "$(Agent.TempDirectory)/revision.json"
+                            revision_ready="true"
+                            break
+                          fi
+                        fi
                         sleep 10
                       done
+                      if test -s "$revision_list" && jq -e 'type == "array"' "$revision_list" >/dev/null 2>&1; then
+                        jq -c \
+                          --arg expected_revision "$expected_revision_name" \
+                          '{schemaVersion: 1, expectedRevision: $expected_revision, candidates: [
+                            .[] | select(.name == $expected_revision) |
+                            {name, properties: {active, provisioningState, runningState, healthState, trafficWeight, replicas}}
+                          ]}' \
+                          "$revision_list" > "$revision_state_receipt" || true
+                      elif test -s "$(Agent.TempDirectory)/revision.json"; then
+                        jq -c \
+                          --arg expected_revision "$expected_revision_name" \
+                          '{schemaVersion: 1, expectedRevision: $expected_revision, candidates: [
+                            {name, properties: {active, provisioningState, runningState, healthState, trafficWeight, replicas}}
+                          ]}' \
+                          "$(Agent.TempDirectory)/revision.json" > "$revision_state_receipt" || true
+                      fi
+                      if ! test -s "$revision_state_receipt"; then
+                        printf '{"schemaVersion":1,"expectedRevision":"%s","candidates":[]}\n' \
+                          "$expected_revision_name" > "$revision_state_receipt"
+                      fi
+                      chmod 600 "$revision_state_receipt"
                       if [[ "$revision_ready" != true ]]; then
                         echo "Expected release revision did not reach an accepted ready state/100%: $expected_revision_name" >&2
-                        if test -s "$(Agent.TempDirectory)/revision.json"; then
-                          jq -c '{name, properties: {active, provisioningState, runningState, healthState, trafficWeight, replicas}}' \
-                            "$(Agent.TempDirectory)/revision.json" >&2 || true
+                        if test -s "$revision_state_receipt"; then
+                          cat "$revision_state_receipt" >&2
                         fi
                         if test -s "$(Agent.TempDirectory)/revision.stderr"; then
                           sed -n '1,80p' "$(Agent.TempDirectory)/revision.stderr" >&2
+                        fi
+                        if test -s "$revision_list_stderr"; then
+                          sed -n '1,80p' "$revision_list_stderr" >&2
                         fi
                         exit 1
                       fi

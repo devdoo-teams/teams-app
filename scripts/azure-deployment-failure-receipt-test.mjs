@@ -81,8 +81,13 @@ assert.match(pipeline, /--exit-code "\$status"/u, 'receipt must record the faili
 assert.match(deployCanary, /\.properties\.provisioningState == "Provisioned"/u, 'revision-readiness must accept the official Provisioned state');
 assert.match(
   deployCanary,
-  /jq -c '\{name, properties: \{active, provisioningState, runningState, healthState, trafficWeight, replicas\}\}'/u,
-  'revision-readiness failures must retain safe state diagnostics without environment values',
+  /azure-revision-state\.json/u,
+  'revision-readiness must retain a value-free state receipt without environment values',
+);
+assert.match(
+  deployCanary,
+  /cat\s+"\$revision_state_receipt"/u,
+  'revision-readiness failures must log the value-free state receipt rather than raw revision data',
 );
 assert.doesNotMatch(pipeline, /--error "\$\{[^}]*stderr/iu, 'raw stderr must not be copied into the durable receipt');
 
