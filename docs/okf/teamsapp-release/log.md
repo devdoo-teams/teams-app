@@ -173,3 +173,10 @@
 * **Observed**: the user's supplied remote screenshot showed the Mac desktop (`USER_REMOTE_VIEW`); local `pmset` showed Caffeine/`caffeinate` `Prevent*Sleep` (`POWER_ASSERTION_ACTIVE`); local black capture and CUA automatic-unlock error were separate (`REMOTE_CAPTURE_UNAVAILABLE` and `CUA_CONTROL_UNAVAILABLE`).
 * **Correction**: no `CONFIRMED_SCREEN_LOCK` was established. The prior unlock interpretation was an evidence overclaim caused by mixing host/session/capture boundaries, not an observed user action or server diagnosis.
 * **Prevention**: require host/session/time/surface labels, two corroborating same-host/same-session signals before an unlock request, and use `REMOTE_SESSION_MISMATCH` for conflicts. Continue command-only, existing Ego DOM, and public HTTP checks while native UI is separately `DESKTOP_UNVERIFIED`.
+
+## 2026-09-08 — Promoted Core `minReplicas: 1` source gate
+
+* **Observed**: `infra/azure/modules/container-app.bicep` previously compiled with `minReplicas: 0`; the contract assertion was changed to require `1` and produced the expected RED failure before the source change.
+* **Implemented**: the minimal Bicep correction sets `minReplicas: 1` while retaining `maxReplicas: 1`; platform contract and worker-runtime focused tests are GREEN.
+* **Boundary**: `SOURCE_24_7_READY_FOR_HOSTED_PREFLIGHT`; Azure has not read back this source state. Run 46 remains blocked at `worker-runtime` with missing VM auth metadata.
+* **Policy**: no application version bump, package generation/upload, or Teams completion message. Fresh same-commit handoff, what-if, cost/runtime review, Azure read-back, public identity, and worker receipt remain required.

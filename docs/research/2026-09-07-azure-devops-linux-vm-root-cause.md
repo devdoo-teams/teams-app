@@ -171,7 +171,7 @@ failure:   retain logs/receipt, keep old traffic, invoke bounded rollback
 
 **OFFICIAL CONTRACT.** Azure Container Apps health probe 문서는 startup/liveness/readiness의 의미를 구분한다(본문 line 31–40). multiple revision mode에서는 readiness 성공 후 traffic을 이동해야 하며(line 166–189), ingress가 있으면 포털은 기본 TCP probes를 추가할 수 있지만 명시적 앱 계약을 대신하지 않는다.
 
-**OBSERVED REPOSITORY EVIDENCE.** `infra/azure/modules/container-app.bicep:43-53`은 `activeRevisionsMode: 'multiple'`와 `latestRevision: true, weight: 100`을 선언하지만 `template.containers[].probes`가 없고 `minReplicas: 0`이다(`:203-215`).
+**OBSERVED REPOSITORY EVIDENCE (2026-09-07 audit baseline).** `infra/azure/modules/container-app.bicep:43-53`은 `activeRevisionsMode: 'multiple'`와 `latestRevision: true, weight: 100`을 선언하지만 `template.containers[].probes`가 없고 당시 `minReplicas: 0`이었다(`:203-215`). The promoted-source correction is recorded in section 8.1 below.
 
 **판정.** 현재 설정이 Run 32의 직접 원인이라고 단정할 수 없다. 그러나 readiness를 명시하지 않은 채 latest revision에 100%를 선언하는 것은 공식 blue/green 계약과 맞지 않는 구조적 위험이다. 0% labeled green → probe → synthetic health → traffic switch로 바꿔야 한다.
 
@@ -203,9 +203,17 @@ failure:   retain logs/receipt, keep old traffic, invoke bounded rollback
 
 **OFFICIAL CONTRACT.** Azure Web-Queue-Worker architecture는 web front end, queue, worker를 분리하고, queue-based load leveling은 장기/비동기 처리를 buffer와 retry로 분리한다. Azure VM/VMSS 문서는 VM이 OS 수준의 장기 실행 환경이라는 책임을 갖는다.
 
-**OBSERVED REPOSITORY EVIDENCE.** 현재 template은 ACA `minReplicas: 0,maxReplicas: 1`, Storage Queue, Cosmos, Blob worker archive, single Linux VM을 함께 사용한다. runtime state는 Cosmos/Storage를 목표로 하지만 실제 live migration/reconciliation과 worker terminal receipt는 아직 검증되지 않았다.
+**OBSERVED REPOSITORY EVIDENCE (2026-09-07 audit baseline).** 당시 template은 ACA `minReplicas: 0,maxReplicas: 1`, Storage Queue, Cosmos, Blob worker archive, single Linux VM을 함께 사용했다. The promoted-source correction is recorded in section 8.1; runtime state is still not live-verified, including migration/reconciliation and the worker terminal receipt.
 
 **판정.** Core API/ACA는 stateless HTTP+queue producer/consumer 경계, Linux VM은 Codex CLI 실행 경계, Cosmos/Queue/Blob은 durable state/artifact 경계로 고정한다. Container local filesystem이나 VM runtime directory를 authoritative state로 취급하지 않는다.
+
+### 8.1 2026-09-08 source correction for the promoted 24/7 Core
+
+**OBSERVED SOURCE CHANGE.** The promoted Container App module now declares `minReplicas: 1` and `maxReplicas: 1` at `infra/azure/modules/container-app.bicep:203-206`; the compiled ARM contract test at `scripts/azure-platform-contract-test.mjs:681` requires one minimum replica. The prior `minReplicas: 0` behavior remains historical evidence for Run 40/44 and is not current source intent.
+
+**TDD EVIDENCE.** The changed contract assertion was RED against the previous compiled template (`0 !== 1`) and GREEN after the minimal Bicep change. The focused platform contract and worker probe tests are GREEN. This proves source/fixture behavior only; it does not prove an Azure deployment, cost, active replica, public health identity, or worker authentication.
+
+**PROMOTION RULE.** A scale-to-zero canary remains allowed only as an explicitly labeled development/cost profile. The requested promoted 24/7 Core uses `minReplicas: 1`; it requires a fresh same-commit immutable handoff, non-mutating what-if, cost/runtime review, Azure deployment, revision read-back, public health identity, and the separate VM worker gate. No application version bump is made for this infrastructure-only correction.
 
 ## 근본 원인 분류
 

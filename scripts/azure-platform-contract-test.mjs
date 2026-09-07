@@ -678,7 +678,7 @@ try {
     false,
     'compiled platform template must not contain a client secret value',
   );
-  assert.equal(containerApp.properties?.template?.scale?.minReplicas, 0, 'Container App must scale to zero');
+  assert.equal(containerApp.properties?.template?.scale?.minReplicas, 1, 'promoted Container App must keep one replica running for 24/7 availability');
   assert.equal(containerApp.properties?.configuration?.activeRevisionsMode, 'multiple', 'Container App must retain rollback revisions');
 
   for (const output of [

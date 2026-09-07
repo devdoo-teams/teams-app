@@ -6,12 +6,12 @@ resource: /faq.md
 tags: [faq, incident-response, release, teams, azure]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T14:42:00Z"
+  at: "2026-09-07T15:04:50Z"
 verified:
   by: "process:release-faq-reconciliation/1"
-  at: "2026-09-07T14:42:00Z"
+  at: "2026-09-07T15:04:50Z"
 status: stable
-stale_after: "2026-09-14T14:42:00Z"
+stale_after: "2026-09-14T15:04:50Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -493,3 +493,9 @@ Evidence classification:
 Only a direct lock-screen/session signal and an independent signal tied to the same host and session may be recorded as `CONFIRMED_SCREEN_LOCK`. If signals disagree, record `REMOTE_SESSION_MISMATCH`, preserve the original evidence, continue command-only/Ego DOM/public HTTP checks, and keep only the native UI row `DESKTOP_UNVERIFIED`. Do not ask the user to unlock based on one tool error.
 
 Official basis: Apple separates power/sleep timing from Lock Screen password behavior ([Set sleep and wake settings for your Mac](https://support.apple.com/en-ie/guide/mac-help/mchle41a6ccd/mac), observed web lines 296-320; [Change Lock Screen settings on Mac](https://support.apple.com/en-euro/guide/mac-help/-mh11784/mac), observed web lines 274-292). Installed help also defines `pmset -g assertions` as power-assertion reporting and `screencapture` as screen capture. Internal rule: [remote screen evidence section](../../teams-release-workflow.md#원격-화면잠금캡처-증거-판정).
+
+## Q27. Does changing the source to `minReplicas: 1` prove that the Teams app is now 24/7?
+
+No. It makes the promoted source intent match the Azure always-running requirement, but it is still only source evidence until the exact commit is handed off, the non-mutating what-if and cost/runtime review pass, Azure reads back `minReplicas: 1`, the revision is active, public health matches the release identity, and the separate Linux worker gate passes.
+
+The previous `Healthy / ScaledToZero / replicas 0` observation was a valid HTTP canary result, not 24/7 proof. Development/cost profiles may retain scale-to-zero only when explicitly labeled as such. The app version remains unchanged because this is infrastructure-only.

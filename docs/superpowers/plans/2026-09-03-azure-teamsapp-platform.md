@@ -11,7 +11,7 @@ Use the Teams chat and personal tab as the user interface for a durable Azure-ho
 - Never put secrets, credentials, device codes, tokens, connection strings, or `auth.json` in Git, build artifacts, logs, migration bundles, or Teams packages.
 - GitHub builds and publishes immutable artifacts. Azure DevOps is the sole authority for Azure deployment and environment promotion.
 - The Azure runtime subscription is `0e58c3cb-474d-4e70-978a-4939c586f867`, region `koreacentral`, and the second subscription is not modified.
-- Free-first defaults: one scale-to-zero Container App canary, one Cosmos DB free-tier account when eligible, Storage Queue, Key Vault, Application Insights, and one `Standard_B2ats_v2` Linux worker VM.
+- Free-first defaults: development/cost canaries may use one scale-to-zero Container App, but the promoted 24/7 Core service must use `minReplicas: 1`; the platform still uses one Cosmos DB free-tier account when eligible, Storage Queue, Key Vault, Application Insights, and one `Standard_B2ats_v2` Linux worker VM.
 - The Container App must not execute Codex, Hermes, Buzz, or other CLI child processes. It dispatches durable work to VM workers or calls explicitly registered HTTPS provider adapters.
 - File JSON remains a local compatibility backend. Azure mode must use explicit configuration and fail closed when required Azure resources are absent.
 - Preserve all accepted records during migration. Export, hash, import idempotently, reconcile counts and stable IDs, then retain a rollback bundle.
@@ -37,7 +37,7 @@ Requirements:
 1. Write tests first that execute the release-input validator and inspect compiled Bicep/YAML behavior, not mere source-line presence.
 2. Bicep provisions resource-group-scoped ACA environment/app, ACR, Cosmos DB, Storage account/queue/file share, Key Vault, Log Analytics/Application Insights, managed identities, and a Linux VM using `Standard_B2ats_v2`.
 3. Use managed identities and RBAC; do not emit secrets or connection strings as outputs.
-4. The Container App scales to zero and receives only secret references/identity-based endpoints.
+4. A development/cost canary may scale to zero, but the promoted 24/7 Container App must declare `minReplicas: 1` and `maxReplicas: 1` until an accepted scaling design exists. It receives only secret references/identity-based endpoints.
 5. The Azure DevOps pipeline consumes a GitHub-produced release receipt containing commit, version, image digest, ZIP SHA-256, and client/server digests; validates the receipt; requires an Azure DevOps environment approval; deploys by immutable image digest; verifies revision readiness and public identity; and supports rollback to the previous revision.
 6. GitHub workflow changes, if any, stop before Azure deployment and publish the immutable receipt as the handoff artifact.
 

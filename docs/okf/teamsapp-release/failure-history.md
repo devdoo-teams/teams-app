@@ -6,12 +6,12 @@ resource: /failure-history.md
 tags: [teamsapp, azure, release, incident, failure, provenance]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T14:42:00Z"
+  at: "2026-09-07T15:04:50Z"
 verified:
   by: "process:release-evidence-reconciliation/1"
-  at: "2026-09-07T14:42:00Z"
+  at: "2026-09-07T15:04:50Z"
 status: stable
-stale_after: "2026-09-14T14:42:00Z"
+stale_after: "2026-09-14T15:04:50Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"

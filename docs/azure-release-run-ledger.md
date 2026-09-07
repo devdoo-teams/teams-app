@@ -227,3 +227,11 @@ Azure DevOps 큐잉 후에는 다음 순서로 read-back한다.
 - Classification: `CONFIRMED_ROOT_CAUSE / WORKER_AUTH_OUT_OF_BAND_MISSING`; existing VM worker service is active but cannot authenticate Codex
 - Status: `AZURE_CANARY_HTTP_PASS / WORKER_RUNTIME_GATE_BLOCKED / RELEASE_BLOCKED`; no version bump, Teams upload, or completion report
 - Next: user-only Codex device login on the existing VM, then bounded probe read-back; do not copy or log auth contents. Official Run Command contract: https://learn.microsoft.com/en-us/azure/virtual-machines/linux/run-command
+
+## 현재 source — 2026-09-08 24/7 Core replica correction
+
+- Source change: `infra/azure/modules/container-app.bicep` now sets the promoted Core Container App to `minReplicas: 1` and `maxReplicas: 1`; `scripts/azure-platform-contract-test.mjs` requires the compiled ARM template to retain that invariant.
+- TDD evidence: the modified contract test was RED against the prior source (`actual 0`, expected `1`), then GREEN after the minimal Bicep change. `node scripts/azure-platform-contract-test.mjs` and `npm run test:azure-worker-runtime-probe` are GREEN.
+- Identity policy: app/package/Teams version remains `1.0.103`; this is an infrastructure/availability change, so no version bump, ZIP upload, or Teams completion message is justified.
+- Hosted boundary: Run 46 still used source `930d4f7` and deployed release `71df02e2`; its VM `worker-runtime` gate failed because `auth_file=missing`. The new `minReplicas: 1` source has not been deployed or read back in Azure yet.
+- Decision: `SOURCE_24_7_READY_FOR_HOSTED_PREFLIGHT / AZURE_24_7_UNVERIFIED / WORKER_RUNTIME_GATE_BLOCKED`. Before any Azure mutation, commit/push this source, run fresh Azure Core, generate a same-commit immutable handoff, and perform a non-mutating what-if plus explicit cost/runtime review. Keep the existing service untouched.
