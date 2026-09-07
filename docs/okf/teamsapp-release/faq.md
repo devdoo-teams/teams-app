@@ -6,12 +6,12 @@ resource: /faq.md
 tags: [faq, incident-response, release, teams, azure]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T15:41:29Z"
+  at: "2026-09-07T16:01:02Z"
 verified:
   by: "process:release-faq-reconciliation/1"
-  at: "2026-09-07T15:41:29Z"
+  at: "2026-09-07T16:01:02Z"
 status: stable
-stale_after: "2026-09-14T15:41:29Z"
+stale_after: "2026-09-14T16:01:02Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -509,3 +509,9 @@ The previous `Healthy / ScaledToZero / replicas 0` observation was a valid HTTP 
 Run 47 reached the correct source and release identity, passed the pre-approval checks and manual approval, then stopped before Azure mutation because the exact workload what-if contained a new intentional path: `properties.template.scale.minReplicas` with `Modify`. The fail-closed allowlist knew the older legacy env/secret shape but not this combined shape.
 
 The fix is a separate exact Run 47 multiset fixture plus a regression test. It does not accept arbitrary Container App `Modify` changes. The run remains failed until the clean fix is committed, the full Azure Core gate passes, and a fresh hosted run reads back the exact what-if and subsequent runtime identity.
+
+## Q29. Why did Run 48 fail even though the Run 47 fix was committed?
+
+Because the hosted Run 48 did execute the new f17 commit, but Azure returned a larger exact property-change multiset than the Run 47 fixture represented. The existing Container App reported the Run 37 legacy reconciliation plus two release-identity env updates (`env[19]` and `env[21]`), `image`, `properties.template.revisionSuffix`, and `properties.template.scale.minReplicas`. The source Bicep declares each of those release-controlled fields, but the fail-closed classifier had not yet recorded this combined observed shape.
+
+This is a confirmed allowlist fixture gap, not a source mismatch and not a successful deployment. The prevention is to retain the exact value-free provider multiset as a regression, map each newly accepted path to a current template field, and continue rejecting any extra/unobserved `Modify` entry. Run 48 remains `FAIL_AFTER_APPROVAL` until a clean commit passes the full Azure Core gate and one bounded hosted rerun reaches the next real boundary.

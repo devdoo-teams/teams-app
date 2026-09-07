@@ -187,3 +187,10 @@
 * **Evidence**: workload diagnostic `BLOCKED`; exact Container App delta was the Run 37 legacy env/secret shape plus `properties.template.scale.minReplicas` / `Modify`; workload artifact `268` was 25,531 bytes and failure artifact `269` was 553 bytes with receipt SHA `33d4245cb056122ade21d5e9c9fe170275efcd54c4ba9562a08805ef062ade37`.
 * **Classification**: `CONFIRMED_ROOT_CAUSE / WORKLOAD_WHAT_IF_ALLOWLIST_MISSING_MIN_REPLICAS`; this is an exact fixture gap, not evidence that `minReplicas: 1` is invalid or deployed.
 * **Fix**: add the exact combined multiset and RED/GREEN regression; keep arbitrary Container App `Modify` blocked. No version bump or Teams completion message.
+
+## 2026-09-08 — Run 48 second exact what-if shape gap
+
+* **Observed**: Run 48 / `20260907.4` used source/release `f17e40ac57905735aa5218efcd9399977822fc35`, app `1.0.103`, Azure CLI `2.89.1`, Azure DevOps extension `1.0.7`, and Bicep `0.46.1`. The hosted task stopped before workload mutation at `workload-parameters-and-what-if`.
+* **Read-back**: Ego Lite read back workload diagnostic artifact `276` (`25,531` bytes): `status=BLOCKED`, `whatIf.status=Succeeded`, `Modify:6`, `NoChange:20`, `Ignore:2`, `Unsupported:9`. The Container App delta was Run 37's legacy env/secret multiset plus `env[19]`, `env[21]`, `image`, `properties.template.revisionSuffix`, and `properties.template.scale.minReplicas`. Failure artifact `277` was retained; the task recorded `bce72eb23cf742f3bec6722d0091dbbb312a3a7c5b741bd4dac5dcc10c184f3a`.
+* **Classification**: `CONFIRMED_ROOT_CAUSE / WORKLOAD_WHAT_IF_ALLOWLIST_MISSING_RUN48_RELEASE_IDENTITY_SHAPE`. The Run 47 fixture was incomplete for the next provider-reported state shape. This is not a commit mismatch, Azure deployment success, or proof that the source change is invalid.
+* **Prevention**: add an exact value-free Run 48 multiset and RED/GREEN regression, explicitly mapping the extra paths to the current Bicep release identity fields. Keep arbitrary env/image/scale changes blocked, keep version `1.0.103`, and require a clean Core gate plus one bounded hosted rerun before further mutation.

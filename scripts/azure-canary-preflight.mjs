@@ -562,6 +562,21 @@ const workloadContainerAppRun47ReleaseUpdatePropertyChanges = Object.freeze([
   Object.freeze({ path: 'properties.template.scale.minReplicas', propertyChangeType: 'Modify' }),
 ]);
 
+// Run 48 retained the same legacy reconciliation and promoted replica change,
+// while the existing canary still had stale release identity fields. These
+// additional paths map exactly to the current template's env[19]/env[21],
+// image, and revisionSuffix. Keep the complete multiset exact and value-free;
+// unrelated environment, image, or scale changes must remain blocked.
+const workloadContainerAppRun48ReleaseUpdatePropertyChanges = Object.freeze([
+  ...workloadContainerAppRun47ReleaseUpdatePropertyChanges,
+  Object.freeze({ path: '19', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'value', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: '21', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'value', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'image', propertyChangeType: 'Modify' }),
+  Object.freeze({ path: 'properties.template.revisionSuffix', propertyChangeType: 'Modify' }),
+]);
+
 const workloadContainerAppReleaseUpdateVariants = Object.freeze([
   workloadContainerAppReleaseUpdatePropertyChanges,
   // ARM what-if can omit this service-defaulted Delete noise; keep both complete observed multisets exact.
@@ -575,6 +590,7 @@ const workloadContainerAppReleaseUpdateVariants = Object.freeze([
   workloadContainerAppRun33ReleaseUpdatePropertyChanges,
   workloadContainerAppRun37ReleaseUpdatePropertyChanges,
   workloadContainerAppRun47ReleaseUpdatePropertyChanges,
+  workloadContainerAppRun48ReleaseUpdatePropertyChanges,
 ]);
 
 const plannedChangeRules = Object.freeze([

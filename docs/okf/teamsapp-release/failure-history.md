@@ -6,12 +6,12 @@ resource: /failure-history.md
 tags: [teamsapp, azure, release, incident, failure, provenance]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T15:41:29Z"
+  at: "2026-09-07T16:01:02Z"
 verified:
   by: "process:release-evidence-reconciliation/1"
-  at: "2026-09-07T15:41:29Z"
+  at: "2026-09-07T16:01:02Z"
 status: stable
-stale_after: "2026-09-14T15:41:29Z"
+stale_after: "2026-09-14T16:01:02Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -714,3 +714,15 @@ The Azure DevOps artifact UI showed `azure-deployment-failure-receipt` at `536 B
 **CLASSIFICATION.** `CONFIRMED_ROOT_CAUSE / WORKLOAD_WHAT_IF_ALLOWLIST_MISSING_MIN_REPLICAS`. The release was blocked because the new intentional 24/7 property was not represented in the exact allowlist. This is not evidence that `minReplicas: 1` is invalid, nor evidence that Azure deployment or 24/7 runtime succeeded.
 
 **FIX AND VERIFICATION.** Added a separate exact Run 47 property multiset and a regression in `scripts/azure-what-if-receipt-test.mjs`; the regression was first RED against the old classifier and GREEN after the minimal `scripts/azure-canary-preflight.mjs` fixture addition. The application version remains unchanged. A fresh clean Core gate and one bounded hosted rerun are required; do not widen the allowlist to arbitrary `Modify` or bypass the what-if gate.
+
+## 2026-09-08 — Run 48 exposed a second exact what-if shape gap
+
+**OFFICIAL CONTRACT.** Azure ARM what-if is a non-mutating preview; its reported resource and property changes must be reviewed against the intended template before a deployment mutation ([Template deployment what-if](https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-what-if), What-if operation and change details, observed web lines 29-52). The exact-change allowlist below is an internal fail-closed control and does not replace Azure's deployment contract.
+
+**OBSERVED EVIDENCE.** Run 48 / `20260907.4` was queued with and read back source/release commit `f17e40ac57905735aa5218efcd9399977822fc35`, app `1.0.103`. The hosted log checked out that exact commit and logged Azure CLI `2.89.1`, Azure DevOps extension `1.0.7`, and Bicep `0.46.1`. After the same approval path, the task stopped at `workload-parameters-and-what-if` before workload mutation. The authenticated Ego Lite read-back of workload diagnostic artifact `276` showed `status=BLOCKED`, `whatIf.status=Succeeded`, and `Modify:6`, `NoChange:20`, `Ignore:2`, `Unsupported:9`.
+
+The exact Container App `Modify` multiset was the known Run 37 legacy env/secret reconciliation plus `env[19]` and `env[21]` release identity value updates, `image`, `properties.template.revisionSuffix`, and `properties.template.scale.minReplicas`. The task recorded `Invalid Azure canary preflight: what-if contains disallowed Modify change`; failure receipt artifact `277` was retained and the task recorded receipt SHA `bce72eb23cf742f3bec6722d0091dbbb312a3a7c5b741bd4dac5dcc10c184f3a`.
+
+**CLASSIFICATION.** `CONFIRMED_ROOT_CAUSE / WORKLOAD_WHAT_IF_ALLOWLIST_MISSING_RUN48_RELEASE_IDENTITY_SHAPE`. The Run 47 fixture was an incomplete representation of the provider's next observed state shape. This is not a source-commit mismatch, not evidence that `minReplicas: 1` is invalid, and not evidence of a successful Azure deployment.
+
+**FIX AND PREVENTION.** Added an exact, value-free Run 48 multiset fixture to `scripts/azure-canary-preflight.mjs` and a RED/GREEN regression to `scripts/azure-what-if-receipt-test.mjs`. The fixture names the release identity paths explicitly and continues to reject arbitrary environment, image, and scale edits. The app version remains `1.0.103`; no package upload or completion report is justified. A clean full Azure Core gate and one bounded hosted rerun from the new commit are required before any further mutation.

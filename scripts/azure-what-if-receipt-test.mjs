@@ -500,6 +500,36 @@ try {
     'workload-container-app-release-update',
   ]);
 
+  // Run 48 observed the promoted replica update together with the release
+  // identity fields that were still stale on the existing canary. Keep the
+  // provider-reported multiset exact and value-free; do not broaden the
+  // release allowlist to arbitrary env, image, or scale edits.
+  const run48ContainerAppPropertyChanges = [
+    ...run47ContainerAppPropertyChanges,
+    { path: '19', propertyChangeType: 'Modify' },
+    { path: 'value', propertyChangeType: 'Modify' },
+    { path: '21', propertyChangeType: 'Modify' },
+    { path: 'value', propertyChangeType: 'Modify' },
+    { path: 'image', propertyChangeType: 'Modify' },
+    { path: 'properties.template.revisionSuffix', propertyChangeType: 'Modify' },
+  ];
+  const run48ContainerAppOnly = createAzureWhatIfReceipt({
+    ...workloadIdentity,
+    whatIf: {
+      status: 'Succeeded',
+      changes: [{
+        resourceId: `${scope}/providers/Microsoft.App/containerApps/teamsapp-canary-goictvxm`,
+        changeType: 'Modify',
+        delta: run48ContainerAppPropertyChanges,
+      }],
+    },
+    checkedAt: '2026-09-08T01:00:00.000Z',
+  });
+  assert.equal(run48ContainerAppOnly.status, 'READY');
+  assert.deepEqual(run48ContainerAppOnly.whatIf.approvedPlannedChanges.map(({ rule }) => rule), [
+    'workload-container-app-release-update',
+  ]);
+
   for (const unsafeWorkloadChanges of [
     [{ ...workloadObservedChanges[0], resourceId: `${scope}/providers/Microsoft.App/containerApps/teamsapp-production-goictvxm` }],
     [{ ...workloadObservedChanges[0], delta: undefined }],

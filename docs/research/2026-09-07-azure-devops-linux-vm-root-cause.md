@@ -4,9 +4,9 @@
 
 - 조사일: 2026-09-07 (Asia/Seoul)
 - 대상: `devdoo-teams/teams-app`, canonical worktree `/Users/doosansmacbookpro/Documents/TeamsApp`, `main`
-- 조사 기준 HEAD: `0fff1b2d9195707d8c3363f2249955aed0eb559b` (2026-09-08 source correction)
+- 조사 기준 HEAD: `f17e40ac57905735aa5218efcd9399977822fc35` (2026-09-08 what-if allowlist correction)
 - 제품 버전: `1.0.103` (이번 조사에서는 버전 변경 없음)
-- 운영 사건: Azure DevOps Run 32 / Build `20260906.11`부터 Run 47 / Build `20260907.3`까지
+- 운영 사건: Azure DevOps Run 32 / Build `20260906.11`부터 Run 48 / Build `20260907.4`까지
 - 조사 범위: Azure DevOps 승인·배포·아티팩트 계약, ARM what-if 및 Bicep 경계, Azure Container Apps revision/health/traffic, ACR managed identity, Linux VM/cloud-init/Custom Script Extension, 24/7 worker 상태·증거 체인
 - 증거 분류: `OFFICIAL CONTRACT`, `OBSERVED REPOSITORY EVIDENCE`, `INFERENCE / RECOMMENDATION`, `LIVE UNVERIFIED`
 - 이 문서는 읽기·리서치·문서화 결과다. 이번 문서 갱신 자체는 Azure 리소스, Teams 앱, 트래픽, 비밀, Jira, 브라우저 세션을 변경하지 않았으며, Run 43의 pipeline 배포·실패 read-back은 아래에 별도 기록한다.
@@ -416,3 +416,11 @@ Root cause is now separated from earlier Azure canary status: Run44's successful
 Run 47 / `20260907.3` used source and release commit `0fff1b2d9195707d8c3363f2249955aed0eb559b`, application version `1.0.103`, and the new GitHub immutable handoff. GitHub artifact and Azure DevOps handoff/Core/RBAC/approval boundaries passed. The deployment task stopped before `az deployment group create` at `workload-parameters-and-what-if` because the existing canary Container App's exact legacy env/secret property multiset gained the intentional `properties.template.scale.minReplicas` / `Modify` path.
 
 This is `CONFIRMED_ROOT_CAUSE` / `WORKLOAD_WHAT_IF_ALLOWLIST_MISSING_MIN_REPLICAS`, not evidence that Azure rejects `minReplicas: 1`. The workload diagnostic and failure receipt were both retained. The source adds a separate exact Run 47 multiset and a RED/GREEN regression; arbitrary Container App scale or environment modifications remain blocked. The next run must execute from a clean commit and read back the same exact what-if before any deployment or 24/7 claim.
+
+## Run 48 — exact release-identity what-if shape gap
+
+Run 48 / Azure DevOps build `20260907.4` was queued and executed from source/release commit `f17e40ac57905735aa5218efcd9399977822fc35`, application version `1.0.103`, and the f17 immutable GitHub handoff. Hosted log 44 confirmed checkout of f17 and reported Azure CLI `2.89.1`, Azure DevOps extension `1.0.7`, and Bicep `0.46.1`. Handoff, Azure Core/RBAC, and manual approval passed. The deployment task then stopped before workload mutation at `workload-parameters-and-what-if`.
+
+The read-back workload diagnostic artifact `276` reported `status=BLOCKED`, `whatIf.status=Succeeded`, and change counts `Modify:6`, `NoChange:20`, `Ignore:2`, `Unsupported:9`. The exact Container App property multiset was the Run 37 legacy env/secret reconciliation plus release identity updates at `env[19]` and `env[21]`, `image`, `properties.template.revisionSuffix`, and `properties.template.scale.minReplicas`. Mapping the array indexes against `infra/azure/modules/container-app.bicep:99-180` shows that `env[19]` is `RELEASE_SOURCE_COMMIT` and `env[21]` is `RELEASE_IMAGE_DIGEST`; the remaining paths are also declared release-controlled fields. The diagnostic and failure receipt `277` were read through the existing authenticated Ego Lite tab; the task recorded receipt SHA `bce72eb23cf742f3bec6722d0091dbbb312a3a7c5b741bd4dac5dcc10c184f3a`.
+
+This is `CONFIRMED_ROOT_CAUSE / WORKLOAD_WHAT_IF_ALLOWLIST_MISSING_RUN48_RELEASE_IDENTITY_SHAPE`. The source commit was not mismatched; the previously added Run 47 fixture was simply incomplete for the next observed provider state shape. The correct remediation is not a broad `Modify` exception. The source now adds one complete, value-free Run 48 multiset to `scripts/azure-canary-preflight.mjs`, with a RED regression in `scripts/azure-what-if-receipt-test.mjs` followed by GREEN focused tests. A clean full Azure Core gate and one bounded hosted rerun from the new commit are still required. No app version bump, package upload, or 24/7/A2A completion claim is justified.
