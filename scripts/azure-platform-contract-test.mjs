@@ -11,8 +11,10 @@ const workerVmBicepPath = path.join(root, 'infra', 'azure', 'modules', 'worker-v
 const canaryParametersPath = path.join(root, 'infra', 'azure', 'parameters', 'canary.bicepparam');
 const pipelinePath = path.join(root, 'azure-pipelines.yml');
 const workerBlobStagePath = path.join(root, 'scripts', 'azure-worker-blob-stage.mjs');
+const workerRuntimeProbePath = path.join(root, 'scripts', 'azure-worker-runtime-probe.mjs');
 const workerVmBicepSource = fs.readFileSync(workerVmBicepPath, 'utf8');
 const workerBlobStageSource = fs.readFileSync(workerBlobStagePath, 'utf8');
+const workerRuntimeProbeSource = fs.readFileSync(workerRuntimeProbePath, 'utf8');
 const rubyYamlSafeLoadProgram = 'puts JSON.generate(YAML.safe_load(File.read(ARGV[0]), permitted_classes: [], permitted_symbols: [], aliases: true))';
 
 const prerequisiteRecoveryTest = spawnSync('python3', ['scripts/azure-worker-prerequisites-test.py'], {
@@ -927,6 +929,49 @@ try {
     deployScript?.includes('cp scripts/azure-worker-blob-stage.mjs "$worker_blob_script"'),
     'deployment must snapshot the worker Blob staging helper before release checkout',
   );
+  assert.ok(
+    deployScript?.includes('worker_runtime_probe_script="$(Agent.TempDirectory)/azure-worker-runtime-probe.mjs"'),
+    'deployment must reserve a pipeline-owned worker runtime probe before release checkout',
+  );
+  assert.ok(
+    deployScript?.includes('cp scripts/azure-worker-runtime-probe.mjs "$worker_runtime_probe_script"'),
+    'deployment must snapshot the worker runtime probe before release checkout',
+  );
+  assert.ok(
+    deployScript?.includes('test -s "$worker_runtime_probe_script"'),
+    'deployment must reject an empty worker runtime probe helper',
+  );
+  assert.ok(
+    (deployScript?.indexOf('cp scripts/azure-worker-runtime-probe.mjs "$worker_runtime_probe_script"') ?? -1)
+      < (deployScript?.indexOf('git checkout --detach "$commit"') ?? -1),
+    'worker runtime probe must be snapshotted before release checkout',
+  );
+  assert.ok(
+    deployScript?.includes('az vm run-command invoke'),
+    'deployment must use the official Azure VM Run Command boundary for worker readiness',
+  );
+  assert.ok(
+    deployScript?.includes('--command-id RunShellScript'),
+    'worker readiness must invoke the documented Linux RunShellScript command',
+  );
+  assert.ok(
+    deployScript?.includes('node "$worker_runtime_probe_script" verify'),
+    'deployment must verify the redacted worker runtime probe receipt',
+  );
+  assert.ok(
+    (deployScript?.indexOf('node "$worker_runtime_probe_script" verify') ?? -1)
+      < (deployScript?.indexOf('failure_boundary="final-identity-contract"') ?? -1),
+    'worker runtime readiness must pass before final release identity verification',
+  );
+  assert.ok(
+    deploySteps.some((step) => step.task === 'PublishPipelineArtifact@1'
+      && step.inputs?.artifact === 'azure-worker-runtime-probe'
+      && step.condition === 'succeeded()'),
+    'deployment must retain the verified worker runtime probe receipt',
+  );
+  assert.match(workerRuntimeProbeSource, /auth\.json/u, 'worker runtime probe must inspect auth metadata');
+  assert.match(workerRuntimeProbeSource, /login status/u, 'worker runtime probe must verify Codex login status');
+  assert.doesNotMatch(workerRuntimeProbeSource, /readFileSync\([^)]*auth\.json/iu, 'worker runtime probe must not read auth.json contents');
   assert.ok(
     deployScript?.includes('cp scripts/azure-canary-preflight.mjs "$what_if_receipt_tools_dir/azure-canary-preflight.mjs"'),
     'deployment must snapshot the CI what-if classifier dependency before release checkout',

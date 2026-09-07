@@ -12,6 +12,7 @@ const expectedScripts = [
   'scripts/azure-platform-contract-test.mjs',
   'scripts/azure-codex-package-test.mjs',
   'scripts/azure-worker-runtime-package-test.mjs',
+  'scripts/azure-worker-runtime-probe-test.mjs',
   'scripts/azure-release-input-test.mjs',
   'scripts/azure-github-handoff-test.mjs',
   'scripts/azure-approval-check-test.mjs',

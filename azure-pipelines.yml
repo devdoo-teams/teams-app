@@ -471,6 +471,9 @@ stages:
                       what_if_receipt_tools_dir="$(Agent.TempDirectory)/azure-what-if-receipt-tools"
                       what_if_receipt_script="$what_if_receipt_tools_dir/azure-what-if-receipt.mjs"
                       deployment_contract_script="$what_if_receipt_tools_dir/azure-deployment-contract.mjs"
+                      worker_runtime_probe_script="$(Agent.TempDirectory)/azure-worker-runtime-probe.mjs"
+                      worker_runtime_probe_response="$(Agent.TempDirectory)/azure-worker-runtime-probe-response.json"
+                      worker_runtime_probe_dir="$(Pipeline.Workspace)/azure-worker-runtime-probe"
                       failure_boundary="bootstrap"
                       worker_blob_script="$(Agent.TempDirectory)/azure-worker-blob-stage.mjs"
                       foundation_parameters="$(Agent.TempDirectory)/foundation.parameters.json"
@@ -479,8 +482,10 @@ stages:
                       worker_vm_inventory="$(Agent.TempDirectory)/worker-vm-inventory.json"
                       mkdir -p "$failure_receipt_dir"
                       mkdir -p "$what_if_receipt_tools_dir"
+                      mkdir -p "$worker_runtime_probe_dir"
                       cp scripts/azure-deployment-failure-receipt.mjs "$failure_receipt_script"
                       cp scripts/azure-worker-blob-stage.mjs "$worker_blob_script"
+                      cp scripts/azure-worker-runtime-probe.mjs "$worker_runtime_probe_script"
                       cp scripts/azure-what-if-receipt.mjs "$what_if_receipt_tools_dir/azure-what-if-receipt.mjs"
                       cp scripts/azure-deployment-contract.mjs "$deployment_contract_script"
                       cp scripts/azure-release-input.mjs "$what_if_receipt_tools_dir/azure-release-input.mjs"
@@ -491,6 +496,7 @@ stages:
                       cp scripts/child-test-environment.mjs "$what_if_receipt_tools_dir/child-test-environment.mjs"
                       test -s "$failure_receipt_script"
                       test -s "$worker_blob_script"
+                      test -s "$worker_runtime_probe_script"
                       test -s "$what_if_receipt_script"
                       test -s "$deployment_contract_script"
                       test -s "$what_if_receipt_tools_dir/azure-release-input.mjs"
@@ -814,6 +820,29 @@ stages:
                         exit 1
                       fi
                       curl --fail --retry 12 --retry-all-errors --retry-delay 5 --output "$(Agent.TempDirectory)/health.json" "https://${fqdn}/api/health"
+                      failure_boundary="worker-runtime"
+                      worker_probe_script="$(node "$worker_runtime_probe_script" script \
+                        --expected-commit "$commit" \
+                        --expected-codex-bin-sha256 "$codex_bin_sha")"
+                      set +e
+                      az vm run-command invoke \
+                        --subscription "$AZURE_SUBSCRIPTION_ID" \
+                        --resource-group "$AZURE_RESOURCE_GROUP" \
+                        --name "$worker_vm_name" \
+                        --command-id RunShellScript \
+                        --scripts "$worker_probe_script" \
+                        --output json > "$worker_runtime_probe_response"
+                      worker_probe_invoke_status=$?
+                      set -e
+                      test "$worker_probe_invoke_status" -eq 0 || {
+                        printf 'Azure worker runtime probe invocation failed with exit code %s.\n' "$worker_probe_invoke_status" >&2
+                        exit "$worker_probe_invoke_status"
+                      }
+                      node "$worker_runtime_probe_script" verify \
+                        --input "$worker_runtime_probe_response" \
+                        --expected-commit "$commit" \
+                        --expected-codex-bin-sha256 "$codex_bin_sha" \
+                        --output "$worker_runtime_probe_dir/azure-worker-runtime-probe.json"
                       failure_boundary="final-identity-contract"
                       node "$deployment_contract_script" verify "$receipt" "$provenance" "$(Agent.TempDirectory)/revision.json" "$(Agent.TempDirectory)/health.json" "$registry_server"
                   env:
@@ -838,6 +867,12 @@ stages:
                     CODEX_PACKAGE_URL: ${{ parameters.codexPackageUrl }}
                     CODEX_PACKAGE_SHA256: ${{ parameters.codexPackageSha256 }}
                     CODEX_PACKAGE_VERSION: ${{ parameters.codexPackageVersion }}
+                - task: PublishPipelineArtifact@1
+                  displayName: Retain verified worker runtime probe receipt
+                  condition: succeeded()
+                  inputs:
+                    targetPath: $(Pipeline.Workspace)/azure-worker-runtime-probe
+                    artifact: azure-worker-runtime-probe
                 - task: PublishPipelineArtifact@1
                   displayName: Retain exact workload what-if receipt
                   condition: always()
