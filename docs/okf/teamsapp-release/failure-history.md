@@ -6,12 +6,12 @@ resource: /failure-history.md
 tags: [teamsapp, azure, release, incident, failure, provenance]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-08T03:54:00Z"
+  at: "2026-09-08T04:24:56Z"
 verified:
   by: "process:release-evidence-reconciliation/1"
-  at: "2026-09-08T03:54:00Z"
+  at: "2026-09-08T04:24:56Z"
 status: stable
-stale_after: "2026-09-15T03:54:00Z"
+stale_after: "2026-09-15T04:24:56Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -541,7 +541,7 @@ These records do not substitute for current Azure run evidence.
 
 # Current judgment
 
-The current state is `AZURE_CANARY_PASS / WORKER_RUNTIME_GATE_BLOCKED / RELEASE_BLOCKED`: Run 46 passed the pre-approval Core/RBAC, approval, workload deployment, revision, public-health, and what-if boundaries, then failed at the newly enforced `worker-runtime` gate because the VM has no `auth.json`; Run 45 was an invalid queue attempt with empty required template parameters and failed before mutation. Run 44 remains the last canary PASS without the worker gate. Run 43 remains FAILED_AFTER_APPROVAL at `final-identity-contract`, Run 42 remains FAILED_AFTER_APPROVAL at the same boundary, Run 41 remains FAILED_AFTER_APPROVAL at `revision-and-health`, Run 40 remains FAILED_AFTER_APPROVAL at `revision-and-health`, Run 39 remains FAILED_AFTER_APPROVAL at `worker-blob`, Run 38 remains FAILED_AFTER_APPROVAL at the same boundary, Run 32 remains FAILED_AFTER_APPROVAL, Run 31 remains FAILED_BEFORE_APPROVAL, and Run 30 remains FAILED_AFTER_APPROVAL.
+The current state is `AZURE_CANARY_REVISION_PASS / PUBLIC_HEALTH_FETCH_PASS / WORKER_RUNTIME_GATE_BLOCKED / RELEASE_BLOCKED`: Run 54 passed handoff, hosted Core/RBAC, approval, workload what-if, Blob staging, workload deployment, revision readiness, and the public health fetch, then failed at the enforced `worker-runtime` gate because the Azure VM probe observed `auth_file="missing"`. The exact reason the VM auth file is absent is not established by this run and remains `ROOT_CAUSE_REVIEW_REQUIRED`; Mac/CUA unlock state is not VM-side evidence. Run 46 had the same worker boundary on an earlier source; Run 45 was an invalid queue attempt with empty required template parameters and failed before mutation. Run 44 remains the last canary PASS before the worker gate was introduced. Run 53 remains FAILED_AFTER_APPROVAL at `revision-and-health`, Run 52 remains FAILED_AFTER_APPROVAL at the same boundary, Run 51 remains FAILED_AFTER_APPROVAL at `revision-and-health`, Run 50 remains FAILED_AFTER_APPROVAL at `workload-parameters-and-what-if`, Run 43 remains FAILED_AFTER_APPROVAL at `final-identity-contract`, Run 42 remains FAILED_AFTER_APPROVAL at the same boundary, Run 41 remains FAILED_AFTER_APPROVAL at `revision-and-health`, Run 40 remains FAILED_AFTER_APPROVAL at `revision-and-health`, Run 39 remains FAILED_AFTER_APPROVAL at `worker-blob`, Run 38 remains FAILED_AFTER_APPROVAL at the same boundary, Run 32 remains FAILED_AFTER_APPROVAL, Run 31 remains FAILED_BEFORE_APPROVAL, and Run 30 remains FAILED_AFTER_APPROVAL.
 
 - local/contract/Azure Core evidence: PASS within scope;
 - Run 32 workload what-if: FAILED after approval at `workload-parameters-and-what-if`; no Azure workload mutation occurred;
@@ -570,6 +570,18 @@ The current state is `AZURE_CANARY_PASS / WORKER_RUNTIME_GATE_BLOCKED / RELEASE_
 - Teams desktop fresh reply: UNVERIFIED;
 - mobile: MOBILE_UNVERIFIED;
 - live A2A: UNVERIFIED.
+
+## 2026-09-08 — Run 54 reached the worker runtime gate but the VM auth file was missing
+
+**OFFICIAL CONTRACT.** Microsoft Linux VM Run Command executes scripts through the VM agent with `RunShellScript` and does not provide an interactive terminal: [Run scripts in a Linux VM by using Run Commands](https://learn.microsoft.com/en-us/azure/virtual-machines/linux/run-command). The repository's cloud-init contract separately states that authentication material is provisioned out of band and must not be copied into cloud-init (`infra/azure/cloud-init/codex-worker.yml:1-3`).
+
+**OBSERVED EVIDENCE.** Azure DevOps Run 54 / build `20260908.1` used source/release commit `319e676d13b3b366a1df52bee022306b71da0eac`, app `1.0.103`, and image `sha256:5a04180696ca4c5ab12da199e0ff6b737b490cf14f14501402091714f3b531cd`. The hosted run passed handoff, hosted Core/RBAC, approval, workload what-if, Blob staging, workload deployment, revision readiness, and the public health fetch. It then invoked the named VM with `RunShellScript`; the task log recorded `Invalid Azure worker runtime probe: auth_file was "missing"; expected "present"`, `receiptWriteStatus=READY`, and `boundary=worker-runtime exitCode=1`. Artifact listing retained workload artifact `324` and failure artifact `325` (536 B total).
+
+**SOURCE CONTRACT.** `azure-pipelines.yml:883-906` runs the probe after the health fetch. `scripts/azure-worker-runtime-probe.mjs:109-150` checks only redacted auth metadata at `$AGENT_CODEX_HOME/auth.json`, then requires a regular file with mode `600`, link count `1`, owner `teamsworker`, and authenticated `codex login status`. The probe's exact missing-file observation is therefore confirmed. The reason it is missing (login not completed, path/configuration, or prior VM state) is not established by this run and remains `ROOT_CAUSE_REVIEW_REQUIRED`.
+
+**CLASSIFICATION.** `CONFIRMED_FAILURE_BOUNDARY / WORKER_AUTH_OUT_OF_BAND_MISSING`. The user's Mac/CUA lock state is a separate host/session fact and cannot be promoted to Azure VM authentication evidence. No auth contents, device codes, or secrets were logged or copied.
+
+**CURRENT JUDGMENT.** `AZURE_CANARY_REVISION_PASS / PUBLIC_HEALTH_FETCH_PASS / WORKER_RUNTIME_GATE_BLOCKED / RELEASE_BLOCKED`. Run 44 remains the last canary success before the worker gate was introduced; it is not equivalent to a current 24/7 worker success. Next action is a user-only device-login handoff on the existing VM, followed by one bounded probe read-back. No app version bump, package upload, traffic promotion, or completion message is justified.
 
 ## 2026-09-07 — Run 38/39 worker Blob metadata query root cause and correction
 

@@ -6,12 +6,12 @@ resource: /gates.md
 tags: [release-gate, azure, teams, provenance, rollback]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-08T03:54:00Z"
+  at: "2026-09-08T04:24:56Z"
 verified:
   by: "process:release-gate-reconciliation/1"
-  at: "2026-09-08T03:54:00Z"
+  at: "2026-09-08T04:24:56Z"
 status: stable
-stale_after: "2026-09-15T03:54:00Z"
+stale_after: "2026-09-15T04:24:56Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -184,7 +184,7 @@ Container Apps troubleshooting requires revision status and system/application l
 
 # Current run
 
-Run 53 is the current Azure canary result: it used the exact `18d20a7` handoff and hosted checkout, passed handoff, hosted Azure Core/RBAC, manual approval, workload what-if, Blob staging, and workload mutation, then failed at `revision-and-health`. The corrected value-free receipt read back `active=true`, `provisioningState=Provisioned`, `runningState=RunningAtMaxScale`, `healthState=Healthy`, `trafficWeight=100`, and `replicas=1`. This is a confirmed readiness allowlist gap, with an official-document enum drift that remains explicitly recorded; the strict observed tuple is now covered by regression tests. Worker-runtime, Teams package, desktop/mobile, and A2A promotion remain `BLOCKED` or `UNVERIFIED`; no app version bump, upload, or completion message is allowed.
+Run 54 is the current Azure canary result: it used the exact `319e676` handoff and hosted checkout, passed handoff, hosted Azure Core/RBAC, manual approval, workload what-if, Blob staging, workload mutation, revision readiness, and the public health fetch, then failed at `worker-runtime`. The VM `RunShellScript` probe returned the redacted observation `auth_file="missing"`; the exact reason the out-of-band VM auth file is absent remains `ROOT_CAUSE_REVIEW_REQUIRED`. Run 53's strict observed-state correction is now covered by regression tests. Worker-runtime, 24/7, Teams package, desktop/mobile, and A2A promotion remain `BLOCKED` or `UNVERIFIED`; no app version bump, upload, or completion message is allowed.
 
 # Required commands before a new run
 

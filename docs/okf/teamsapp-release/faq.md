@@ -6,12 +6,12 @@ resource: /faq.md
 tags: [faq, incident-response, release, teams, azure]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-08T03:54:00Z"
+  at: "2026-09-08T04:24:56Z"
 verified:
   by: "process:release-faq-reconciliation/1"
-  at: "2026-09-08T03:54:00Z"
+  at: "2026-09-08T04:24:56Z"
 status: stable
-stale_after: "2026-09-15T03:54:00Z"
+stale_after: "2026-09-15T04:24:56Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -551,3 +551,11 @@ Run 53's corrected receipt showed `active=true`, `provisioningState=Provisioned`
 `RunningAtMaxScale` is an observed current provider value, but it is not listed in the current Microsoft REST page's running-state enumeration. It must therefore be treated as `CONTRACT_DRIFT_REVIEW_REQUIRED`, not as a generic unknown-state wildcard. The fix accepts only this exact observed state together with `Healthy` and at least one replica, while retaining `active`, `Provisioned|Succeeded`, and 100% traffic checks. Zero-replica and unhealthy variants remain blocked. The application version remains `1.0.103`; no Teams package upload or completion message is justified until a fresh hosted run verifies the fix.
 
 Official basis: [Container Apps revision list REST schema](https://learn.microsoft.com/en-us/rest/api/resource-manager/containerapps/container-apps-revisions/list-revisions?view=rest-resource-manager-containerapps-2026-01-01) and [az containerapp revision](https://learn.microsoft.com/en-us/cli/azure/containerapp/revision?view=azure-cli-latest). The `RunningAtMaxScale` value itself is live Run 53 evidence, not an assertion that the current documentation enumerates it.
+
+## Q35. Why did Run 54 fail even though the Azure revision and health checks passed?
+
+Run 54 reached the separate Azure VM worker boundary. The hosted task invoked the named VM with `RunShellScript` and the redacted probe returned `auth_file="missing"`; the verifier therefore stopped at `worker-runtime` before it could publish a worker-ready receipt. This is not evidence of a revision, Container App, or Mac screen-lock failure.
+
+The probe reads `$AGENT_CODEX_HOME/auth.json` only as metadata and requires a regular owner-only file plus `codex login status` under `teamsworker`. The repository cloud-init contract explicitly leaves auth provisioning out of band. The exact missing-file observation is confirmed; why the VM file is absent remains `ROOT_CAUSE_REVIEW_REQUIRED` until a VM-side, secret-free read-back distinguishes incomplete login from path or prior-state configuration.
+
+The correct next step is user-only device login on the existing Azure VM, without copying or logging auth contents, followed by one bounded probe read-back. Unlocking the Mac or logging into a Mac terminal does not change the Azure VM's filesystem. Official basis: [Run scripts in a Linux VM by using Run Commands](https://learn.microsoft.com/en-us/azure/virtual-machines/linux/run-command).

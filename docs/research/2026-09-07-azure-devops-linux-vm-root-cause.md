@@ -4,9 +4,9 @@
 
 - 조사일: 2026-09-08 (Asia/Seoul)
 - 대상: `devdoo-teams/teams-app`, canonical worktree `/Users/doosansmacbookpro/Documents/TeamsApp`, `main`
-- 조사 기준 HEAD: `39aa6f5b9ef90cb45ecae585e40e741ebf27eaed` (2026-09-08 revision read-back and diagnostic receipt correction; hosted verification failed at revision-and-health)
+- 조사 기준 HEAD: `319e676d13b3b366a1df52bee022306b71da0eac` (2026-09-08 strict healthy max-scale readiness correction; hosted verification reached the worker-runtime gate and failed on missing VM auth)
 - 제품 버전: `1.0.103` (이번 조사에서는 버전 변경 없음)
-- 운영 사건: Azure DevOps Run 32 / Build `20260906.11`부터 Run 53 / Build `20260907.9`까지
+- 운영 사건: Azure DevOps Run 32 / Build `20260906.11`부터 Run 54 / Build `20260908.1`까지
 - 조사 범위: Azure DevOps 승인·배포·아티팩트 계약, ARM what-if 및 Bicep 경계, Azure Container Apps revision/health/traffic, ACR managed identity, Linux VM/cloud-init/Custom Script Extension, 24/7 worker 상태·증거 체인
 - 증거 분류: `OFFICIAL CONTRACT`, `OBSERVED REPOSITORY EVIDENCE`, `INFERENCE / RECOMMENDATION`, `LIVE UNVERIFIED`
 - 이 문서는 읽기·리서치·문서화 결과다. 이번 문서 갱신 자체는 Azure 리소스, Teams 앱, 트래픽, 비밀, Jira, 브라우저 세션을 변경하지 않았으며, Run 43의 pipeline 배포·실패 read-back은 아래에 별도 기록한다.
@@ -473,6 +473,14 @@ This correction does not change the app version, package, or Teams UI. The next 
 ## Run 53 — actual revision was healthy but the allowlist rejected its live state
 
 Run 53 / Azure DevOps build `20260907.9` used source/release commit `18d20a7baa2770118d6529dca802a87702e23e26`, application version `1.0.103`, and the matching immutable handoff. After the user-authorized environment approval, the hosted task passed handoff, Azure Core `30/30`, RBAC, workload what-if, and worker Blob staging. It failed at `revision-and-health`; the VM worker probe was not reached.
+
+## Run 54 — revision correction passed; the Azure VM worker auth gate failed
+
+Run 54 / Azure DevOps build `20260908.1` used source/release commit `319e676d13b3b366a1df52bee022306b71da0eac`, application version `1.0.103`, and the matching immutable handoff. The hosted timeline records successful handoff, hosted Azure Core/RBAC, environment approval, workload what-if, Blob staging, workload deployment, the corrected revision readiness predicate, and the public health fetch. It then invoked the named VM through `az vm run-command invoke --command-id RunShellScript`.
+
+The probe verifier rejected the VM response with the exact redacted error `Invalid Azure worker runtime probe: auth_file was "missing"; expected "present"`, and the task recorded `boundary=worker-runtime exitCode=1`. The source probe reads `$AGENT_CODEX_HOME/auth.json` as metadata only and requires a regular mode-600 file, link count 1, owner `teamsworker`, and authenticated `codex login status` (`scripts/azure-worker-runtime-probe.mjs:109-150`). The exact missing-file observation is confirmed; the cause of the missing file is not established and remains `ROOT_CAUSE_REVIEW_REQUIRED`.
+
+This is a separate platform boundary from the Mac/CUA display state. The repository cloud-init contract intentionally leaves authentication out of band, and Microsoft Run Command is non-interactive. The appropriate remediation is user-only device login on the existing VM without copying or logging auth contents, followed by one bounded probe read-back. This run is `AZURE_CANARY_REVISION_PASS / PUBLIC_HEALTH_FETCH_PASS / WORKER_RUNTIME_GATE_BLOCKED / RELEASE_BLOCKED`; it is not a 24/7, A2A, or Teams UI release proof.
 
 The corrected workload artifact `316` contained a 332-byte `azure-revision-state.json`. Existing authenticated Ego Lite read-back returned:
 
