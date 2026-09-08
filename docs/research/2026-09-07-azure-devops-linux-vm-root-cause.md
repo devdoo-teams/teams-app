@@ -6,7 +6,7 @@
 - 대상: `devdoo-teams/teams-app`, canonical worktree `/Users/doosansmacbookpro/Documents/TeamsApp`, `main`
 - 조사 기준 HEAD: `39aa6f5b9ef90cb45ecae585e40e741ebf27eaed` (2026-09-08 revision read-back and diagnostic receipt correction; hosted verification failed at revision-and-health)
 - 제품 버전: `1.0.103` (이번 조사에서는 버전 변경 없음)
-- 운영 사건: Azure DevOps Run 32 / Build `20260906.11`부터 Run 52 / Build `20260907.8`까지
+- 운영 사건: Azure DevOps Run 32 / Build `20260906.11`부터 Run 53 / Build `20260907.9`까지
 - 조사 범위: Azure DevOps 승인·배포·아티팩트 계약, ARM what-if 및 Bicep 경계, Azure Container Apps revision/health/traffic, ACR managed identity, Linux VM/cloud-init/Custom Script Extension, 24/7 worker 상태·증거 체인
 - 증거 분류: `OFFICIAL CONTRACT`, `OBSERVED REPOSITORY EVIDENCE`, `INFERENCE / RECOMMENDATION`, `LIVE UNVERIFIED`
 - 이 문서는 읽기·리서치·문서화 결과다. 이번 문서 갱신 자체는 Azure 리소스, Teams 앱, 트래픽, 비밀, Jira, 브라우저 세션을 변경하지 않았으며, Run 43의 pipeline 배포·실패 read-back은 아래에 별도 기록한다.
@@ -469,3 +469,19 @@ The null receipt fields were a separate source defect, not a confirmed provider 
 The minimal correction replaces both jq receipt branches with the snapshotted `scripts/azure-revision-readback.mjs` helper. `summarizeAzureRevision` projects only the documented `revision.properties.*` fields, `createAzureRevisionStateReceipt` supports both a list and a single named-show object, and `describe` emits a shell-safe unquoted shape. The RED test first failed on missing exports; the focused unit test and `azure-platform-contract-test.mjs` then passed after implementation. The deployment gate remains strict and unchanged: a diagnostic receipt is not readiness evidence, and a hosted run must still prove the active/provisioned/running-or-healthy/100%-traffic predicate before the VM worker gate can start.
 
 This correction does not change the app version, package, or Teams UI. The next controlled sequence is: clean commit and push, clean Azure Core gate, fresh immutable handoff, one bounded hosted rerun, then read back the corrected revision receipt before any worker, 24/7, A2A, portal, desktop, or mobile claim.
+
+## Run 53 — actual revision was healthy but the allowlist rejected its live state
+
+Run 53 / Azure DevOps build `20260907.9` used source/release commit `18d20a7baa2770118d6529dca802a87702e23e26`, application version `1.0.103`, and the matching immutable handoff. After the user-authorized environment approval, the hosted task passed handoff, Azure Core `30/30`, RBAC, workload what-if, and worker Blob staging. It failed at `revision-and-health`; the VM worker probe was not reached.
+
+The corrected workload artifact `316` contained a 332-byte `azure-revision-state.json`. Existing authenticated Ego Lite read-back returned:
+
+```json
+{"name":"teamsapp-canary-goictvxm--18d20a7baa","properties":{"active":true,"provisioningState":"Provisioned","runningState":"RunningAtMaxScale","healthState":"Healthy","trafficWeight":100,"replicas":1}}
+```
+
+The failure receipt artifact `317` was 541 bytes, and the task recorded receipt SHA `041423bce6582666dd193634e303a9ed683b79561f67c55516de2e626c0fc77b`. The exact failure boundary is therefore confirmed. The prior Run 52 projection bug is not present: nested properties and an unquoted `revisionListResponseShape` are now read back correctly.
+
+The remaining root cause is `CONFIRMED_ROOT_CAUSE / REVISION_READINESS_ALLOWLIST_MISSING_OBSERVED_RUNNING_AT_MAX_SCALE`. The inline jq predicate and shared `isRevisionReadyForRelease` accepted only `Running` or healthy `ScaledToZero`; they rejected the service's live `RunningAtMaxScale` value even though the revision was active, provisioned, healthy, serving 100% traffic, and had one replica. Current Microsoft REST documentation defines the field location and the known running-state enumeration but does not enumerate `RunningAtMaxScale`; this is recorded as `CONTRACT_DRIFT_REVIEW_REQUIRED`, not silently presented as an official guarantee.
+
+The minimal fix is to accept this one observed state only under the strict tuple `active=true`, `provisioningState=Provisioned|Succeeded`, `healthState=Healthy`, `replicas>=1`, and `trafficWeight=100`. `ScaledToZero` remains limited to the healthy HTTP-canary path, and arbitrary or unknown running states remain rejected. This does not prove the separate 24/7 goal: `minReplicas>=1`, worker systemd/auth/login, durable heartbeat/restart evidence, A2A, same-release Teams portal package, desktop, and mobile gates remain outstanding.

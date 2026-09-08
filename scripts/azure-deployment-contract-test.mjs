@@ -112,6 +112,45 @@ assert.equal(
   true,
   'legacy Succeeded provisioning state remains compatible with existing release fixtures',
 );
+assert.equal(
+  isRevisionReadyForRelease({
+    ...revision,
+    properties: {
+      ...revision.properties,
+      runningState: 'RunningAtMaxScale',
+      healthState: 'Healthy',
+      replicas: 1,
+    },
+  }),
+  true,
+  'the live Azure RunningAtMaxScale state is ready only with healthy replicas',
+);
+assert.equal(
+  isRevisionReadyForRelease({
+    ...revision,
+    properties: {
+      ...revision.properties,
+      runningState: 'RunningAtMaxScale',
+      healthState: 'Healthy',
+      replicas: 0,
+    },
+  }),
+  false,
+  'RunningAtMaxScale without a live replica must remain blocked',
+);
+assert.equal(
+  isRevisionReadyForRelease({
+    ...revision,
+    properties: {
+      ...revision.properties,
+      runningState: 'RunningAtMaxScale',
+      healthState: 'Unhealthy',
+      replicas: 1,
+    },
+  }),
+  false,
+  'RunningAtMaxScale with unhealthy health must remain blocked',
+);
 assert.throws(
   () => validateReleaseDeployment({
     receipt,

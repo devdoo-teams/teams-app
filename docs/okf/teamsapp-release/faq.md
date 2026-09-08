@@ -6,12 +6,12 @@ resource: /faq.md
 tags: [faq, incident-response, release, teams, azure]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T18:41:50Z"
+  at: "2026-09-08T03:54:00Z"
 verified:
   by: "process:release-faq-reconciliation/1"
-  at: "2026-09-07T18:41:50Z"
+  at: "2026-09-08T03:54:00Z"
 status: stable
-stale_after: "2026-09-14T18:41:50Z"
+stale_after: "2026-09-15T03:54:00Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -543,3 +543,11 @@ Run 52 proved that the normalizer accepted the hosted list response as a top-lev
 The prevention is now explicit and test-backed: receipt generation uses `scripts/azure-revision-readback.mjs` to read only the nested documented properties, supports both a normalized list and a single `revision show` response, emits an unquoted response-shape value for shell assignment, and rejects malformed revision properties. The pipeline contract test rejects the old root-level shorthand. This improves diagnosis without weakening readiness, bypassing what-if, or converting a failed run into a release. The application version remains `1.0.103`; a fresh clean Core gate and hosted rerun are required.
 
 Official basis: [Container Apps Revisions - List Revisions - REST API](https://learn.microsoft.com/en-us/rest/api/resource-manager/containerapps/container-apps-revisions/list-revisions?view=rest-resource-manager-containerapps-2026-01-01), `Revision` schema (`properties.active`, `properties.healthState`, `properties.provisioningState`, `properties.runningState`, `properties.replicas`, `properties.trafficWeight`), and [az containerapp revision](https://learn.microsoft.com/en-us/cli/azure/containerapp/revision?view=azure-cli-latest), `list`/`show` command sections.
+
+## Q34. What was the actual Run 53 failure after the receipt fix?
+
+Run 53's corrected receipt showed `active=true`, `provisioningState=Provisioned`, `runningState=RunningAtMaxScale`, `healthState=Healthy`, `trafficWeight=100`, and `replicas=1` for the expected revision. The pipeline still failed because its readiness allowlist accepted only `Running` or healthy `ScaledToZero`. This is a confirmed internal false negative, not evidence of a source mismatch, missing replica, or unhealthy Azure revision.
+
+`RunningAtMaxScale` is an observed current provider value, but it is not listed in the current Microsoft REST page's running-state enumeration. It must therefore be treated as `CONTRACT_DRIFT_REVIEW_REQUIRED`, not as a generic unknown-state wildcard. The fix accepts only this exact observed state together with `Healthy` and at least one replica, while retaining `active`, `Provisioned|Succeeded`, and 100% traffic checks. Zero-replica and unhealthy variants remain blocked. The application version remains `1.0.103`; no Teams package upload or completion message is justified until a fresh hosted run verifies the fix.
+
+Official basis: [Container Apps revision list REST schema](https://learn.microsoft.com/en-us/rest/api/resource-manager/containerapps/container-apps-revisions/list-revisions?view=rest-resource-manager-containerapps-2026-01-01) and [az containerapp revision](https://learn.microsoft.com/en-us/cli/azure/containerapp/revision?view=azure-cli-latest). The `RunningAtMaxScale` value itself is live Run 53 evidence, not an assertion that the current documentation enumerates it.

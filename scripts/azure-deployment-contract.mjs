@@ -45,10 +45,12 @@ function readJson(filePath) {
 
 export function isRevisionReadyForRelease(revision) {
   const properties = revision?.properties;
+  const hasLiveReplica = Number.isFinite(Number(properties?.replicas)) && Number(properties.replicas) >= 1;
   return properties?.active === true
     && provisionedStates.has(properties.provisioningState)
     && (
       properties.runningState === 'Running'
+      || (properties.runningState === 'RunningAtMaxScale' && properties.healthState === 'Healthy' && hasLiveReplica)
       || (properties.runningState === 'ScaledToZero' && properties.healthState === 'Healthy')
     );
 }

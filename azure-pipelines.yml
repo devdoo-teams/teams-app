@@ -807,6 +807,7 @@ stages:
                               and ((.properties.provisioningState == "Provisioned")
                                 or (.properties.provisioningState == "Succeeded"))
                               and ((.properties.runningState == "Running")
+                                or (.properties.runningState == "RunningAtMaxScale" and .properties.healthState == "Healthy" and ((.properties.replicas // 0) | tonumber) >= 1)
                                 or (.properties.runningState == "ScaledToZero" and .properties.healthState == "Healthy"))
                               and (((.properties.trafficWeight // 0) | tonumber) == 100)' \
                               "$(Agent.TempDirectory)/revision.json" >/dev/null; then
@@ -831,6 +832,7 @@ stages:
                                   and ((.properties.provisioningState == "Provisioned")
                                     or (.properties.provisioningState == "Succeeded"))
                                   and ((.properties.runningState == "Running")
+                                    or (.properties.runningState == "RunningAtMaxScale" and .properties.healthState == "Healthy" and ((.properties.replicas // 0) | tonumber) >= 1)
                                     or (.properties.runningState == "ScaledToZero" and .properties.healthState == "Healthy"))
                                   and (((.properties.trafficWeight // 0) | tonumber) == 100))
                               ] | length == 1' \

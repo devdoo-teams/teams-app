@@ -226,3 +226,11 @@
 * **Objective classification**: the failure boundary is confirmed, but the provider state is `ROOT_CAUSE_REVIEW_REQUIRED`. The null state values were not trustworthy diagnostics because the old jq projection used root-level shorthand instead of the documented `properties.*` paths. The list normalizer itself did run on a top-level array, so Run 52 does not confirm the earlier envelope hypothesis.
 * **Fix**: add nested-property and single-show receipt helpers to `scripts/azure-revision-readback.mjs`, make the shell shape output unquoted, and add RED/GREEN unit plus pipeline contract coverage that rejects the old projection. No app version bump, package upload, or Teams completion message.
 * **Next gate**: commit/push the fix, rerun the clean Azure Core gate, create a fresh immutable handoff, and execute one bounded hosted run. Only a hosted revision-ready result can advance to the separate VM worker gate.
+
+## 2026-09-08 — Run 53 observed running-state drift
+
+* **Observed**: Run 53 / `20260907.9` used source/release `18d20a7…`, passed handoff, hosted Core `30/30`, RBAC, approval, workload what-if, and Blob staging, then failed at `revision-and-health`.
+* **Read-back**: Ego Lite read `azure-revision-state.json` from artifact `316` and confirmed `active=true`, `provisioningState=Provisioned`, `runningState=RunningAtMaxScale`, `healthState=Healthy`, `trafficWeight=100`, and `replicas=1` for the expected revision. Failure artifact `317` was 541 B; task receipt SHA was `041423bce6582666dd193634e303a9ed683b79561f67c55516de2e626c0fc77b`.
+* **Classification**: `CONFIRMED_ROOT_CAUSE / REVISION_READINESS_ALLOWLIST_MISSING_OBSERVED_RUNNING_AT_MAX_SCALE`. The corrected receipt removed the prior diagnostic bug; the remaining failure was an internal false negative. Current official REST documentation does not enumerate this live value, so it is also `CONTRACT_DRIFT_REVIEW_REQUIRED`.
+* **Fix**: add a strict `RunningAtMaxScale` branch requiring `Healthy` and `replicas>=1` to the shared contract and hosted predicates. Keep all other unknown states blocked; retain active/provisioned/100%-traffic checks. No app version bump or Teams completion message.
+* **Next gate**: run the clean Core gate, create a fresh immutable handoff, and perform one bounded hosted rerun before advancing to the separate VM worker gate.

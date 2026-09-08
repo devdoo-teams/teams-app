@@ -6,12 +6,12 @@ resource: /failure-history.md
 tags: [teamsapp, azure, release, incident, failure, provenance]
 generated:
   by: "process:codex-okf/1"
-  at: "2026-09-07T18:41:50Z"
+  at: "2026-09-08T03:54:00Z"
 verified:
   by: "process:release-evidence-reconciliation/1"
-  at: "2026-09-07T18:41:50Z"
+  at: "2026-09-08T03:54:00Z"
 status: stable
-stale_after: "2026-09-14T18:41:50Z"
+stale_after: "2026-09-15T03:54:00Z"
 sources:
   - id: okf-spec
     resource: "https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md"
@@ -774,3 +774,15 @@ The workload artifact `300` contained `azure-revision-state.json` (271 B), the d
 **FIX AND PREVENTION.** The pipeline now delegates receipt creation to the snapshotted `scripts/azure-revision-readback.mjs` helper. Its `summarizeAzureRevision` function reads only the documented nested properties and its `createAzureRevisionStateReceipt` supports both normalized lists and a single `revision show` response. The CLI `describe` path now emits an unquoted shape suitable for shell assignment. RED/GREEN coverage includes nested-property preservation, single-show diagnostics, exact shape output, malformed properties, and a pipeline contract assertion that rejects the old root-level shorthand. The version remains `1.0.103`; no package upload or Teams completion message is justified.
 
 **CURRENT JUDGMENT.** Run 52 remains `AZURE_CANARY_REVISION_GATE_FAILED / WORKER_RUNTIME_GATE_UNREACHED / RELEASE_BLOCKED`. Commit and push the fix, run the clean Azure Core gate, create a fresh immutable handoff, and perform one bounded hosted rerun. Until that run passes revision readiness and the separate VM worker receipt, 24/7, A2A, portal, desktop, and mobile remain blocked or unverified.
+
+## 2026-09-08 — Run 53 exposed an observed `RunningAtMaxScale` readiness state
+
+**OFFICIAL CONTRACT.** Microsoft documents the revision state fields below `Revision.properties` and the `revision show` / `revision list --all` commands, but the current REST page's running-state enumeration does not list `RunningAtMaxScale`: [Container Apps revision list REST schema](https://learn.microsoft.com/en-us/rest/api/resource-manager/containerapps/container-apps-revisions/list-revisions?view=rest-resource-manager-containerapps-2026-01-01), [Azure CLI revision commands](https://learn.microsoft.com/en-us/cli/azure/containerapp/revision?view=azure-cli-latest). The omission is recorded as contract drift rather than silently treated as an official guarantee.
+
+**OBSERVED EVIDENCE.** Run 53 / Azure DevOps build `20260907.9` used source/release commit `18d20a7baa2770118d6529dca802a87702e23e26`, app `1.0.103`, and the matching immutable handoff. The run passed handoff, hosted Core `30/30`, RBAC, approval, workload what-if, and Blob staging. The corrected workload artifact `316` contained `azure-revision-state.json` at 332 B. Ego Lite read-back of that file returned the expected revision `teamsapp-canary-goictvxm--18d20a7baa` with `active=true`, `provisioningState=Provisioned`, `runningState=RunningAtMaxScale`, `healthState=Healthy`, `trafficWeight=100`, and `replicas=1`. The task still failed at `revision-and-health` after its bounded poll; failure artifact `317` was 541 B and the task recorded receipt SHA `041423bce6582666dd193634e303a9ed683b79561f67c55516de2e626c0fc77b`.
+
+**ROOT CAUSE.** `CONFIRMED_ROOT_CAUSE / REVISION_READINESS_ALLOWLIST_MISSING_OBSERVED_RUNNING_AT_MAX_SCALE`. The service returned a healthy, active, provisioned, traffic-serving revision with one live replica, but both the inline readiness predicate and the final deployment contract accepted only `Running` or healthy `ScaledToZero`. This is not a source/handoff mismatch, and the corrected receipt proves that the previous all-null diagnostic was fixed. The exact state is an observed provider value that current official documentation does not enumerate, so it remains `CONTRACT_DRIFT_REVIEW_REQUIRED` rather than an unqualified official state.
+
+**FIX AND PREVENTION.** Add a strict `RunningAtMaxScale` branch to the shared readiness contract and both hosted jq predicates, requiring `healthState=Healthy` and `replicas>=1`; retain `active=true`, `Provisioned|Succeeded`, and 100% traffic requirements. Add GREEN/RED coverage for healthy one-replica, zero-replica, and unhealthy variants, plus a pipeline contract assertion. Do not accept arbitrary or unknown running-state strings. The app version remains `1.0.103`; no package upload or Teams completion message is justified.
+
+**CURRENT JUDGMENT.** Run 53 is a confirmed pipeline false-negative at `revision-and-health`; it did not reach the VM worker gate. Commit and push this strict observed-state correction, create a fresh immutable handoff, and execute one bounded hosted rerun. Only after revision readiness, the separate worker receipt, 24/7 identity, and Teams UI evidence pass can release completion be claimed.
