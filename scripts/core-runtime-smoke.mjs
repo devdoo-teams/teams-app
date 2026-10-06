@@ -156,6 +156,10 @@ try {
   const healthResponse = await fetch(`${baseUrl}/api/health`);
   const health = await healthResponse.json();
   assert.equal(healthResponse.status, 200);
+  assert.ok(health.storage.authoritativeStores.includes('PersonalNotificationBroker'));
+  assert.equal(health.storage.total, health.storage.authoritativeStores.length);
+  assert.equal(health.storage.migrated, 0);
+  assert.equal(health.storage.horizontalSafe, false);
   assert.equal(healthResponse.headers.get('x-powered-by'), null);
   assert.equal(healthResponse.headers.get('x-content-type-options'), 'nosniff');
   assert.equal(healthResponse.headers.get('referrer-policy'), 'strict-origin-when-cross-origin');

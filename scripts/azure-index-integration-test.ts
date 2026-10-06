@@ -464,7 +464,8 @@ function verifyIndexCompositionContract(): void {
   assert.match(source, /createAgentDispatchSubmissionPort/);
   assert.match(source, /authoritativeStores/);
   assert.match(source, /migrated:\s*0/);
-  assert.match(source, /total:\s*11/);
+  assert.match(source, /'PersonalNotificationBroker'/);
+  assert.match(source, /total:\s*12/);
   assert.match(source, /horizontalSafe:\s*false/);
 }
 
