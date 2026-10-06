@@ -6,6 +6,10 @@ import { JobConversationView } from '../src/client/JobConversationView.js';
 import { loadJobConversation, refreshVisibleJobConversation } from '../src/client/job-conversation.js';
 import { createCoreOrchestrationJobActivity } from '../src/server/genui-response.js';
 import type { CoreOrchestrationJob } from '../src/shared/core-orchestration.js';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { CoreJobCardPages } from '../src/server/core-job-card-pages.js';
 
 const job: CoreOrchestrationJob = {
   id: 'synthetic-receipt', provider: 'codex', prompt: 'synthetic request', mode: 'read-only', status: 'completed',
@@ -59,4 +63,19 @@ const historyHtml = renderToStaticMarkup(<JobConversationView conversation={hist
 assert.ok(historyHtml.includes('parent-selection') && historyHtml.includes('selected-A'), 'each attempt retains its own evidence');
 const badUsage = await surfaces({ ...job, tokenUsage: { ...job.tokenUsage!, source: 'untrusted', outputTokens: undefined } as any });
 assert.equal(badUsage.facts.find((fact: any) => fact.title === '사용 토큰')?.value, '제공되지 않음', 'invalid telemetry must not manufacture totals');
+const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'receipt-page-summary-')));
+try {
+  const scope = { tenantId: 'synthetic', requesterId: 'synthetic', conversationId: 'synthetic' };
+  const pages = new CoreJobCardPages(path.join(root, 'pages.json'), {
+    getJob: () => job, update: async () => { throw new Error('no outbound during local fixture'); },
+  });
+  await pages.initialize();
+  const prepared = await pages.create(job.id, scope, true);
+  assert.ok(prepared);
+  const summary = prepared.activity.attachments[0].content as any;
+  const summaryFacts = summary.body.flatMap((element: any) => element.facts ?? []);
+  for (const [label, value] of expected) {
+    assert.equal(summaryFacts.find((fact: any) => fact.title === label)?.value, value, `actual personal summary preserves ${label}`);
+  }
+} finally { await fs.rm(root, { recursive: true, force: true }); }
 console.log('PASS: actual tab/card/conversation share selected vs observed evidence, true zero and explicit unavailable metadata');
