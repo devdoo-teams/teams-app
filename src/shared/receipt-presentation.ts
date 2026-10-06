@@ -30,6 +30,6 @@ export function projectReceiptFacts(job: ReceiptInput): readonly ReceiptFact[] {
       { label: '출력 토큰', value: count(usage.outputTokens) },
       { label: '추론 출력', value: count(usage.reasoningOutputTokens) },
     ] : [{ label: '토큰 사용량', value: '제공되지 않음' }]),
-    { label: '계정 잔여량', value: '제공되지 않음' },
+    { label: '계정 잔여량', value: 'Codex CLI에서 제공되지 않음' },
   ];
 }

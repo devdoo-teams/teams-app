@@ -32,6 +32,7 @@ const expected = [
   ['전송 추론 수준', '수집되지 않음'], ['응답 ID', '수집되지 않음'], ['관측 출처', 'worker-observation'],
   ['관측 시각', '2026-10-06T00:01:00.000Z'], ['사용량 출처', 'codex.exec.jsonl.turn.completed.usage'],
   ['입력 토큰', '0'], ['추론 출력', '24'],
+  ['계정 잔여량', 'Codex CLI에서 제공되지 않음'],
 ];
 for (const [label, value] of expected) {
   assert.equal(rendered.facts.find((fact: any) => fact.title === label)?.value, value, `actual card fact ${label}`);
