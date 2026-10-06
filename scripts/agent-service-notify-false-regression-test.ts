@@ -158,10 +158,11 @@ try {
   await service.initialize();
 
   failDelivery = true;
-  const transportJob = await service.submit({ prompt: 'delivery independent', mode: 'read-only', scope: scopes.completed, notify: true });
+  const transportScope = { ...scopes.completed, requesterId: 'independent-delivery-user' };
+  const transportJob = await service.submit({ prompt: 'delivery independent', mode: 'read-only', scope: transportScope, notify: true });
   await runner.waitForStart(1);
   runner.complete('execution succeeds despite delivery failure');
-  const transportTerminal = await waitForStatus(store, transportJob.id, scopes.completed, 'completed');
+  const transportTerminal = await waitForStatus(store, transportJob.id, transportScope, 'completed');
   assert.equal(transportTerminal.result, 'execution succeeds despite delivery failure');
   assert.equal(transportTerminal.durableNotifications?.enabled, true, 'local notification intent must survive restart');
   failDelivery = false;
@@ -221,7 +222,7 @@ try {
   assert.deepEqual(notifications.filter(({ job }) => job.id === privateWrite.id), [],
     'approval must preserve the durable private job notification intent');
 
-  const privateContinuation = await service.continue(privateWrite.id, 'continue privately', scopes.completed);
+  const privateContinuation = await service.continue(privateWrite.id, 'continue privately', scopes.completed, { notify: true });
   assert.ok(privateContinuation);
   assert.equal(privateContinuation.durableNotifications?.enabled, false);
   await service.approve(privateContinuation.id, scopes.completed);
@@ -230,7 +231,7 @@ try {
   await waitForStatus(store, privateContinuation.id, scopes.completed, 'completed');
   assert.deepEqual(notifications.filter(({ job }) => job.id === privateContinuation.id), []);
 
-  const privateRetry = await service.retry(failedJobId, scopes.failed);
+  const privateRetry = await service.retry(failedJobId, scopes.failed, { notify: true });
   assert.ok(privateRetry);
   assert.equal(privateRetry.durableNotifications?.enabled, false);
   await runner.waitForStart(6);

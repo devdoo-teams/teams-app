@@ -14,7 +14,8 @@ try {
   const job = { id: 'task-synthetic', ...principal, conversationId: deriveServerOwnedRestConversationId(principal), status: 'completed', prompt: '합성 요청', result: '합성 결과', progress: [], mode: 'read-only', createdAt: new Date().toISOString(), durableNotifications: { enabled: true, delivered: [] } } as any;
   const event = { job, conversationId: job.conversationId, kind: 'result', phase: 'completed', message: '합성 결과' } as any;
   const sends: string[] = [];
-  let broker = new module.PersonalNotificationBroker(file, botId, async (target: string) => { sends.push(target); return { state: 'accepted', activityId: 'activity-synthetic' }; });
+  const serviceUrls: string[] = [];
+  let broker = new module.PersonalNotificationBroker(file, botId, async (target: any) => { sends.push(target.conversationId); serviceUrls.push(target.serviceUrl); return { state: 'accepted', activityId: 'activity-synthetic' }; });
   await broker.initialize();
   await broker.deliver(event);
   assert.equal(broker.status(job.id, principal)?.state, 'waiting-personal-chat');
@@ -26,6 +27,7 @@ try {
   assert.equal(await broker.observeAuthenticatedActivity(activity), true);
   await broker.flush();
   assert.deepEqual(sends, ['personal-synthetic']);
+  assert.deepEqual(serviceUrls, [activity.serviceUrl], 'send must receive the captured authenticated service URL');
   assert.equal(broker.status(job.id, principal)?.state, 'accepted');
   assert.equal(broker.status(job.id, { ...principal, requesterId: 'other-owner' }), undefined);
   await broker.deliver(event);
@@ -52,5 +54,30 @@ try {
   const recovered = new module.PersonalNotificationBroker(file, botId, async () => { throw new Error('must not retry interrupted send'); });
   await recovered.initialize(); await recovered.flush();
   assert.equal(recovered.status('task-uncertain', principal)?.state, 'ambiguous');
+  const recoveryFile = path.join(directory, 'recovery.json');
+  let recoveredSends = 0;
+  const terminal = new module.PersonalNotificationBroker(recoveryFile, botId, async () => { recoveredSends++; return { state: 'accepted' }; });
+  await terminal.initialize(); await terminal.observeAuthenticatedActivity(activity);
+  await terminal.recoverTerminalJobs([job]);
+  await terminal.recoverTerminalJobs([job]);
+  assert.equal(recoveredSends, 1, 'terminal persistence before enqueue is recovered once');
+  const stalled = new module.PersonalNotificationBroker(path.join(directory, 'stalled.json'), botId, async () => { recoveredSends++; return new Promise(() => {}); });
+  await stalled.initialize(); await stalled.observeAuthenticatedActivity(activity);
+  await stalled.deliver(event);
+  assert.equal(stalled.status(job.id, principal)?.state, 'ambiguous');
+  await stalled.deliver({ ...event, job: { ...job, id: 'task-after-stall' } });
+  await stalled.flush();
+  assert.equal(recoveredSends, 2, 'unsettled transport blocks additional dispatch');
+  assert.equal(stalled.status('task-after-stall', principal)?.state, 'pending');
+  const invalid = JSON.parse(await fs.readFile(file, 'utf8'));
+  assert.equal(invalid.outbox[0].notification.job, undefined, 'outbox does not duplicate private job snapshots');
+  for (const field of ['kind', 'phase', 'message']) {
+    const malformed = structuredClone(invalid); delete malformed.outbox[0].notification[field];
+    await fs.writeFile(file, JSON.stringify(malformed));
+    await assert.rejects(new module.PersonalNotificationBroker(file, botId, async () => ({ state:'accepted' })).initialize(), /PERSONAL_NOTIFICATION_STORE_INVALID/);
+  }
+  invalid.outbox[0].notification.enabled = false;
+  await fs.writeFile(file, JSON.stringify(invalid));
+  await assert.rejects(new module.PersonalNotificationBroker(file, botId, async () => ({ state:'accepted' })).initialize(), /PERSONAL_NOTIFICATION_STORE_INVALID/);
   console.log('PASS: verified owner personal binding, durable pending/receipt, notify:false, restart and ambiguous no-resend');
 } finally { await fs.rm(directory, { recursive: true, force: true }); }

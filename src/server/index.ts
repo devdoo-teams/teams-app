@@ -2582,9 +2582,19 @@ let agentService: AgentService;
 
 const personalNotifications = new PersonalNotificationBroker(
   path.join(path.dirname(agentJobStorePath), 'personal-notifications.json'), botClientId,
-  async (conversationId, notification) => {
+  async (reference, payload) => {
+    const job = agentJobStore.getForPrincipal(payload.jobId, reference);
+    if (!job || job.durableNotifications?.enabled !== true || !teamsApp || skipOutbound) return { state: 'rejected' as const };
+    const notification: AgentNotification = { ...payload, job, conversationId: job.conversationId };
+    const loadedApi = await import('@microsoft/teams.api');
+    const api = (loadedApi as any).default ?? loadedApi;
+    const destination = new api.Client(reference.serviceUrl, teamsApp.api.http.clone({ timeout: 10_000 }));
+    const sender = createBotSender((activity) => destination.conversations.createActivity(reference.conversationId, {
+      ...(activity as object), from: { id: teamsApp.id, role: 'bot' },
+      conversation: { id: reference.conversationId, conversationType: 'personal', tenantId: reference.tenantId },
+    }));
     const envelope = genUiMode === 'legacy' ? undefined : genUi.notification(notification);
-    const receipt = await createConversationBotSender(conversationId)(notification.message, envelope);
+    const receipt = await sender(notification.message, envelope);
     return { state: receipt.state === 'connector-accepted' ? 'accepted' as const
       : receipt.state === 'connector-rejected' ? 'rejected' as const : 'ambiguous' as const,
       ...(receipt.activityId ? { activityId: receipt.activityId } : {}) };
@@ -2634,6 +2644,7 @@ agentService = new AgentService(
   },
 );
 await agentService.initialize();
+await personalNotifications.recoverTerminalJobs(agentJobStore.listLocalOnly(4096));
 
 const coreProviderCapabilities = !azureQueueDispatch
   ? await probeCliCapabilities().catch(() => unknownCliCapabilities())

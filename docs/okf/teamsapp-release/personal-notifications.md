@@ -12,6 +12,8 @@ stale_after: "2026-10-13T16:29:00Z"
 
 # Personal notification destination and receipt
 
+REVIEW FIXTURE: schema2 persists only enabled/kind/phase/message, without duplicating the private job snapshot. The send callback reads the owned job again and constructs a public SDK ApiClient from the authenticated reference serviceUrl, cloning the existing SDK authenticated HTTP client with a 10-second timeout. A still-unsettled transport blocks additional dispatch even after the receipt becomes ambiguous. Startup recovers explicitly enabled terminal REST jobs missing an outbox event; legacy absent intent and existing ambiguous receipts are excluded. Synthetic recovery, incomplete payload rejection, inherited false override and hung transport tests passed; this is not live Teams evidence.
+
 OFFICIAL CONTRACT: Microsoft requires the installed app and actual conversation ID/reference, captured from that context. Email/UPN is not an outbound address. Updating a message requires the actual returned activity ID. See the source above.
 
 OBSERVED EVIDENCE: installed `@microsoft/teams.apps` is 2.0.15. Candidate node_modules/@microsoft/teams.apps/dist/app.js:344–360 constructs `App.send` with the supplied conversation ID and SDK service URL. dist/activity-sender.js:17–40 chooses create/update from activity.id. This does not establish receipt in the Teams UI.

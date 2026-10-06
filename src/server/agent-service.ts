@@ -331,7 +331,7 @@ export class AgentService {
       parentJobId: previous.id,
       threadId: previous.threadId,
       ...(jobSelection(previous) ?? {}),
-      notify: options.notify ?? previous.durableNotifications?.enabled,
+      notify: previous.durableNotifications?.enabled === false ? false : options.notify ?? previous.durableNotifications?.enabled,
       onProgress: options.onProgress,
     });
   }
@@ -564,7 +564,7 @@ export class AgentService {
       parentJobId: previous.id,
       threadId: previous.threadId,
       ...(jobSelection(previous) ?? {}),
-      notify: options.notify ?? previous.durableNotifications?.enabled,
+      notify: previous.durableNotifications?.enabled === false ? false : options.notify ?? previous.durableNotifications?.enabled,
       onProgress: options.onProgress,
     });
   }
