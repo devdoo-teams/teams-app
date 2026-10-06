@@ -157,6 +157,7 @@ try {
   const health = await healthResponse.json();
   assert.equal(healthResponse.status, 200);
   assert.ok(health.storage.authoritativeStores.includes('PersonalNotificationBroker'));
+  assert.ok(health.storage.authoritativeStores.includes('CoreJobCardPages'));
   assert.equal(health.storage.total, health.storage.authoritativeStores.length);
   assert.equal(health.storage.migrated, 0);
   assert.equal(health.storage.horizontalSafe, false);

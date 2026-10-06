@@ -54,6 +54,7 @@ import {
 import { GitService } from './git-service.js';
 import { PersonalNotificationBroker } from './personal-notification.js';
 import { sendPersonalNotificationCard } from './personal-notification-card.js';
+import { CoreJobCardPages, wrapCoreJobCardSender, preserveCoreCardDeliveryReceipt, guardCoreCardPageUpdate } from './core-job-card-pages.js';
 import {
   configureResponseEngineRouter,
   ResponseEngineNotConfiguredError,
@@ -299,6 +300,8 @@ const itemStorePath = process.env.ITEM_STORE_PATH ?? path.resolve(process.cwd(),
 const workItemStorePath = process.env.WORK_ITEM_STORE_PATH ?? path.resolve(process.cwd(), 'data/work-items.json');
 const collaborationStorePath = process.env.COLLABORATION_STORE_PATH ?? path.resolve(process.cwd(), 'data/collaboration.json');
 const agentJobStorePath = process.env.AGENT_JOB_STORE_PATH ?? path.resolve(process.cwd(), 'data/agent-jobs.json');
+const coreJobCardPageStorePath = path.join(path.dirname(agentJobStorePath), 'core-job-card-pages.json');
+let coreJobCardPages: CoreJobCardPages | undefined;
 const a2aStorePath = process.env.A2A_STORE_PATH ?? path.resolve(process.cwd(), 'data/a2a.json');
 const a2aOutboundStorePath = process.env.A2A_OUTBOUND_STORE_PATH ?? path.resolve(process.cwd(), 'data/a2a-outbound.json');
 const agentAdmissionJournalPath = process.env.AGENT_ADMISSION_JOURNAL_PATH ?? path.resolve(process.cwd(), 'data/agent-admission.json');
@@ -839,6 +842,7 @@ storeProcessLease = await acquireStoreProcessLease([
   ...(azureQueueDispatch ? [] : [agentJobStorePath]),
   a2aStorePath,
   a2aOutboundStorePath,
+  coreJobCardPageStorePath,
   agentAdmissionJournalPath,
   genUiActionStorePath,
   responseModeStorePath,
@@ -1880,9 +1884,10 @@ http.get('/api/health', async (_request: any, response: any) => {
         'ProviderLifecycleStore',
         'ProviderMutationReplayStore',
         'PersonalNotificationBroker',
+        'CoreJobCardPages',
       ],
       migrated: 0,
-      total: 12,
+      total: 13,
       horizontalSafe: false,
     },
     dispatch: {
@@ -2595,9 +2600,17 @@ const personalNotifications = new PersonalNotificationBroker(
       conversation: { id: reference.conversationId, conversationType: 'personal', tenantId: reference.tenantId },
     }));
     const envelope = genUiMode === 'legacy' ? undefined : genUi.notification(notification);
-    const receipt = envelope
-      ? await sendPersonalNotificationCard(sender, envelope)
-      : await sender(notification.message);
+    const pageScope = { tenantId: reference.tenantId, requesterId: reference.requesterId,
+      conversationId: reference.conversationId };
+    const paged = envelope && coreJobCardPages
+      ? await coreJobCardPages.create(notification.jobId, pageScope, true, personalTabDeepLink)
+      : undefined;
+    const receipt = paged && envelope
+      ? await sender(envelope.fallbackText ?? '요청 결과를 카드로 확인하세요.', undefined, paged.activity)
+      : envelope ? await sendPersonalNotificationCard(sender, envelope) : await sender(notification.message);
+    if (paged && receipt.state === 'connector-accepted' && receipt.activityId) {
+      if (coreJobCardPages) await preserveCoreCardDeliveryReceipt(coreJobCardPages, paged.key, pageScope, receipt);
+    }
     return { state: receipt.state === 'connector-accepted' ? 'accepted' as const
       : receipt.state === 'connector-rejected' ? 'rejected' as const : 'ambiguous' as const,
       ...(receipt.activityId ? { activityId: receipt.activityId } : {}) };
@@ -2890,6 +2903,12 @@ const coreOrchestrationService = new CoreOrchestrationService({
   observeCodexModelCatalog: observeCoreCodexModelCatalog,
   ...(azureQueueDispatch ? { observeProviderFact: observeAzureCoreProviderFact } : {}),
 });
+coreJobCardPages = new CoreJobCardPages(coreJobCardPageStorePath, {
+  universalActions: process.env.TEAMS_CARD_UNIVERSAL_ACTIONS === 'true',
+  getJob: (jobId, scope) => coreOrchestrationService.get(createServerDerivedCoreScope(scope, 'principal'), { jobId }),
+  update: async () => { throw new Error('CARD_PAGE_UPDATE_REQUIRES_AUTHENTICATED_ACTIVITY'); },
+});
+await coreJobCardPages.initialize();
 mountCoreOrchestrationRoutes(http, {
   observeNotificationDelivery: (jobId, principal) => personalNotifications.status(jobId, principal),
   service: coreOrchestrationService,
@@ -3843,6 +3862,7 @@ function teamsBotResponseRequest(activity: any, scope: AgentJobScope, prompt: st
 }
 
 const CORE_ORCHESTRATION_CARD_ACTIONS = new Set([
+  'orchestration.page',
   'orchestration.confirm-cancel',
   'orchestration.confirm-approve',
   'orchestration.dismiss-confirmation',
@@ -4088,6 +4108,9 @@ async function handleCoreOrchestrationChatCommand(
     return;
   }
   try {
+    if (coreJobCardPages) send = wrapCoreJobCardSender(coreJobCardPages, scope,
+      activity?.conversation?.conversationType === 'personal', send, personalTabDeepLink,
+      activity?.type === 'invoke' ? nonEmptyString(activity?.replyToId, 200) : undefined);
     await sendCoreOrchestrationActivity(send, await resolveCoreOrchestrationCommand(activity, scope, command));
   } catch (error) {
     const message = error instanceof AgentMutationAuthorizationError
@@ -4105,6 +4128,14 @@ async function handleCoreOrchestrationChatCommand(
 }
 
 async function handleCoreOrchestrationCardSubmission(activity: any, send: BotSend): Promise<void> {
+  if (coreOrchestrationCardValue(activity)?.action === 'orchestration.page') {
+    await handleCoreJobPageAction(activity);
+    return;
+  }
+  const pageScope = activityScope(activity);
+  if (coreJobCardPages && pageScope) send = wrapCoreJobCardSender(coreJobCardPages, pageScope,
+    activity?.conversation?.conversationType === 'personal', send, personalTabDeepLink,
+    activity?.type === 'invoke' ? nonEmptyString(activity?.replyToId, 200) : undefined);
   if (!isCoreOrchestrationCardSubmission(activity)) {
     await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity('유효하지 않은 Core 에이전트 카드 요청입니다.'));
     return;
@@ -4270,10 +4301,36 @@ async function handleCoreMessageExtension(activity: any) {
   } catch { return coreMessageExtensionError(); }
 }
 
+async function handleCoreJobPageAction(activity: any) {
+  const scope = activityScope(activity);
+  const invalid = { statusCode: 400, type: 'application/vnd.microsoft.error',
+    value: { code: 'InvalidCardPage', message: '이 카드의 페이지를 확인할 수 없습니다.' } };
+  if (!coreJobCardPages || !scope || activity?.conversation?.conversationType !== 'personal') return invalid;
+  try {
+    return await coreJobCardPages.act(coreOrchestrationCardValue(activity), scope, true,
+      nonEmptyString(activity?.replyToId, 200) ?? '', activity?.type === 'invoke' ? 'invoke' : 'submit',
+      async (activityId, card, boundScope) => guardCoreCardPageUpdate(skipOutbound, async () => {
+        if (!teamsApp || !await personalNotifications.observeAuthenticatedActivity(activity)) {
+          throw new Error('CARD_PAGE_UPDATE_REFERENCE_UNVERIFIED');
+        }
+        const api = await import('@microsoft/teams.api');
+        const destination = new api.Client(activity.serviceUrl, teamsApp.api.http.clone({ timeout: 10_000 }));
+        return destination.conversations.updateActivity(boundScope.conversationId, activityId, {
+          type: 'message', from: { id: teamsApp.id, role: 'bot' },
+          conversation: { id: boundScope.conversationId, conversationType: 'personal', tenantId: boundScope.tenantId },
+          attachments: [{ contentType: 'application/vnd.microsoft.card.adaptive', content: card }],
+        });
+      }));
+  } catch { return { ...invalid, statusCode: 500 }; }
+}
+
 async function handleCoreOrchestrationInvoke(activity: any): Promise<{
   status: 200;
-  body: { statusCode: 200; type: 'application/vnd.microsoft.card.adaptive'; value: unknown };
+  body: { statusCode: number; type: string; value: unknown };
 }> {
+  if (coreOrchestrationCardValue(activity)?.action === 'orchestration.page') {
+    return { status: 200, body: await handleCoreJobPageAction(activity) };
+  }
   let rendered = coreOrchestrationErrorActivity('유효하지 않은 Core 에이전트 카드 요청입니다.');
   const capture: BotSend = async (_text, _envelope, activityOverride) => {
     if (activityOverride) rendered = activityOverride as CoreOrchestrationTeamsActivity;

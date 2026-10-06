@@ -3,7 +3,7 @@ type: "Concept"
 sources:
   - resource: "https://nodejs.org/docs/latest-v24.x/api/fs.html"
     title: "Node.js File system"
-    location: "Promises API; application serialization is distinct from asynchronous read/write, consulted local store contract; HTML lines not stable"
+    location: "Promises API #promises-api, observed lines494–505 on2026-10-06; current v24 documentation is24.21.0, installed Node24.13.1; stable promise read/write API checked locally, HTML lines maychange"
 generated: { by: "process:codex", at: "2026-10-06T17:58:23Z" }
 verified: { by: "process:deterministic-local-reproduction", at: "2026-10-06T17:58:23Z" }
 status: "VERIFIED_LOCAL_ONLY"
@@ -11,6 +11,8 @@ stale_after: "2026-10-13T17:58:23Z"
 ---
 
 # A2A regression read-back must not write
+
+OFFICIAL CONTRACT: Node documents that fs/promises operations are not synchronized and concurrent changes to the same file need application coordination. This is consistent with the existing one-writer file-store lease, not a new multi-writer claim.
 
 OBSERVED EVIDENCE: first1.0.107/f50c524 canonical Core run timed out at scripts/teams-a2a-outbound-restart-regression-test.ts:191 with the repaired intent still dispatching. One isolated invocation, three additional bounded isolated invocations and a second full machine invocation passed. This did not establish absence of a race.
 

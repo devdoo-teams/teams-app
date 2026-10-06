@@ -15,6 +15,10 @@ okf_version: 0.2
 * [설치본·런타임 독립 증거](installation-observations.md) - 2026-10-06 공식 계약 재확인, 실행 가능한 설치/현재 런타임/데스크톱 판정과 Dev Tunnel 안내 구분
 * [Azure DevOps·Linux VM/ACA 근본원인 지식그래프](../../research/2026-09-07-azure-devops-linux-vm-root-cause.md) - Run 32–54와 Azure 배포 책임 경계의 공식 계약 대조, root-cause 분류, 목표 구조
 
+* [개인 작업 카드 페이지](job-card-pages.md) - 같은 activity의 페이지 상태와 Core 기본/Universal opt-in 계약
+
+* [A2A read-back snapshot 경쟁](a2a-readback-race.md) - 간헐 회귀 검사의 stale write 재현과 순수 read-back
+
 ## Reading order
 
 1. failure-history.md
