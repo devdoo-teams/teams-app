@@ -249,6 +249,7 @@ try {
 
   const listed = await request('GET', '/jobs?limit=10', undefined, auth);
   assert.equal(listed.status, 200);
+  assert.equal(JSON.parse(listed.body).pendingJobs, null, 'legacy service without pending reader does not claim an empty inbox');
   assert.equal(JSON.parse(listed.body).jobs[0].id, first.job.id);
   assert.deepEqual(JSON.parse(listed.body).providers[0], {
     provider: 'codex', availability: 'unknown', capabilities: ['submit'], observedAt: now, source: 'runtime-probe',

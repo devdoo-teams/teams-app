@@ -37,7 +37,7 @@ export type CoreOrchestrationRouteService = Pick<CoreOrchestrationService,
   | 'provideInput'
   | 'listProviderFacts'
   | 'listCodexModelCatalog'
->;
+> & Partial<Pick<CoreOrchestrationService, 'listPending'>>;
 
 export type CoreOrchestrationRouteOptions = Readonly<{
   service: CoreOrchestrationRouteService;
@@ -93,7 +93,7 @@ export function createCoreOrchestrationRouter(options: CoreOrchestrationRouteOpt
   router.get('/jobs', asyncHandler(async (request, response) => {
     const scope = scopeFor(options, request, response);
     const jobs = options.service.list(scope, listRequest(request)).map(job => decorateJob(job, scope));
-    const pending = options.service.listPending(scope);
+    const pending = options.service.listPending?.(scope);
     const modelCatalog = await options.service.listCodexModelCatalog();
     response.set('Cache-Control', 'no-store').status(200).json({
       jobs,
