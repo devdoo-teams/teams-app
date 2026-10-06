@@ -11,6 +11,8 @@ import type { VisibleJobConversation } from '../shared/job-conversation.js';
 import { loadJobConversation } from './job-conversation.js';
 
 export type CoreOrchestrationJobList = {
+  pendingJobs?: CoreOrchestrationJob[] | null;
+  pendingHasMore?: boolean;
   jobs: CoreOrchestrationJob[];
   providers: CoreProviderFact[];
   modelCatalog?: CoreCodexModelCatalog;

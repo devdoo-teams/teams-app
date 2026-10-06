@@ -10,6 +10,7 @@ export function JobConversationView({ conversation }: { conversation: VisibleJob
     <ol className="work-item-list">
       {conversation.turns.map(turn => <li className="work-item-card" key={turn.jobId}>
         <p className="work-item-meta">{CORE_JOB_STATUS_LABELS[turn.status]} · {turn.createdAt} · {turn.jobId}</p>
+        {turn.pendingOperation ? <p>승인 대상: {turn.pendingOperation.jobId} · revision: {turn.pendingOperation.revision}</p> : null}
         <h5>내 요청</h5>
         <p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{turn.request}</p>
         {turn.response ? <><h5>에이전트 응답</h5><p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{turn.response}</p></> : null}

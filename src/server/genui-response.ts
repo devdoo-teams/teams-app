@@ -1,4 +1,5 @@
 import { withTeamsJobDeepLink } from './teams-tab-link.js';
+import { projectPendingOperation } from './personal-approval-projection.js';
 import { CORE_JOB_STATUS_LABELS } from '../shared/core-orchestration.js';
 import { randomUUID } from 'node:crypto';
 
@@ -231,6 +232,7 @@ export function createCoreOrchestrationJobActivity(
   job: CoreOrchestrationJob,
   options?: CoreOrchestrationCardOptions,
 ): CoreOrchestrationTeamsActivity {
+  const pendingOperation = projectPendingOperation(job);
   const actions = orchestrationActions(job, { ...options,
     openTabUrl: withTeamsJobDeepLink(options?.openTabUrl, job.id) ?? options?.openTabUrl });
   const detail = job.result ?? job.error ?? job.progress.at(-1) ?? '세부 진행 정보가 없습니다.';
@@ -245,6 +247,7 @@ export function createCoreOrchestrationJobActivity(
         type: 'FactSet',
         facts: [
           { title: '작업 ID', value: identifierText(job.id, 200, 'unknown-job') },
+          ...(pendingOperation ? [{ title: '승인 대상 revision', value: pendingOperation.revision }] : []),
           { title: '상태', value: identifierText(job.status, 40, 'unknown') },
           { title: '상태 표시', value: CORE_JOB_STATUS_LABELS[job.status] },
           { title: '제출 실행경계', value: identifierText(job.executionEnvironment, 40, '확인되지 않음') },
@@ -285,6 +288,7 @@ export function createCoreOrchestrationConfirmationActivity(
   options?: CoreOrchestrationCardOptions,
 ): CoreOrchestrationTeamsActivity {
   const isApproval = action === 'approve';
+  const pendingOperation = projectPendingOperation(job);
   return orchestrationActivity({
     type: 'AdaptiveCard',
     $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
@@ -299,7 +303,8 @@ export function createCoreOrchestrationConfirmationActivity(
           : '이 작업에 취소 요청을 보낼까요?',
         wrap: true,
       },
-      { type: 'FactSet', facts: [{ title: '작업 ID', value: identifierText(job.id, 200, 'unknown-job') }] },
+      { type: 'FactSet', facts: [{ title: '작업 ID', value: identifierText(job.id, 200, 'unknown-job') },
+        ...(pendingOperation ? [{ title: '승인 대상 revision', value: pendingOperation.revision }] : [])] },
     ],
     actions: withTabAction([
       orchestrationAction(

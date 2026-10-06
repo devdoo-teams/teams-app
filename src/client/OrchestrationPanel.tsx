@@ -205,6 +205,8 @@ export function createOrchestrationPollingController<TTimer = ReturnType<typeof 
 export type OrchestrationPanelViewProps = {
   phase: PanelPhase;
   jobs: readonly CoreOrchestrationJob[];
+  pendingJobs?: readonly CoreOrchestrationJob[] | null;
+  pendingHasMore?: boolean;
   providers: readonly CoreProviderFact[];
   selectedJob: CoreOrchestrationJob | null;
   conversation?: VisibleJobConversation;
@@ -417,6 +419,18 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
         <p aria-live="polite" className="empty" role="status">아직 실행한 작업이 없습니다.</p>
       ) : null}
 
+      {props.phase === 'ready' ? <section aria-label="개인 승인 대기 목록">
+        <h3>승인 대기</h3>
+        <p>승인 대상 확인 후 기존 작업 상세에서 승인하거나 취소하세요. 확인 카드가 만료돼도 작업은 자동 승인되지 않습니다.</p>
+        {props.pendingHasMore ? <p role="status">승인 대기 작업 중 최근 100개를 표시합니다. 나머지는 작업 ID로 조회하세요.</p> : null}
+        {props.pendingJobs == null ? <p role="status">전체 승인함 조회가 확인되지 않았습니다. 아래는 최근 작업에 포함된 승인 대기 항목입니다.</p> : null}
+        {(props.pendingJobs ?? props.jobs).some(job => job.pendingOperation) ? (props.pendingJobs ?? props.jobs).filter(job => job.pendingOperation).map(job => (
+          <article key={job.id} className="work-item-card">
+            <button type="button" onClick={() => void props.onSelectTask(job.id)}>{job.prompt}</button>
+            <p>승인 대상: {job.pendingOperation!.jobId} · revision: {job.pendingOperation!.revision}</p>
+          </article>
+        )) : <p role="status">{props.pendingJobs == null ? '최근 작업에 승인 대기 항목이 없습니다.' : '승인 대기 작업이 없습니다.'}</p>}
+      </section> : null}
       {props.phase === 'ready' && props.jobs.length > 0 ? (
         <div aria-label="오케스트레이션 작업 목록" className="work-item-list" role="list">
           {props.jobs.map((job) => (
@@ -436,6 +450,7 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
       {props.selectedJob ? (
         <article aria-labelledby="orchestration-detail-heading" className="work-item-detail" id="orchestration-job-detail" tabIndex={-1}>
           <h3 id="orchestration-detail-heading">작업 상세</h3>
+          {props.selectedJob.pendingOperation ? <p>승인 대상: {props.selectedJob.pendingOperation.jobId} · revision: {props.selectedJob.pendingOperation.revision}</p> : null}
           <p><strong>상태:</strong> {statusLabels[props.selectedJob.status]}</p>
           <p><strong>작업 ID:</strong> {props.selectedJob.id}</p>
           {props.selectedJob.notificationDelivery ? <p aria-label="개인 채팅 알림 상태">
@@ -602,6 +617,8 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     return () => { active = false; };
   }, []);
   const [jobs, setJobs] = useState<CoreOrchestrationJob[]>([]);
+  const [pendingJobs, setPendingJobs] = useState<CoreOrchestrationJob[] | null | undefined>(undefined);
+  const [pendingHasMore, setPendingHasMore] = useState(false);
   const [providers, setProviders] = useState<CoreProviderFact[]>([]);
   const [modelCatalog, setModelCatalog] = useState<CoreCodexModelCatalog | undefined>();
   const [selectedJob, setSelectedJob] = useState<CoreOrchestrationJob | null>(null);
@@ -651,12 +668,15 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     }
     try {
       const result = await client.listJobs(controller.signal);
+      const selected = selectedJob ? await client.getJob(selectedJob.id, controller.signal) : undefined;
       const requestedJob = requestedJobId ? await loadRequestedJob(requestedJobId, client, controller.signal) : undefined;
       if (controller.signal.aborted) return;
       setJobs([...includeRequestedJob(result.jobs, requestedJob)]);
+      setPendingJobs(result.pendingJobs);
+      setPendingHasMore(result.pendingHasMore === true);
       setProviders(result.providers);
       setModelCatalog(result.modelCatalog);
-      setSelectedJob((current) => current ? result.jobs.find((job) => job.id === current.id) ?? (requestedJob?.id === current.id ? requestedJob : current) : requestedJob ?? null);
+      setSelectedJob((current) => current ? selected?.id === current.id ? selected : result.jobs.find((job) => job.id === current.id) ?? (requestedJob?.id === current.id ? requestedJob : current) : requestedJob ?? null);
       setProviderId((current) => {
         const retained = result.providers.find((provider) => provider.provider === current);
         if (supports(retained, 'submit')) return current;
@@ -673,7 +693,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
         setPhase('error');
       }
     }
-  }, [client, requestedJobId]);
+  }, [client, requestedJobId, selectedJob?.id]);
 
   useEffect(() => {
     void load();
@@ -818,6 +838,8 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     error={error}
     inputValue={inputValue}
     jobs={jobs}
+    pendingJobs={pendingJobs}
+    pendingHasMore={pendingHasMore}
     lastUpdatedAt={lastUpdatedAt}
     mobile={isMobile}
     mode={mode}

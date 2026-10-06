@@ -1,6 +1,7 @@
-import type { CoreOrchestrationJobStatus, CoreAgentToolUsage } from './core-orchestration.js';
+import type { CoreOrchestrationJobStatus, CoreAgentToolUsage, CorePendingOperation } from './core-orchestration.js';
 
 export type VisibleJobTurn = Readonly<{
+  pendingOperation?: CorePendingOperation;
   jobId: string;
   request: string;
   response?: string;

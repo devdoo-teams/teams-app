@@ -306,6 +306,12 @@ export class AgentJobStore {
       .map(cloneAgentJob);
   }
 
+  listPendingForPrincipal(principal: Pick<AgentJobScope, 'tenantId' | 'requesterId'>, limit = 101): AgentJob[] {
+    return this.jobs.filter(job => matchesPrincipal(job, principal)
+      && job.status === 'awaiting_approval' && job.mode === 'workspace-write')
+      .slice(0, limit).map(cloneAgentJob);
+  }
+
   list(scope: AgentJobScope, limit = 10): AgentJob[] {
     return this.jobs
       .filter((job) => matchesScope(job, scope))

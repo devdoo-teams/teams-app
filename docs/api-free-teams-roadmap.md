@@ -22,6 +22,10 @@
 
 작은 단위의 순서는 대화 상세 → 개인 채팅 알림 → 진행 카드/outbox → 승인함 → 이어가기/취소 → provider/실행 영수증 → Windows 및 receiver/worker 분리 → 파일/PR → 일정 workflow → RAG/MCP/기억 → child jobs/사용자 인계/명시적 공유 → 컴퓨터 작업이다. 새 외부 연결·권한·비용·대상이 필요한 단계는 현재 승인 범위에서 설계와 합성 시험까지 진행한다.
 
+개인 승인함은 기존 owner-scoped 작업 응답의 `pendingOperation`을 읽는다. `awaiting_approval`인 `workspace-write` 작업만 표시하며, 상세·대화 이력·작업/확인 카드가 동일 작업 ID와 서버 계산 revision을 표시한다. revision은 순서가 고정된 schema1 배열 `[schema, jobId, prompt, mode, provider|null, executionEnvironment|null, model|null, reasoningEffort|null, catalogRevision|null, parentJobId|null, threadId|null]`의 JSON UTF-8 SHA-256이다. 진행 로그·전송 상태·시간은 포함하지 않는다. 이는 읽기 전용 비교 식별자이며 실행 권한이나 인자 결합 승인 토큰이 아니다. 기존 확인 grant는 action/job/correlation/tenant/requester/conversation을 결합하며 별도 인자 revision을 결합하지 않는다. 기존 grant 만료·소비·권한 검사는 그대로 유지한다. grant 만료는 durable 작업 만료를 뜻하지 않고, 다른 표면이 승인/취소하면 최신 작업 응답에서 pending 항목이 사라진다. 새 승인 경로나 자동 실행을 추가하지 않는다. 이 slice의 로컬 합성 결과는 보존된109 릴리스 검증과 분리하며 공개104/설치본/카탈로그 및 실제 Teams UI는 변경·검증하지 않는다.
+
+승인함은 최근 일반 작업 20개에서 필터링하지 않고 owner 범위의 전체 저장 작업에서 승인 대기 상태를 먼저 필터링한다. 응답은 최대100개이며 더 있으면 생략 안내를 표시한다. 기존 응답에 승인함 조회가 없으면 전체 빈 상태로 주장하지 않고 최근 작업 기준임을 표시한다. 선택 상세는 기존 owner-scoped get API로 polling마다 갱신해 다른 표면에서 처리된 상태를 반영한다.
+
 첫 대화 상세는 기존 owner-scoped API의 선택 작업과 최대 20개 부모 작업에 저장된 요청·최종 응답·진행·안전한 도구 이름을 보여준다. 내부 reasoning, raw CLI 세션, 저장되지 않은 도구 결과를 복원한 것처럼 표시하지 않는다. 이전 작업이 없거나 체인이 불일치하면 불완전 상태를 표시한다. 이후 저장·cursor·전체 세션은 별도 수락 조건으로 확장한다. [OpenClaw 고정 소스](https://github.com/openclaw/openclaw/tree/2e59936b6747f10c44edb76decd662c2d27305be), [LibreChat 고정 소스](https://github.com/LibreChat-AI/LibreChat/tree/e1dfc10449ff713faffacd60273fddcfe2c0a698)는 비교 근거이며 코드 복사나 실행 검증을 뜻하지 않는다.
 
 사용자의 `업무허브탭의 devtunnel 은 시간제한을 두지마` 요청에 따라 기존 승인된 서버·터널의 로컬 자동 종료 시간은 제거한다. `scripts/local_hub_lifetime.py`의 `None` 정책은 자동 종료 기한이 없으며, 명시적 정지 또는 서버 종료는 여전히 종료 조건이다. 이 정책 자체는 실행 권한을 부여하지 않는다. tunnel 서비스 만료·인증·접근 범위와 OS 설정은 변경하지 않으며, 현재 프로세스 생존은 24/7 가용성 보장이 아니다.

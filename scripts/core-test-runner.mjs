@@ -62,6 +62,7 @@ const tsTests = [
   'scripts/personal-notification-test.ts',
   'scripts/personal-notification-card-test.ts',
   'scripts/core-job-card-pages-test.ts',
+  'scripts/personal-approval-projection-test.ts',
   'scripts/a2a-outbound-readback-test.ts',
   'scripts/job-detail-selection-test.ts',
   'scripts/job-conversation-view-test.tsx',

@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { projectPendingOperation } from './personal-approval-projection.js';
 
 import type { AgentJob, AgentJobMode, AgentJobScope } from './agent-job-store.js';
 import {
@@ -96,6 +97,7 @@ export interface CoreAgentServicePort {
 }
 
 export interface CoreAgentJobStorePort {
+  listPendingForPrincipal?(principal: Pick<AgentJobScope, 'tenantId' | 'requesterId'>, limit?: number): AgentJob[];
   resolveIdempotentSubmission(
     scope: AgentJobScope,
     idempotencyKey: string,
@@ -218,6 +220,15 @@ export class CoreOrchestrationService {
     return jobs
       .filter((job) => Boolean(storedScopeForPrincipal(job, scope)))
       .map(toCoreJob);
+  }
+
+  listPending(scope: ServerDerivedCoreScope): { jobs: CoreOrchestrationJob[]; hasMore: boolean } | undefined {
+    assertServerScope(scope);
+    if (scope[CONVERSATION_ONLY] || !this.options.jobStore.listPendingForPrincipal) return undefined;
+    const jobs = this.options.jobStore.listPendingForPrincipal(scope, 101)
+      .filter(job => Boolean(storedScopeForPrincipal(job, scope))).map(toCoreJob)
+      .filter(job => Boolean(job.pendingOperation));
+    return { jobs: jobs.slice(0, 100), hasMore: jobs.length > 100 };
   }
 
   async cancel(scope: ServerDerivedCoreScope, request: CoreJobRequest): Promise<CoreOrchestrationJob | undefined> {
@@ -556,7 +567,9 @@ function assertNoClientScope(request: object): void {
 }
 
 function toCoreJob(job: AgentJob): CoreOrchestrationJob {
+  const pendingOperation = projectPendingOperation(job);
   return {
+    ...(pendingOperation ? { pendingOperation } : {}),
     id: job.id,
     ...(job.executionEnvironment ? { executionEnvironment: job.executionEnvironment } : {}),
     ...(job.idempotencyKey ? { idempotencyKey: job.idempotencyKey } : {}),

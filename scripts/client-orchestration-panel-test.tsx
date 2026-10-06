@@ -332,11 +332,13 @@ const empty = renderToStaticMarkup(<OrchestrationPanelView
   {...baseProps}
   phase="ready"
   jobs={[]}
+  pendingJobs={[]}
   selectedJob={null}
   error=""
   mobile={false}
 />);
 assert.match(empty, /아직 실행한 작업이 없습니다/);
+assert.match(empty, /승인 대기 작업이 없습니다/);
 assert.match(empty, /작업 내용/);
 assert.match(empty, /실행 제공자/);
 assert.match(empty, /Codex 모델/);
@@ -346,12 +348,15 @@ assert.match(empty, /자동 새로고침 3초/, 'the hub tells the user that pro
 const approval = renderToStaticMarkup(<OrchestrationPanelView
   {...baseProps}
   phase="ready"
-  jobs={[task('awaiting_approval', { mode: 'workspace-write' })]}
-  selectedJob={task('awaiting_approval', { mode: 'workspace-write' })}
+  jobs={[task('awaiting_approval', { mode: 'workspace-write', pendingOperation: { kind: 'job-approval', jobId: 'task-1', revision: 'b'.repeat(64) } })]}
+  pendingJobs={[task('awaiting_approval', { mode: 'workspace-write', pendingOperation: { kind: 'job-approval', jobId: 'task-1', revision: 'b'.repeat(64) } })]}
+  selectedJob={task('awaiting_approval', { mode: 'workspace-write', pendingOperation: { kind: 'job-approval', jobId: 'task-1', revision: 'b'.repeat(64) } })}
   error=""
   mobile={false}
 />);
 assert.match(approval, /승인 필요/);
+assert.match(approval, /개인 승인 대기 목록/);
+assert.equal(approval.split('b'.repeat(64)).length - 1, 2, 'inbox and selected detail show the same server revision');
 assert.match(approval, />승인<\/button>/);
 assert.match(approval, /계속하려면 승인이 필요합니다/);
 

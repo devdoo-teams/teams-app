@@ -12,6 +12,7 @@ function visibleText(value: string): string {
 function visibleTurn(job: CoreOrchestrationJob): VisibleJobTurn {
   const text = [job.prompt, job.result ?? '', job.error ?? '', ...job.progress];
   return {
+    ...(job.pendingOperation ? { pendingOperation: { ...job.pendingOperation } } : {}),
     jobId: job.id, request: visibleText(job.prompt), status: job.status,
     ...(job.result ? { response: visibleText(job.result) } : {}),
     ...(job.error ? { error: visibleText(job.error) } : {}),

@@ -51,7 +51,10 @@ export type CoreAgentToolUsage = Readonly<{
   observedAt: string;
 }>;
 
+/** Display identity only. Expiry/consumption belong to existing confirmation grants. */
+export type CorePendingOperation = Readonly<{ kind: 'job-approval'; jobId: string; revision: string }>;
 export type CoreOrchestrationJob = Readonly<{
+  pendingOperation?: CorePendingOperation;
   id: string;
   /** Server-owned execution boundary; legacy jobs have no observed environment. */
   executionEnvironment?: CoreExecutionEnvironment;
