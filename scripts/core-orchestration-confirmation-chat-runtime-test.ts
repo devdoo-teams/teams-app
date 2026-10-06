@@ -11,6 +11,7 @@ const tenantId = 'mp269-tenant';
 const requesterId = 'mp269-user';
 const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mp269-confirmation-chat-'));
 await fs.chmod(runtimeRoot, 0o700);
+await fs.mkdir(path.join(runtimeRoot, 'workspace'), { mode: 0o700 });
 const copilotFixture = path.join(runtimeRoot, 'copilot-fixture');
 await createMeasuredCopilotFixture(copilotFixture);
 let child: ChildProcess | undefined;
@@ -128,11 +129,15 @@ try {
   }));
   assertCard(missingApproveToken.body, '유효하지 않은');
   await assertStatus(baseUrl, approveJob, 'awaiting_approval', 'a forged approve payload must not mutate');
+  const executionsBeforeApproval = await fixtureExecutionCount();
   assertCard((await post(baseUrl, activity('', 'approve-confirmed', approvePayload))).body, approveJob);
   await assertNotStatus(baseUrl, approveJob, 'awaiting_approval', 'confirmed approve must mutate');
+  await assertCompletedFixtureJob(approveJob);
+  assert.equal(await fixtureExecutionCount(), executionsBeforeApproval + 1, 'approval executes the fixture exactly once');
   const approveReplay = await post(baseUrl, activity('', 'approve-confirmed-replay', approvePayload));
   assertCard(approveReplay.body, '현재 상태\\((?:queued|running|completed)\\)');
   await assertNotStatus(baseUrl, approveJob, 'awaiting_approval', 'replayed approve must not restart the mutation');
+  assert.equal(await fixtureExecutionCount(), executionsBeforeApproval + 1, 'terminal approval replay must not execute the fixture again');
 
   const malformed = await post(baseUrl, activity('', 'malformed-confirm', {
     schemaVersion: '1', action: 'orchestration.confirm-cancel', jobId: approveJob, tenantId: 'attacker',
@@ -152,6 +157,25 @@ async function createAwaitingJob(baseUrl: string, prompt: string): Promise<strin
     ?.find((fact: any) => fact.title === '작업 ID')?.value;
   assert.equal(typeof id, 'string');
   return id;
+}
+
+async function fixtureExecutionCount(): Promise<number> {
+  const text = await fs.readFile(`${copilotFixture}.executions`, 'utf8');
+  return text.trim().split('\n').filter(Boolean).length;
+}
+
+async function assertCompletedFixtureJob(jobId: string): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    const jobs = JSON.parse(await fs.readFile(path.join(runtimeRoot, 'agent-jobs.json'), 'utf8'));
+    const job = jobs.find((candidate: { id: string }) => candidate.id === jobId);
+    if (job && ['completed', 'failed', 'cancelled'].includes(job.status)) {
+      assert.equal(job.status, 'completed', `fixture must finish successfully before replay: ${job.error ?? job.status}`);
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail('fixture did not reach a terminal state before replay');
 }
 
 async function assertMeasuredProvider(baseUrl: string): Promise<void> {
@@ -254,6 +278,7 @@ if [ "$1" = "--help" ]; then
   printf '%s\\n' 'GitHub Copilot CLI help'
   exit 0
 fi
+printf '%s\\n' execution >> ${JSON.stringify(`${copilotFixture}.executions`)}
 printf '%s\\n' \\
   '{"type":"session.start","data":{"sessionId":"019fd700-51cd-7862-a4ef-74ccae0f2b4e"}}' \\
   '{"type":"assistant.turn_start","data":{"turnId":"turn-1"}}' \\
