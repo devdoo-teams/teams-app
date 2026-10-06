@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { A2AStore } from '../src/server/a2a-store.js';
-import { TeamsA2AOutboundStore } from '../src/server/teams-a2a-outbound-store.js';
+import { TeamsA2AOutboundStore, readTeamsA2ACompletionIntent, readTeamsA2AIntent } from '../src/server/teams-a2a-outbound-store.js';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 
 const root = process.cwd();
@@ -180,17 +180,13 @@ try {
   );
   assert.equal(recovered?.status, 'connector-accepted');
   assert.equal(recovered?.attempts, 1);
-  const persisted = new TeamsA2AOutboundStore(a2aOutboundStorePath);
-  await persisted.initialize();
-  const repairedIntent = await persisted.createOrGetCompletionIntent({
-    parentTaskId: missingIntentParent.id,
-    scope: repairedScope,
-    payloadSha256: completionIntentFingerprint(missingIntentParent.id, repairedScope),
-  });
-  assert.equal(repairedIntent.created, false, 'startup recovery must persist the repaired intent before delivery');
+  // A read-back must not publish a stale snapshot while the server finishes its lease.
+  const repairedIntent = await readTeamsA2ACompletionIntent(a2aOutboundStorePath, missingIntentParent.id, repairedScope);
+  assert.ok(repairedIntent, 'startup recovery must persist the repaired intent before delivery');
+  assert.equal(repairedIntent.payloadSha256, completionIntentFingerprint(missingIntentParent.id, repairedScope));
   const settledRepairedIntent = await waitForTerminalIntent(
     a2aOutboundStorePath,
-    repairedIntent.intent.id,
+    repairedIntent.id,
     repairedScope,
     4_000,
   );
@@ -231,9 +227,7 @@ async function waitForTerminalIntent(
   const deadline = Date.now() + timeoutMs;
   let latestStatus = 'missing';
   while (Date.now() < deadline) {
-    const store = new TeamsA2AOutboundStore(filePath);
-    await store.initialize();
-    const intent = store.getIntent(intentId, intentScope);
+    const intent = await readTeamsA2AIntent(filePath, intentId, intentScope);
     latestStatus = intent?.status ?? 'missing';
     if (intent && intent.status !== 'queued' && intent.status !== 'dispatching') return intent;
     await delay(25);

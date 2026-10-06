@@ -52,6 +52,25 @@ export class TeamsA2AOutboundConflictError extends Error {
   }
 }
 
+/** Cross-process inspection only: no creation, lease repair, or snapshot publication. */
+export async function readTeamsA2ACompletionIntent(
+  filePath: string, parentTaskIdValue: string, scopeValue: A2AScope,
+): Promise<TeamsA2AOutboundIntent | undefined> {
+  const parentTaskId = safeId(parentTaskIdValue, 'parentTaskId');
+  const scope = safeScope(scopeValue);
+  return readTeamsA2AIntent(filePath, intentId(scope, parentTaskId), scope);
+}
+
+export async function readTeamsA2AIntent(
+  filePath: string, idValue: string, scopeValue: A2AScope,
+): Promise<TeamsA2AOutboundIntent | undefined> {
+  const id = safeId(idValue, 'intentId');
+  const scope = safeScope(scopeValue);
+  const snapshot = loadState(JSON.parse(await readAtomicJsonStore(filePath)) as unknown);
+  const intent = snapshot.intents[id];
+  return intent && sameScope(intent.scope, scope) ? cloneIntent(intent) : undefined;
+}
+
 export class TeamsA2AOutboundStore {
   private state: TeamsA2AOutboundState = emptyState();
   private initialized = false;
