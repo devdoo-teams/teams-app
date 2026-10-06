@@ -119,10 +119,10 @@ export class CoreJobCardPages {
     const labels: Record<Page, string> = { summary: '요약', progress: '진행', conversation: '대화', result: '결과' };
     const block = (value: string) => ({ type: 'TextBlock', text: text(value), wrap: true });
     let body: Record<string, unknown>[];
-    if (record.page === 'summary') body = [block(text(job.prompt, 400)), { type: 'FactSet', facts: [
-      { title: '작업', value: job.id }, { title: '상태', value: job.status },
-      { title: '승인', value: job.status === 'awaiting_approval' ? '승인 필요' : '추가 승인 요청 없음' },
-    ] }, block(job.progress.at(-1) ?? '진행 기록이 없습니다.')];
+    if (record.page === 'summary') body = [block(text(job.prompt, 400)),
+      ...base.attachments[0].content.body.filter(element => element.type === 'FactSet'),
+      { type: 'FactSet', facts: [{ title: '승인', value: job.status === 'awaiting_approval' ? '승인 필요' : '추가 승인 요청 없음' }] },
+      block(job.progress.at(-1) ?? '진행 기록이 없습니다.')];
     else if (record.page === 'progress') body = job.progress.slice(-5).map(block);
     else if (record.page === 'result') body = [block(job.result ?? job.error ?? '아직 최종 결과가 없습니다.')];
     else {
