@@ -36,7 +36,7 @@ const expected = [
 for (const [label, value] of expected) {
   assert.equal(rendered.facts.find((fact: any) => fact.title === label)?.value, value, `actual card fact ${label}`);
   for (const html of [rendered.tab, rendered.conversation]) {
-    assert.ok(html.includes(label) && html.includes(value), `same job shows ${label}=${value} on both React surfaces`);
+    assert.ok(html.includes(`<strong>${label}:</strong> ${value}`), `same job associates ${label}=${value} on both React surfaces`);
   }
 }
 const missing = { ...job, executionReceipt: undefined, tokenUsage: undefined };

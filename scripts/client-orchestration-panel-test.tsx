@@ -443,7 +443,7 @@ assert.match(promptAndTools, /MCP · jira\/search_issues/);
 assert.match(promptAndTools, /gpt-5.6-sol/);
 assert.match(promptAndTools, /high/);
 assert.match(promptAndTools, /입력 1,200/);
-assert.match(promptAndTools, /계정 잔여량: 제공되지 않음/);
+assert.match(promptAndTools.replace(/<[^>]+>/g, ''), /계정 잔여량: 제공되지 않음/, 'quota remains unavailable regardless of label markup');
 
 const copilotDetail = renderToStaticMarkup(<OrchestrationPanelView
   {...baseProps}
