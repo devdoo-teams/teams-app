@@ -16,6 +16,16 @@
 
 ## 사용자 표면
 
+### 2026-10-07 적용 순서와 검증 경계
+
+사용자 제공 Library 보고서 `libfile_7cfcb5c652c88191be09e432c6b3c2c4`의 v0 파일을 실제 로컬로 materialize하고 읽었다. 30개 후보의 고정 소스·라이선스 근거는 기술 비교 자료이며, upstream 또는 우리 앱의 실행 통과 증거가 아니다. 기존 durable job·승인·owner 격리·provider 선택·실행 영수증을 다시 구현하지 않는다.
+
+작은 단위의 순서는 대화 상세 → 개인 채팅 알림 → 진행 카드/outbox → 승인함 → 이어가기/취소 → provider/실행 영수증 → Windows 및 receiver/worker 분리 → 파일/PR → 일정 workflow → RAG/MCP/기억 → child jobs/사용자 인계/명시적 공유 → 컴퓨터 작업이다. 새 외부 연결·권한·비용·대상이 필요한 단계는 현재 승인 범위에서 설계와 합성 시험까지 진행한다.
+
+첫 대화 상세는 기존 owner-scoped API의 선택 작업과 최대 20개 부모 작업에 저장된 요청·최종 응답·진행·안전한 도구 이름을 보여준다. 내부 reasoning, raw CLI 세션, 저장되지 않은 도구 결과를 복원한 것처럼 표시하지 않는다. 이전 작업이 없거나 체인이 불일치하면 불완전 상태를 표시한다. 이후 저장·cursor·전체 세션은 별도 수락 조건으로 확장한다. [OpenClaw 고정 소스](https://github.com/openclaw/openclaw/tree/2e59936b6747f10c44edb76decd662c2d27305be), [LibreChat 고정 소스](https://github.com/LibreChat-AI/LibreChat/tree/e1dfc10449ff713faffacd60273fddcfe2c0a698)는 비교 근거이며 코드 복사나 실행 검증을 뜻하지 않는다.
+
+사용자의 `업무허브탭의 devtunnel 은 시간제한을 두지마` 요청에 따라 기존 승인된 서버·터널의 로컬 자동 종료 시간은 제거한다. `scripts/local_hub_lifetime.py`의 `None` 정책은 자동 종료 기한이 없으며, 명시적 정지 또는 서버 종료는 여전히 종료 조건이다. 이 정책 자체는 실행 권한을 부여하지 않는다. tunnel 서비스 만료·인증·접근 범위와 OS 설정은 변경하지 않으며, 현재 프로세스 생존은 24/7 가용성 보장이 아니다.
+
 ### Teams Bot 채팅
 
 - `help`와 `agent ...` namespace만 기본 명령으로 노출한다.

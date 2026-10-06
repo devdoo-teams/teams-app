@@ -42,6 +42,10 @@ jobs:
           npm run test:image-publish-workflow-contract
           node scripts/release-observation-test.mjs
           node scripts/runtime-replay-startup-test.mjs
+          python3 scripts/local-hub-lifetime-test.py
+          npx --no-install tsx scripts/job-conversation-client-test.ts
+          npx --no-install tsx scripts/job-detail-selection-test.ts
+          npx --no-install tsx scripts/job-conversation-view-test.tsx
       - name: Build Core
         run: npm run build:core
       - name: Run Core tests

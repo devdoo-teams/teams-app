@@ -7,6 +7,8 @@ import type {
   CoreSubmitRequest,
   CoreSubmitResult,
 } from '../shared/core-orchestration.js';
+import type { VisibleJobConversation } from '../shared/job-conversation.js';
+import { loadJobConversation } from './job-conversation.js';
 
 export type CoreOrchestrationJobList = {
   jobs: CoreOrchestrationJob[];
@@ -45,6 +47,7 @@ export class CoreOrchestrationClientError extends Error {
 export type CoreOrchestrationClient = {
   listJobs: (signal?: AbortSignal) => Promise<CoreOrchestrationJobList>;
   getJob: (jobId: string, signal?: AbortSignal) => Promise<CoreOrchestrationJob>;
+  getJobConversation?: (jobId: string, signal?: AbortSignal) => Promise<{ job: CoreOrchestrationJob; conversation: VisibleJobConversation }>;
   continueJob: (jobId: string, prompt: string, signal?: AbortSignal) => Promise<CoreOrchestrationJobResult>;
   submitJob: (input: CoreSubmitRequest, signal?: AbortSignal) => Promise<CoreSubmitResult>;
   cancelJob: (jobId: string, signal?: AbortSignal) => Promise<CoreOrchestrationJobResult>;
@@ -115,14 +118,16 @@ function jobPath(jobId: string, action = ''): string {
 export function createCoreOrchestrationClient(
   request: ApiOperationRequest = apiFetch,
 ): CoreOrchestrationClient {
+  const getJob = async (jobId: string, signal?: AbortSignal) => {
+    const response = await expectResponse<CoreOrchestrationJobResult>(request, jobPath(jobId), { signal });
+    return response.job;
+  };
   return {
     listJobs(signal) {
       return expectResponse<CoreOrchestrationJobList>(request, `${CORE_ORCHESTRATION_API_BASE_PATH}/jobs`, { signal });
     },
-    async getJob(jobId, signal) {
-      const response = await expectResponse<CoreOrchestrationJobResult>(request, jobPath(jobId), { signal });
-      return response.job;
-    },
+    getJob,
+    getJobConversation(jobId, signal) { return loadJobConversation(jobId, getJob, signal); },
     continueJob(jobId, prompt, signal) {
       return expectResponse<CoreOrchestrationJobResult>(
         request,

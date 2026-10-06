@@ -1,3 +1,8 @@
+import type { VisibleJobConversation } from '../shared/job-conversation.js';
+import { JobConversationView } from './JobConversationView.js';
+import { loadJobConversation, refreshVisibleJobConversation } from './job-conversation.js';
+import { createLatestDetailRequestController } from './latest-detail-request.js';
+export { createLatestDetailRequestController } from './latest-detail-request.js';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 
 import {
@@ -204,6 +209,7 @@ export type OrchestrationPanelViewProps = {
   jobs: readonly CoreOrchestrationJob[];
   providers: readonly CoreProviderFact[];
   selectedJob: CoreOrchestrationJob | null;
+  conversation?: VisibleJobConversation;
   prompt: string;
   providerId: string;
   mode: CoreOrchestrationMode;
@@ -423,12 +429,12 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
       ) : null}
 
       {props.selectedJob ? (
-        <article aria-labelledby="orchestration-detail-heading" className="work-item-detail">
+        <article aria-labelledby="orchestration-detail-heading" className="work-item-detail" id="orchestration-job-detail" tabIndex={-1}>
           <h3 id="orchestration-detail-heading">작업 상세</h3>
           <p><strong>상태:</strong> {statusLabels[props.selectedJob.status]}</p>
           <p><strong>작업 ID:</strong> {props.selectedJob.id}</p>
           <p><strong>작업 마지막 갱신:</strong> {props.selectedJob.updatedAt ?? '제공되지 않음'}</p>
-          <p><strong>프롬프트:</strong> {props.selectedJob.prompt}</p>
+          {!props.conversation ? <p><strong>프롬프트:</strong> {props.selectedJob.prompt}</p> : null}
           {props.selectedJob.provider === 'codex' ? (
             <>
               <p><strong>모델:</strong> {props.selectedJob.model ?? 'CLI 기본값'}</p>
@@ -457,13 +463,14 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
               </ul>
             ) : <span> 없음 (스킬·플러그인은 제공자가 식별자를 보고한 경우에만 표시)</span>}
           </div>
-          {props.selectedJob.progress.length > 0 ? (
+          {props.conversation ? <JobConversationView conversation={props.conversation} /> : null}
+          {!props.conversation && props.selectedJob.progress.length > 0 ? (
             <ul aria-label="작업 진행 기록">
               {props.selectedJob.progress.map((entry, index) => <li key={`${index}-${entry}`}>{entry}</li>)}
             </ul>
           ) : null}
-          {props.selectedJob.result ? <p>{props.selectedJob.result}</p> : null}
-          {props.selectedJob.error ? <p className="error" role="alert">{props.selectedJob.error}</p> : null}
+          {!props.conversation && props.selectedJob.result ? <p>{props.selectedJob.result}</p> : null}
+          {!props.conversation && props.selectedJob.error ? <p className="error" role="alert">{props.selectedJob.error}</p> : null}
 
           {props.selectedJob.status === 'awaiting_approval' ? (
             <div>
@@ -573,6 +580,18 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
   const [providers, setProviders] = useState<CoreProviderFact[]>([]);
   const [modelCatalog, setModelCatalog] = useState<CoreCodexModelCatalog | undefined>();
   const [selectedJob, setSelectedJob] = useState<CoreOrchestrationJob | null>(null);
+  const [conversation, setConversation] = useState<VisibleJobConversation | undefined>();
+  const detailRequests = useRef(createLatestDetailRequestController());
+  useEffect(() => () => detailRequests.current.dispose(), []);
+  useEffect(() => {
+    if (selectedJob) setConversation(current => current ? refreshVisibleJobConversation(current, selectedJob) : current);
+  }, [selectedJob]);
+  useEffect(() => {
+    if (!conversation) return;
+    const detail = document.getElementById('orchestration-job-detail');
+    detail?.focus({ preventScroll: true });
+    detail?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }, [conversation?.selectedJobId]);
   const [providerId, setProviderId] = useState('');
   const [modelId, setModelId] = useState('');
   const [reasoningEffort, setReasoningEffort] = useState<CoreCodexReasoningEffort | ''>('');
@@ -726,21 +745,20 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
 
   const selectJob = useCallback(async (jobId: string) => {
     const slot = `detail:${jobId}`;
-    if (busy.isBusy(slot)) return;
     setBusyAction(slot);
     setError('');
-    try {
-      const detail = await busy.run(slot, () => client.getJob(jobId));
-      if (detail) {
-        updateJob(detail);
+    setConversation(undefined);
+    await detailRequests.current.request(
+      signal => client.getJobConversation?.(jobId, signal) ?? loadJobConversation(jobId, client.getJob, signal),
+      { success: detail => {
+        updateJob(detail.job);
+        setConversation(detail.conversation);
         setInputValue('');
-      }
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusyAction((current) => current === slot ? '' : current);
-    }
-  }, [busy, client, updateJob]);
+      }, error: caught => setError(errorMessage(caught)),
+      settled: () => setBusyAction((current) => current === slot ? '' : current) },
+    );
+  }, [client, updateJob]);
+
 
   const cancel = useCallback(async (jobId: string) => {
     const outcome = await runMutation(`cancel:${jobId}`, () => client.cancelJob(jobId), '취소 요청을 보냈습니다.');
@@ -801,6 +819,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     providers={providers}
     reasoningEffort={reasoningEffort}
     selectedJob={selectedJob}
+    conversation={conversation?.selectedJobId === selectedJob?.id ? conversation : undefined}
     validationError={validationError}
   />;
 }
