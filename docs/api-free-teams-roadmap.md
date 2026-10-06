@@ -26,6 +26,8 @@
 
 승인함은 최근 일반 작업 20개에서 필터링하지 않고 owner 범위의 전체 저장 작업에서 승인 대기 상태를 먼저 필터링한다. 응답은 최대100개이며 더 있으면 생략 안내를 표시한다. 기존 응답에 승인함 조회가 없으면 전체 빈 상태로 주장하지 않고 최근 작업 기준임을 표시한다. 선택 상세는 기존 owner-scoped get API로 polling마다 갱신해 다른 표면에서 처리된 상태를 반영한다.
 
+실행 영수증의 첫 표시 slice는 기존 Codex 작업의 선택 model/effort, worker 관측 model/effort와 출처·시각, 검증된 terminal usage·출처를 공통 읽기 전용 projection으로 탭 상세·작업 카드·대화 각 turn에 표시한다. 별도 수집하지 않는 전송 model/effort와 responseId는 `수집되지 않음`으로 표시하며 선택값·threadId·jobId를 대신 채우지 않는다. 없는 usage는 실제 0과 구분하고 reasoning token 수로 실제 effort를 추정하지 않는다. 원본 job 저장 계약과 owner-scoped API는 유지한다. 이는 직접 provider 응답 증거, 새 provider 연결, 비용 집계나 공개 배포 검증이 아니다. 보존된110 기준과 별도의 소스 변경·로컬 합성 검증으로 추적한다.
+
 첫 대화 상세는 기존 owner-scoped API의 선택 작업과 최대 20개 부모 작업에 저장된 요청·최종 응답·진행·안전한 도구 이름을 보여준다. 내부 reasoning, raw CLI 세션, 저장되지 않은 도구 결과를 복원한 것처럼 표시하지 않는다. 이전 작업이 없거나 체인이 불일치하면 불완전 상태를 표시한다. 이후 저장·cursor·전체 세션은 별도 수락 조건으로 확장한다. [OpenClaw 고정 소스](https://github.com/openclaw/openclaw/tree/2e59936b6747f10c44edb76decd662c2d27305be), [LibreChat 고정 소스](https://github.com/LibreChat-AI/LibreChat/tree/e1dfc10449ff713faffacd60273fddcfe2c0a698)는 비교 근거이며 코드 복사나 실행 검증을 뜻하지 않는다.
 
 사용자의 `업무허브탭의 devtunnel 은 시간제한을 두지마` 요청에 따라 기존 승인된 서버·터널의 로컬 자동 종료 시간은 제거한다. `scripts/local_hub_lifetime.py`의 `None` 정책은 자동 종료 기한이 없으며, 명시적 정지 또는 서버 종료는 여전히 종료 조건이다. 이 정책 자체는 실행 권한을 부여하지 않는다. tunnel 서비스 만료·인증·접근 범위와 OS 설정은 변경하지 않으며, 현재 프로세스 생존은 24/7 가용성 보장이 아니다.

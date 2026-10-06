@@ -2,6 +2,7 @@ import * as teamsSdk from '@microsoft/teams-js';
 const teamsApp = teamsSdk.app;
 import { parseRequestedJobId, loadRequestedJob, includeRequestedJob } from './job-deep-link.js';
 import { CORE_JOB_STATUS_LABELS } from '../shared/core-orchestration.js';
+import { projectReceiptFacts } from '../shared/receipt-presentation.js';
 import type { VisibleJobConversation } from '../shared/job-conversation.js';
 import { JobConversationView } from './JobConversationView.js';
 import { loadJobConversation, refreshVisibleJobConversation } from './job-conversation.js';
@@ -128,10 +129,6 @@ export function validateOrchestrationSubmission(
     }
   }
   return '';
-}
-
-function formatTokenCount(value: number): string {
-  return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
 export type OrchestrationBusyController = {
@@ -464,26 +461,7 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
           <p><strong>실제 실행환경:</strong> {props.selectedJob.executionReceipt?.platform ?? '확인되지 않음'}</p>
           <p><strong>작업 마지막 갱신:</strong> {props.selectedJob.updatedAt ?? '제공되지 않음'}</p>
           {!props.conversation ? <p><strong>프롬프트:</strong> {props.selectedJob.prompt}</p> : null}
-          {props.selectedJob.provider === 'codex' ? (
-            <>
-              <p><strong>선택 모델:</strong> {props.selectedJob.model ?? 'CLI 기본값'}</p>
-              <p><strong>실제 모델:</strong> {props.selectedJob.executionReceipt?.model ?? '확인되지 않음 (worker 관측 없음)'}</p>
-              <p><strong>선택 추론 수준:</strong> {props.selectedJob.reasoningEffort ?? 'CLI 기본값'}</p>
-              <p><strong>실제 추론 수준:</strong> {props.selectedJob.executionReceipt?.reasoningEffort ?? '확인되지 않음 (worker 관측 없음)'}</p>
-              {props.selectedJob.tokenUsage ? (
-                <p>
-                  <strong>토큰 사용량:</strong>{' '}
-                  입력 {formatTokenCount(props.selectedJob.tokenUsage.inputTokens)} · 캐시 입력{' '}
-                  {formatTokenCount(props.selectedJob.tokenUsage.cachedInputTokens)}
-                  {props.selectedJob.tokenUsage.cacheWriteInputTokens !== undefined
-                    ? ` · 캐시 쓰기 ${formatTokenCount(props.selectedJob.tokenUsage.cacheWriteInputTokens)}`
-                    : ''}
-                  {' '}· 출력 {formatTokenCount(props.selectedJob.tokenUsage.outputTokens)} · 추론 출력{' '}
-                  {formatTokenCount(props.selectedJob.tokenUsage.reasoningOutputTokens)} · 계정 잔여량: 제공되지 않음
-                </p>
-              ) : <p><strong>토큰 사용량:</strong> 실행 완료 전 또는 제공되지 않음 · 계정 잔여량: 제공되지 않음</p>}
-            </>
-          ) : null}
+          {projectReceiptFacts(props.selectedJob).map(fact => <p key={fact.label}><strong>{fact.label}:</strong> {fact.value}</p>)}
           <div>
             <strong>제공자가 보고한 도구:</strong>
             {(props.selectedJob.tools?.length ?? 0) > 0 ? (

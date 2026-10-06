@@ -71,6 +71,7 @@ const tsTests = [
   'scripts/client-orchestration-panel-test.tsx',
   'scripts/agent-job-presentation-test.ts',
   'scripts/agent-execution-receipt-test.ts',
+  'scripts/receipt-presentation-test.tsx',
   'scripts/client-app-orchestration-integration-test.tsx',
   'scripts/agent-only-hub-contract-test.mjs',
   'scripts/agent-tool-observation-test.ts',

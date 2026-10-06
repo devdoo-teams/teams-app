@@ -6,14 +6,6 @@ export type AgentTokenUsage = CoreAgentTokenUsage;
 
 type TokenUsageRecord = Record<string, unknown>;
 
-const CANONICAL_TOKEN_USAGE_KEYS = new Set([
-  'source',
-  'inputTokens',
-  'cachedInputTokens',
-  'cacheWriteInputTokens',
-  'outputTokens',
-  'reasoningOutputTokens',
-]);
 
 function isRecord(value: unknown): value is TokenUsageRecord {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -53,13 +45,4 @@ export function parseCodexTokenUsage(value: unknown): AgentTokenUsage | undefine
   };
 }
 
-export function isAgentTokenUsage(value: unknown): value is AgentTokenUsage {
-  if (!isRecord(value)) return false;
-  if (Object.keys(value).some((key) => !CANONICAL_TOKEN_USAGE_KEYS.has(key))) return false;
-  return value.source === CODEX_TOKEN_USAGE_SOURCE
-    && isTokenCount(value.inputTokens)
-    && isTokenCount(value.cachedInputTokens)
-    && (value.cacheWriteInputTokens === undefined || isTokenCount(value.cacheWriteInputTokens))
-    && isTokenCount(value.outputTokens)
-    && isTokenCount(value.reasoningOutputTokens);
-}
+export { isAgentTokenUsage } from '../shared/token-usage-validation.js';

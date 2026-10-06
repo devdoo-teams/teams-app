@@ -1,7 +1,9 @@
 import type { CoreOrchestrationJobStatus, CoreAgentToolUsage, CorePendingOperation } from './core-orchestration.js';
+import type { ReceiptFact } from './receipt-presentation.js';
 
 export type VisibleJobTurn = Readonly<{
   pendingOperation?: CorePendingOperation;
+  receiptFacts?: readonly ReceiptFact[];
   jobId: string;
   request: string;
   response?: string;

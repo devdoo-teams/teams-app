@@ -1,6 +1,7 @@
 import { withTeamsJobDeepLink } from './teams-tab-link.js';
 import { projectPendingOperation } from './personal-approval-projection.js';
 import { CORE_JOB_STATUS_LABELS } from '../shared/core-orchestration.js';
+import { projectReceiptFacts } from '../shared/receipt-presentation.js';
 import { randomUUID } from 'node:crypto';
 
 import type { AgentJob } from './agent-job-store.js';
@@ -255,20 +256,7 @@ export function createCoreOrchestrationJobActivity(
           { title: '권한', value: identifierText(job.mode, 40, 'unknown') },
           { title: 'Provider', value: identifierText(job.provider, 40, '미지정') },
           { title: '마지막 갱신', value: identifierText(job.updatedAt, 80, '제공되지 않음') },
-          ...(job.provider === 'codex' ? [
-            { title: '선택 모델', value: identifierText(job.model, 128, 'Codex CLI 기본값') },
-            { title: '실제 모델', value: identifierText(job.executionReceipt?.model, 128, '확인되지 않음 (worker 관측 없음)') },
-            { title: '선택 추론 수준', value: identifierText(job.reasoningEffort, 40, 'Codex CLI 기본값') },
-            { title: '실제 추론 수준', value: identifierText(job.executionReceipt?.reasoningEffort, 40, '확인되지 않음 (worker 관측 없음)') },
-            ...(isAgentTokenUsage(job.tokenUsage) ? [
-              {
-                title: '사용 토큰',
-                value: `${formatTokenCount(job.tokenUsage.inputTokens + job.tokenUsage.outputTokens)} (입력 ${formatTokenCount(job.tokenUsage.inputTokens)} / 출력 ${formatTokenCount(job.tokenUsage.outputTokens)})`,
-              },
-              { title: '추론 출력', value: formatTokenCount(job.tokenUsage.reasoningOutputTokens) },
-            ] : []),
-            { title: '계정 잔여량', value: 'Codex CLI에서 제공되지 않음' },
-          ] : []),
+          ...projectReceiptFacts(job).map(fact => ({ title: fact.label, value: identifierText(fact.value, 300, '제공되지 않음') })),
         ],
       },
       { type: 'TextBlock', text: displayText(job.prompt, CORE_CARD_TEXT_LIMIT, '(작업 설명 없음)'), wrap: true },
@@ -1203,9 +1191,6 @@ function jobExecutionFacts(job: AgentJob): Array<{ label: string; value: string 
     { label: '상태 표시', value: CORE_JOB_STATUS_LABELS[job.status] ?? '확인되지 않음' },
     { label: '제출 실행경계', value: identifierText(job.executionEnvironment, 40, '확인되지 않음') },
     { label: '실제 실행환경', value: identifierText(job.executionReceipt?.platform, 40, '확인되지 않음') },
-    { label: '선택 모델', value: identifierText(job.model, 128, 'CLI 기본값') },
-    { label: '실제 모델', value: identifierText(job.executionReceipt?.model, 128, '확인되지 않음 (worker 관측 없음)') },
-    { label: '선택 추론 수준', value: identifierText(job.reasoningEffort, 40, 'CLI 기본값') },
-    { label: '실제 추론 수준', value: identifierText(job.executionReceipt?.reasoningEffort, 40, '확인되지 않음 (worker 관측 없음)') },
+    ...projectReceiptFacts(job),
   ];
 }

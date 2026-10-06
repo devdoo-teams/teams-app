@@ -1,5 +1,6 @@
 import type { CoreOrchestrationJob } from '../shared/core-orchestration.js';
 import type { VisibleJobConversation, VisibleJobTurn } from '../shared/job-conversation.js';
+import { projectReceiptFacts } from '../shared/receipt-presentation.js';
 
 const MAX_TURNS = 20;
 const MAX_TEXT = 8192;
@@ -12,6 +13,7 @@ function visibleText(value: string): string {
 function visibleTurn(job: CoreOrchestrationJob): VisibleJobTurn {
   const text = [job.prompt, job.result ?? '', job.error ?? '', ...job.progress];
   return {
+    receiptFacts: projectReceiptFacts(job),
     ...(job.pendingOperation ? { pendingOperation: { ...job.pendingOperation } } : {}),
     jobId: job.id, request: visibleText(job.prompt), status: job.status,
     ...(job.result ? { response: visibleText(job.result) } : {}),

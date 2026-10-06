@@ -18,6 +18,9 @@ export function JobConversationView({ conversation }: { conversation: VisibleJob
         {!turn.response && !turn.error ? <p>저장된 최종 응답이 아직 없습니다.</p> : null}
         {turn.progress.length ? <details><summary>진행 내역</summary><ul>{turn.progress.map((entry, index) => <li key={index}>{entry}</li>)}</ul></details> : null}
         {turn.tools.length ? <p>관찰된 도구: {turn.tools.map(tool => `${tool.category}: ${tool.name}`).join(', ')}</p> : null}
+        {turn.receiptFacts?.length ? <details open><summary>실행 영수증</summary>
+          {turn.receiptFacts.map(fact => <p key={fact.label}><strong>{fact.label}:</strong> {fact.value}</p>)}
+        </details> : null}
         {turn.truncated ? <p role="note">긴 내용 일부가 생략됐습니다.</p> : null}
       </li>)}
     </ol>
