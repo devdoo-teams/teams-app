@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { lstat, mkdtemp, realpath, rm } from 'node:fs/promises';
+import { lstat, mkdtemp, realpath, rm, writeFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import net from 'node:net';
@@ -9,7 +9,7 @@ import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 
 const root = path.resolve(process.cwd());
 const runtimeDistRoot = resolveRuntimeDistRoot(root);
-const entry = path.join(runtimeDistRoot, 'server/index.js');
+const entry = path.join(root, 'scripts/start-server.mjs');
 const currentUserId = process.getuid();
 
 async function removeJustCreatedWorkspaceOwnedDataDir(directory) {
@@ -105,6 +105,11 @@ try {
   a2aOutboundStorePath = path.join(dataDir, 'a2a-outbound.json');
   const tabDomain = 'runtime-smoke.example.com';
   const botClientId = '11111111-2222-4333-8444-555555555555';
+  const replayPath = path.join(dataDir, 'inactive-replay.json');
+  const missingReplay = process.env.TEAMS_TEST_INACTIVE_REPLAY_FIXTURE === 'missing';
+  if (!missingReplay) await writeFile(replayPath, '{deliberately-corrupt-fixture');
+  const replayReadGuard = path.join(dataDir, 'replay-read-guard.mjs');
+  await writeFile(replayReadGuard, `import fs from 'node:fs/promises';\nconst blocked=${JSON.stringify(replayPath)};\nfor (const name of ['readFile','open','lstat','stat']) { const original=fs[name]; fs[name]=function(file,...args) { if (String(file)===blocked) throw new Error('inactive replay was opened: '+name); return original.call(this,file,...args); }; }\n`);
   const env = createChildTestEnvironment(process.env, {
     overrides: {
       TEAMS_RUNTIME_DIST_DIR: runtimeDistRoot,
@@ -131,11 +136,13 @@ try {
       A2A_OUTBOUND_STORE_PATH: a2aOutboundStorePath,
       GENUI_ACTION_STORE_PATH: path.join(dataDir, 'genui-actions.json'),
       RESPONSE_MODE_STORE_PATH: path.join(dataDir, 'response-modes.json'),
+      PROVIDER_MUTATION_REPLAY_STORE_PATH: replayPath,
+      TEAMS_MCP_PROVIDER_TOOLS: 'true',
     },
   });
 
   const output = [];
-  child = spawn(process.execPath, [entry], {
+  child = spawn(process.execPath, ['--import', replayReadGuard, entry], {
     cwd: root,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -158,6 +165,8 @@ try {
   assert.equal(health.outbound, 'disabled');
   assert.equal(health.copilotKit, 'disabled');
   assert.equal(health.mcpEnabled, false);
+  if (missingReplay) await assert.rejects(() => lstat(replayPath), { code: 'ENOENT' });
+  else assert.equal(await readFile(replayPath, 'utf8'), '{deliberately-corrupt-fixture');
   assert.equal(health.responseProviders.deterministic, true);
   assert.equal(health.responseProviders.openai, false);
   for (const provider of ['codex', 'ghcp']) {

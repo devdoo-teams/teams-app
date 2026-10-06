@@ -17,6 +17,8 @@ import {
   summarizePhase,
 } from './release-loop.mjs';
 import { verifyTeamsRegistration } from './teams-registration.mjs';
+import { validateReleaseObservations } from './release-observations.mjs';
+export { validateReleaseObservations, canContinueTunnelNotice } from './release-observations.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const defaultStatePath = path.join(root, '.release', 'update-current.json');
@@ -427,7 +429,10 @@ export function validateBrowserAttestation(input, state, surface, now = new Date
     normalized.remoteOperationId = operationId || null;
     normalized.remoteOperationIdUnavailableReason = unavailableReason || null;
   }
-  if (surface === 'installed') normalized.installedVersion = assertAttestationText(input.installedVersion, 'installedVersion');
+  if (surface === 'installed') {
+    normalized.installedVersion = assertAttestationText(input.installedVersion, 'installedVersion');
+    if (normalized.installedVersion !== state.version) throw new Error('observed installed version does not match the release run');
+  }
   return normalized;
 }
 
@@ -459,6 +464,7 @@ export function parseReleaseUpdateArgs(argv) {
     else if (arg === '--evidence' || arg === '--file') options.evidencePath = value();
     else if (arg === '--reason') options.reason = value();
     else if (arg === '--state') options.statePath = value();
+    else if (arg === '--observations') options.observationsPath = value();
     else throw new Error(`unknown release:update argument: ${arg}`);
   }
   if (options.surface !== undefined) assertPhase(options.surface);
@@ -1198,6 +1204,34 @@ async function executeCli(argv) {
     if (options.command === 'complete') {
       if (nextAction(state) !== 'complete') throw new Error(`release:update is not complete; next action is ${nextAction(state)}`);
       assertCompletionContract(state);
+      if (!options.observationsPath) throw new Error('complete requires --observations with separate catalog, personal installation, runtime and native desktop observations');
+      const observationBytes = await fs.readFile(options.observationsPath, 'utf8');
+      const observations = JSON.parse(observationBytes);
+      let configuredRuntime = {};
+      try { configuredRuntime = parseDotEnv(await fs.readFile(path.join(root, '.env.runtime'), 'utf8')); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+      const releaseEnvironment = { ...configuredRuntime, ...process.env };
+      validateReleaseObservations(observations, {
+        ...state.releaseUpdate?.identity,
+        tenantId: releaseEnvironment.TENANT_ID,
+        catalogId: releaseEnvironment.TEAMS_CATALOG_APP_ID,
+      });
+      await writeCanonicalState({
+        ...state,
+        releaseUpdate: {
+          ...state.releaseUpdate,
+          observationReceipt: {
+            path: path.resolve(options.observationsPath),
+            sha256: crypto.createHash('sha256').update(observationBytes).digest('hex'),
+            verifiedAt: new Date().toISOString(),
+            boundaries: Object.fromEntries(['portal', 'personalInstall', 'runtime', 'desktop'].map(name => [name, {
+              source: observations[name].source,
+              observedAt: observations[name].observedAt,
+              identity: observations[name].identity,
+            }])),
+          },
+        },
+      }, statePath);
       const payload = await runLoopCommand(statePath, ['complete'], 'complete', state);
       const completed = await readCanonicalState(statePath);
       return outputJson({
@@ -1206,6 +1240,7 @@ async function executeCli(argv) {
         identity: completed.releaseUpdate?.identity ?? null,
         jira: completed.releaseUpdate?.jira ?? null,
         attestations: completed.releaseUpdate?.attestations ?? {},
+        observationReceipt: completed.releaseUpdate?.observationReceipt ?? null,
         releaseReport: completionReport(completed),
       });
     }

@@ -40,6 +40,8 @@ jobs:
           npm run test:ci-workflow-contract
           npm run test:docker-build-contract
           npm run test:image-publish-workflow-contract
+          node scripts/release-observation-test.mjs
+          node scripts/runtime-replay-startup-test.mjs
       - name: Build Core
         run: npm run build:core
       - name: Run Core tests

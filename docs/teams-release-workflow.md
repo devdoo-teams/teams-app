@@ -280,8 +280,14 @@ npm run release:update -- status
 # 포털/설치본/데스크톱/모바일을 실제로 확인한 뒤 surface별 evidence JSON 등록
 npm run release:update -- browser --surface <portal|installed|desktop|mobile> --evidence <evidence.json>
 npm run release:update -- reconcile --evidence <jira-reconciliation.json>
-npm run release:update -- complete
+npm run release:update -- complete --observations /absolute/path/observations.json
 ```
+
+완료 시 독립 observation JSON은 카탈로그·개인 설치본·현재 런타임·현재 빌드의
+데스크톱 흐름을 각각 기록한다. 기존 `.env.runtime` 또는 실행 환경의 검증된
+tenant/catalog 값과 대조하며, 클라이언트 캐시를 서버 read-back으로 승격하지 않는다.
+필드·공식 계약·현재 승인 확인 인터페이스는
+[`installation-observations.md`](okf/teamsapp-release/installation-observations.md)를 따른다.
 
 이전 run이 커밋 변경으로 재개할 수 없는 상태라면 상태 파일을 삭제하거나 완료로 위장하지 않는다. 원인을 확인한 뒤 다음 명령으로 기존 run을 보존하면서 명시적으로 폐기하고 같은 상태 경로에서 새 run을 시작한다.
 
@@ -367,7 +373,7 @@ npm run release:update -- browser --surface mobile --evidence /absolute/path/mob
 
 # 실제 Jira 원격 read-back과 발견 항목 매핑을 확인한 뒤에만 최종화
 npm run release:update -- reconcile --evidence /absolute/path/jira-reconciliation.json
-npm run release:update -- complete
+npm run release:update -- complete --observations /absolute/path/observations.json
 ```
 
 실행기는 다음을 자동으로 차단한다: 임의의 오래된 ZIP 경로, 이전 커밋의 공개 서버,
