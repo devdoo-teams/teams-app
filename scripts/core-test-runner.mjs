@@ -13,6 +13,7 @@ const coreBuildSteps = [
   ['scripts/build-server.mjs', '--core'],
 ];
 const plainTests = [
+  'scripts/pinned-ts-test-runner-test.mjs',
   'scripts/core-test-runner-test.mjs',
   'scripts/core-orchestration-gate-registration-test.mjs',
   'scripts/core-test-workspace-test.mjs',
