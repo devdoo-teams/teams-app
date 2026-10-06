@@ -1,5 +1,6 @@
 # Project delivery instructions
 
+- 기능 후보를 사내 도입 정책의 사전 적합성만으로 미리 제외하지 않는다. 개인 개발·합성 데이터 시험 환경에서 확인 가능한 upstream 구현·라이선스·커밋을 기존 Teams 기능과 비교하고, 현재 안정화·검증을 유지하면서 장점을 우선순위별로 하나씩 구현·시험한다. 최종 사내 도입 판단은 사용자가 한다. 회사 정책·보안 관련 도입 검토사항은 기능 자체 삭제 대신 별도로 기록하되, 실제 실행의 인증·접근제어·비밀 보호, 실제 회사 데이터의 외부 전송 제한, 새 권한·비용·배포 대상에 대한 승인 요건은 유지한다. 인증 해제·전체 접근 허용·회사 정책 우회로 이 방향을 구현하지 않는다.
 - Teams 앱 변경 요청은 아래의 필수 릴리스 워크플로우를 따른다. 구현만 끝내거나 로컬 테스트 결과만으로 완료 처리하지 않는다.
 - 수동/환경 승인 성공은 배포 성공이 아니다. 승인 후 job이 generic nonzero exit만 반환하면 retained failure receipt와 Azure revision/system/application logs를 read-back하기 전까지 정확한 Azure boundary를 `UNVERIFIED`로 유지하며 foundation, ACR, workload, revision, health 원인을 추측하지 않는다.
 - 현재 기술 제약에서는 `Teams Core`가 기준 제품이다. Microsoft Teams SDK + TypeScript/React 개인 탭 + Express/결정형 서버 + Adaptive Cards를 API 키 없이 먼저 구현한다. CopilotKit, OpenAI API, 로컬 모델, MCP는 Core 기능이 안정된 뒤 명시적 feature flag와 별도 검증으로만 추가하며, API 키가 없다는 이유로 Core 기능을 대체 응답·가짜 완료로 처리하지 않는다. 상세 단계는 [`docs/api-free-teams-roadmap.md`](docs/api-free-teams-roadmap.md)를 따른다.
