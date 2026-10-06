@@ -53,6 +53,7 @@ import {
 } from './codex-capability.js';
 import { GitService } from './git-service.js';
 import { PersonalNotificationBroker } from './personal-notification.js';
+import { sendPersonalNotificationCard } from './personal-notification-card.js';
 import {
   configureResponseEngineRouter,
   ResponseEngineNotConfiguredError,
@@ -2594,7 +2595,9 @@ const personalNotifications = new PersonalNotificationBroker(
       conversation: { id: reference.conversationId, conversationType: 'personal', tenantId: reference.tenantId },
     }));
     const envelope = genUiMode === 'legacy' ? undefined : genUi.notification(notification);
-    const receipt = await sender(notification.message, envelope);
+    const receipt = envelope
+      ? await sendPersonalNotificationCard(sender, envelope)
+      : await sender(notification.message);
     return { state: receipt.state === 'connector-accepted' ? 'accepted' as const
       : receipt.state === 'connector-rejected' ? 'rejected' as const : 'ambiguous' as const,
       ...(receipt.activityId ? { activityId: receipt.activityId } : {}) };

@@ -4,6 +4,9 @@ sources:
   - resource: "https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/send-proactive-messages"
     title: "Proactive messages"
     location: "Get the conversation ID and Send the message, observed lines 37–39, 72, 94–106, 154–157 on 2026-10-06; HTML lines may change"
+  - resource: "https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/cards/cards-reference"
+    title: "Types of cards"
+    location: "Support for Adaptive Cards, observed lines146–152 on2026-10-06; HTML lines maychange"
 generated: { by: "process:codex", at: "2026-10-06T16:29:00Z" }
 verified: { by: "process:official-document-and-installed-package-read", at: "2026-10-06T16:29:00Z" }
 status: "UNVERIFIED"
@@ -11,6 +14,8 @@ stale_after: "2026-10-13T16:29:00Z"
 ---
 
 # Personal notification destination and receipt
+
+CORE CARD CONTRACT: the project declares personal Core notifications as Adaptive Cards1.6. The canonical Microsoft page above supports bot/mobile cards up to1.6 and rejects positive/destructive action styling. The personal producer now preserves the existing masked notification content while upgrading the top-level and nested ShowCard card declarations to1.6, restricting actions toSubmit/ShowCard/OpenUrl and inputs toText/ChoiceSet. It sends attachments only; the already-masked fallback text is used only for explicit legacy or confirmed card rejection. Synthetic actualproducer RED1.2→GREEN1.6 covers progress/result/error/cancelled, nested cards, limited actions and masked text. This does not prove mobile rendering or live receipt.
 
 REVIEW FIXTURE: schema2 persists only enabled/kind/phase/message, without duplicating the private job snapshot. The send callback reads the owned job again and constructs a public SDK ApiClient from the authenticated reference serviceUrl, cloning the existing SDK authenticated HTTP client with a 10-second timeout. A still-unsettled transport blocks additional dispatch even after the receipt becomes ambiguous. Startup recovers explicitly enabled terminal REST jobs missing an outbox event; legacy absent intent and existing ambiguous receipts are excluded. Synthetic recovery, incomplete payload rejection, inherited false override and hung transport tests passed; this is not live Teams evidence.
 
