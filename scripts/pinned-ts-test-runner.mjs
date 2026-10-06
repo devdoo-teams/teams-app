@@ -9,8 +9,8 @@ export async function runPinnedTsTest(script, {
   runProcess = runProcessWithTimeout,
   env = process.env,
 } = {}) {
-  if (typeof script !== 'string' || !/^scripts\/[a-zA-Z0-9_-]+\.tsx?$/.test(script)) {
-    throw new Error('TypeScript test requires a relative scripts/*.ts or *.tsx path');
+  if (typeof script !== 'string' || !/^scripts\/[a-zA-Z0-9_-]+\.(?:tsx?|mjs)$/.test(script)) {
+    throw new Error('Pinned test requires a relative scripts/*.ts, *.tsx or *.mjs path');
   }
   const workspace = resolveWorkspace();
   try {

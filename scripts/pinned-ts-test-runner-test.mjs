@@ -18,4 +18,9 @@ await assert.rejects(runPinnedTsTest('scripts/synthetic-test.ts', {
   resolveWorkspace: () => workspace, runProcess: async () => { throw new Error('fixture failure'); }, env: {},
 }), /fixture failure/);
 assert.equal(cleaned, 2, 'failed tests clean only their own materialized source');
+await runPinnedTsTest('scripts/agent-only-hub-contract-test.mjs', {
+  resolveWorkspace: () => workspace,
+  runProcess: async () => ({ stdout: '', stderr: '' }), env: {},
+});
+assert.equal(cleaned, 3, 'plain source contract also uses pinned tracked source');
 console.log('PASS: pinned TypeScript test runner needs no local tsx executable and cleans source on failure');
