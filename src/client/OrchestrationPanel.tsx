@@ -47,6 +47,7 @@ type SubmissionIdentity = Readonly<{
   model?: string;
   reasoningEffort?: CoreCodexReasoningEffort;
   catalogRevision?: string;
+  notify?: boolean;
 }>;
 
 function submissionFingerprint(input: SubmissionIdentity): string {
@@ -54,6 +55,7 @@ function submissionFingerprint(input: SubmissionIdentity): string {
     prompt: input.prompt.trim(),
     provider: input.provider,
     mode: input.mode,
+    ...(input.notify !== undefined ? { notify: input.notify } : {}),
     ...(input.model ? {
       model: input.model,
       reasoningEffort: input.reasoningEffort,
@@ -206,6 +208,8 @@ export type OrchestrationPanelViewProps = {
   providers: readonly CoreProviderFact[];
   selectedJob: CoreOrchestrationJob | null;
   conversation?: VisibleJobConversation;
+  notifyPersonal?: boolean;
+  onNotifyPersonalChange?: (value: boolean) => void;
   prompt: string;
   providerId: string;
   mode: CoreOrchestrationMode;
@@ -386,6 +390,11 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
         <button className="primary" disabled={props.phase === 'loading' || submitBusy} type="submit">
           {actionLabel('작업 실행', '제출 중…', submitBusy)}
         </button>
+        {props.onNotifyPersonalChange ? <label>
+          <input type="checkbox" checked={props.notifyPersonal === true} disabled={props.phase === 'loading' || submitBusy}
+            onChange={event => props.onNotifyPersonalChange?.(event.currentTarget.checked)} />
+          내 업무 허브 개인 채팅으로 진행·결과 알림 받기
+        </label> : null}
       </form>
 
       {props.validationError ? <p className="error" role="alert">{props.validationError}</p> : null}
@@ -429,6 +438,13 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
           <h3 id="orchestration-detail-heading">작업 상세</h3>
           <p><strong>상태:</strong> {statusLabels[props.selectedJob.status]}</p>
           <p><strong>작업 ID:</strong> {props.selectedJob.id}</p>
+          {props.selectedJob.notificationDelivery ? <p aria-label="개인 채팅 알림 상태">
+            <strong>개인 채팅 알림:</strong> {({
+              'waiting-personal-chat': '개인 채팅 연결 대기 — 업무 허브 개인 채팅에서 메시지를 보내세요.',
+              pending: '전송 대기', sending: '전송 확인 중', accepted: 'Teams가 전송을 수락함 — 실제 수신 여부는 채팅에서 확인하세요.',
+              rejected: 'Teams가 전송을 거부함 — 앱 설치·차단 상태를 확인하세요.', ambiguous: '전송 결과 미확인 — 중복 방지를 위해 자동 재전송하지 않습니다.',
+            })[props.selectedJob.notificationDelivery.state]}
+          </p> : null}
           <p><strong>제출 실행경계:</strong> {props.selectedJob.executionEnvironment ?? '확인되지 않음'}</p>
           <p><strong>실제 실행환경:</strong> {props.selectedJob.executionReceipt?.platform ?? '확인되지 않음'}</p>
           <p><strong>작업 마지막 갱신:</strong> {props.selectedJob.updatedAt ?? '제공되지 않음'}</p>
@@ -606,6 +622,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
   const [reasoningEffort, setReasoningEffort] = useState<CoreCodexReasoningEffort | ''>('');
   const [mode, setMode] = useState<CoreOrchestrationMode>('read-only');
   const [prompt, setPrompt] = useState('');
+  const [notifyPersonal, setNotifyPersonal] = useState(true);
   const [inputValue, setInputValue] = useState('');
   const [busyAction, setBusyAction] = useState('');
   const [error, setError] = useState('');
@@ -737,6 +754,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
       prompt: prompt.trim(),
       provider: providerId as CoreOrchestrationProvider,
       mode,
+      notify: notifyPersonal,
       ...(providerId === 'codex' && modelCatalog && modelId && reasoningEffort ? {
         model: modelId,
         reasoningEffort,
@@ -751,7 +769,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     if (outcome === 'success' || outcome === 'definitive-failure') {
       submissionKeys.current.complete(identity, idempotencyKey);
     }
-  }, [client, mode, modelCatalog, modelId, prompt, providerId, providers, reasoningEffort, runMutation]);
+  }, [client, mode, modelCatalog, modelId, notifyPersonal, prompt, providerId, providers, reasoningEffort, runMutation]);
 
   const selectJob = useCallback(async (jobId: string) => {
     setRequestedJobId(current => current === jobId ? current : undefined);
@@ -834,6 +852,8 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     reasoningEffort={reasoningEffort}
     selectedJob={selectedJob}
     conversation={conversation?.selectedJobId === selectedJob?.id ? conversation : undefined}
+    notifyPersonal={notifyPersonal}
+    onNotifyPersonalChange={setNotifyPersonal}
     validationError={validationError}
   />;
 }

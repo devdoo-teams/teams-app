@@ -58,6 +58,7 @@ const tsTests = [
   'scripts/core-message-extension-test.ts',
   'scripts/client-job-deep-link-test.ts',
   'scripts/job-conversation-client-test.ts',
+  'scripts/personal-notification-test.ts',
   'scripts/job-detail-selection-test.ts',
   'scripts/job-conversation-view-test.tsx',
   'scripts/core-orchestration-provider-gate-test.ts',

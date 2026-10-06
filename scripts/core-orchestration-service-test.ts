@@ -40,6 +40,7 @@ const modelCatalog = parseCodexModelCatalogPayload([{
 let submitCalls = 0;
 let executionLaunches = 0;
 let continueCalls = 0;
+let observedNotify: boolean | undefined;
 const agentService = {
   submit: async (input: {
     prompt: string;
@@ -51,8 +52,10 @@ const agentService = {
     model?: string;
     reasoningEffort?: CoreCodexReasoningEffort;
     catalogRevision?: string;
+    notify?: boolean;
   }): Promise<AgentJob> => {
     submitCalls += 1;
+    observedNotify = input.notify;
     const job = await store.create({
       prompt: input.prompt,
       provider: input.provider ?? 'codex',
@@ -533,4 +536,9 @@ await assert.rejects(
   'persisted idempotency keys must retain the same canonical validation as new writes',
 );
 
+const silentRequest = { ...request, idempotencyKey: 'notify-opt-out', notify: false };
+await service.submit(scope, silentRequest, { notify: true });
+assert.equal(observedNotify, false, 'explicit opt-out cannot be overridden by default notification options');
+await assert.rejects(service.submit(scope, { ...silentRequest, notify: true }), CoreOrchestrationIdempotencyConflictError, 'notification choice belongs to durable request identity');
+await assert.rejects(service.submit(scope, { ...request, idempotencyKey: 'bad-notify', notify: 'yes' } as any), CoreOrchestrationValidationError);
 console.log('PASS: core orchestration service enforces scoped DTOs, strict mutations, durable idempotency, input boundary, and measured provider facts');

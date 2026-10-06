@@ -77,6 +77,7 @@ export type CoreOrchestrationJob = Readonly<{
   createdAt: string;
   /** Server-owned durable timestamp of the last meaningful job mutation. */
   updatedAt?: string;
+  notificationDelivery?: { state: 'waiting-personal-chat' | 'pending' | 'sending' | 'accepted' | 'rejected' | 'ambiguous'; observedAt: string; activityId?: string };
   startedAt?: string;
   finishedAt?: string;
 }>;
@@ -89,6 +90,7 @@ export type CoreSubmitRequest = Readonly<{
   model?: string;
   reasoningEffort?: CoreCodexReasoningEffort;
   catalogRevision?: string;
+  notify?: boolean;
 }>;
 
 export type CoreJobRequest = Readonly<{ jobId: string }>;

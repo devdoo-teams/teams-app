@@ -44,6 +44,7 @@ export type CoreOrchestrationRouteOptions = Readonly<{
   authenticate: RequestHandler;
   /** Resolves identity only from server-validated request state, never request body/query values. */
   resolveAuthenticatedScope: (request: Request, response: Response) => AgentJobScope | undefined;
+  observeNotificationDelivery?: (jobId: string, principal: AgentJobScope) => CoreOrchestrationJob['notificationDelivery'];
 }>;
 
 export const CORE_ORCHESTRATION_API_BASE_PATH = '/api/core-orchestration' as const;
@@ -78,14 +79,20 @@ export function createCoreOrchestrationRouter(options: CoreOrchestrationRouteOpt
 
   router.use(options.authenticate);
   router.use(express.json({ limit: '64kb', strict: true }));
+  const decorateJob = (job: CoreOrchestrationJob, scope: AgentJobScope): CoreOrchestrationJob => {
+    const notificationDelivery = options.observeNotificationDelivery?.(job.id, scope);
+    return notificationDelivery ? { ...job, notificationDelivery } : job;
+  };
 
   router.post('/jobs', asyncHandler(async (request, response) => {
-    const result = await options.service.submit(scopeFor(options, request, response), submitRequest(request.body));
-    response.set('Cache-Control', 'no-store').status(result.replayed ? 200 : 201).json(result);
+    const scope = scopeFor(options, request, response);
+    const result = await options.service.submit(scope, submitRequest(request.body));
+    response.set('Cache-Control', 'no-store').status(result.replayed ? 200 : 201).json({ ...result, job: decorateJob(result.job, scope) });
   }));
 
   router.get('/jobs', asyncHandler(async (request, response) => {
-    const jobs = options.service.list(scopeFor(options, request, response), listRequest(request));
+    const scope = scopeFor(options, request, response);
+    const jobs = options.service.list(scope, listRequest(request)).map(job => decorateJob(job, scope));
     const modelCatalog = await options.service.listCodexModelCatalog();
     response.set('Cache-Control', 'no-store').status(200).json({
       jobs,
@@ -96,8 +103,9 @@ export function createCoreOrchestrationRouter(options: CoreOrchestrationRouteOpt
 
   router.get('/jobs/:jobId', asyncHandler(async (request, response) => {
     assertNoQuery(request);
-    const job = options.service.get(scopeFor(options, request, response), jobRequest(request));
-    response.set('Cache-Control', 'no-store').status(200).json({ job: requireJob(job) });
+    const scope = scopeFor(options, request, response);
+    const job = options.service.get(scope, jobRequest(request));
+    response.set('Cache-Control', 'no-store').status(200).json({ job: decorateJob(requireJob(job), scope) });
   }));
 
   router.post('/jobs/:jobId/continue', asyncHandler(async (request, response) => {
@@ -162,6 +170,7 @@ function submitRequest(value: unknown): CoreSubmitRequest {
     'model',
     'reasoningEffort',
     'catalogRevision',
+    'notify',
   ]);
   if (typeof body.idempotencyKey !== 'string'
     || typeof body.prompt !== 'string'
@@ -171,7 +180,8 @@ function submitRequest(value: unknown): CoreSubmitRequest {
     || (body.reasoningEffort !== undefined && ![
       'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra',
     ].includes(String(body.reasoningEffort)))
-    || (body.catalogRevision !== undefined && typeof body.catalogRevision !== 'string')) {
+    || (body.catalogRevision !== undefined && typeof body.catalogRevision !== 'string')
+    || (body.notify !== undefined && typeof body.notify !== 'boolean')) {
     throw invalidRequest();
   }
   return {
@@ -184,6 +194,7 @@ function submitRequest(value: unknown): CoreSubmitRequest {
       ? { reasoningEffort: body.reasoningEffort as CoreSubmitRequest['reasoningEffort'] }
       : {}),
     ...(body.catalogRevision !== undefined ? { catalogRevision: body.catalogRevision as string } : {}),
+    ...(body.notify !== undefined ? { notify: body.notify as boolean } : {}),
   };
 }
 

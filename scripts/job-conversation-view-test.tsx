@@ -12,4 +12,9 @@ assert.match(markup,/이전 대화 일부를 불러올 수 없습니다/);
 assert.match(markup,/&lt;script&gt;request&lt;\/script&gt;/);
 assert.doesNotMatch(markup,/<script>|<img src=x/);
 assert.match(markup,/도구 결과 원문은 저장되지 않았습니다/);
+const deliveryMarkup = renderToStaticMarkup(<OrchestrationPanelView {...props} notifyPersonal={false} onNotifyPersonalChange={() => undefined}
+  selectedJob={{ ...props.selectedJob!, notificationDelivery: { state:'accepted', observedAt:'2026-10-06T00:00:00Z' } }} />);
+assert.match(deliveryMarkup, /내 업무 허브 개인 채팅으로 진행·결과 알림 받기/);
+assert.match(deliveryMarkup, /Teams가 전송을 수락함/);
+assert.match(deliveryMarkup, /실제 수신 여부는 채팅에서 확인/);
 console.log('PASS: real selected detail renders bounded visible conversation, missing-history notice and escaped content');

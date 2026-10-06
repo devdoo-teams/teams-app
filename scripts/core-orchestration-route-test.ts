@@ -29,6 +29,7 @@ const modelCatalog = parseCodexModelCatalogPayload([{
 const jobs = new Map<string, CoreOrchestrationJob>();
 const idempotency = new Map<string, { hash: string; job: CoreOrchestrationJob }>();
 let nextId = 1;
+let observedNotify: boolean | undefined;
 
 function scopeKey(scope: ServerDerivedCoreScope): string {
   return `${scope.tenantId}/${scope.requesterId}/${scope.conversationId}`;
@@ -58,6 +59,7 @@ function jobKey(scope: ServerDerivedCoreScope, id: string): string {
 
 const service: CoreOrchestrationRouteService = {
   async submit(scope, request) {
+    observedNotify = request.notify;
     if (request.prompt === 'provider unavailable') throw new AgentProviderUnavailableError('codex');
     if (request.prompt === 'internal secret') throw new Error('secret=must-not-leak');
     const hash = requestHash(request);
@@ -197,6 +199,10 @@ try {
   assert.equal(submitted.headers['cache-control'], 'no-store');
   const first = JSON.parse(submitted.body) as { job: CoreOrchestrationJob; replayed: boolean };
   assert.equal(first.replayed, false);
+  const silent = await request('POST', '/jobs', { idempotencyKey: 'route-silent', prompt: 'synthetic silent task', mode: 'read-only', notify: false }, auth);
+  assert.equal(silent.status, 201);
+  assert.equal(observedNotify, false, 'explicit tab opt-out reaches authenticated service');
+  assert.equal((await request('POST', '/jobs', { idempotencyKey: 'route-invalid-notify', prompt: 'synthetic', mode: 'read-only', notify: 'true' }, auth)).status, 400);
 
   const selected = await request('POST', '/jobs', {
     idempotencyKey: 'route-selected-model',

@@ -52,6 +52,7 @@ import {
   type CliCapability,
 } from './codex-capability.js';
 import { GitService } from './git-service.js';
+import { PersonalNotificationBroker } from './personal-notification.js';
 import {
   configureResponseEngineRouter,
   ResponseEngineNotConfiguredError,
@@ -1877,9 +1878,10 @@ http.get('/api/health', async (_request: any, response: any) => {
         'ResponseModeStore',
         'ProviderLifecycleStore',
         'ProviderMutationReplayStore',
+        'PersonalNotificationBroker',
       ],
       migrated: 0,
-      total: 11,
+      total: 12,
       horizontalSafe: false,
     },
     dispatch: {
@@ -2578,12 +2580,40 @@ http.post('/api/collaboration/notifications', async (request: any, response: any
 
 let agentService: AgentService;
 
-const notifyConversation = async (notification: AgentNotification): Promise<void> => {
+const personalNotifications = new PersonalNotificationBroker(
+  path.join(path.dirname(agentJobStorePath), 'personal-notifications.json'), botClientId,
+  async (conversationId, notification) => {
+    const envelope = genUiMode === 'legacy' ? undefined : genUi.notification(notification);
+    const receipt = await createConversationBotSender(conversationId)(notification.message, envelope);
+    return { state: receipt.state === 'connector-accepted' ? 'accepted' as const
+      : receipt.state === 'connector-rejected' ? 'rejected' as const : 'ambiguous' as const,
+      ...(receipt.activityId ? { activityId: receipt.activityId } : {}) };
+  },
+);
+await personalNotifications.initialize();
+const personalNotificationTimer = setInterval(() => {
+  void personalNotifications.flush().catch(() => console.warn('PERSONAL_NOTIFICATION_FLUSH_BLOCKED'));
+}, 15_000);
+personalNotificationTimer.unref();
+
+async function observePersonalNotificationActivity(activity: any): Promise<void> {
+  try {
+    if (await personalNotifications.observeAuthenticatedActivity(activity)) await personalNotifications.flush();
+  } catch { console.warn('PERSONAL_NOTIFICATION_REFERENCE_BLOCKED'); }
+}
+
+const notifyConversation = async (notification: AgentNotification): Promise<{ accepted: boolean }> => {
   const { conversationId, message } = notification;
+  if (conversationId.startsWith('rest-')) {
+    await personalNotifications.deliver(notification);
+    const { tenantId, requesterId } = notification.job;
+    return { accepted: Boolean(tenantId && requesterId && personalNotifications.status(notification.job.id, { tenantId, requesterId })?.state === 'accepted') };
+  }
   const envelope = genUiMode === 'legacy'
     ? undefined
     : genUi.notification(notification);
-  await createConversationBotSender(conversationId)(message, envelope);
+  const receipt = await createConversationBotSender(conversationId)(message, envelope);
+  return { accepted: receipt.state === 'connector-accepted' };
 };
 
 agentService = new AgentService(
@@ -2847,6 +2877,7 @@ const coreOrchestrationService = new CoreOrchestrationService({
   ...(azureQueueDispatch ? { observeProviderFact: observeAzureCoreProviderFact } : {}),
 });
 mountCoreOrchestrationRoutes(http, {
+  observeNotificationDelivery: (jobId, principal) => personalNotifications.status(jobId, principal),
   service: coreOrchestrationService,
   authenticate: createUserAuthMiddleware({
     allowUnauthenticated: skipAuth,
@@ -2983,6 +3014,7 @@ const handleSignal = (signal: NodeJS.Signals): void => {
   if (shutdownPromise) return;
   shutdownPromise = (async () => {
     try {
+      clearInterval(personalNotificationTimer);
       await Promise.allSettled(
         [...a2aAgentServices.values()].map((service) => service.close({ closeAdmission: false })),
       );
@@ -4607,10 +4639,12 @@ if (teamsApp) {
   teamsApp.on('message.ext.open', async ({ activity }: any) => handleCoreMessageExtension(activity));
   teamsApp.on('message.ext.submit', async ({ activity }: any) => handleCoreMessageExtension(activity));
   teamsApp.on('install.add', async ({ activity, send }: any) => {
+    await observePersonalNotificationActivity(activity);
     const runtimeSend = createRuntimeBotSender(activity, send);
     await handleInstall(activity, runtimeSend);
   });
   teamsApp.on('message', async ({ activity, send }: any) => {
+    await observePersonalNotificationActivity(activity);
     if (activity?.type === 'message' && isResponseModeCardAction(activity.value)) {
       const runtimeSend = createRuntimeBotSender(activity, send);
       await handleResponseModeSubmit(activity, runtimeSend);

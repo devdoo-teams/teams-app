@@ -145,6 +145,7 @@ export class CoreOrchestrationService {
     assertServerScope(scope);
     assertNoClientScope(request);
     const normalized = normalizeSubmitRequest(request);
+    const notify = options.notify === false || normalized.notify === false ? false : options.notify ?? normalized.notify;
     const provider = normalized.provider ?? this.defaultProvider();
     const submission = await this.validateModelSelection(provider, normalized);
     const requestHash = canonicalRequestHash(submission);
@@ -164,7 +165,7 @@ export class CoreOrchestrationService {
           scope,
           idempotencyKey: request.idempotencyKey,
           requestHash,
-          ...(options.notify === false ? { notify: false } : {}),
+          ...(notify !== undefined ? { notify } : {}),
         });
         return { job: toCoreJob(job), replayed: false, requestHash };
       } catch (error) {
@@ -463,6 +464,9 @@ export function canonicalRequestHash(request: Omit<CoreSubmitRequest, 'idempoten
 }
 
 function normalizeSubmitRequest(request: CoreSubmitRequest): Omit<CoreSubmitRequest, 'idempotencyKey'> {
+  if (request.notify !== undefined && typeof request.notify !== 'boolean') {
+    throw new CoreOrchestrationValidationError('notify is invalid.');
+  }
   if (typeof request.idempotencyKey !== 'string'
     || !request.idempotencyKey.trim()
     || request.idempotencyKey.trim() !== request.idempotencyKey
@@ -495,6 +499,7 @@ function normalizeSubmitRequest(request: CoreSubmitRequest): Omit<CoreSubmitRequ
     prompt: request.prompt.trim(),
     ...(request.provider ? { provider: request.provider } : {}),
     mode: request.mode,
+    ...(request.notify !== undefined ? { notify: request.notify } : {}),
     ...(selection ?? {}),
   };
 }

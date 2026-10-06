@@ -42,7 +42,7 @@ export type AgentNotification = {
   message: string;
 };
 
-type Notify = (notification: AgentNotification) => Promise<void>;
+type Notify = (notification: AgentNotification) => Promise<void | { accepted: boolean }>;
 type ProgressListener = (message: string) => Promise<void> | void;
 type ReconciliationState = {
   jobId: string;
@@ -282,9 +282,7 @@ export class AgentService {
             : process.platform === 'darwin' ? 'local-macos'
             : process.platform === 'win32' ? 'local-windows'
             : process.platform === 'linux' ? 'local-linux' : undefined,
-          ...(this.options.executionDispatcher || input.notify === false ? {
-            durableNotifications: { enabled: input.notify !== false, delivered: [] },
-          } : {}),
+          durableNotifications: { enabled: input.notify !== false, delivered: [] },
         });
         await admission.lease.bindJob(job.id);
         this.admissionLeases.set(job.id, admission.lease);
@@ -658,7 +656,8 @@ export class AgentService {
             paths: [this.workspace, process.env.HOME, process.env.USERPROFILE], maxChars: 4_000,
           })}` };
     try {
-      await this.notifyIfEnabled(job, event, undefined, state.enabled);
+      const accepted = await this.notifyIfEnabled(job, event, undefined, state.enabled);
+      if (!accepted) return job;
     } catch {
       // Keep the authoritative result and leave delivery pending for the next poll.
       return job;
@@ -1194,33 +1193,42 @@ export class AgentService {
     event: Omit<AgentNotification, 'conversationId' | 'job'>,
     progressState?: ProgressState,
     notificationIntent?: boolean,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const state = this.progressStates.get(job.id);
-    if (job.durableNotifications?.enabled === false) return;
-    if ((notificationIntent ?? progressState?.notify ?? state?.notify ?? true) === false) return;
+    if (job.durableNotifications?.enabled === false) return false;
+    if ((notificationIntent ?? progressState?.notify ?? state?.notify ?? true) === false) return false;
 
     const scope = scopeForJob(job);
-    if (!scope) return;
+    if (!scope) return false;
     if (!progressState) {
       const current = this.store.get(job.id, scope) ?? job;
-      await this.notify({
+      return this.deliverNotification({
         ...event,
         conversationId: current.conversationId,
         job: current,
       });
-      return;
     }
 
-    await this.withJobMutationLock(job.id, scope, async () => {
-      if (!this.isCurrentRunningProgress(job, progressState)) return;
+    return this.withJobMutationLock(job.id, scope, async () => {
+      if (!this.isCurrentRunningProgress(job, progressState)) return false;
       const current = this.store.get(job.id, scope);
-      if (!current) return;
-      await this.notify({
+      if (!current) return false;
+      return this.deliverNotification({
         ...event,
         conversationId: current.conversationId,
         job: current,
       });
     });
+  }
+
+  private async deliverNotification(notification: AgentNotification): Promise<boolean> {
+    try {
+      const receipt = await this.notify(notification);
+      return receipt?.accepted !== false;
+    } catch {
+      // Execution outcome is authoritative. Delivery remains a separate retry/receipt boundary.
+      return false;
+    }
   }
 
   private createProgressState(id: string, notify: boolean, onProgress?: ProgressListener): ProgressState {

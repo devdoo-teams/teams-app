@@ -119,6 +119,7 @@ await execFileAsync('git', ['init'], { cwd: workspace });
 const store = new AgentJobStore(path.join(storeRoot, 'agent-jobs.json'));
 const runner = new ControlledRunner();
 const notifications: AgentNotification[] = [];
+let failDelivery = false;
 const scopes: Record<'completed' | 'failed' | 'blocked', AgentJobScope> = {
   completed: {
     requesterId: 'notify-false-completed-user',
@@ -145,13 +146,26 @@ const service = new AgentService(
   store,
   runner as unknown as CodexRunner,
   workspace,
-  async (notification) => notifications.push(notification),
+  async (notification) => {
+    if (failDelivery) throw new Error('synthetic delivery unavailable');
+    notifications.push(notification);
+  },
   new GitService(workspace),
   { canMutateScope: () => true, canReadScope: () => true, executionPolicy },
 );
 
 try {
   await service.initialize();
+
+  failDelivery = true;
+  const transportJob = await service.submit({ prompt: 'delivery independent', mode: 'read-only', scope: scopes.completed, notify: true });
+  await runner.waitForStart(1);
+  runner.complete('execution succeeds despite delivery failure');
+  const transportTerminal = await waitForStatus(store, transportJob.id, scopes.completed, 'completed');
+  assert.equal(transportTerminal.result, 'execution succeeds despite delivery failure');
+  assert.equal(transportTerminal.durableNotifications?.enabled, true, 'local notification intent must survive restart');
+  failDelivery = false;
+  runner.starts = 0;
 
   const completedJob = await service.submit({
     prompt: 'complete silently',
