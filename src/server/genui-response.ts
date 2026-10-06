@@ -1,3 +1,5 @@
+import { withTeamsJobDeepLink } from './teams-tab-link.js';
+import { CORE_JOB_STATUS_LABELS } from '../shared/core-orchestration.js';
 import { randomUUID } from 'node:crypto';
 
 import type { AgentJob } from './agent-job-store.js';
@@ -229,7 +231,8 @@ export function createCoreOrchestrationJobActivity(
   job: CoreOrchestrationJob,
   options?: CoreOrchestrationCardOptions,
 ): CoreOrchestrationTeamsActivity {
-  const actions = orchestrationActions(job, options);
+  const actions = orchestrationActions(job, { ...options,
+    openTabUrl: withTeamsJobDeepLink(options?.openTabUrl, job.id) ?? options?.openTabUrl });
   const detail = job.result ?? job.error ?? job.progress.at(-1) ?? '세부 진행 정보가 없습니다.';
   return orchestrationActivity({
     type: 'AdaptiveCard',
@@ -243,12 +246,17 @@ export function createCoreOrchestrationJobActivity(
         facts: [
           { title: '작업 ID', value: identifierText(job.id, 200, 'unknown-job') },
           { title: '상태', value: identifierText(job.status, 40, 'unknown') },
+          { title: '상태 표시', value: CORE_JOB_STATUS_LABELS[job.status] },
+          { title: '제출 실행경계', value: identifierText(job.executionEnvironment, 40, '확인되지 않음') },
+          { title: '실제 실행환경', value: identifierText(job.executionReceipt?.platform, 40, '확인되지 않음') },
           { title: '권한', value: identifierText(job.mode, 40, 'unknown') },
           { title: 'Provider', value: identifierText(job.provider, 40, '미지정') },
           { title: '마지막 갱신', value: identifierText(job.updatedAt, 80, '제공되지 않음') },
           ...(job.provider === 'codex' ? [
-            { title: '모델', value: identifierText(job.model, 128, 'Codex CLI 기본값') },
-            { title: '추론 수준', value: identifierText(job.reasoningEffort, 40, 'Codex CLI 기본값') },
+            { title: '선택 모델', value: identifierText(job.model, 128, 'Codex CLI 기본값') },
+            { title: '실제 모델', value: identifierText(job.executionReceipt?.model, 128, '확인되지 않음 (worker 관측 없음)') },
+            { title: '선택 추론 수준', value: identifierText(job.reasoningEffort, 40, 'Codex CLI 기본값') },
+            { title: '실제 추론 수준', value: identifierText(job.executionReceipt?.reasoningEffort, 40, '확인되지 않음 (worker 관측 없음)') },
             ...(isAgentTokenUsage(job.tokenUsage) ? [
               {
                 title: '사용 토큰',
@@ -713,13 +721,13 @@ export class GenUiResponseFactory {
     this.agentLabel = options.agentLabel?.trim() || 'Codex';
   }
 
-  private tabActions(): GenUiAction[] {
+  private tabActions(jobId?: string): GenUiAction[] {
     if (!this.openTabUrl) return [];
     return [{
       id: 'open-tab',
       action: 'open-tab',
-      label: '업무 허브 탭 열기',
-      entityId: 'home',
+      label: jobId ? '작업 상세 열기' : '업무 허브 탭 열기',
+      entityId: jobId ?? 'home',
       correlationId: 'home-tab',
       actionToken: randomUUID(),
       style: 'default',
@@ -767,9 +775,11 @@ export class GenUiResponseFactory {
     fallbackText: string;
     actions?: GenUiAction[];
     includeTabAction?: boolean;
+    jobId?: string;
     metadata?: Record<string, string | number | boolean | null>;
   }): GenUiEnvelopeV1 {
-    const { includeTabAction = true, ...envelopeInput } = input;
+    const { includeTabAction = true, jobId, ...envelopeInput } = input;
+    const openTabUrl = jobId ? withTeamsJobDeepLink(this.openTabUrl, jobId) : this.openTabUrl;
     return GenUiEnvelopeV1Schema.parse({
       schemaVersion: GENUI_SCHEMA_VERSION,
       correlationId: randomUUID(),
@@ -784,11 +794,11 @@ export class GenUiResponseFactory {
       fallbackText: displayText(envelopeInput.fallbackText, 4_000, '요청 결과를 확인하세요.'),
       actions: [
         ...(envelopeInput.actions ?? []),
-        ...(includeTabAction ? this.tabActions() : []),
+        ...(includeTabAction ? this.tabActions(jobId) : []),
       ],
       metadata: redactSharedValue({
         ...(envelopeInput.metadata ?? {}),
-        ...(this.openTabUrl ? { openTabUrl: this.openTabUrl } : {}),
+        ...(openTabUrl ? { openTabUrl } : {}),
       }) as Record<string, string | number | boolean | null>,
     });
   }
@@ -964,6 +974,7 @@ export class GenUiResponseFactory {
       summary: text,
       prompt: safeJobPrompt(job),
       sections: [
+        { type: 'facts', title: '작업 실행 정보', facts: jobExecutionFacts(job) },
         { type: 'status', status: jobStatus, description: [error, result, progress.at(-1)].filter(Boolean).join('\n').slice(0, 2_000) },
         ...(tokenUsage ? [{ type: 'facts' as const, title: '토큰 사용량', facts: tokenUsageFacts(tokenUsage) }] : []),
         { type: 'list', title: '최근 진행 기록', items: progress.map((message, index) => ({ id: `${jobId}-${index}`.slice(0, 120), label: message })) },
@@ -1006,7 +1017,7 @@ export class GenUiResponseFactory {
         title: '쓰기 작업 승인 필요',
         summary: text,
         prompt,
-        sections: [{ type: 'status', title: '승인 경계', status: 'awaiting_approval', description: prompt }],
+        sections: [{ type: 'status', title: '승인 경계', status: 'awaiting_approval', description: prompt }, { type: 'facts', title: '작업 실행 정보', facts: jobExecutionFacts(job) }],
         fallbackText: `${text}\napprove ${jobId} 또는 cancel ${jobId}`,
         actions,
         metadata: { source: 'teams-bot', deterministic: true },
@@ -1026,7 +1037,7 @@ export class GenUiResponseFactory {
       title: '쓰기 작업 승인 처리',
       summary: text,
       prompt: safeJobPrompt(job),
-      sections: [{ type: 'status', title: '승인 결과', status: jobStatus, description: safeJobPrompt(job) }],
+      sections: [{ type: 'status', title: '승인 결과', status: jobStatus, description: safeJobPrompt(job) }, { type: 'facts', title: '작업 실행 정보', facts: jobExecutionFacts(job) }],
       fallbackText: text,
       metadata: { source: 'teams-bot', deterministic: true },
     });
@@ -1043,7 +1054,7 @@ export class GenUiResponseFactory {
       title: '작업 취소 결과',
       summary: text,
       prompt: safeJobPrompt(job),
-      sections: [{ type: 'status', title: '취소 결과', status: jobStatus, description: safeJobPrompt(job) }],
+      sections: [{ type: 'status', title: '취소 결과', status: jobStatus, description: safeJobPrompt(job) }, { type: 'facts', title: '작업 실행 정보', facts: jobExecutionFacts(job) }],
       fallbackText: text,
       metadata: { source: 'teams-bot', deterministic: true },
     });
@@ -1059,7 +1070,7 @@ export class GenUiResponseFactory {
       title: `${this.agentLabel} 대화 이어서 실행`,
       summary: text,
       prompt: safeJobPrompt(job),
-      sections: [{ type: 'status', title: '재개 결과', status: safeJobStatus(job), description: safeJobPrompt(job) }],
+      sections: [{ type: 'status', title: '재개 결과', status: safeJobStatus(job), description: safeJobPrompt(job) }, { type: 'facts', title: '작업 실행 정보', facts: jobExecutionFacts(job) }],
       fallbackText: text,
       metadata: { source: 'teams-bot', deterministic: true },
     });
@@ -1075,7 +1086,7 @@ export class GenUiResponseFactory {
       title: `자연어 ${this.agentLabel} 작업 시작`,
       summary: text,
       prompt: safeJobPrompt(job),
-      sections: [{ type: 'status', title: '작업 요청', status: safeJobStatus(job), description: safeJobPrompt(job) }],
+      sections: [{ type: 'status', title: '작업 요청', status: safeJobStatus(job), description: safeJobPrompt(job) }, { type: 'facts', title: '작업 실행 정보', facts: jobExecutionFacts(job) }],
       fallbackText: text,
       metadata: { source: 'teams-bot', deterministic: true },
     });
@@ -1097,7 +1108,7 @@ export class GenUiResponseFactory {
       title: missing ? '커밋 대기 중' : committed ? '커밋 결과' : '커밋 실패',
       summary: text,
       prompt: safeJobPrompt(job),
-      sections: [{ type: 'status', title: 'Git 결과', status: jobStatus, description: text }],
+      sections: [{ type: 'status', title: 'Git 결과', status: jobStatus, description: text }, { type: 'facts', title: '작업 실행 정보', facts: jobExecutionFacts(job) }],
       fallbackText: text,
       metadata: { source: 'teams-bot', deterministic: true },
     });
@@ -1113,7 +1124,7 @@ export class GenUiResponseFactory {
     return this.create({
       kind: 'job-status', id: jobId, status: 'loading', title: `${this.agentLabel} 작업 시작`, summary: text,
       prompt: safeJobPrompt(job),
-      sections: [{ type: 'status', status: safeJobStatus(job), description: safeJobPrompt(job) }], fallbackText: text,
+      sections: [{ type: 'status', status: safeJobStatus(job), description: safeJobPrompt(job) }, { type: 'facts', title: '작업 실행 정보', facts: jobExecutionFacts(job) }], fallbackText: text,
       metadata: { source: 'teams-bot', deterministic: true },
     });
   }
@@ -1148,10 +1159,12 @@ export class GenUiResponseFactory {
     return this.create({
       kind,
       id: jobId,
+      jobId,
       status,
       title,
       summary,
-      sections: [{ type: 'status', title: '작업 상태', status: sectionStatus, description: summary }],
+      sections: [{ type: 'status', title: '작업 상태', status: sectionStatus, description: summary },
+        { type: 'facts', title: '작업 실행 정보', facts: jobExecutionFacts(notification.job) }],
       fallbackText,
       prompt: safeJobPrompt(notification.job),
       metadata: { source: 'agent-service', event: displayText(notification.phase, 64, 'unknown'), deterministic: true },
@@ -1176,4 +1189,18 @@ function compactNotification(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value;
   const suffix = '\n\n(알림이 길어 일부 생략되었습니다.)';
   return `${value.slice(0, Math.max(1, maxLength - suffix.length))}${suffix}`;
+}
+
+function jobExecutionFacts(job: AgentJob): Array<{ label: string; value: string }> {
+  return [
+    { label: '작업 ID', value: safeJobId(job) },
+    { label: '상태', value: safeJobStatus(job) },
+    { label: '상태 표시', value: CORE_JOB_STATUS_LABELS[job.status] ?? '확인되지 않음' },
+    { label: '제출 실행경계', value: identifierText(job.executionEnvironment, 40, '확인되지 않음') },
+    { label: '실제 실행환경', value: identifierText(job.executionReceipt?.platform, 40, '확인되지 않음') },
+    { label: '선택 모델', value: identifierText(job.model, 128, 'CLI 기본값') },
+    { label: '실제 모델', value: identifierText(job.executionReceipt?.model, 128, '확인되지 않음 (worker 관측 없음)') },
+    { label: '선택 추론 수준', value: identifierText(job.reasoningEffort, 40, 'CLI 기본값') },
+    { label: '실제 추론 수준', value: identifierText(job.executionReceipt?.reasoningEffort, 40, '확인되지 않음 (worker 관측 없음)') },
+  ];
 }

@@ -109,7 +109,9 @@ async function testV3CarriesModelSelectionAndCompletionUsageWithoutBreakingV2():
     outputTokens: 30,
     reasoningOutputTokens: 10,
   };
+  const executionReceipt = {source:'worker-observation', observedAt:'2026-10-06T00:00:00.000Z', platform:'linux', model:'observed-fixture'} as const;
   await fixture.queue.complete(lease!, {
+    executionReceipt,
     result: 'selected result',
     providerExecutionId: 'selected-exec',
     tokenUsage,
@@ -120,6 +122,7 @@ async function testV3CarriesModelSelectionAndCompletionUsageWithoutBreakingV2():
     requesterId: selectedJob.requesterId,
     conversationId: selectedJob.conversationId,
   });
+  assert.deepEqual(observed?.receipt?.executionReceipt, executionReceipt, 'queue retains observed worker receipt');
   assert.deepEqual(
     (observed?.receipt as unknown as { tokenUsage?: unknown })?.tokenUsage,
     tokenUsage,

@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 
 import { atomicWriteJson, readAtomicJsonStore } from './atomic-file.js';
 
-export type GenUiActionName = 'approve' | 'cancel' | 'refresh' | 'retry' | 'open-tab' | 'feedback';
+export type GenUiActionName = 'approve' | 'cancel' | 'refresh' | 'retry' | 'open-tab' | 'feedback' | 'submit-agent';
 
 export type GenUiActionGrant = {
   action: GenUiActionName;
@@ -27,7 +27,7 @@ const DEFAULT_TTL_MS = 15 * 60 * 1000;
 const MAX_GRANT_FIELD_LENGTH = 200;
 const MAX_ACTION_TOKEN_LENGTH = 512;
 const TOKEN_HASH_PATTERN = /^[a-f0-9]{64}$/;
-const ACTION_NAMES = ['approve', 'cancel', 'refresh', 'retry', 'open-tab', 'feedback'] as const;
+const ACTION_NAMES = ['approve', 'cancel', 'refresh', 'retry', 'open-tab', 'feedback', 'submit-agent'] as const;
 const CURRENT_GRANT_KEYS = new Set([
   'action',
   'entityId',

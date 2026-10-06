@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 
 import type {
   CoreAgentTokenUsage,
+  CoreExecutionReceipt,
   CoreAgentToolUsage,
   CoreCodexModelSelection,
   CoreCodexReasoningEffort,
@@ -76,6 +77,7 @@ export type AgentDispatchCompletionReceipt = Readonly<{
   providerExecutionId: string;
   completedAt?: string;
   tokenUsage?: CoreAgentTokenUsage;
+  executionReceipt?: CoreExecutionReceipt;
 }>;
 
 export type AgentDispatchErrorReceipt = Readonly<{

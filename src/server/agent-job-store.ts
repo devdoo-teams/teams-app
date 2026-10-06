@@ -1,4 +1,6 @@
 import crypto from 'node:crypto';
+import { readExecutionReceipt, sameExecutionReceipt } from './agent-execution-receipt.js';
+import type { CoreExecutionReceipt } from '../shared/core-orchestration.js';
 
 import { atomicWriteJson, readAtomicJsonStore } from './atomic-file.js';
 import type { CliAgentProvider } from './cli-agent-runner.js';
@@ -9,7 +11,7 @@ import {
   mergeObservedToolUsage,
 } from './agent-tool-observation.js';
 import type { CoreAgentToolCategory, CoreAgentToolUsage } from '../shared/core-orchestration.js';
-import type { CoreCodexModelSelection, CoreCodexReasoningEffort } from '../shared/core-orchestration.js';
+import type { CoreExecutionEnvironment, CoreCodexModelSelection, CoreCodexReasoningEffort } from '../shared/core-orchestration.js';
 import { assertSafeCodexModelSelection } from './codex-model-catalog.js';
 
 export type AgentJobMode = 'read-only' | 'workspace-write';
@@ -55,13 +57,22 @@ export interface AgentJobScope {
   tenantId: string;
 }
 
+export type DurableAgentNotifications = {
+  enabled: boolean;
+  delivered: Array<'running' | 'completed' | 'failed'>;
+};
+
 export interface AgentJob {
+  executionReceipt?: CoreExecutionReceipt;
+  executionEnvironment?: CoreExecutionEnvironment;
   id: string;
   prompt: string;
   /** Provider used for this job; legacy records may omit it and use the configured default. */
   provider?: CliAgentProvider;
   mode: AgentJobMode;
   status: AgentJobStatus;
+  /** Server-owned delivery intent and acknowledgements for external workers. */
+  durableNotifications?: DurableAgentNotifications;
   conversationId: string;
   requesterId: string;
   /** Missing only on legacy records; scoped access deliberately rejects them. */
@@ -152,15 +163,20 @@ export class AgentJobStore {
       const previousJobs = this.jobs;
       try {
         let nextJobs: AgentJob[];
+        let persistenceBaseline = previousJobs;
         let requiresPersistence = false;
         if (this.options.durableLedger) {
+          const durableSnapshot = await this.options.durableLedger.load();
           const loaded = loadJobs(
-            await this.options.durableLedger.load(),
+            durableSnapshot,
             'durable AgentJob ledger',
             this.options.legacyProvider,
           );
           nextJobs = loaded.jobs.map(cloneAgentJob);
           requiresPersistence = loaded.migrated;
+          // loadJobs validated the snapshot. Preserve its pre-migration bytes as
+          // the CAS baseline, instead of treating existing records as new IDs.
+          persistenceBaseline = durableSnapshot as AgentJob[];
         } else {
           try {
             const raw = await readAtomicJsonStore(this.filePath);
@@ -179,7 +195,7 @@ export class AgentJobStore {
         // the last durable snapshot, and migrated/new-store state is published
         // only after its atomic write succeeds.
         if (requiresPersistence) {
-          await this.persistJobs(previousJobs, nextJobs);
+          await this.persistJobs(persistenceBaseline, nextJobs);
         }
         this.jobs = nextJobs;
         this.initialized = true;
@@ -203,6 +219,8 @@ export class AgentJobStore {
     provider: CliAgentProvider;
     mode: AgentJobMode;
     scope: AgentJobScope;
+    executionEnvironment?: CoreExecutionEnvironment;
+    durableNotifications?: DurableAgentNotifications;
     parentJobId?: string;
     threadId?: string;
     idempotencyKey?: string;
@@ -218,6 +236,7 @@ export class AgentJobStore {
       id: `task-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`,
       prompt: input.prompt,
       ...(input.provider ? { provider: input.provider } : {}),
+      ...(input.durableNotifications ? { durableNotifications: readDurableNotifications(input, 0) } : {}),
       mode: input.mode,
       status: input.mode === 'workspace-write' ? 'awaiting_approval' : 'queued',
       conversationId: input.scope.conversationId,
@@ -228,6 +247,7 @@ export class AgentJobStore {
       threadId: input.threadId,
       progress: [],
       tools: [],
+      ...(input.executionEnvironment !== undefined ? { executionEnvironment: readExecutionEnvironment(input.executionEnvironment) } : {}),
       ...(selection ?? {}),
       createdAt,
       updatedAt: createdAt,
@@ -330,13 +350,26 @@ export class AgentJobStore {
         ...patch,
         updatedAt: new Date().toISOString(),
       } as AgentJob;
+      if ('durableNotifications' in patch) {
+        updated.durableNotifications = readDurableNotifications(updated, index);
+        const intent = this.jobs[index].durableNotifications?.enabled;
+        if (intent !== undefined && updated.durableNotifications?.enabled !== intent) {
+          throw new Error('durable notification intent is immutable');
+        }
+      }
       if ('provider' in patch && patch.provider !== this.jobs[index].provider) {
         throw new Error('agent job provider identity is immutable');
       }
-      for (const field of ['model', 'reasoningEffort', 'catalogRevision'] as const) {
+      for (const field of ['model', 'reasoningEffort', 'catalogRevision', 'executionEnvironment'] as const) {
         if (field in patch && patch[field] !== this.jobs[index][field]) {
-          throw new Error('agent job Codex model selection is immutable');
+          throw new Error(field === 'executionEnvironment' ? 'agent job execution environment is immutable' : 'agent job Codex model selection is immutable');
         }
+      }
+      if ('executionReceipt' in patch) {
+        const receipt = readExecutionReceipt(patch.executionReceipt);
+        const previous = this.jobs[index].executionReceipt;
+        if (previous && !sameExecutionReceipt(previous, receipt)) throw new Error('execution receipt is immutable');
+        updated.executionReceipt = receipt;
       }
       if ('tokenUsage' in patch) {
         if (patch.tokenUsage !== undefined && !isAgentTokenUsage(patch.tokenUsage)) {
@@ -498,9 +531,13 @@ function cloneAgentJob(job: AgentJob): AgentJob {
   return {
     ...job,
     progress: [...job.progress],
+    ...(job.durableNotifications ? { durableNotifications: {
+      enabled: job.durableNotifications.enabled, delivered: [...job.durableNotifications.delivered],
+    } } : {}),
     ...(job.tools ? { tools: job.tools.map((usage) => ({ ...usage })) } : {}),
     ...(job.changedPaths ? { changedPaths: [...job.changedPaths] } : {}),
     ...(job.tokenUsage ? { tokenUsage: { ...job.tokenUsage } } : {}),
+    ...(job.executionReceipt ? { executionReceipt: { ...job.executionReceipt } } : {}),
   };
 }
 
@@ -705,12 +742,15 @@ function loadJob(
     ...(threadId.value ? { threadId: threadId.value } : {}),
     ...(result.value ? { result: result.value } : {}),
     ...(tokenUsage ? { tokenUsage } : {}),
+    ...(value.executionReceipt !== undefined ? { executionReceipt: readExecutionReceipt(value.executionReceipt) } : {}),
     ...(commitHash.value ? { commitHash: commitHash.value } : {}),
     ...(commitMessage.value ? { commitMessage: commitMessage.value } : {}),
     ...(changedPaths.value ? { changedPaths: changedPaths.value } : {}),
     ...(error.value ? { error: error.value } : {}),
+    ...(readDurableNotifications(value, index) ? { durableNotifications: readDurableNotifications(value, index) } : {}),
     progress: progress.value,
     tools: tools.value,
+    ...(value.executionEnvironment !== undefined ? { executionEnvironment: readExecutionEnvironment(value.executionEnvironment) } : {}),
     ...(selection ?? {}),
     createdAt: createdAt.value,
     updatedAt: effectiveUpdatedAt,
@@ -964,4 +1004,27 @@ function hasOwn(record: JobRecord, field: string): boolean {
 
 function invalidJob(index: number, reason: string): Error {
   return new Error(`Invalid agent job store format: record ${index}: ${reason}`);
+}
+
+function readDurableNotifications(value: { durableNotifications?: unknown }, index: number): DurableAgentNotifications | undefined {
+  const candidate = value.durableNotifications;
+  if (candidate === undefined) return undefined;
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+    throw invalidJob(index, 'durableNotifications must be an object');
+  }
+  const record = candidate as Record<string, unknown>;
+  if (typeof record.enabled !== 'boolean' || !Array.isArray(record.delivered)
+      || record.delivered.length > 3
+      || record.delivered.some(status => !['running', 'completed', 'failed'].includes(status))
+      || new Set(record.delivered).size !== record.delivered.length) {
+    throw invalidJob(index, 'durableNotifications intent or delivery statuses are invalid');
+  }
+  return { enabled: record.enabled, delivered: [...record.delivered] } as DurableAgentNotifications;
+}
+
+function readExecutionEnvironment(value: unknown): CoreExecutionEnvironment {
+  if (!['local-macos', 'local-linux', 'local-windows', 'external-worker'].includes(value as string)) {
+    throw new Error('agent job execution environment is invalid');
+  }
+  return value as CoreExecutionEnvironment;
 }

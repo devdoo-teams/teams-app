@@ -44,6 +44,7 @@ export interface CodexRunEvent {
 }
 
 export interface CodexRunResult {
+  executionReceipt?: import('../shared/core-orchestration.js').CoreExecutionReceipt;
   threadId?: string;
   finalMessage: string;
   eventCount: number;
@@ -283,6 +284,9 @@ export class CodexRunner {
     }
 
     const command = this.runnerOptions.command?.executable ?? process.env.CODEX_BIN ?? 'codex';
+    if (platform === 'win32' && /^(?:wsl|wsl\.exe)$/i.test(command.split(/[\\/]/).at(-1) ?? '')) {
+      throw new Error('Windows native worker cannot use a WSL executable.');
+    }
     const prefixArgs = this.runnerOptions.command?.prefixArgs
       ?? (process.env.CODEX_SCRIPT ? [process.env.CODEX_SCRIPT] : []);
     const enrichedPrompt = `${REMOTE_AGENT_GUIDANCE}\n\nUSER REQUEST:\n${options.prompt}`;
@@ -581,6 +585,12 @@ export class CodexRunner {
         threadId,
         finalMessage,
         eventCount,
+        // The actual process host is observed; CLI selection is not actual model evidence.
+        ...(['darwin', 'linux', 'win32'].includes(process.platform) ? { executionReceipt: {
+          source: 'worker-observation' as const,
+          observedAt: new Date().toISOString(),
+          platform: process.platform as 'darwin' | 'linux' | 'win32',
+        } } : {}),
         ...(tokenUsage ? { tokenUsage } : {}),
       };
     } catch (error) {

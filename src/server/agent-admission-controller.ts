@@ -248,6 +248,13 @@ export class AgentAdmissionController {
     await this.markTerminalPendingToken(token);
   }
 
+  /** Read-only journal state. A terminal worker result does not prove owner cleanup. */
+  requiresReconciliation(jobId: string): boolean {
+    const token = this.jobTokens.get(jobId);
+    const phase = token ? this.reservations.get(token)?.phase : undefined;
+    return phase === 'unresolved' || phase === 'terminal_pending';
+  }
+
   async markUnresolved(jobId: string, failureCode: string): Promise<void> {
     await this.initialize();
     const token = this.jobTokens.get(jobId);

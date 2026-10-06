@@ -79,3 +79,15 @@ await assert.rejects(
 assert.equal(windowsSpawnCount, 0, 'unsupported Windows process control rejects before workload spawn');
 
 console.log('PASS: POSIX process-group TERM/KILL/reap is verified and Windows production fails closed without a supported injected controller');
+
+for (const executable of ['wsl.exe', 'C:\\Windows\\System32\\wsl.exe', 'wsl']) {
+  let spawned = false;
+  const nativeOnly = new CodexRunner({
+    platform: 'win32', command: { executable },
+    processControllerProvider: { preflight() {}, attach() { return undefined; } },
+    spawn() { spawned = true; throw new Error('spawn reached'); },
+  });
+  await assert.rejects(nativeOnly.run({ jobId: 'no-wsl', prompt: 'fixture', workspace: '.', mode: 'workspace-write' }), /WSL executable/);
+  assert.equal(spawned, false, 'noWSL boundary rejects before any workload spawn');
+}
+console.log('PASS: Windows native-worker boundary rejects WSL launchers before spawn (fixture only)');

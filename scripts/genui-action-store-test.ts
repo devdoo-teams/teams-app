@@ -48,6 +48,44 @@ try {
   );
   assert.equal((await tenantScoped.consume({ ...tenantGrant, token: tenantToken })).ok, true);
 
+  for (const action of ['approve', 'cancel'] as const) {
+    const exactGrant = { ...grant, action, entityId: `exact-${action}` };
+    const exactToken = await store.issue(exactGrant);
+    for (const mismatch of [
+      { requesterId: 'other-user' }, { tenantId: 'other-tenant' },
+      { conversationId: 'other-conversation' }, { entityId: 'other-job' },
+      { correlationId: 'other-correlation' }, { action: action === 'approve' ? 'cancel' as const : 'approve' as const },
+    ]) {
+      assert.deepEqual(await store.consume({ ...exactGrant, ...mismatch, token: exactToken }),
+        { ok: false, reason: 'mismatch' });
+    }
+    const reopened = new GenUiActionStore(dataFile);
+    await reopened.initialize();
+    const concurrent = await Promise.all(Array.from({ length: 8 }, () =>
+      reopened.consume({ ...exactGrant, token: exactToken })));
+    assert.equal(concurrent.filter(result => result.ok).length, 1,
+      `${action} allows exactly one concurrent confirmation`);
+    assert.ok(concurrent.filter(result => !result.ok).every(result => result.reason === 'consumed'));
+  }
+
+  for (const kind of ['result', 'error'] as const) {
+    const factory = new GenUiResponseFactory(store, { openTabUrl: 'https://teams.microsoft.com/l/entity/9b20fd94-2ac9-4423-ac1f-ff528ab245c1/home?webUrl=https%3A%2F%2Fexample.com%2Ftabs%2Fhome%2F' });
+    const envelope = factory.notification({ kind, phase: kind === 'result' ? 'completed' : 'failed',
+      conversationId: 'personal-chat', message: 'terminal event', job: {
+        id: 'task-deep-link', conversationId: 'personal-chat', requesterId: 'owner', tenantId: 'tenant',
+        prompt: 'private prompt', mode: 'read-only', status: kind === 'result' ? 'completed' : 'failed',
+        result: kind === 'result' ? 'private result' : undefined, error: kind === 'error' ? 'failed' : undefined,
+        createdAt: '2026-10-06T00:00:00.000Z', progress: [],
+      } });
+    const card = renderGenUiCard(envelope);
+    const link = card.actions?.find(action => action.type === 'Action.OpenUrl')?.url;
+    assert.ok(link);
+    const url = new URL(String(link));
+    assert.deepEqual(JSON.parse(url.searchParams.get('context')!), { subEntityId: 'task-deep-link' });
+    assert.equal(new URL(url.searchParams.get('webUrl')!).searchParams.get('jobId'), 'task-deep-link');
+    assert.equal(String(link).includes('private'), false, 'link contains no prompt/result');
+  }
+
   const legacyFile = path.join(directory, 'legacy.json');
   await fs.writeFile(legacyFile, `${JSON.stringify([{
     tokenHash: 'legacy-token-hash',

@@ -63,6 +63,7 @@ export function createWorkerExecutor(options: {
           result: outcome.finalMessage,
           providerExecutionId: outcome.threadId,
           ...(outcome.tokenUsage ? { tokenUsage: outcome.tokenUsage } : {}),
+          ...(outcome.executionReceipt ? { executionReceipt: outcome.executionReceipt } : {}),
         };
       }).finally(() => context.signal.removeEventListener('abort', propagateAbort));
       return {

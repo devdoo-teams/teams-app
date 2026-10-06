@@ -25,6 +25,7 @@ export type WorkerExecutionResult = Readonly<{
   result: string;
   providerExecutionId: string;
   tokenUsage?: CoreAgentTokenUsage;
+  executionReceipt?: import('../shared/core-orchestration.js').CoreExecutionReceipt;
 }>;
 
 export type WorkerExecutionHandle = Readonly<{

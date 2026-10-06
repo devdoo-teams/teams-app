@@ -66,6 +66,7 @@ try {
   await first.initialize();
   const created = await first.create({
     prompt: 'persist scoped identity across an ACA recycle',
+    durableNotifications: { enabled: false, delivered: [] },
     provider: 'codex',
     mode: 'read-only',
     scope,
@@ -75,6 +76,7 @@ try {
   await first.update(created.id, scope, {
     status: 'running',
     startedAt: '2026-09-03T00:00:00.000Z',
+    durableNotifications: { enabled: false, delivered: ['running'] },
   });
 
   const second = new AgentJobStore(path.join(root, 'ephemeral-second.json'), {
@@ -87,6 +89,8 @@ try {
   assert.equal(recovered?.requesterId, scope.requesterId);
   assert.equal(recovered?.conversationId, scope.conversationId);
   assert.equal(recovered?.status, 'running');
+  assert.deepEqual(recovered?.durableNotifications, { enabled: false, delivered: ['running'] },
+    'shared runtime recovery must retain notify=false and delivery acknowledgements');
   assert.equal(second.get(created.id, otherScope), undefined, 'durable recovery must preserve scope isolation');
   await assert.rejects(
     fs.access(path.join(root, 'ephemeral-first.json')),
@@ -96,6 +100,7 @@ try {
   await second.update(created.id, scope, {
     status: 'completed',
     result: 'durable ledger result',
+    durableNotifications: { enabled: false, delivered: ['running', 'completed'] },
     finishedAt: '2026-09-03T00:01:00.000Z',
   });
   const third = new AgentJobStore(path.join(root, 'ephemeral-third.json'), {
@@ -103,6 +108,7 @@ try {
   });
   await third.initialize();
   assert.equal(third.get(created.id, scope)?.result, 'durable ledger result');
+  assert.deepEqual(third.get(created.id, scope)?.durableNotifications, { enabled: false, delivered: ['running', 'completed'] });
 
   const migrationRuntimeStore = new MemoryRuntimeStore();
   const ledgerScope: RuntimeScope = {

@@ -1,3 +1,12 @@
+export type CoreExecutionEnvironment = 'local-macos' | 'local-linux' | 'local-windows' | 'external-worker';
+/** Trusted worker observations, independent of immutable submission selections. */
+export type CoreExecutionReceipt = Readonly<{
+  source: 'worker-observation';
+  observedAt: string;
+  platform?: 'darwin' | 'linux' | 'win32';
+  model?: string;
+  reasoningEffort?: CoreCodexReasoningEffort;
+}>;
 export type CoreOrchestrationMode = 'read-only' | 'workspace-write';
 export type CoreOrchestrationProvider = 'codex' | 'copilot';
 export type CoreCodexReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
@@ -44,6 +53,9 @@ export type CoreAgentToolUsage = Readonly<{
 
 export type CoreOrchestrationJob = Readonly<{
   id: string;
+  /** Server-owned execution boundary; legacy jobs have no observed environment. */
+  executionEnvironment?: CoreExecutionEnvironment;
+  executionReceipt?: CoreExecutionReceipt;
   idempotencyKey?: string;
   prompt: string;
   provider?: CoreOrchestrationProvider;
@@ -177,3 +189,8 @@ export class CoreOrchestrationValidationError extends Error {
     this.name = 'CoreOrchestrationValidationError';
   }
 }
+
+export const CORE_JOB_STATUS_LABELS: Record<CoreOrchestrationJobStatus, string> = {
+  queued: '대기 중', awaiting_approval: '승인 필요', input_required: '입력 필요',
+  running: '실행 중', completed: '완료', failed: '실패', cancelled: '취소됨',
+};

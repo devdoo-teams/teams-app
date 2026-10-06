@@ -56,6 +56,38 @@ try {
   const confirmCancel = { schemaVersion: '1', action: 'orchestration.confirm-cancel', jobId: cancelJob };
   const cancelConfirmationCard = assertConfirmationCard((await post(baseUrl, activity('', 'confirm-cancel', confirmCancel))).body, '작업 취소 확인');
   const cancelPayload = confirmationPayload(cancelConfirmationCard, 'orchestration.cancel');
+  // A private job must never be rendered or mutated into a shared conversation,
+  // even when the caller owns it or replays a genuine personal confirmation.
+  for (const conversationType of ['groupChat', 'channel', undefined]) {
+    const shared = (text: string, value?: unknown) => ({
+      ...activity(text, `shared-${conversationType}-${Math.random()}`, value),
+      conversation: { id: 'shared-conversation', conversationType, tenantId },
+    });
+    for (const request of [
+      shared(`agent status ${cancelJob}`), shared('agent list'),
+      shared(`agent cancel ${cancelJob}`), shared(`agent approve ${cancelJob}`),
+      shared('', confirmCancel),
+      shared('', { schemaVersion: '1', action: 'orchestration.dismiss-confirmation', jobId: cancelJob }),
+      shared('', cancelPayload),
+      shared('', { schemaVersion: '1', action: 'orchestration.retry', jobId: cancelJob }),
+      shared('', { schemaVersion: '1', action: 'orchestration.provide-input', jobId: cancelJob, input: 'private input' }),
+    ]) {
+      const response = await post(baseUrl, request);
+      assert.equal(response.status, 200);
+      const rendered = JSON.stringify(response.body);
+      assert.equal(rendered.includes(cancelJob), false, 'shared response must not expose private job identity');
+      assert.equal(rendered.includes('취소 확인 흐름'), false, 'shared response must not expose private prompt');
+      assert.equal(rendered.includes('confirmationToken'), false, 'shared response must not issue a private job grant');
+    }
+  }
+  for (const mismatch of [
+    { from: { id: 'other-user', aadObjectId: 'other-user' } },
+    { conversation: { id: 'mp269-conversation', conversationType: 'personal', tenantId: 'other-tenant' },
+      channelData: { tenant: { id: 'other-tenant' } } },
+  ]) {
+    const response = await post(baseUrl, { ...activity('', 'foreign-confirmation', cancelPayload), ...mismatch });
+    assert.equal(JSON.stringify(response.body).includes(cancelJob), false);
+  }
   await assertStatus(baseUrl, cancelJob, 'awaiting_approval', 'first cancel click must not mutate');
   assertConfirmationCard((await post(baseUrl, activity('', 'confirm-cancel-replay', confirmCancel))).body, '작업 취소 확인');
   await assertStatus(baseUrl, cancelJob, 'awaiting_approval', 'duplicate first cancel click must not mutate');

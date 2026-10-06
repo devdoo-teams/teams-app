@@ -149,7 +149,9 @@ for (const [status, expectedActions] of [
     `${status} omits positive/destructive styling unsupported by Teams`,
   );
   assert.equal(card.actions?.at(-1)?.type, 'Action.OpenUrl', `${status} exposes the 업무 허브 tab link`);
-  assert.equal(card.actions?.at(-1)?.url, tabUrl);
+  const detailUrl = new URL(String(card.actions?.at(-1)?.url));
+  assert.deepEqual(JSON.parse(detailUrl.searchParams.get('context')!), { subEntityId: 'job-durable-42' });
+  assert.equal(new URL(detailUrl.searchParams.get('webUrl')!).searchParams.get('jobId'), 'job-durable-42');
 }
 
 const inputCard = cardFrom(createCoreOrchestrationJobActivity(job('input_required'), { openTabUrl: tabUrl }));
@@ -163,7 +165,7 @@ assert.deepEqual(inputForm?.actions?.[0]?.data, {
   jobId: 'job-durable-42',
 });
 assert.equal(inputCard.actions?.at(-1)?.type, 'Action.OpenUrl');
-assert.equal(inputCard.actions?.at(-1)?.url, tabUrl);
+assert.deepEqual(JSON.parse(new URL(String(inputCard.actions?.at(-1)?.url)).searchParams.get('context')!), { subEntityId: 'job-durable-42' });
 
 const detailCard = cardFrom(createCoreOrchestrationJobActivity(job('running'), { openTabUrl: tabUrl }));
 const jobCardJson = JSON.stringify(detailCard);
@@ -307,3 +309,9 @@ for (const command of ['agent run', 'agent new', 'agent continue', 'agent write'
 }
 
 console.log('core-orchestration-chat-card-test: PASS');
+
+for (const status of ['queued', 'running', 'awaiting_approval', 'completed', 'failed', 'cancelled'] as const) {
+  const facts = cardFrom(createCoreOrchestrationJobActivity(job(status))).body?.find(element => element.type === 'FactSet')?.facts as Array<{title:string;value:string}>;
+  assert.equal(facts.find(fact => fact.title === '상태')?.value, status, 'canonical status fact remains machine-readable');
+  assert.ok(facts.find(fact => fact.title === '상태 표시'), 'localized display is a separate fact');
+}

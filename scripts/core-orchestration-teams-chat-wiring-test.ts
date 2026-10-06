@@ -9,7 +9,7 @@ assert.match(source, /parseCoreOrchestrationChatCommand/u, 'Teams chat must cons
 assert.match(source, /createCoreOrchestrationJobActivity/u, 'Teams chat must render the shared attachment-only job card');
 assert.match(source, /createCoreOrchestrationListActivity/u, 'Teams chat must render the shared attachment-only list card');
 assert.match(source, /async function handleCoreOrchestrationChatCommand/u, 'Teams chat must have an explicit Core orchestration handler');
-assert.match(source, /createServerDerivedCoreScope\(scope\)/u, 'Teams activity scope must be branded server-side before service use');
+assert.match(source, /createServerDerivedCoreScope\(scope,/u, 'Teams activity scope must be branded server-side before service use');
 assert.match(source, /coreOrchestrationService\.submit/u, 'submit must use the same application service as the tab');
 assert.match(source, /coreOrchestrationService\.get/u, 'status must use the same application service as the tab');
 assert.match(source, /coreOrchestrationService\.list/u, 'list must use the same application service as the tab');

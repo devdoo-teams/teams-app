@@ -84,3 +84,5 @@ footer { color: #777; font-size: 0.75rem; text-align: center; }
   .work-item-detail input, .work-item-detail select, .work-item-detail textarea { background: #323130; border-color: #605e5c; color: #fff; }
   .secondary, .delete-confirmation { background: #3b3a39; color: #fff; }
 }
+
+.work-item-card-heading .badge { flex-shrink: 0; white-space: nowrap; }

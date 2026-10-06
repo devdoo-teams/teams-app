@@ -1,3 +1,7 @@
+import * as teamsSdk from '@microsoft/teams-js';
+const teamsApp = teamsSdk.app;
+import { parseRequestedJobId, loadRequestedJob, includeRequestedJob } from './job-deep-link.js';
+import { CORE_JOB_STATUS_LABELS } from '../shared/core-orchestration.js';
 import type { VisibleJobConversation } from '../shared/job-conversation.js';
 import { JobConversationView } from './JobConversationView.js';
 import { loadJobConversation, refreshVisibleJobConversation } from './job-conversation.js';
@@ -23,15 +27,7 @@ type PanelPhase = 'loading' | 'ready' | 'error';
 
 const DEFAULT_CLIENT = createCoreOrchestrationClient();
 const ORCHESTRATION_POLL_INTERVAL_MS = 3_000;
-const statusLabels: Record<CoreOrchestrationJob['status'], string> = {
-  queued: '대기 중',
-  awaiting_approval: '승인 필요',
-  input_required: '입력 필요',
-  running: '실행 중',
-  completed: '완료',
-  failed: '실패',
-  cancelled: '취소됨',
-};
+const statusLabels = CORE_JOB_STATUS_LABELS;
 const toolCategoryLabels = {
   skill: '스킬',
   plugin: '플러그인',
@@ -433,12 +429,16 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
           <h3 id="orchestration-detail-heading">작업 상세</h3>
           <p><strong>상태:</strong> {statusLabels[props.selectedJob.status]}</p>
           <p><strong>작업 ID:</strong> {props.selectedJob.id}</p>
+          <p><strong>제출 실행경계:</strong> {props.selectedJob.executionEnvironment ?? '확인되지 않음'}</p>
+          <p><strong>실제 실행환경:</strong> {props.selectedJob.executionReceipt?.platform ?? '확인되지 않음'}</p>
           <p><strong>작업 마지막 갱신:</strong> {props.selectedJob.updatedAt ?? '제공되지 않음'}</p>
           {!props.conversation ? <p><strong>프롬프트:</strong> {props.selectedJob.prompt}</p> : null}
           {props.selectedJob.provider === 'codex' ? (
             <>
-              <p><strong>모델:</strong> {props.selectedJob.model ?? 'CLI 기본값'}</p>
-              <p><strong>추론 수준:</strong> {props.selectedJob.reasoningEffort ?? 'CLI 기본값'}</p>
+              <p><strong>선택 모델:</strong> {props.selectedJob.model ?? 'CLI 기본값'}</p>
+              <p><strong>실제 모델:</strong> {props.selectedJob.executionReceipt?.model ?? '확인되지 않음 (worker 관측 없음)'}</p>
+              <p><strong>선택 추론 수준:</strong> {props.selectedJob.reasoningEffort ?? 'CLI 기본값'}</p>
+              <p><strong>실제 추론 수준:</strong> {props.selectedJob.executionReceipt?.reasoningEffort ?? '확인되지 않음 (worker 관측 없음)'}</p>
               {props.selectedJob.tokenUsage ? (
                 <p>
                   <strong>토큰 사용량:</strong>{' '}
@@ -576,6 +576,15 @@ export type OrchestrationPanelProps = {
 
 export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: OrchestrationPanelProps) {
   const [phase, setPhase] = useState<PanelPhase>('loading');
+  const [requestedJobId, setRequestedJobId] = useState(() => parseRequestedJobId(typeof window === 'undefined' ? '' : window.location.search));
+  useEffect(() => {
+    if (!teamsApp.isInitialized()) return;
+    let active = true;
+    void teamsApp.getContext().then(context => {
+      if (active) setRequestedJobId(parseRequestedJobId(window.location.search, context.page.subPageId));
+    }).catch(() => { /* The URL hint remains subject to the same authenticated detail API. */ });
+    return () => { active = false; };
+  }, []);
   const [jobs, setJobs] = useState<CoreOrchestrationJob[]>([]);
   const [providers, setProviders] = useState<CoreProviderFact[]>([]);
   const [modelCatalog, setModelCatalog] = useState<CoreCodexModelCatalog | undefined>();
@@ -625,11 +634,12 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     }
     try {
       const result = await client.listJobs(controller.signal);
+      const requestedJob = requestedJobId ? await loadRequestedJob(requestedJobId, client, controller.signal) : undefined;
       if (controller.signal.aborted) return;
-      setJobs(result.jobs);
+      setJobs([...includeRequestedJob(result.jobs, requestedJob)]);
       setProviders(result.providers);
       setModelCatalog(result.modelCatalog);
-      setSelectedJob((current) => current ? result.jobs.find((job) => job.id === current.id) ?? null : null);
+      setSelectedJob((current) => current ? result.jobs.find((job) => job.id === current.id) ?? (requestedJob?.id === current.id ? requestedJob : current) : requestedJob ?? null);
       setProviderId((current) => {
         const retained = result.providers.find((provider) => provider.provider === current);
         if (supports(retained, 'submit')) return current;
@@ -646,7 +656,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
         setPhase('error');
       }
     }
-  }, [client]);
+  }, [client, requestedJobId]);
 
   useEffect(() => {
     void load();
@@ -744,6 +754,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
   }, [client, mode, modelCatalog, modelId, prompt, providerId, providers, reasoningEffort, runMutation]);
 
   const selectJob = useCallback(async (jobId: string) => {
+    setRequestedJobId(current => current === jobId ? current : undefined);
     const slot = `detail:${jobId}`;
     setBusyAction(slot);
     setError('');
@@ -759,6 +770,9 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     );
   }, [client, updateJob]);
 
+  useEffect(() => {
+    if (requestedJobId) void selectJob(requestedJobId);
+  }, [requestedJobId, selectJob]);
 
   const cancel = useCallback(async (jobId: string) => {
     const outcome = await runMutation(`cancel:${jobId}`, () => client.cancelJob(jobId), '취소 요청을 보냈습니다.');

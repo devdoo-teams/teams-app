@@ -1,3 +1,4 @@
+import { CoreMessageExtension, coreMessageExtensionError } from './core-message-extension.js';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -178,7 +179,7 @@ import {
   createRuntimeStoreLegacyDispatchMigration,
 } from './storage/agent-dispatch-state-port.js';
 import { createRuntimeStoreCodexWorkerCatalogPort } from './storage/codex-worker-catalog-port.js';
-import type { AgentExecutionDispatcher, AgentExecutionObservation } from './agent-service.js';
+import type { AgentExecutionDispatcher, AgentExecutionObservation } from './agent-execution-port.js';
 import {
   createAgentDispatchSubmissionPort,
   createAgentDispatchTaskFromJob,
@@ -258,6 +259,7 @@ function createQueueExecutionDispatcher(
           result: record.receipt?.result,
           providerExecutionId: record.receipt?.providerExecutionId,
           ...(record.receipt?.tokenUsage ? { tokenUsage: record.receipt.tokenUsage } : {}),
+          ...(record.receipt?.executionReceipt ? { executionReceipt: record.receipt.executionReceipt } : {}),
           ...(tools?.length ? { tools } : {}),
         };
       }
@@ -3923,12 +3925,19 @@ function coreOrchestrationActivityIdempotencyKey(activity: any, scope: AgentJobS
   return `teams-core-chat-v1:${digest}`;
 }
 
+// Only a positively identified personal conversation may expose owner jobs across surfaces.
+// This visibility restriction does not grant another group participant any job access.
+function coreOrchestrationBotScope(activity: any, scope: AgentJobScope) {
+  return createServerDerivedCoreScope(scope,
+    activity?.conversation?.conversationType === 'personal' ? 'principal' : 'conversation');
+}
+
 async function resolveCoreOrchestrationCommand(
   activity: any,
   scope: AgentJobScope,
   command: CoreOrchestrationChatCommand,
 ): Promise<CoreOrchestrationTeamsActivity> {
-  const serverScope = createServerDerivedCoreScope(scope);
+  const serverScope = coreOrchestrationBotScope(activity, scope);
   if (command.kind === 'select-submit') {
     const catalog = await coreOrchestrationService.listCodexModelCatalog();
     return catalog
@@ -4062,7 +4071,7 @@ async function handleCoreOrchestrationCardSubmission(activity: any, send: BotSen
       return;
     }
     try {
-      const serverScope = createServerDerivedCoreScope(scope);
+      const serverScope = coreOrchestrationBotScope(activity, scope);
       const catalog = await coreOrchestrationService.listCodexModelCatalog();
       if (!catalog || catalog.revision !== value.catalogRevision) {
         await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity('Codex 모델 목록이 변경되었습니다. agent choose 명령으로 다시 선택하세요.'));
@@ -4105,7 +4114,7 @@ async function handleCoreOrchestrationCardSubmission(activity: any, send: BotSen
       return;
     }
     try {
-      const job = coreOrchestrationService.get(createServerDerivedCoreScope(scope), { jobId: String(value.jobId) });
+      const job = coreOrchestrationService.get(coreOrchestrationBotScope(activity, scope), { jobId: String(value.jobId) });
       if (!job) {
         await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity('요청한 작업을 찾을 수 없습니다.'));
         return;
@@ -4152,7 +4161,7 @@ async function handleCoreOrchestrationCardSubmission(activity: any, send: BotSen
       return;
     }
     try {
-      const serverScope = createServerDerivedCoreScope(scope);
+      const serverScope = coreOrchestrationBotScope(activity, scope);
       const job = coreOrchestrationService.get(serverScope, { jobId: String(value.jobId) });
       if (!job) {
         await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity('요청한 작업을 찾을 수 없습니다.'));
@@ -4198,6 +4207,21 @@ async function handleCoreOrchestrationCardSubmission(activity: any, send: BotSen
     ? { kind, jobId: String(value.jobId), input: String(value.input) }
     : { kind: kind as 'cancel' | 'approve' | 'retry', jobId: String(value.jobId) };
   await handleCoreOrchestrationChatCommand(activity, send, command);
+}
+
+const coreMessageExtension = new CoreMessageExtension({
+  core: coreOrchestrationService, grants: genUiActionStore, canSubmit: isOperator,
+  personalTabUrl: personalTabDeepLink,
+});
+
+async function handleCoreMessageExtension(activity: any) {
+  const scope = activityScope(activity);
+  if (!scope) return coreMessageExtensionError();
+  try {
+    return activity.name === 'composeExtension/fetchTask'
+      ? await coreMessageExtension.open(scope, activity.value)
+      : await coreMessageExtension.submit(scope, activity.value);
+  } catch { return coreMessageExtensionError(); }
 }
 
 async function handleCoreOrchestrationInvoke(activity: any): Promise<{
@@ -4580,6 +4604,8 @@ http.get('/tabs/home', (request: any, response: any, next: any) => {
 
 if (teamsApp) {
   teamsApp.tab('home', clientDist);
+  teamsApp.on('message.ext.open', async ({ activity }: any) => handleCoreMessageExtension(activity));
+  teamsApp.on('message.ext.submit', async ({ activity }: any) => handleCoreMessageExtension(activity));
   teamsApp.on('install.add', async ({ activity, send }: any) => {
     const runtimeSend = createRuntimeBotSender(activity, send);
     await handleInstall(activity, runtimeSend);
@@ -4652,6 +4678,12 @@ if (teamsApp) {
       const send = createBotSender(undefined, messages, activities);
       await handleGenUiSubmit(request.body, send);
       response.json({ messages, activities });
+      return;
+    }
+
+    if (request.body?.type === 'invoke' && (request.body.name === 'composeExtension/fetchTask'
+      || request.body.name === 'composeExtension/submitAction')) {
+      response.status(200).json(await handleCoreMessageExtension(request.body));
       return;
     }
 

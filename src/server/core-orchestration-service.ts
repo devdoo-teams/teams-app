@@ -36,15 +36,19 @@ import {
 } from './codex-model-catalog.js';
 
 const SERVER_SCOPE = Symbol('server-derived-core-orchestration-scope');
+const CONVERSATION_ONLY = Symbol('conversation-only-core-scope');
 const MAX_LIST_LIMIT = 100;
 const MAX_PROVIDER_INPUT_BYTES = 8_192;
 const MAX_PROVIDER_INPUT_DEPTH = 8;
 const UNSUPPORTED_CONTROL_CHARACTERS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u;
 const SUBMISSION_LOCKS = new WeakMap<CoreAgentJobStorePort, Map<string, Promise<void>>>();
 
-export type ServerDerivedCoreScope = Readonly<AgentJobScope & { [SERVER_SCOPE]: true }>;
+export type ServerDerivedCoreScope = Readonly<AgentJobScope & { [SERVER_SCOPE]: true; [CONVERSATION_ONLY]: boolean }>;
 
-export function createServerDerivedCoreScope(scope: AgentJobScope): ServerDerivedCoreScope {
+export function createServerDerivedCoreScope(
+  scope: AgentJobScope,
+  visibility: 'principal' | 'conversation' = 'principal',
+): ServerDerivedCoreScope {
   for (const name of ['tenantId', 'requesterId', 'conversationId'] as const) {
     const value = scope?.[name];
     if (typeof value !== 'string'
@@ -54,7 +58,7 @@ export function createServerDerivedCoreScope(scope: AgentJobScope): ServerDerive
       throw new CoreOrchestrationValidationError(`${name} must be a non-empty server-derived value.`);
     }
   }
-  return Object.freeze({ ...scope, [SERVER_SCOPE]: true }) as ServerDerivedCoreScope;
+  return Object.freeze({ ...scope, [SERVER_SCOPE]: true, [CONVERSATION_ONLY]: visibility === 'conversation' }) as ServerDerivedCoreScope;
 }
 
 export interface CoreAgentServicePort {
@@ -68,6 +72,7 @@ export interface CoreAgentServicePort {
     model?: string;
     reasoningEffort?: CoreCodexModelSelection['reasoningEffort'];
     catalogRevision?: string;
+    notify?: boolean;
   }): Promise<AgentJob>;
   get(id: string, scope: AgentJobScope): AgentJob | undefined;
   continue(
@@ -136,7 +141,7 @@ export type CoreOrchestrationServiceOptions = Readonly<{
 export class CoreOrchestrationService {
   constructor(private readonly options: CoreOrchestrationServiceOptions) {}
 
-  async submit(scope: ServerDerivedCoreScope, request: CoreSubmitRequest): Promise<CoreSubmitResult> {
+  async submit(scope: ServerDerivedCoreScope, request: CoreSubmitRequest, options: { notify?: boolean } = {}): Promise<CoreSubmitResult> {
     assertServerScope(scope);
     assertNoClientScope(request);
     const normalized = normalizeSubmitRequest(request);
@@ -159,6 +164,7 @@ export class CoreOrchestrationService {
           scope,
           idempotencyKey: request.idempotencyKey,
           requestHash,
+          ...(options.notify === false ? { notify: false } : {}),
         });
         return { job: toCoreJob(job), replayed: false, requestHash };
       } catch (error) {
@@ -203,7 +209,9 @@ export class CoreOrchestrationService {
       throw new CoreOrchestrationValidationError(`limit must be an integer from 1 to ${MAX_LIST_LIMIT}.`);
     }
     const principal = { tenantId: scope.tenantId, requesterId: scope.requesterId };
-    const jobs = this.options.agentService.listForPrincipal?.(principal, limit)
+    const jobs = scope[CONVERSATION_ONLY]
+      ? this.options.agentService.list(scope, limit)
+      : this.options.agentService.listForPrincipal?.(principal, limit)
       ?? this.options.jobStore.listForPrincipal?.(principal, limit)
       ?? this.options.agentService.list(scope, limit);
     return jobs
@@ -320,7 +328,7 @@ export class CoreOrchestrationService {
 
   private resolveJob(scope: ServerDerivedCoreScope, id: string): AgentJob | undefined {
     const direct = this.options.agentService.get(id, scope);
-    if (direct) return direct;
+    if (direct || scope[CONVERSATION_ONLY]) return direct;
     const principal = { tenantId: scope.tenantId, requesterId: scope.requesterId };
     return this.options.agentService.getForPrincipal?.(id, principal)
       ?? this.options.jobStore.getForPrincipal?.(id, principal);
@@ -545,6 +553,7 @@ function assertNoClientScope(request: object): void {
 function toCoreJob(job: AgentJob): CoreOrchestrationJob {
   return {
     id: job.id,
+    ...(job.executionEnvironment ? { executionEnvironment: job.executionEnvironment } : {}),
     ...(job.idempotencyKey ? { idempotencyKey: job.idempotencyKey } : {}),
     prompt: job.prompt,
     ...(job.provider ? { provider: job.provider } : {}),
@@ -560,6 +569,7 @@ function toCoreJob(job: AgentJob): CoreOrchestrationJob {
     ...(job.reasoningEffort ? { reasoningEffort: job.reasoningEffort } : {}),
     ...(job.catalogRevision ? { catalogRevision: job.catalogRevision } : {}),
     ...(job.tokenUsage ? { tokenUsage: { ...job.tokenUsage } } : {}),
+    ...(job.executionReceipt ? { executionReceipt: { ...job.executionReceipt } } : {}),
     createdAt: job.createdAt,
     ...(job.updatedAt ? { updatedAt: job.updatedAt } : {}),
     ...(job.startedAt ? { startedAt: job.startedAt } : {}),

@@ -219,7 +219,7 @@ process.exit(2);
       }));
       const submittedCard = teamsCard(submitted.body, 'gpt-5.6-sol');
       const jobId = cardFact(submittedCard, '작업 ID');
-      assert.equal(cardFact(submittedCard, '추론 수준'), 'high');
+      assert.equal(cardFact(submittedCard, '선택 추론 수준'), 'high');
 
       const completedCard = await waitForCompletedTeamsJob(baseUrl, jobId);
       assert.equal(cardFact(completedCard, '상태'), 'completed');

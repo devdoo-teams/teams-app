@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { readExecutionReceipt } from './agent-execution-receipt.js';
 import { isDeepStrictEqual } from 'node:util';
 
 import {
@@ -438,6 +439,7 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
       throw new TypeError('completion token usage is invalid');
     }
     const tokenUsage = receipt.tokenUsage ? Object.freeze({ ...receipt.tokenUsage }) : undefined;
+    const executionReceipt = readExecutionReceipt(receipt.executionReceipt);
     await this.terminalUpdate(lease, (record) => {
       if (record.cancellationRequested) throw new Error('cancelled dispatch cannot be completed');
       return {
@@ -448,6 +450,7 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
           providerExecutionId,
           completedAt: this.now(),
           ...(tokenUsage ? { tokenUsage } : {}),
+          ...(executionReceipt ? { executionReceipt } : {}),
         },
         error: undefined,
       };
@@ -998,6 +1001,7 @@ function sanitizeRecordForResponse(value: AgentDispatchRecord): AgentDispatchRec
         ),
         completedAt: value.receipt.completedAt,
         ...(value.receipt.tokenUsage ? { tokenUsage: { ...value.receipt.tokenUsage } } : {}),
+        ...(value.receipt.executionReceipt !== undefined ? { executionReceipt: readExecutionReceipt(value.receipt.executionReceipt) } : {}),
       },
     } : {}),
     ...(value.error ? {

@@ -24,3 +24,15 @@ assert.equal(buildTeamsPersonalTabDeepLink({
 }), undefined);
 
 console.log('PASS: Teams personal tab deep links are encoded and reject invalid deployment values');
+
+const jobLink = buildTeamsPersonalTabDeepLink({
+  catalogAppId: '9b20fd94-2ac9-4423-ac1f-ff528ab245c1', tabDomain: 'example.com', jobId: 'task-detail-1',
+});
+assert.ok(jobLink);
+const target = new URL(jobLink);
+assert.deepEqual(JSON.parse(target.searchParams.get('context')!), { subEntityId: 'task-detail-1' });
+assert.equal(new URL(target.searchParams.get('webUrl')!).searchParams.get('jobId'), 'task-detail-1');
+assert.equal(target.searchParams.has('prompt'), false);
+assert.equal(buildTeamsPersonalTabDeepLink({
+  catalogAppId: '9b20fd94-2ac9-4423-ac1f-ff528ab245c1', tabDomain: 'example.com', jobId: '../private?user=other',
+}), undefined);

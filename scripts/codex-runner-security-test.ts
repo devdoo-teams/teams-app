@@ -290,6 +290,10 @@ try {
   const events: string[] = [];
   const result = await runCase('success', (event) => { events.push(event.type ?? ''); });
   assert.equal(result.finalMessage, 'SECURITY_FAKE_OK');
+  assert.equal(result.executionReceipt?.platform, process.platform, 'receipt observes the real process host');
+  assert.equal(result.executionReceipt?.source, 'worker-observation');
+  assert.equal(result.executionReceipt?.model, undefined, 'requested model is not observed model evidence');
+  assert.equal(result.executionReceipt?.reasoningEffort, undefined, 'requested reasoning is not observed effort evidence');
   assert.deepEqual(events, ['thread.started', 'turn.started', 'item.completed', 'turn.completed'], 'callbacks preserve FSM order');
   assert.equal(result.eventCount, 4);
 

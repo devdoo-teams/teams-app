@@ -51,26 +51,8 @@ type ReconciliationState = {
   lastFailureCode: string;
 };
 
-export type AgentExecutionObservation = Readonly<{
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'quarantined';
-  result?: string;
-  providerExecutionId?: string;
-  error?: string;
-  tools?: readonly CoreAgentToolUsage[];
-  tokenUsage?: CoreAgentTokenUsage;
-}>;
-
-/**
- * Durable execution boundary used by runtimes that submit work to an external
- * worker. Implementations must not execute a CLI in the HTTP server process.
- */
-export interface AgentExecutionDispatcher {
-  readonly kind: 'azure-queue';
-  dispatch(job: AgentJob): Promise<void>;
-  observe(job: AgentJob): Promise<AgentExecutionObservation | undefined>;
-  cancel(job: AgentJob, reason: string): Promise<void>;
-  close?(): Promise<void> | void;
-}
+export type { AgentExecutionDispatcher, AgentExecutionObservation } from './agent-execution-port.js';
+import type { AgentExecutionDispatcher } from './agent-execution-port.js';
 
 export const MAX_AGENT_PROMPT_LENGTH = 2_000;
 
@@ -181,6 +163,7 @@ export class AgentService {
       defaultProvider?: CliAgentProvider;
       providerRunners?: Partial<Record<CliAgentProvider, CodexRunner>>;
       executionDispatcher?: AgentExecutionDispatcher;
+      durableObservationIntervalMs?: number;
     } = {},
   ) {
     this.agentLabel = options.agentLabel?.trim() || 'Codex';
@@ -211,6 +194,8 @@ export class AgentService {
   private pendingSubmissions = 0;
   private readonly submissionDrainWaiters = new Set<() => void>();
   private closing = false;
+  private durableObservationTimer?: ReturnType<typeof setTimeout>;
+  private durableObservationInFlight?: Promise<void>;
   // A workspace-write job's changed-path proof is a before/after observation
   // of the shared checkout. Serialize the whole observation and runner
   // lifetime so another job cannot contaminate that proof or the commit step.
@@ -226,11 +211,9 @@ export class AgentService {
       for (const job of this.store.listLocalOnly(Number.MAX_SAFE_INTEGER)) {
         const scope = scopeForJob(job);
         if (!scope || job.status === 'awaiting_approval') continue;
-        const reconciled = await this.reconcileDurableObservation(job, scope);
-        if (reconciled && !isTerminalJob(job) && isTerminalJob(reconciled)) {
-          await this.finalizeAdmission(reconciled, scope);
-        }
+        await this.observe(job.id, scope);
       }
+      this.scheduleDurableObservation();
     } else {
       await this.store.recoverInterruptedJobs();
       await this.reconstructAdmissionFromStore();
@@ -250,6 +233,16 @@ export class AgentService {
           : [],
       ),
     );
+    for (const job of this.store.listLocalOnly(Number.MAX_SAFE_INTEGER)) {
+      const scope = scopeForJob(job);
+      if (!scope || !isTerminalJob(job) || !this.admissionController.requiresReconciliation(job.id)) continue;
+      const marker = 'AGENT_RECONCILIATION_REQUIRED: 재시작 시 미완료 terminal cleanup이 확인됐습니다. 운영자 복구가 필요합니다.';
+      if (!job.error) await this.store.update(job.id, scope, { error: marker });
+      else if (!job.error.startsWith('AGENT_RECONCILIATION_REQUIRED:')) {
+        // Preserve authoritative worker failure diagnostics; expose cleanup separately in progress.
+        await this.store.appendProgress(job.id, scope, marker);
+      }
+    }
   }
 
   async submit(input: {
@@ -284,7 +277,15 @@ export class AgentService {
         if (!this.options.executionDispatcher) {
           executionWorkspace = await this.executionPolicy.prepareWorkspace(input.mode, input.scope, prompt);
         }
-        job = await this.store.create({ ...input, prompt, provider });
+        job = await this.store.create({ ...input, prompt, provider,
+          executionEnvironment: this.options.executionDispatcher ? 'external-worker'
+            : process.platform === 'darwin' ? 'local-macos'
+            : process.platform === 'win32' ? 'local-windows'
+            : process.platform === 'linux' ? 'local-linux' : undefined,
+          ...(this.options.executionDispatcher || input.notify === false ? {
+            durableNotifications: { enabled: input.notify !== false, delivered: [] },
+          } : {}),
+        });
         await admission.lease.bindJob(job.id);
         this.admissionLeases.set(job.id, admission.lease);
         if (executionWorkspace) this.executionWorkspaces.set(job.id, executionWorkspace);
@@ -332,7 +333,7 @@ export class AgentService {
       parentJobId: previous.id,
       threadId: previous.threadId,
       ...(jobSelection(previous) ?? {}),
-      notify: options.notify,
+      notify: options.notify ?? previous.durableNotifications?.enabled,
       onProgress: options.onProgress,
     });
   }
@@ -404,13 +405,15 @@ export class AgentService {
 
     if (queued) {
       if (this.options.executionDispatcher) await this.dispatchExternally(queued, scope);
-      else this.launchExecution(queued, true);
+      else this.launchExecution(queued, queued.durableNotifications?.enabled !== false);
     }
     return queued;
   }
 
   async close(options: { closeAdmission?: boolean } = {}): Promise<void> {
     this.closing = true;
+    if (this.durableObservationTimer) clearTimeout(this.durableObservationTimer);
+    await this.durableObservationInFlight;
     if (options.closeAdmission !== false) await this.admissionController.close();
     await this.waitForPendingSubmissions();
     const closed = new Set<CodexRunner>();
@@ -511,25 +514,36 @@ export class AgentService {
 
   async reconcileTerminal(id: string, scope: AgentJobScope): Promise<AgentJob | undefined> {
     this.assertMutationAllowed(scope);
-    const reconciled = await this.withJobMutationLock(id, scope, async () => {
+    return this.withJobMutationLock(id, scope, async () => {
       const latest = this.store.get(id, scope);
       if (!latest) return undefined;
-      if (!this.reconciliation.has(id) && latest.status !== 'running') return latest;
-      return this.store.update(id, scope, {
+      const terminalPersistencePending = this.reconciliation.has(id) || latest.status === 'running';
+      const cleanupPending = isTerminalJob(latest) && (
+        latest.error?.startsWith('AGENT_RECONCILIATION_REQUIRED:')
+        || this.admissionController.requiresReconciliation(id)
+      );
+      if (!terminalPersistencePending && !cleanupPending) return latest;
+      const reconciled = terminalPersistencePending ? await this.store.update(id, scope, {
         status: 'failed',
         error: 'AGENT_OPERATOR_RECONCILED: 운영자가 미해결 terminal 상태를 실패로 확정했습니다.',
         finishedAt: new Date().toISOString(),
-      });
-    });
-    if (reconciled) {
+      }) : latest;
+      if (!reconciled) return undefined;
       this.reconciliation.delete(id);
       try {
         await this.finalizeAdmission(reconciled, scope);
+        if (cleanupPending && !terminalPersistencePending) {
+          await this.store.appendProgress(id, scope, 'AGENT_CLEANUP_RECONCILED: 운영자 복구로 terminal cleanup이 완료됐습니다.');
+          return this.store.update(id, scope, {
+            error: reconciled.error?.startsWith('AGENT_RECONCILIATION_REQUIRED:') ? undefined : reconciled.error,
+          });
+        }
       } catch {
         // The visible durable error and held capacity are the recovery state.
+        return this.store.get(id, scope);
       }
-    }
-    return reconciled;
+      return reconciled;
+    });
   }
 
   async retry(
@@ -552,7 +566,7 @@ export class AgentService {
       parentJobId: previous.id,
       threadId: previous.threadId,
       ...(jobSelection(previous) ?? {}),
-      notify: options.notify,
+      notify: options.notify ?? previous.durableNotifications?.enabled,
       onProgress: options.onProgress,
     });
   }
@@ -578,11 +592,15 @@ export class AgentService {
     const dispatcher = this.options.executionDispatcher;
     if (!job || !dispatcher || job.status === 'awaiting_approval') return job;
 
-    const refreshed = await this.reconcileDurableObservation(job, scope);
-    if (refreshed && !isTerminalJob(job) && isTerminalJob(refreshed)) {
-      await this.finalizeAdmission(refreshed, scope);
-    }
-    return refreshed;
+    return this.withJobMutationLock(id, scope, async () => {
+      const latest = this.store.get(id, scope);
+      if (!latest || latest.status === 'awaiting_approval') return latest;
+      const refreshed = await this.reconcileDurableObservation(latest, scope);
+      if (refreshed && !isTerminalJob(latest) && isTerminalJob(refreshed)) {
+        await this.finalizeAdmission(refreshed, scope);
+      }
+      return refreshed;
+    });
   }
 
   private async reconcileDurableObservation(
@@ -592,10 +610,11 @@ export class AgentService {
     const dispatcher = this.options.executionDispatcher;
     if (!dispatcher) return job;
     const observation = await dispatcher.observe(job);
-    if (!observation) return job;
+    if (!observation) return this.deliverDurableNotification(job, scope);
     const status = observation.status === 'quarantined' ? 'failed' : observation.status;
     if (isTerminalJob(job) && !isTerminalStatus(status)) return job;
     const update: Partial<AgentJob> = { status };
+    // Legacy jobs have no reliable notify intent; only newly persisted intent enables cards.
     if (observation.tools?.length) {
       update.tools = mergeObservedToolUsage(job.tools ?? [], observation.tools);
     }
@@ -604,20 +623,74 @@ export class AgentService {
       update.result = observation.result;
       update.threadId = observation.providerExecutionId;
       if (observation.tokenUsage) update.tokenUsage = observation.tokenUsage;
+      if (observation.executionReceipt) update.executionReceipt = observation.executionReceipt;
       update.error = undefined;
-      update.finishedAt = new Date().toISOString();
+      update.finishedAt = job.status === status ? job.finishedAt : new Date().toISOString();
     } else if (status === 'failed') {
       update.result = undefined;
       update.error = observation.error ?? (observation.status === 'quarantined'
         ? 'AZURE_DISPATCH_QUARANTINED: durable worker delivery was quarantined.'
         : 'AZURE_DISPATCH_FAILED: durable worker execution failed.');
-      update.finishedAt = new Date().toISOString();
+      update.finishedAt = job.status === status ? job.finishedAt : new Date().toISOString();
     } else if (status === 'cancelled') {
       update.result = undefined;
       update.error = undefined;
-      update.finishedAt = new Date().toISOString();
+      update.finishedAt = job.status === status ? job.finishedAt : new Date().toISOString();
     }
-    return this.store.update(job.id, scope, update);
+    // Worker terminal success does not prove that server-side cleanup released admission.
+    if (isTerminalJob(job) && job.error?.startsWith('AGENT_RECONCILIATION_REQUIRED:')) {
+      update.error = job.error;
+    }
+    const refreshed = await this.store.update(job.id, scope, update);
+    return refreshed ? this.deliverDurableNotification(refreshed, scope) : undefined;
+  }
+
+  private async deliverDurableNotification(job: AgentJob, scope: AgentJobScope): Promise<AgentJob> {
+    const state = job.durableNotifications;
+    const status = job.status;
+    if (!state?.enabled || !['running', 'completed', 'failed'].includes(status)
+        || state.delivered.includes(status as 'running' | 'completed' | 'failed')) return job;
+    const event: Omit<AgentNotification, 'conversationId' | 'job'> = status === 'running'
+      ? { kind: 'progress', phase: 'analysis', message: `작업 ${job.id}이 실행을 시작했습니다.` }
+      : status === 'completed'
+        ? { kind: 'result', phase: 'completed', message: this.formatCompletion(job.id, job.result!) }
+        : { kind: 'error', phase: 'failed', message: `작업 ${job.id}이 실패했습니다.\n\n${redactCliDiagnostics(job.error ?? 'Azure worker execution failed.', {
+            paths: [this.workspace, process.env.HOME, process.env.USERPROFILE], maxChars: 4_000,
+          })}` };
+    try {
+      await this.notifyIfEnabled(job, event, undefined, state.enabled);
+    } catch {
+      // Keep the authoritative result and leave delivery pending for the next poll.
+      return job;
+    }
+    // At-least-once boundary: a crash between send and ack may resend the card.
+    return await this.store.update(job.id, scope, { durableNotifications: {
+      enabled: state.enabled, delivered: [...state.delivered, status as 'running' | 'completed' | 'failed'],
+    } }) ?? job;
+  }
+
+  private scheduleDurableObservation(): void {
+    if (this.closing || !this.options.executionDispatcher) return;
+    const interval = this.options.durableObservationIntervalMs ?? 1_000;
+    this.durableObservationTimer = setTimeout(() => {
+      this.durableObservationInFlight = this.pollDurableObservations().finally(() => {
+        this.durableObservationInFlight = undefined;
+        this.scheduleDurableObservation();
+      });
+    }, Number.isFinite(interval) && interval >= 10 ? interval : 1_000);
+    this.durableObservationTimer.unref();
+  }
+
+  private async pollDurableObservations(): Promise<void> {
+    for (const job of this.store.listLocalOnly(Number.MAX_SAFE_INTEGER)) {
+      if (this.closing) return;
+      const scope = scopeForJob(job);
+      if (!scope || job.status === 'awaiting_approval' || job.status === 'cancelled') continue;
+      if (isTerminalJob(job) && (!job.durableNotifications?.enabled
+          || job.durableNotifications.delivered.includes(job.status as 'completed' | 'failed'))) continue;
+      try { await this.observe(job.id, scope); }
+      catch { /* Retry queue/read or acknowledgement failures on the next bounded tick. */ }
+    }
   }
 
   list(scope: AgentJobScope, limit = 8): AgentJob[] {
@@ -864,6 +937,7 @@ export class AgentService {
               threadId: result.threadId,
               result: result.finalMessage,
               ...(result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
+              ...(result.executionReceipt ? { executionReceipt: result.executionReceipt } : {}),
               ...(changedPaths ? { changedPaths } : {}),
               finishedAt: new Date().toISOString(),
             });
@@ -1122,6 +1196,7 @@ export class AgentService {
     notificationIntent?: boolean,
   ): Promise<void> {
     const state = this.progressStates.get(job.id);
+    if (job.durableNotifications?.enabled === false) return;
     if ((notificationIntent ?? progressState?.notify ?? state?.notify ?? true) === false) return;
 
     const scope = scopeForJob(job);

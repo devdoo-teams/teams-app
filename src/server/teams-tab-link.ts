@@ -5,6 +5,7 @@ export type TeamsPersonalTabDeepLinkInput = {
   catalogAppId: string;
   tabDomain: string;
   tenantId?: string;
+  jobId?: string;
 };
 
 function validGuid(value: string): boolean {
@@ -35,5 +36,21 @@ export function buildTeamsPersonalTabDeepLink(
   });
   if (tenantId) params.set('tenantId', tenantId);
 
-  return `https://teams.microsoft.com/l/entity/${catalogAppId}/home?${params.toString()}`;
+  const link = `https://teams.microsoft.com/l/entity/${catalogAppId}/home?${params.toString()}`;
+  return input.jobId === undefined ? link : withTeamsJobDeepLink(link, input.jobId);
+}
+
+/** Navigation hint only: the tab must reauthorize the job using its authenticated API. */
+export function withTeamsJobDeepLink(base: string | undefined, jobId: string): string | undefined {
+  if (!base || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(jobId)) return undefined;
+  try {
+    const url = new URL(base);
+    if (url.origin !== 'https://teams.microsoft.com' || !url.pathname.startsWith('/l/entity/')) return undefined;
+    const web = new URL(url.searchParams.get('webUrl') ?? '');
+    if (web.protocol !== 'https:' || web.username || web.password) return undefined;
+    web.searchParams.set('jobId', jobId);
+    url.searchParams.set('webUrl', web.toString());
+    url.searchParams.set('context', JSON.stringify({ subEntityId: jobId }));
+    return url.toString();
+  } catch { return undefined; }
 }

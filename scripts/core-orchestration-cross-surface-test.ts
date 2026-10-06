@@ -88,6 +88,18 @@ try {
   assert.equal(service.get(chatScope, { jobId: tabCreated.job.id })?.id, tabCreated.job.id);
   assert.ok(service.list(chatScope).some((job) => job.id === tabCreated.job.id));
 
+  const groupScope = createServerDerivedCoreScope({ ...chatScope, conversationId: 'group-chat' }, 'conversation');
+  assert.equal(service.get(groupScope, { jobId: tabCreated.job.id }), undefined,
+    'group scope must hide the owner personal job');
+  assert.deepEqual(service.list(groupScope), [], 'group list must not expose private jobs');
+  for (const action of ['approve', 'cancel', 'retry'] as const) {
+    assert.equal(await service[action](groupScope, { jobId: tabCreated.job.id }), undefined);
+  }
+  assert.equal(await service.continue(groupScope, { jobId: tabCreated.job.id, prompt: 'private continuation' }), undefined);
+  assert.equal(await service.provideInput(groupScope, { jobId: tabCreated.job.id, input: 'private input' }), undefined);
+  assert.equal(service.get(chatScope, { jobId: tabCreated.job.id })?.id, tabCreated.job.id,
+    'personal cross-surface access remains available');
+
   const approvedFromChat = await service.approve(chatScope, { jobId: tabCreated.job.id });
   assert.equal(approvedFromChat?.id, tabCreated.job.id);
   assert.equal(approvedFromChat?.status, 'queued');
@@ -97,6 +109,16 @@ try {
   assert.equal(cancelledFromTabAfterApproval?.id, tabCreated.job.id);
   assert.equal(cancelledFromTabAfterApproval?.status, 'cancelled');
   assert.equal(cancellations, 2, 'the second cross-surface mutation targets the stored tab scope');
+
+  const groupCreated = await service.submit(groupScope, {
+    idempotencyKey: 'group-owned', prompt: 'group-owned request', provider: 'codex', mode: 'workspace-write',
+  });
+  assert.equal(service.get(groupScope, { jobId: groupCreated.job.id })?.id, groupCreated.job.id);
+  assert.deepEqual(service.list(groupScope).map(job => job.id), [groupCreated.job.id]);
+  const otherGroupUser = createServerDerivedCoreScope({ ...groupScope, requesterId: 'other-user' }, 'conversation');
+  assert.equal(service.get(otherGroupUser, { jobId: groupCreated.job.id }), undefined);
+  assert.deepEqual(service.list(otherGroupUser), []);
+  await service.cancel(groupScope, { jobId: groupCreated.job.id });
 
   const storedTabJob = store.getLocalOnly(tabCreated.job.id);
   assert.equal(storedTabJob?.tenantId, tabScope.tenantId);

@@ -196,6 +196,34 @@ try {
   assert.match(blockedTerminal.error ?? '', /browser-unavailable/u, 'blocked fixture reaches the diagnosed blocked path');
   assert.equal(blockedTerminal.id, blockedJobId, 'runForCopilot returns the submitted blocked job');
 
+  const privateWrite = await service.submit({
+    prompt: 'reviewed private writing task', mode: 'workspace-write', scope: scopes.completed, notify: false,
+  });
+  assert.equal(privateWrite.status, 'awaiting_approval');
+  await service.approve(privateWrite.id, scopes.completed);
+  await runner.waitForStart(4);
+  runner.complete('private writing result');
+  await waitForStatus(store, privateWrite.id, scopes.completed, 'completed');
+  assert.deepEqual(notifications.filter(({ job }) => job.id === privateWrite.id), [],
+    'approval must preserve the durable private job notification intent');
+
+  const privateContinuation = await service.continue(privateWrite.id, 'continue privately', scopes.completed);
+  assert.ok(privateContinuation);
+  assert.equal(privateContinuation.durableNotifications?.enabled, false);
+  await service.approve(privateContinuation.id, scopes.completed);
+  await runner.waitForStart(5);
+  runner.complete('continued private result');
+  await waitForStatus(store, privateContinuation.id, scopes.completed, 'completed');
+  assert.deepEqual(notifications.filter(({ job }) => job.id === privateContinuation.id), []);
+
+  const privateRetry = await service.retry(failedJobId, scopes.failed);
+  assert.ok(privateRetry);
+  assert.equal(privateRetry.durableNotifications?.enabled, false);
+  await runner.waitForStart(6);
+  runner.complete('private retry result');
+  await waitForStatus(store, privateRetry.id, scopes.failed, 'completed');
+  assert.deepEqual(notifications.filter(({ job }) => job.id === privateRetry.id), []);
+
   const observed = [
     { branch: 'completed', notifications: notifications.filter(({ job }) => job.id === completedJob.id).map(({ kind, phase }) => `${kind}/${phase}`) },
     { branch: 'failed', notifications: notifications.filter(({ job }) => job.id === failedJobId).map(({ kind, phase }) => `${kind}/${phase}`) },
