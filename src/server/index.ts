@@ -139,6 +139,7 @@ import { A2AStore } from './a2a-store.js';
 import { deriveA2AExecutionReadiness } from './a2a-execution-readiness.js';
 import type { A2ATask } from './a2a-contract.js';
 import { TeamsA2AOutboundStore } from './teams-a2a-outbound-store.js';
+import { ensureTeamsA2ACompletionIntent, isTeamsA2ACompletionFingerprint } from './teams-a2a-completion-intent.js';
 import { createA2AExecutionAdapter } from './a2a-execution.js';
 import { serializeA2ADispatchAudit } from './a2a-observability.js';
 import { createA2AAgentAuthorizationPolicy } from './a2a-agent-authorization.js';
@@ -3656,14 +3657,6 @@ function a2aAcceptedPresentation(parentTaskId: string): { text: string; envelope
   };
 }
 
-function a2aCompletionIntentFingerprint(parentTaskId: string, scope: AgentJobScope): string {
-  return crypto.createHash('sha256').update(JSON.stringify({
-    schemaVersion: 'teams-a2a-completion-intent.v1',
-    parentTaskId,
-    scope,
-  }), 'utf8').digest('hex');
-}
-
 async function dispatchA2ACompletion(
   completion: Promise<A2AProductionCollaborationResult>,
   parentTaskId: string,
@@ -3748,18 +3741,17 @@ async function recoverQueuedA2ACompletions(): Promise<void> {
   const terminalStatuses = new Set<A2ATask['status']>(['completed', 'failed', 'canceled']);
   for (const record of a2aStore.listTasksByIdempotencyPrefix(TEAMS_A2A_ASYNC_IDEMPOTENCY_PREFIX, 1_000)) {
     if (!terminalStatuses.has(record.task.status)) continue;
-    await a2aOutboundStore.createOrGetCompletionIntent({
-      parentTaskId: record.task.id,
-      scope: record.task.scope,
-      payloadSha256: a2aCompletionIntentFingerprint(record.task.id, record.task.scope),
-    });
+    // Existing accepted/rejected/ambiguous bindings are immutable evidence, not
+    // missing intents. One old binding must not abort other queued recoveries.
+    if (a2aOutboundStore.getCompletionIntent(record.task.id, record.task.scope)) continue;
+    await ensureTeamsA2ACompletionIntent(a2aOutboundStore, record.task.id, record.task.scope);
   }
 
   for (const intent of a2aOutboundStore.listQueued(100)) {
     const parent = a2aStore.getTask(intent.parentTaskId, intent.scope);
     if (!parent || !terminalStatuses.has(parent.status)) continue;
 
-    if (intent.payloadSha256 !== a2aCompletionIntentFingerprint(parent.id, intent.scope)) {
+    if (!isTeamsA2ACompletionFingerprint(intent.payloadSha256, parent.id, intent.scope)) {
       console.error('A2A Teams completion recovery skipped an intent with an invalid payload fingerprint', intent.id);
       continue;
     }
@@ -3808,11 +3800,7 @@ async function handleBotA2ACollaboration(activity: any, send: BotSend, scope: Ag
       return;
     }
 
-    const durable = await a2aOutboundStore.createOrGetCompletionIntent({
-      parentTaskId: started.parentTask.id,
-      scope,
-      payloadSha256: a2aCompletionIntentFingerprint(started.parentTask.id, scope),
-    });
+    const durable = await ensureTeamsA2ACompletionIntent(a2aOutboundStore, started.parentTask.id, scope);
 
     const ownsDispatch = started.created || durable.created;
     if (started.created) {

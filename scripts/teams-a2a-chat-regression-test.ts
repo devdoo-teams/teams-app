@@ -41,6 +41,7 @@ type PersistedA2AState = {
 };
 
 type PersistedOutboundIntent = {
+  payloadSha256?: unknown;
   parentTaskId?: unknown;
   scope?: PersistedA2ATask['scope'];
   kind?: unknown;
@@ -141,7 +142,7 @@ try {
 
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
-  child = spawn(process.execPath, [entry], {
+  const serverOptions: Parameters<typeof spawn>[2] = {
     cwd: root,
     env: {
       ...process.env,
@@ -183,7 +184,8 @@ try {
       TEAMS_OPTIONAL_RUNTIME: '',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  };
+  child = spawn(process.execPath, [entry], serverOptions);
   child.stdout?.on('data', (chunk) => { serverOutput += chunk.toString(); });
   child.stderr?.on('data', (chunk) => { serverOutput += chunk.toString(); });
 
@@ -334,6 +336,60 @@ try {
       `Server tail: ${serverOutput.slice(-2_000)}`,
     ].join('\n'),
   );
+
+  // Replay a real SDK Activity against a settled historical receipt after a
+  // restart. Change only this synthetic fixture's fingerprint, never a live store.
+  await stop(child);
+  const parentTaskId = parentIds[0];
+  assert.ok(parentTaskId);
+  const settledState = await readJson<PersistedOutboundState>(a2aOutboundStorePath, {});
+  const completion = Object.values(settledState.intents ?? {})
+    .find((intent) => intent.parentTaskId === parentTaskId);
+  assert.ok(completion);
+  const settledJobs = await readJson<PersistedAgentJob[]>(agentJobStorePath, []);
+  for (const binding of ['canonical', 'historical', 'invalid'] as const) {
+    completion.payloadSha256 = crypto.createHash('sha256').update(
+      binding !== 'invalid'
+        ? JSON.stringify({
+          schemaVersion: 'teams-a2a-completion-intent.v1', parentTaskId,
+          scope: binding === 'canonical'
+            ? { tenantId, requesterId, conversationId }
+            : { requesterId, conversationId, tenantId },
+        })
+        : 'unrelated-completion-payload',
+      'utf8',
+    ).digest('hex');
+    await fs.writeFile(a2aOutboundStorePath, JSON.stringify(settledState), 'utf8');
+    const expectedReceipt = structuredClone(completion);
+    child = spawn(process.execPath, [entry], serverOptions);
+    child.stdout?.on('data', (chunk) => { serverOutput += chunk.toString(); });
+    child.stderr?.on('data', (chunk) => { serverOutput += chunk.toString(); });
+    await waitForHealth(baseUrl, child);
+    const replay = await request(baseUrl, '/api/messages', {
+      method: 'POST', body: JSON.stringify(duplicateActivity),
+    });
+    assert.ok(replay.response.ok, `SDK ${binding} replay must return a handled response`);
+    const replayOutbox = await requestJson(baseUrl, `/api/debug/agent-outbox/${conversationId}`, Date.now() + requestTimeoutMs);
+    const replayActivities = replayOutbox.activities as unknown[];
+    assert.ok(Array.isArray(replayActivities));
+    if (binding !== 'invalid') {
+      assert.deepEqual(replayActivities, [], `${binding} accepted replay must not resend or emit an error`);
+    } else {
+      assert.equal(replayActivities.length, 1, 'invalid completion binding must fail closed with one error card');
+      assert.match(JSON.stringify(adaptiveCard(replayActivities[0])), /응답 엔진을 실행하지 못했습니다/u);
+    }
+    const replayState = await readJson<PersistedOutboundState>(a2aOutboundStorePath, {});
+    assert.deepEqual(
+      Object.values(replayState.intents ?? {}).find((intent) => intent.parentTaskId === parentTaskId),
+      expectedReceipt,
+      `${binding} replay must preserve the settled receipt, attempt count and activity ID`,
+    );
+    assert.deepEqual(
+      await readJson<PersistedAgentJob[]>(agentJobStorePath, []), settledJobs,
+      `${binding} duplicate replay must not rerun either specialist job`,
+    );
+    await stop(child);
+  }
 
   console.log('teams-a2a-chat-regression-test: PASS');
 } finally {

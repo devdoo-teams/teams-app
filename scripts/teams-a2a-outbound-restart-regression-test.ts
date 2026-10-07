@@ -79,6 +79,51 @@ try {
 
   const outboundStore = new TeamsA2AOutboundStore(a2aOutboundStorePath);
   await outboundStore.initialize();
+  const legacyReceipts = [];
+  for (const status of ['connector-accepted', 'connector-rejected', 'ambiguous'] as const) {
+    // Actual Bot activityScope order differs from the normalized persisted scope.
+    const legacyScope = {
+      requesterId: scope.requesterId,
+      conversationId: `outbound-restart-legacy-${status}`,
+      tenantId: scope.tenantId,
+    };
+    const legacyParent = await createCompletedTask(
+      a2aStore, legacyScope, `teams-activity-async-v1:legacy-${status}`, 'Already settled synthetic completion.',
+    );
+    const legacy = await outboundStore.createOrGetCompletionIntent({
+      parentTaskId: legacyParent.id,
+      scope: legacyScope,
+      payloadSha256: completionIntentFingerprint(legacyParent.id, legacyScope),
+    });
+    const lease = await outboundStore.claim(legacy.intent.id, legacyScope, `fixture-${status}`, 30_000);
+    assert.ok(lease);
+    const settled = status === 'connector-accepted'
+      ? await outboundStore.recordConnectorAccepted(lease.id, legacyScope, lease.leaseToken!, 'already-accepted-activity')
+      : status === 'connector-rejected'
+        ? await outboundStore.recordConnectorRejected(lease.id, legacyScope, lease.leaseToken!, 'Synthetic rejection.')
+        : await outboundStore.recordAmbiguous(lease.id, legacyScope, lease.leaseToken!, 'Synthetic ambiguous outcome.');
+    legacyReceipts.push({ scope: legacyScope, intent: settled });
+  }
+  const legacyQueuedScope = {
+    requesterId: scope.requesterId,
+    conversationId: 'outbound-restart-legacy-queued',
+    tenantId: scope.tenantId,
+  };
+  const legacyQueuedParent = await createCompletedTask(
+    a2aStore, legacyQueuedScope, 'teams-activity-async-v1:legacy-queued', 'Recover the valid legacy queued completion exactly once.',
+  );
+  const legacyQueued = await outboundStore.createOrGetCompletionIntent({
+    parentTaskId: legacyQueuedParent.id,
+    scope: legacyQueuedScope,
+    payloadSha256: completionIntentFingerprint(legacyQueuedParent.id, legacyQueuedScope),
+  });
+  const invalidScope = { ...scope, conversationId: 'outbound-restart-invalid-binding' };
+  const invalidParent = await createCompletedTask(
+    a2aStore, invalidScope, 'teams-activity-async-v1:invalid-binding', 'This mismatched binding must never be sent.',
+  );
+  const invalid = await outboundStore.createOrGetCompletionIntent({
+    parentTaskId: invalidParent.id, scope: invalidScope, payloadSha256: 'a'.repeat(64),
+  });
   const outbound = await outboundStore.createOrGetCompletionIntent({
     parentTaskId: parent.id,
     scope,
@@ -192,6 +237,22 @@ try {
   );
   assert.equal(settledRepairedIntent.status, 'connector-accepted');
   assert.equal(settledRepairedIntent.attempts, 1);
+
+  const legacyActivities = await waitForRecoveredCompletion(baseUrl, legacyQueuedScope.conversationId, 4_000);
+  assert.equal(legacyActivities.length, 1, 'valid old Bot-order queued completion recovers once');
+  const legacyRecovered = await waitForTerminalIntent(a2aOutboundStorePath, legacyQueued.intent.id, legacyQueuedScope, 4_000);
+  assert.equal(legacyRecovered.status, 'connector-accepted');
+  assert.equal(legacyRecovered.attempts, 1);
+  assert.equal(legacyRecovered.payloadSha256, legacyQueued.intent.payloadSha256, 'do not rewrite legacy payload binding');
+  for (const settled of legacyReceipts) {
+    const actual = await readTeamsA2AIntent(a2aOutboundStorePath, settled.intent.id, settled.scope);
+    assert.deepEqual(actual, settled.intent, 'accepted/rejected/ambiguous durable receipt remains exactly unchanged');
+    const replay = await requestJson(baseUrl, `/api/debug/agent-outbox/${settled.scope.conversationId}`);
+    assert.deepEqual(replay.activities, [], 'settled completions must never be resent');
+  }
+  assert.deepEqual(await readTeamsA2AIntent(a2aOutboundStorePath, invalid.intent.id, invalidScope), invalid.intent);
+  assert.deepEqual((await requestJson(baseUrl, `/api/debug/agent-outbox/${invalidScope.conversationId}`)).activities, [], 'arbitrary binding remains fail-closed');
+  assert.doesNotMatch(serverOutput, /A2A Teams queued completion recovery failed/u, 'a settled old binding must not abort unrelated recovery');
 
   await delay(250);
   const duplicate = await requestJson(baseUrl, `/api/debug/agent-outbox/${scope.conversationId}`);

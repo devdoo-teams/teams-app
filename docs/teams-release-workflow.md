@@ -139,6 +139,36 @@ MFA, CAPTCHA와 같은 사용자만 처리할 수 있는 보안 프롬프트는 
 
 ## 순서
 
+### 로컬 Mac 공개 프로세스 전환의 staging 선행 게이트
+
+새 공개 프로세스를 시작하기 전에 pinned clean Core 빌드의 `dist/server` 전체 출력과
+`dist/client` 전체 출력을 runtime 디렉터리에 옮겨 SHA-256 목록으로 대조한다.
+`index.js`와 marker만 복사하지 않는다. [esbuild splitting 계약](https://esbuild.github.io/api/#splitting)은
+ESM 공유 모듈과 dynamic import를 별도 파일로 출력한다. 설치 help의
+`--splitting`/`--outdir`/`--format=esm`과 실제 빌드 설정을 함께 확인한다.
+
+기존 공개 PID에 종료 신호를 보내기 전에 다음을 모두 read-back한다.
+
+1. 현재 source full commit, Core/clean/schema3 marker, 실제 bundle SHA, 새 ZIP manifest/version/권한/SHA,
+   동일 SHA CI 및 기존 앱·설치 대상·availability의 포털 선행 scope gate를 검증한다.
+2. 생성된 모든 server/client 파일의 목록·SHA를 source와 staging 양쪽에서 비교하고,
+   AST 기반 static/dynamic 상대 import closure와 client HTML script/style closure를 확인한다.
+   선택 provider external은 현재 Core 빌드가 명시적으로 제외한 목록과 disabled runtime만 허용한다.
+   누락 module/asset fixture는 RED, 전체 staging은 GREEN이어야 한다.
+3. 기존 공개 프로세스와 다른 loopback 포트에서 새 runtime을 먼저 부팅한다. 실제 자격증명을
+   정상 로드하되 auth 내용을 복사하거나 출력하지 않고, 별도 빈 합성 store로 사용자 작업·알림을
+   격리한다. `teams-authenticated`/`teams-sdk`/`teams-sdk`와 exact release identity를 확인한다.
+4. 그 별도 포트에서 실제 tab HTML과 HTML이 참조한 모든 JS/CSS의 GET200, content type,
+   응답 byte SHA를 staging manifest와 대조한다. 이 검사는 공개 전환 **전에** 끝내야 한다.
+5. 합성 probe의 정확한 PID만 정상 종료하고, 기존 공개 PID·포트·health와 활성 작업/A2A/알림을
+   다시 확인한다. 기존 승인 범위·idle 상태·rollback identity가 확정돼야 해당 공개 PID만 전환한다.
+   공개 서버·터널은 시험이 끝났다는 이유로 종료하지 않는다.
+
+하나라도 실패하면 기존 서비스를 유지하고 전환을 차단한다. 전환 실패 후에는 원문 stderr와
+failure receipt를 보존하고 알려진 rollback health를 read-back한다. 전환 전·후 실제 불가용 시간을
+기록하며 zero downtime을 추정하지 않는다. 115의 최초 split-chunk 누락과 후속 GET smoke는
+전환 후 보완 검사였으므로, 이를 115 전환의 선행 증거로 소급하지 않는다.
+
 ### Jira 이슈 전수 매핑 게이트
 
 구현·테스트·코드 리뷰·공개 런타임·포털·Teams 데스크톱·모바일에서 발견한 각 재현

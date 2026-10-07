@@ -137,6 +137,7 @@ const tsTests = [
   'scripts/a2a-collaboration-plan-test.ts',
   'scripts/a2a-production-collaboration-test.ts',
   'scripts/teams-a2a-outbound-store-test.ts',
+  'scripts/teams-a2a-completion-intent-test.ts',
   'scripts/a2a-health-provider-roster-test.ts',
   'scripts/a2a-telemetry-test.ts',
   'scripts/a2a-orchestration-identity-test.ts',

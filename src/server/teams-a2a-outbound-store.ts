@@ -227,6 +227,16 @@ export class TeamsA2AOutboundStore {
     });
   }
 
+  getCompletionIntent(parentTaskIdValue: string, scopeValue: A2AScope): TeamsA2AOutboundIntent | undefined {
+    const parentTaskId = safeId(parentTaskIdValue, 'parentTaskId');
+    const scope = safeScope(scopeValue);
+    const intent = this.getIntent(intentId(scope, parentTaskId), scope);
+    if (intent && intent.parentTaskId !== parentTaskId) {
+      throw new TeamsA2AOutboundConflictError('Outbound intent identity does not match its durable key.');
+    }
+    return intent;
+  }
+
   getIntent(intentIdValue: string, scopeValue: A2AScope): TeamsA2AOutboundIntent | undefined {
     this.assertInitialized();
     const id = safeId(intentIdValue, 'intentId');

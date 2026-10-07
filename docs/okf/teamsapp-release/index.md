@@ -21,6 +21,7 @@ okf_version: 0.2
 * [103→111 기능·설치·런타임 독립 판정](functional-version-boundaries.md) - 실제 manifest 능력 차이, 현재111 read-back, 기능별 회귀와 남은 UI 게이트
 * [Codex 후속 세션·합성 Git fixture](codex-followup-session-contract.md) - ephemeral native resume 결함과 별도 합성 승인 시험의 RED/GREEN
 * [Catalog·carousel 계약과 후보 릴리스](catalog-carousel-release113.md) - 최신 Teams 카드 컬렉션/기존 앱 업데이트,112 서비스 유지와 후보 fixture/live 독립 판정
+* [A2A completion fingerprint 속성 순서](a2a-completion-fingerprint-order.md) - MP345의 실제 accepted binding과 합성 restart RED, receipt 보존 및 새 후보 검증 경계
 
 ## Reading order
 
