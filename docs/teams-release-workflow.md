@@ -618,12 +618,14 @@ Entra SSO는 패키지 업로드 성공만으로 완료된 것으로 보지 않�
 
 실제 사용자가 보는 결과를 확인하는 릴리스에서는 기능을 대표 몇 개만 클릭해서 통과시키지 않는다. 구현된 모든 기능을 사용자 화면 위치와 동작 분기로 분해하고, 공개 배포본에서 각 행을 직접 실행한다.
 
+오케스트레이터는 필요한 화면·상태별 스크린샷을 실제로 열어 직접 시각 검수한다. 캡처 생성·접근성 트리·자동 테스트만으로 UI 검수 완료를 보고하지 않는다. `visualReview`에는 캡처 경로, 직접 열람 시각, 검수자, 관찰 결과·결함·판정을 남긴다. 미열람·접근 차단·실기기 미검수는 별도 미검증으로 표시하고, 부모와 사용자가 핵심 화면을 직접 확인할 수 있도록 릴리스 identity와 연결된 증거 인덱스를 제공한다.
+
 각 매트릭스 행은 다음 필드를 갖는다.
 
 ```text
 feature / surface / location / branch / precondition / action
 expected / screenshotBefore / screenshotAfter / accessibilityEvidence
-runtimeEvidence / result(PASS|FAIL|BLOCKED|N/A)
+runtimeEvidence / visualReview / result(PASS|FAIL|BLOCKED|N/A)
 ```
 
 필수 분기에는 초기·로딩·성공·빈 상태·오류·권한 거부·인증 만료·재시도·승인 필요·승인 완료·취소·중복 클릭·잘못된 입력·경계값·모바일 대체 안내가 포함된다. 기능에 해당하지 않는 분기는 `N/A`와 근거를 남긴다.
