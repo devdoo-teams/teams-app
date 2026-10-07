@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { AgentJobStore } from '../src/server/agent-job-store.js';
+import { AgentJobStore, type AgentJobScope } from '../src/server/agent-job-store.js';
 import { CoreOrchestrationService, createServerDerivedCoreScope } from '../src/server/core-orchestration-service.js';
 import { GenUiActionStore } from '../src/server/genui-action-store.js';
-import { createCoreOrchestrationJobActivity, createCoreOrchestrationConfirmationActivity } from '../src/server/genui-response.js';
+import { createCoreOrchestrationJobActivity, createCoreOrchestrationConfirmationActivity, type CoreOrchestrationTeamsActivity } from '../src/server/genui-response.js';
 import { loadJobConversation, refreshVisibleJobConversation } from '../src/client/job-conversation.js';
 import { CoreJobCardPages } from '../src/server/core-job-card-pages.js';
 import { projectPendingOperation } from '../src/server/personal-approval-projection.js';
@@ -38,7 +38,11 @@ try {
   const card = createCoreOrchestrationJobActivity(detail);
   assert.ok(JSON.stringify(card).includes(detail.pendingOperation.revision));
   assert.ok(JSON.stringify(createCoreOrchestrationConfirmationActivity(detail, 'approve')).includes(detail.pendingOperation.revision));
-  const pages = new CoreJobCardPages(path.join(root, 'pages.json'), { getJob: id => service.get(scope, { jobId: id }), update: async () => { throw new Error('no live update'); } });
+  const updates: { id: string; activity: CoreOrchestrationTeamsActivity; scope: AgentJobScope }[] = [];
+  const pages = new CoreJobCardPages(path.join(root, 'pages.json'), {
+    getJob: id => service.get(scope, { jobId: id }),
+    update: async (id, activity, authenticatedScope) => { updates.push({ id, activity, scope: authenticatedScope }); },
+  });
   await pages.initialize(); const prepared = await pages.create(stored.id, scope, true); assert.ok(prepared);
   assert.ok(JSON.stringify(prepared.activity).includes(detail.pendingOperation.revision), 'actual personal page summary retains canonical FactSet revision');
   await pages.bind(prepared.key, scope, 'synthetic-activity');
@@ -70,8 +74,17 @@ try {
   assert.deepEqual(service.listPending(scope)?.jobs, []);
   assert.equal(refreshVisibleJobConversation(loaded.conversation, cancelled).turns[0].pendingOperation, undefined);
   assert.ok(!JSON.stringify(createCoreOrchestrationJobActivity(cancelled)).includes(detail.pendingOperation.revision));
-  const refreshed = await pages.act({ schemaVersion: '1', action: 'orchestration.page', jobId: stored.id, key: prepared.key, page: 'refresh' }, scope, true, 'synthetic-activity', 'invoke');
+  const cancelledRecord = structuredClone(store.get(stored.id, scope));
+  const refreshed = await pages.act({ schemaVersion: '1', action: 'orchestration.page', jobId: stored.id, key: prepared.key, page: 'refresh' }, scope, true, 'synthetic-activity', 'submit');
   assert.equal(refreshed.statusCode, 200);
-  assert.ok(!JSON.stringify(refreshed.value).includes(detail.pendingOperation.revision));
+  assert.equal(updates.length, 1, 'refresh updates the bound activity once');
+  assert.equal(updates[0].id, 'synthetic-activity');
+  assert.deepEqual(updates[0].scope, scope);
+  assert.equal(updates[0].activity.attachmentLayout, 'carousel');
+  assert.equal(updates[0].activity.attachments.length, 4, 'refresh preserves the entire card collection');
+  const refreshedCards = JSON.stringify(updates[0].activity);
+  assert.ok(!refreshedCards.includes(detail.pendingOperation.revision));
+  assert.ok(!refreshedCards.includes('orchestration.approve'), 'cancelled job offers no approval control');
+  assert.deepEqual(store.get(stored.id, scope), cancelledRecord, 'card refresh never mutates the cancelled job');
 } finally { await fs.rm(root, { recursive: true, force: true }); }
 console.log('PASS: pending projection uses immutable arguments, never progress, and disappears after another surface handles it');
