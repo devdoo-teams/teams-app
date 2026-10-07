@@ -18,6 +18,10 @@ try {
   await pages.initialize();
   const original = await pages.create(job.id, scope, true, 'https://example.test/tabs/home/');
   assert.ok(original);
+  assert.equal(original.activity.attachmentLayout, 'carousel', 'a new personal job uses the actual Teams attachment carousel');
+  assert.equal(original.activity.attachments.length, 4, 'summary, progress, conversation and result are separate cards in one activity');
+  assert.deepEqual(original.activity.attachments.map(attachment => attachment.content.body[0].text),
+    ['Core 에이전트 작업 · 요약', 'Core 에이전트 작업 · 진행', 'Core 에이전트 작업 · 대화', 'Core 에이전트 작업 · 결과']);
   const summaryFacts = original.activity.attachments[0].content.body.find(element => element.type === 'FactSet')?.facts as { title: string; value: string }[];
   assert.equal(summaryFacts.find(fact => fact.title === '작업 ID')?.value, job.id, 'paged summary preserves runtime job identity');
   assert.ok(summaryFacts.some(fact => fact.title === '제출 실행경계'), 'summary retains execution evidence');
