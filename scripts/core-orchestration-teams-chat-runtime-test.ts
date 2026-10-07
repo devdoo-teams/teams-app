@@ -132,14 +132,16 @@ function assertCard(body: any, expected: string): Record<string, any> {
 }
 
 function jobIdFrom(card: Record<string, any>): string {
-  const id = card.body?.find((item: any) => item.type === 'FactSet')?.facts
+  const id = card.body?.flatMap((item: any) => item.type === 'Container' ? item.items ?? [] : [item])
+    .find((item: any) => item.type === 'FactSet')?.facts
     ?.find((fact: any) => fact.title === '작업 ID')?.value;
   assert.equal(typeof id, 'string');
   return id;
 }
 
 function jobStatusFrom(card: Record<string, any>): string {
-  const status = card.body?.find((item: any) => item.type === 'FactSet')?.facts
+  const status = card.body?.flatMap((item: any) => item.type === 'Container' ? item.items ?? [] : [item])
+    .find((item: any) => item.type === 'FactSet')?.facts
     ?.find((fact: any) => fact.title === '상태')?.value;
   assert.equal(typeof status, 'string');
   return status;

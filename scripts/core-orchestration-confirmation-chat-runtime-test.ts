@@ -153,7 +153,8 @@ try {
 async function createAwaitingJob(baseUrl: string, prompt: string): Promise<string> {
   const response = await post(baseUrl, activity(`agent write ${prompt}`, `create-${prompt}`));
   const card = assertCard(response.body, 'awaiting_approval');
-  const id = card.body?.find((item: any) => item.type === 'FactSet')?.facts
+  const id = card.body?.flatMap((item: any) => item.type === 'Container' ? item.items ?? [] : [item])
+    .find((item: any) => item.type === 'FactSet')?.facts
     ?.find((fact: any) => fact.title === '작업 ID')?.value;
   assert.equal(typeof id, 'string');
   return id;
