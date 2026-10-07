@@ -73,7 +73,8 @@ try {
   const prepared = await pages.create(job.id, scope, true);
   assert.ok(prepared);
   const summary = prepared.activity.attachments[0].content as any;
-  const summaryFacts = summary.body.flatMap((element: any) => element.facts ?? []);
+  const summaryFacts = summary.body.flatMap((element: any) => element.type === 'Container' ? element.items ?? [] : [element])
+    .flatMap((element: any) => element.facts ?? []);
   for (const [label, value] of expected) {
     assert.equal(summaryFacts.find((fact: any) => fact.title === label)?.value, value, `actual personal summary preserves ${label}`);
   }
