@@ -8,9 +8,9 @@ sources:
     title: "Types of cards"
     location: "Support for Adaptive Cards, observed lines146–152 on2026-10-06; HTML lines maychange"
 generated: { by: "process:codex", at: "2026-10-06T16:29:00Z" }
-verified: { by: "process:official-document-and-installed-package-read", at: "2026-10-06T16:29:00Z" }
+verified: { by: "process:functional-boundary-audit", at: "2026-10-07T09:17:34Z" }
 status: "UNVERIFIED"
-stale_after: "2026-10-13T16:29:00Z"
+stale_after: "2026-10-14T09:17:34Z"
 ---
 
 # Personal notification destination and receipt
@@ -29,4 +29,4 @@ New jobs persist notification intent. A tab checkbox supplies a validated boolea
 
 FIXTURE: personal-notification-test.ts tests synthetic reference, owner/tenant isolation, bot/group/fallback rejection, notify:false, legacy missing intent, duplicate/restart, pending and ambiguous outcomes. agent-service-notify-false-regression-test.ts reproduced execution failure caused by a rejected notification before the fix; after the fix the controlled runner completes with its authoritative result. Existing false/approval/followup/retry branches remain tested. core-orchestration-route-test.ts and service-test.ts cover validated opt-out and durable replay identity.
 
-LIVE RESULT: new implementation not yet deployed. The real old failed job is not retried. Its historic REST ID and absence of stored notification intent do not prove an SDK rejection or notify:false. New personal notification delivery and UI read-back remain UNVERIFIED until same-release authenticated synthetic work in the existing personal chat.
+LIVE RESULT (updated2026-10-07): the implementation is deployed in public111/ad1e78f; authenticated health and the exact hosted111 client asset were read back. This proves deployed code, not opt-in personal broker receipt in the actual Teams chat. The real old failed job is not retried. Its historic REST ID and absence of stored notification intent do not prove an SDK rejection or notify:false. Personal notification delivery and each UI branch remain UNVERIFIED until same-release authenticated synthetic work in the existing personal chat. The earlier A2A completion acceptance is a separate outbound path. See [current functional boundaries](functional-version-boundaries.md).

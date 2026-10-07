@@ -18,6 +18,7 @@ okf_version: 0.2
 * [개인 작업 카드 페이지](job-card-pages.md) - 같은 activity의 페이지 상태와 Core 기본/Universal opt-in 계약
 
 * [A2A read-back snapshot 경쟁](a2a-readback-race.md) - 간헐 회귀 검사의 stale write 재현과 순수 read-back
+* [103→111 기능·설치·런타임 독립 판정](functional-version-boundaries.md) - 실제 manifest 능력 차이, 현재111 read-back, 기능별 회귀와 남은 UI 게이트
 
 ## Reading order
 

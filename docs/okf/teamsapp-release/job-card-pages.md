@@ -11,9 +11,9 @@ sources:
     title: "Types of cards"
     location: "Support for Adaptive Cards, canonical en-us section, observed2026-10-06"
 generated: { by: "process:codex", at: "2026-10-06T17:58:23Z" }
-verified: { by: "process:official-document-and-installed-package-read", at: "2026-10-06T17:58:23Z" }
+verified: { by: "process:functional-boundary-audit", at: "2026-10-07T09:17:34Z" }
 status: "UNVERIFIED"
-stale_after: "2026-10-13T17:58:23Z"
+stale_after: "2026-10-14T09:17:34Z"
 ---
 
 # Same-message private job card pages
@@ -22,7 +22,9 @@ OFFICIAL CONTRACT: Universal Actions require card schema1.4 or greater. The resp
 
 PROJECT CONTRACT: Core cards still declare1.6 and default to Submit/ShowCard/OpenUrl. Page navigation uses Submit with a verified existing activity update, never a new-message fallback. `TEAMS_CARD_UNIVERSAL_ACTIONS=true` is an explicit opt-in for Action.Execute+Submit fallback; its synthetic tests are separate from actual host rendering evidence. This flag grants no permissions and authorizes no deployment. Page actions and fallback specify associatedInputs:none so expanded input forms do not contaminate read requests.
 
-OBSERVED EVIDENCE: the existing public runtime is1.0.104/4f and native installation remained1.0.103 in the fresh desktop About read-back. A local1.0.107 package passed machine/package, but its public identity gate failed104vs107. Public server transition was rejected by approval review as a separate operational change without approval. Local page implementation does not bypass that boundary.
+HISTORICAL OBSERVED EVIDENCE: before the approved111 transition, the public runtime was1.0.104/4f and native About showed1.0.103. A local1.0.107 package passed machine/package, but its public identity gate failed104vs107. The then-requested public transition was rejected by approval review as a separate operational change without approval. These are earlier observations, not current111 failure evidence.
+
+CURRENT OBSERVED EVIDENCE (2026-10-07): the subsequently authorized111/ad1e78f runtime is live, authenticated health and exact hosted client asset match111, and Graph's actual personal installed definition ispublished111. Each same-message page/button still needs current Teams UI execution; nativeSky failure is a separatedesktop gate and user browser control remains intact. Fixture PASS does not establish live updates. See [current functional boundaries](functional-version-boundaries.md).
 
 IMPLEMENTATION: private, owner-only atomic `core-job-card-pages.json` beside the existing job store persists only random card key, job/owner/tenant/personal conversation/activity binding, selected page/cursor and seven-day expiry, capped at4096 live records. It stores no prompts/results/raw CLI transcript. A binding requires a connector-returned activity ID; missing/foreign/expired/unbound/tampered keys fail closed. SDK acceptance survives a UI-state bind-write failure, with separate blocked binding observation and no second send.
 
