@@ -1,5 +1,12 @@
 # TeamsApp release knowledge update log
 
+## 2026-10-07 —120 acknowledgment overlap and candidate121
+
+* **Official contract**: [Container minHeight](https://learn.microsoft.com/en-us/adaptive-cards/schema-explorer/container#minheight), updated2025-12-15, section minHeight/observed lines633–659; [Teams card actions](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/cards/cards-actions), section Adaptive Cards actions; current2026-10-07 read. These do not guarantee arrow geometry or host focus restoration.
+* **Observed evidence**:120 body readability accepted by parent; acknowledgment adds14x9.5px previous-arrow/refresh overlap and actual click navigates to conversation3. Keyboard refresh succeeds but card update leaves activeElement BODY, separately tracked MP-348. Previous followup120 evidence preserved.
+* **Fixture/source**: Candidate121 changes only carousel Container minHeight96px (src/server/core-job-card-pages.ts:168). Focused declared-clearance RED-9.5px at19:41:29Z, same command GREEN19:43:33Z with owner/action/legacy/no-worker-mutation assertions. Full command receipts at /tmp/teams-catalog-update-20261006/release121/mp347-clearance-RED-receipt.json:2 and mp347-clearance-GREEN-receipt.json:2. Node24.13.1/Teams API2.0.15/esbuild0.28.1; version preparation120→121 passed Git version lineage.
+* **Boundary**: Candidate only; full Core/default/source/build/package, commit/CI, same-scope catalog/install/public and actual click/keyboard UI gates remain required. MP-347/MP-348 remain In Progress. MP-338 local integration PASS remains distinct from LIVE_RECOVERY_UNVERIFIED. Isolation and reasoning/defaults are unchanged; native/mobile/full UI remain independent gates.
+
 ## 2026-09-06
 
 * **Creation**: Created the TeamsApp release failure-history, FAQ, gate, and official-contract concepts as an OKF v0.2 bundle.

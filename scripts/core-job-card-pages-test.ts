@@ -37,6 +37,18 @@ function collection(activity: CoreOrchestrationTeamsActivity) {
     assert.equal(inset?.type, 'Container', 'carousel content needs a host-styled inset from navigation overlays');
     assert.equal(inset.style, 'emphasis', 'the existing supported container style supplies host padding');
     assert.equal(inset.bleed, false, 'content must stay inside its inset instead of bleeding under host controls');
+    if (attachment.content.body[0].text === titles[3]) {
+      //120 Teams acknowledgment fixture: natural body52px, previous-arrow
+      // bottom547.398px, refresh top537.898px. A centered host arrow moves
+      // half as far as the actions when the body grows. This checks declared
+      // clearance; actual host geometry and hit testing remain a live gate.
+      const declaredHeight = typeof inset.minHeight === 'string' && /^\d+px$/.test(inset.minHeight)
+        ? Number.parseInt(inset.minHeight, 10) : 0;
+      const addedBodyHeight = Math.max(52, declaredHeight) - 52;
+      const acknowledgedClearance = 537.8984375 - 547.3984375 + addedBodyHeight / 2;
+      assert.ok(acknowledgedClearance >= 8,
+        `short result must reserve8px action clearance with Teams acknowledgment; fixture clearance=${acknowledgedClearance}px`);
+    }
     assert.ok(Array.isArray(inset.items) && inset.items.length > 0);
     assert.equal(attachment.content.body.length, 2, 'all page content stays inside the inset; title remains outside');
     assert.ok(!JSON.stringify(attachment).includes('synthetic-secret'), 'every card masks sensitive content');
@@ -89,6 +101,7 @@ try {
   const legacyPages = new CoreJobCardPages(legacyFile, { ...options, universalActions: true }); await legacyPages.initialize();
   const legacyResponse = await legacyPages.act({ ...action, page: 'result' }, scope, true, 'activity-original', 'invoke');
   assert.equal(legacyResponse.statusCode, 200); assert.ok(JSON.stringify(legacyResponse.value).includes('safe result'));
+  assert.ok(!JSON.stringify(legacyResponse.value).includes('minHeight'), 'legacy single-card responses keep their layout');
   assert.equal(updates.length, beforeRejected, 'legacy invoke sends no update'); assert.equal(legacyPages.existing(job.id, scope, 'activity-original')?.attachmentLayout, 'list');
   const sent: CoreOrchestrationTeamsActivity[] = [];
   const wrapped = wrapCoreJobCardSender(restarted, scope, true, async (_text, envelope, activity) => {

@@ -165,11 +165,11 @@ export class CoreJobCardPages {
     // Only summary retains existing confirmation/mutation controls; each is still handled by its original owner gate.
     const controls = page === 'summary' ? base.attachments[0].content.actions ?? [] : [];
     const link = withTeamsJobDeepLink(record.openTabUrl, job.id);
-    // Request the host's existing padding for carousel body content. Actual
-    // clearance from host navigation overlays is verified in Teams. Legacy
-    // single-card responses retain their original layout.
+    // Keep short carousel bodies tall enough that centered host arrows stay
+    // clear of actions even when Teams adds its submit acknowledgment below.
+    // Actual host clearance is a live gate; legacy single cards are unchanged.
     const contentBody = record.layout === 'carousel'
-      ? [{ type: 'Container', style: 'emphasis', bleed: false, items: body }]
+      ? [{ type: 'Container', style: 'emphasis', bleed: false, minHeight: '96px', items: body }]
       : body;
     return { ...base, attachments: [{ ...base.attachments[0], content: { ...base.attachments[0].content,
       body: [block(`Core 에이전트 작업 · ${labels[page]}`), ...contentBody],
