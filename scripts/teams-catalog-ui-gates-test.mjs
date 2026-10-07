@@ -25,6 +25,13 @@ const observation = { ownership: 'agent', authenticated: true, scope, currentSna
 assert.equal(gates.planCatalogUpload(release, observation).action, 'OPEN_EXISTING_APP_UPDATE_DIALOG');
 assert.equal(gates.planCatalogUpload(release, { ...observation, stage: 'update-dialog', innerFileControlObserved: true }).action, 'SELECT_EXACT_PACKAGE_ONCE');
 assert.equal(gates.planCatalogUpload(release, { ...observation, stage: 'update-dialog' }).action, 'READ_CURRENT_DIALOG', 'the outer upload button is not the file chooser');
+const readyDialog = { ...observation, stage: 'update-dialog', innerFileControlObserved: true };
+assert.equal(gates.planCatalogUpload({ ...release, availability: undefined }, { ...readyDialog, availability: undefined }).action, 'BLOCKED', 'two omitted availability fields are not verified equal scope');
+assert.equal(gates.planCatalogUpload({ ...release, availability: '' }, { ...readyDialog, availability: '' }).action, 'BLOCKED');
+for (const value of ['unknown', 1, undefined]) {
+  assert.equal(gates.planCatalogUpload(release, { ...readyDialog, authenticated: value }).action, 'WAIT_USER_AUTH', 'authentication requires a measured boolean true');
+  assert.equal(gates.planCatalogUpload(release, { ...readyDialog, currentSnapshot: value }).action, 'READ_CURRENT_STATE', 'truthy freshness is not current state');
+}
 assert.equal(gates.planCatalogUpload(release, { ...observation, currentSnapshot: false }).action, 'READ_CURRENT_STATE');
 assert.equal(gates.planCatalogUpload(release, { ...observation, stage: 'upload-uncertain', transferCount: 1 }).action, 'READ_CATALOG_WITHOUT_REUPLOAD');
 assert.equal(gates.planCatalogUpload(release, { ...observation, stage: 'update-dialog', transferCount: 1, innerFileControlObserved: true }).action, 'READ_CATALOG_WITHOUT_REUPLOAD');

@@ -22,7 +22,7 @@ export function planExistingTabRecovery(observation, authorization) {
 
 export function planCatalogUpload(release, observation) {
   if (observation?.ownership !== 'agent') return decision('WAIT_USER_HANDOFF', 'CURRENT_SESSION_NOT_AGENT_OWNED');
-  if (!observation.authenticated) return decision('WAIT_USER_AUTH', 'EXISTING_LOGIN_REQUIRED');
+  if (observation.authenticated !== true) return decision('WAIT_USER_AUTH', 'EXISTING_LOGIN_REQUIRED');
   if (!sameScope(release, observation.scope)
     || !/^\d+\.\d+\.\d+$/u.test(release.version ?? '')
     || !/^[a-f0-9]{40}$/u.test(release.commit ?? '') || !/^[a-f0-9]{64}$/u.test(release.packageSha256 ?? '')
@@ -30,11 +30,11 @@ export function planCatalogUpload(release, observation) {
     || !Array.isArray(release.devicePermissions) || release.devicePermissions.length !== 0
     || !Array.isArray(release.resourceSpecificPermissions) || release.resourceSpecificPermissions.length !== 0
     || !sameTargets(release.installedTargets, observation.installedTargets)
-    || release.availability !== observation.availability)
+    || !text(release.availability) || !text(observation.availability) || release.availability !== observation.availability)
     return decision('BLOCKED', 'RELEASE_IDENTITY_OR_EXISTING_SCOPE_MISMATCH');
   if (!Number.isInteger(observation.transferCount) || observation.transferCount < 0 || observation.transferCount > 1)
     return decision('BLOCKED', 'TRANSFER_HISTORY_UNVERIFIED_OR_DUPLICATED');
-  if (!observation.currentSnapshot) return decision('READ_CURRENT_STATE', 'FRESH_STATE_REQUIRED_AFTER_EACH_ACTION');
+  if (observation.currentSnapshot !== true) return decision('READ_CURRENT_STATE', 'FRESH_STATE_REQUIRED_AFTER_EACH_ACTION');
   if (observation.stage === 'catalog-readback')
     return observation.catalogVersion === release.version
       ? decision('CATALOG_UPDATED_ONLY', 'INSTALLATION_RUNTIME_AND_NATIVE_UI_GATES_REMAIN_INDEPENDENT')
