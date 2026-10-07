@@ -409,7 +409,8 @@ function teamsCard(body: any, expected: string): Record<string, any> {
 
 function cardFact(card: Record<string, any>, title: string): string {
   const value = card.body
-    ?.filter((item: any) => item.type === 'FactSet')
+    ?.flatMap((item: any) => item.type === 'Container' ? item.items ?? [] : [item])
+    .filter((item: any) => item.type === 'FactSet')
     .flatMap((item: any) => item.facts ?? [])
     .find((fact: any) => fact.title === title)?.value;
   assert.equal(typeof value, 'string', `card fact ${title} must be present`);
