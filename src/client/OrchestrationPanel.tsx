@@ -26,6 +26,17 @@ import type {
 
 type PanelPhase = 'loading' | 'ready' | 'error';
 
+type PanelNotice = Readonly<{ kind: 'refresh-error' | 'mutation'; message: string }> | null;
+
+export function settleOrchestrationRefreshNotice(
+  current: PanelNotice,
+  outcome: Readonly<{ status: 'succeeded' | 'aborted' }> | Readonly<{ status: 'failed'; message: string }>,
+): PanelNotice {
+  if (outcome.status === 'aborted') return current;
+  if (outcome.status === 'failed') return { kind: 'refresh-error', message: `자동 업데이트 실패: ${outcome.message}` };
+  return current?.kind === 'refresh-error' ? null : current;
+}
+
 const DEFAULT_CLIENT = createCoreOrchestrationClient();
 const ORCHESTRATION_POLL_INTERVAL_MS = 3_000;
 const statusLabels = CORE_JOB_STATUS_LABELS;
@@ -621,7 +632,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
   const [inputValue, setInputValue] = useState('');
   const [busyAction, setBusyAction] = useState('');
   const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
+  const [notice, setNotice] = useState<PanelNotice>(null);
   const [validationError, setValidationError] = useState('');
   const [lastUpdatedAt, setLastUpdatedAt] = useState('');
   const [pendingConfirmation, setPendingConfirmation] = useState<Readonly<{ kind: 'approve' | 'cancel'; jobId: string }> | null>(null);
@@ -662,10 +673,11 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
       });
       setLastUpdatedAt(new Date().toISOString());
       setPhase('ready');
+      setNotice(current => settleOrchestrationRefreshNotice(current, { status: 'succeeded' }));
     } catch (caught) {
       if (controller.signal.aborted) return;
       if (options.silent) {
-        setNotice(`자동 업데이트 실패: ${errorMessage(caught)}`);
+        setNotice(current => settleOrchestrationRefreshNotice(current, { status: 'failed', message: errorMessage(caught) }));
       } else {
         setError(errorMessage(caught));
         setPhase('error');
@@ -715,7 +727,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     if (busy.isBusy(slot)) return 'ignored';
     setBusyAction(slot);
     setError('');
-    setNotice('');
+    setNotice(null);
     try {
       const result = await busy.run(slot, operation);
       if (!result) return 'ignored';
@@ -725,7 +737,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
         return 'definitive-failure';
       }
       updateJob(result.job);
-      setNotice(orchestrationMutationNotice(result, successMessage));
+      setNotice({ kind: 'mutation', message: orchestrationMutationNotice(result, successMessage) });
       return 'success';
     } catch (caught) {
       setError(errorMessage(caught));
@@ -823,7 +835,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     mode={mode}
     modelCatalog={modelCatalog}
     modelId={modelId}
-    notice={notice}
+    notice={notice?.message ?? ''}
     pendingConfirmation={pendingConfirmation}
     onApprove={approve}
     onCancel={cancel}
