@@ -300,7 +300,7 @@ async function main(): Promise<void> {
       createAgentServiceFake(job('completed', '후속 요청'), previous, continuedTrace),
       '같은 대화에서 이어서 확인해줘',
     ));
-    assert.match(continued.text, /이전 Codex 대화를 이어서/);
+    assert.match(continued.text, /이전 작업의 요청·결과를 참고해 새 읽기 전용 작업/);
     assert.equal(continuedTrace.continuations[0]?.notify, true, 'continued natural-language requests enable same-conversation notifications');
 
     console.log('deterministic response engine tests passed');

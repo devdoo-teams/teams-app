@@ -98,6 +98,7 @@ const tsTests = [
   'scripts/agent-admission-control-test.ts',
   'scripts/agent-process-controller-security-test.ts',
   'scripts/agent-service-transition-test.ts',
+  'scripts/agent-service-ephemeral-continuation-test.ts',
   'scripts/agent-service-notify-false-regression-test.ts',
   'scripts/agent-durable-notification-test.ts',
   'scripts/agent-job-durable-ledger-test.ts',

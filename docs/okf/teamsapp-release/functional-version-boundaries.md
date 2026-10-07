@@ -19,10 +19,10 @@ sources:
   - resource: "https://git-scm.com/docs/git-ls-remote"
     title: "git-ls-remote"
     location: "DESCRIPTION / OPTIONS --exit-code; observed current documentation on2026-10-07"
-generated: { by: "process:codex", at: "2026-10-07T09:15:27Z" }
-verified: { by: "process:retained-zip-current-health-assets-focused-regressions-remote-readback", at: "2026-10-07T09:15:27Z" }
+generated: { by: "process:codex", at: "2026-10-07T10:55:13Z" }
+verified: { by: "process:current-cli-source-regression-live-ui", at: "2026-10-07T10:55:13Z" }
 status: "UNVERIFIED"
-stale_after: "2026-10-14T09:12:00Z"
+stale_after: "2026-10-14T10:55:13Z"
 ---
 
 # 업무 허브103→111: 기능별 독립 판정
@@ -31,7 +31,7 @@ stale_after: "2026-10-14T09:12:00Z"
 
 103과111은 버전 문자열만 다른 패키지가 아니다. 실제 보존 ZIP의103에는 `composeExtensions`가 없고111에는 메시지 메뉴의 `delegateMessage`가 있다. 반면 앱 ID, 탭 URL, 봇 ID·scope·명령, SSO resource, validDomains, devicePermissions, resource-specific permissions 선언은 같다. 호스트가 같은103 탭·봇도 현재111 서버의 코드를 사용할 수 있다. 따라서 About의 과거103 표시만으로 현재 탭·봇 기능 전체를 차단하거나, 반대로 탭111만으로 메시지 메뉴 능력을 증명하지 않는다.
 
-2026-10-07 부모가 확인한 웹·모바일 런타임111 증거와 실제 Graph 개인 설치 정의111을 반영한다. 과거 About103와 메뉴 누락은 **HISTORICAL ONLY**이며 현재 상태는 미재검증이다. 이 감사는 사용자 브라우저를 제어하지 않았다.
+2026-10-07 부모가 확인한 웹·모바일 런타임111 증거와 실제 Graph 개인 설치 정의111을 반영한다. 18:41KST 제어 회수 요청 후 기존 Ego TaskSpace2/p1을 직접 조작했다. 새 합성 메시지의 전체 More actions에도 업무 허브가 없고, 실제 About는103, 새 self Graph GET200 정의는111/published였다. 따라서 이 두 관찰은 현재 재현된 MP-118 증거이며, 현재111 탭·봇 기능의 개별 성공과 분리한다.
 
 ## OFFICIAL CONTRACT
 
@@ -99,9 +99,9 @@ curl --connect-timeout 5 --max-time 15 -fsS https://dxshc7dx-3978.jpe1.devtunnel
 
 현재 공개111 서버PID53118, tunnelPID52764는 보존했다. 09:03Z 관찰에서 각각 elapsed 약10h07m·17h05m, health authenticated111, nextAction 기존 프로세스 유지·기능별 UI 시험. 이는24/7 운영 증거가 아니다.
 
-웹은 사용자 제어 상태다. 현재 명시적 반환을 관찰하기 전 브라우저 제어·reload·새 탭·재로그인을 하지 않는다. 네이티브 desktop은 별도로15:15KST의 `Sky Computer Use native pipe startup failed` 때문에 AX·스크린샷이 없으며, 원인이 아직 미확정이다. 이를 웹 전체 불능으로 확대하지 않는다. 현재 모바일 runtime111 스크린샷은 모바일의 개별 카드·승인·메뉴 분기 통과를 뜻하지 않는다.
+웹은 18:41KST 명시적 요청 뒤 기존 TaskSpace2 제어를 실제 회수했다. 기존 p1과 기존 Graph/관리 탭만 사용했고 새 탭·reload·재로그인을 추가하지 않았다. 네이티브 desktop은 별도로15:15KST의 `Sky Computer Use native pipe startup failed` 때문에 AX·스크린샷이 없으며, 원인이 아직 미확정이다. 이를 웹 전체 불능으로 확대하지 않는다. 부모가 직접 본 모바일 개인 합성 요청/OK 카드 사진은 부분 증거이며 모바일의 설치·승인·메뉴 전체 분기 통과를 뜻하지 않는다.
 
-요청된7개 기능의37개 검증 위치,15개 필수 상태를 desktop/web/iOS별로 구분한 새 실행 큐는1665개 행이며 모두현재 해당 분기 미실행의 `BLOCKED`다. 각 행에 전후 스크린샷·AX·runtimeEvidence·result 필드를 채웠다. 이전 대표 성공·fixture·runtime 카드로 이 행들을 PASS 처리하지 않았다. 해당 기능에 없는 상태는 실제 branch 조사 후 근거와 함께N/A로 바꾼다. 이 큐는 전체 앱의 완료 수락 매트릭스가 아니다.
+초기7개 기능/37개 위치/15개 상태의 desktop/web/iOS 실행 큐는1665개 `BLOCKED` 행으로 보존했다. 그 뒤 실제 웹 관찰은 `ui-live-20261007/current-live-ui-matrix.json`의 별도 행에 기록했다. 독립 읽기 작업·개인 알림·동일 activity 결과/진행/대화·상세 링크·취소를 실제 실행했고, 후속 resume 및 승인 Git fixture 실패는 MP-334/335로 분리했다. 이 일부 관찰을 초기 큐 전체나 desktop/mobile 통과로 승격하지 않는다. 스크린샷을 직접 열어 시각 검수하며 전 표면 receipt·경계/중복·dialog 등 남은 분기는 계속 BLOCKED다.
 
 브라우저 반환 뒤 기존 개인 합성 대화·동일111 identity에서 메뉴→dialog→읽기 제출/쓰기 승인 대기, 탭 opt-in 개인 알림, 카드 페이지, 승인함,receipt 각 표면을 순서대로 시험한다. 현재 승인 범위에서 가능한 분기를 수행하고 재현된 결함은 Jira에 먼저 연결한 뒤 RED→최소 수정→GREEN→같은 release identity의 배포/UI 재검증을 진행한다. 로그인·MFA는 사용자 단계이며 추가 권한·관리정책·삭제는 이 감사에 포함하지 않는다.
 

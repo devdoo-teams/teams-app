@@ -312,7 +312,9 @@ export class DeterministicResponseEngine implements ResponseEngine {
     if (!job) throw new Error('Codex 작업을 생성하지 못했습니다.');
     input.setActiveJobId?.(job.id);
     const text = previous
-      ? `이전 Codex 대화를 이어서 작업 ${job.id}을 시작했습니다. 진행 상황과 완료 결과를 이 채팅으로 보내드립니다.`
+      ? previous.mode === 'read-only' && (previous.provider ?? 'codex') === 'codex'
+        ? `이전 작업의 요청·결과를 참고해 새 읽기 전용 작업 ${job.id}을 시작했습니다. 진행 상황과 완료 결과를 이 채팅으로 보내드립니다.`
+        : `이전 Codex 대화를 이어서 작업 ${job.id}을 시작했습니다. 진행 상황과 완료 결과를 이 채팅으로 보내드립니다.`
       : `작업 ${job.id}을 시작했습니다. 진행 상황과 완료 결과를 이 채팅으로 보내드립니다.`;
     if (streamToCaller) {
       const completed = await input.agentService.waitForTerminal(job.id, input.scope);

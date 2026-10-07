@@ -120,6 +120,9 @@ export function buildCodexExecArguments(options: Readonly<{
   if (options.threadId && !CODEX_THREAD_ID_PATTERN.test(options.threadId)) {
     throw new Error('Invalid Codex thread ID.');
   }
+  if (options.threadId && options.mode === 'read-only') {
+    throw new Error('Ephemeral Codex read-only sessions cannot be resumed.');
+  }
   const selection = options.selection ? assertSafeCodexModelSelection(options.selection) : undefined;
   const args = [
     ...options.prefixArgs,
