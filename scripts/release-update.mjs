@@ -319,10 +319,10 @@ export function summarizeBrowserHandoff(state, surface) {
     packageSha256: packageEntry?.sha256,
     publicOrigin,
     instructions: [
-      `Reuse the existing in-app browser tab for ${surface}; do not create a new tab or login session.`,
+      `Reuse the existing in-app browser tab for ${surface}; a fallback tab requires recorded explicit user approval after one failed bounded recovery, in the same logged-in profile.`,
       `Verify app ID ${manifestAppId ?? '<from ZIP manifest>'}, version ${state.version}, commit ${state.commit}, and package SHA ${packageEntry?.sha256 ?? '<recorded package SHA>'}.`,
       surface === 'portal'
-        ? 'Import/replace the existing app package, validate it, then submit only the matching version. The registered Teams app package must also be read back and match before portal evidence is accepted.'
+        ? 'Import/replace the existing app package through the existing app New version path. The outer File upload opens a dialog; arm its inner file control, transfer the exact package once, then read back the catalog before any uncertain retry. Apply scripts/teams-catalog-ui-gates.mjs and docs/skills/teams-catalog-update/SKILL.md. The registered Teams app package must also be read back and match before portal evidence is accepted.'
         : 'Verify the installed release identity before capturing the required before/after evidence.',
       'Leave credential entry, MFA, Authenticator, and security prompts to the user.',
       `Record PASS, FAIL, or BLOCKED evidence for ${surface}; never infer success from a spinner or HTTP 200 alone.`,

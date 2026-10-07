@@ -32,6 +32,7 @@ const plainTests = [
   'scripts/release-prepare-test.mjs',
   'scripts/release-identity-consistency-test.mjs',
   'scripts/release-update-test.mjs',
+  'scripts/teams-catalog-ui-gates-test.mjs',
   'scripts/release-observation-test.mjs',
   'scripts/runtime-replay-startup-test.mjs',
   'scripts/package-app-determinism-test.mjs',

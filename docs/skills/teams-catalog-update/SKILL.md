@@ -1,0 +1,23 @@
+---
+name: teams-catalog-update
+description: Update one explicitly authorized existing Teams organization catalog app with bounded existing-session recovery and retained read-back evidence.
+---
+
+Use this project skill only for the tenant, catalog, manifest app ID, version and scope authorized in the current request. Read `docs/okf/teamsapp-release/index.md`, `failure-history.md`, `official-contracts.md`, `gates.md`, and the applicable installation/browser observations before operating. User authorization persists; do not ask again for a scoped action already approved.
+
+Microsoft contract: [Update a custom app in Teams Admin Center](https://learn.microsoft.com/en-us/microsoftteams/teams-custom-app-policies-and-settings#update-a-custom-app-using-teams-admin-center), observed 2026-10-07, page updated 2026-04-14, section update-a-custom-app-using-teams-admin-center. HTML line numbering is not stable. Installation read-back: [Graph list installed apps](https://learn.microsoft.com/en-us/graph/api/userteamwork-list-installedapps?view=graph-rest-1.0), same-date observation, request/optional-query-parameters sections.
+
+Observed tool contract: ego-browser CLI 0.5.1.13, skill 2.0.0 (2026-09-09), Chromium152.0.7977.54. Read the current browser skill and installed help before reuse. A changed or unavailable contract is `CONTRACT_DRIFT_BLOCKED`; browser metadata is not actual control evidence.
+
+1. Read ownership, ambient UI and current tabs. Stop for user ownership. Select one existing tab per surface and retain it. An empty tabs list while ambient UI shows a tab is a connection/exposure mismatch.
+2. Use `planExistingTabRecovery` in `scripts/teams-catalog-ui-gates.mjs`. Observe actual control, attempt at most one bounded reconnect, and retain its exact failure. A new tab is allowed only by explicit recorded authorization for this same tenant/catalog/app, after existing control failed, using the same logged-in profile. No new profile, login session, authorization reset or permissions. Keep authentication and user tabs open.
+3. Verify clean committed implementation, version, actual ZIP manifest/app ID, package SHA, devicePermissions, resource-specific permissions, environment and existing target/availability scope. Use `planCatalogUpload`; missing or mismatching evidence blocks mutation. Keep the prior package and runtime rollback available.
+4. Re-read state after each action. On existing app details, New version > File upload opens an app update dialog. **That outer control is not the file chooser.** Capture the dialog, arm its inner file control, select the exact verified ZIP once, and retain before/after UI plus the transferred file identity.
+5. If an action times out after selection/submission, treat its write outcome as unknown. Read actual catalog version and validation state before any retry. Do not re-transfer on a generic timeout, close the app, reset the browser or alter policy to escape the failure.
+6. Read back the catalog identity/version/targets/availability. Independently read personal installation via the already-authorized Graph GET or Teams About. Record an About-label lag separately; actual Graph installation plus fresh menu/runtime results may proceed to functional testing. Do not claim a matching About label if it differs.
+7. Check public health/version/full commit/bundle SHA and required authenticated modes. Then execute fresh synthetic personal Teams flows and capture their visible results and AX state. Native Teams desktop and exhaustive UI coverage remain separate gates; web/fixture screenshots do not replace them. Mobile-only states stay `MOBILE_UNVERIFIED` until actual evidence.
+8. Keep the requested untimed service and existing tunnel alive. A bounded startup observation is not a service lifetime. Do not insert an automatic shutdown. A later runtime transition requires exact process identity and active-job/A2A/outbound safety read-back; preserve login, stores and rollback.
+
+Pressure tests: `node scripts/teams-catalog-ui-gates-test.mjs` and `node scripts/release-update-test.mjs`, included in Core. Fixtures cover ownership/auth pauses, ambient/list mismatch, metadata without control, one recovery, scoped fallback, two-stage chooser, scope changes, stale state, duplicate transfer and unknown upload read-back. Fixtures do not prove an actual upload.
+
+Evidence must separate OFFICIAL CONTRACT, OBSERVED EVIDENCE, INFERENCE, FIXTURE and LIVE RESULT. Record process, pid, elapsed, lastActivity, health and nextAction for long stages. Never mark Jira Done or send a Teams completion message while mandatory release evidence is missing.
