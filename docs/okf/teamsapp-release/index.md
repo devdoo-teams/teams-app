@@ -20,6 +20,7 @@ okf_version: 0.2
 * [A2A read-back snapshot 경쟁](a2a-readback-race.md) - 간헐 회귀 검사의 stale write 재현과 순수 read-back
 * [103→111 기능·설치·런타임 독립 판정](functional-version-boundaries.md) - 실제 manifest 능력 차이, 현재111 read-back, 기능별 회귀와 남은 UI 게이트
 * [Codex 후속 세션·합성 Git fixture](codex-followup-session-contract.md) - ephemeral native resume 결함과 별도 합성 승인 시험의 RED/GREEN
+* [113 catalog·carousel 계약](catalog-carousel-release113.md) - 최신 Teams 카드 컬렉션/기존 앱 업데이트,112 서비스 유지와113 fixture/live 독립 판정
 
 ## Reading order
 
