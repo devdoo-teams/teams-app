@@ -165,8 +165,14 @@ export class CoreJobCardPages {
     // Only summary retains existing confirmation/mutation controls; each is still handled by its original owner gate.
     const controls = page === 'summary' ? base.attachments[0].content.actions ?? [] : [];
     const link = withTeamsJobDeepLink(record.openTabUrl, job.id);
+    // Request the host's existing padding for carousel body content. Actual
+    // clearance from host navigation overlays is verified in Teams. Legacy
+    // single-card responses retain their original layout.
+    const contentBody = record.layout === 'carousel'
+      ? [{ type: 'Container', style: 'emphasis', bleed: false, items: body }]
+      : body;
     return { ...base, attachments: [{ ...base.attachments[0], content: { ...base.attachments[0].content,
-      body: [block(`Core 에이전트 작업 · ${labels[page]}`), ...body],
+      body: [block(`Core 에이전트 작업 · ${labels[page]}`), ...contentBody],
       actions: [...actions, ...controls.filter(action => action.type !== 'Action.OpenUrl'),
         ...(link && isSafeGenUiUrl(link) ? [{ type: 'Action.OpenUrl', title: '상세 대화 열기', url: link }] : [])],
     } }] };

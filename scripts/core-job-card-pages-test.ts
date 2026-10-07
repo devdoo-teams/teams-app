@@ -33,6 +33,12 @@ function collection(activity: CoreOrchestrationTeamsActivity) {
   assert.ok(Buffer.byteLength(JSON.stringify(activity), 'utf8') < 80_000);
   for (const attachment of activity.attachments) {
     assert.equal(attachment.content.version, '1.6');
+    const inset = attachment.content.body[1];
+    assert.equal(inset?.type, 'Container', 'carousel content needs a host-styled inset from navigation overlays');
+    assert.equal(inset.style, 'emphasis', 'the existing supported container style supplies host padding');
+    assert.equal(inset.bleed, false, 'content must stay inside its inset instead of bleeding under host controls');
+    assert.ok(Array.isArray(inset.items) && inset.items.length > 0);
+    assert.equal(attachment.content.body.length, 2, 'all page content stays inside the inset; title remains outside');
     assert.ok(!JSON.stringify(attachment).includes('synthetic-secret'), 'every card masks sensitive content');
     assert.ok(!JSON.stringify(attachment).includes('CarouselPage'), 'no unsupported inner-card carousel schema');
     assert.ok(!(attachment.content.actions ?? []).some(action => action.type === 'Action.Execute'));
@@ -41,7 +47,8 @@ function collection(activity: CoreOrchestrationTeamsActivity) {
 try {
   const pages = new CoreJobCardPages(file, options); await pages.initialize();
   const original = await pages.create(job.id, scope, true, 'https://example.test/tabs/home/'); assert.ok(original); collection(original.activity);
-  const facts = original.activity.attachments[0].content.body.find(element => element.type === 'FactSet')?.facts as { title: string; value: string }[];
+  const summaryItems = original.activity.attachments[0].content.body[1].items as Record<string, unknown>[];
+  const facts = summaryItems.find(element => element.type === 'FactSet')?.facts as { title: string; value: string }[];
   assert.equal(facts.find(fact => fact.title === '작업 ID')?.value, job.id);
   assert.ok(facts.some(fact => fact.title === '제출 실행경계'), 'summary retains execution evidence');
   assert.ok(JSON.stringify(original.activity.attachments[1]).includes('six'));
