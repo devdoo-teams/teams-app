@@ -41,6 +41,19 @@ const modelCatalog: CoreCodexModelCatalog = {
 const pollingFactory = (orchestrationPanelModule as Record<string, unknown>).createOrchestrationPollingController;
 assert.equal(typeof pollingFactory, 'function', 'the agent hub exposes a bounded non-overlapping polling controller');
 
+const settleRefreshNotice = (orchestrationPanelModule as Record<string, unknown>).settleOrchestrationRefreshNotice;
+assert.equal(typeof settleRefreshNotice, 'function', 'a successful refresh recovers an earlier automatic-refresh failure');
+{
+  const settle = settleRefreshNotice as (notice: unknown, outcome: { status: string; message?: string }) => unknown;
+  const failure = settle(null, { status: 'failed', message: 'synthetic offline' });
+  assert.deepEqual(failure, { kind: 'refresh-error', message: '자동 업데이트 실패: synthetic offline' });
+  assert.equal(settle(failure, { status: 'succeeded' }), null, 'failure followed by successful polling or manual refresh clears the stale error');
+  assert.deepEqual(settle(failure, { status: 'aborted' }), failure, 'aborted or superseded requests cannot claim recovery');
+  const mutation = { kind: 'mutation', message: '작업을 제출했습니다.' };
+  assert.deepEqual(settle(mutation, { status: 'succeeded' }), mutation, 'refresh preserves a newer mutation receipt');
+  assert.equal(settle(null, { status: 'succeeded' }), null);
+}
+
 {
   const scheduled: Array<{ callback: () => Promise<void> | void; delay: number; token: number }> = [];
   const cancelled: number[] = [];
