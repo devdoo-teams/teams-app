@@ -41,7 +41,7 @@ Azure 외부 worker의 read-only isolation은 별도 미지원 경계다. 이 �
 
 [MP-335](https://devdoo.atlassian.net/browse/MP-335)는 실제 승인 후 Codex의 Git 사전 검사에서 실패했다. 설치 Git **2.54.0(Apple Git-157)** help의 `--template`/`--initial-branch` 계약을 확인했다. `/tmp/teams-synthetic-workspace111-20261007`의 `rev-parse --is-inside-work-tree`는 RED128이었다. 이 합성 경로에만 private empty template로 Git을 초기화했다. 기존 합성 파일3개의 SHA는 전후 동일하고 인증·trust·검사 우회 설정은 바꾸지 않았다. 같은 명령은 GREEN0/true다.
 
-그 뒤 기존 실패 작업을 재실행하지 않고 새 job `task-muxzggjo-cc278df6`를 실제 Teams 탭에서 제출했다. inline 승인 확인의 전후 화면을 직접 열어 검수하고 두 번째 confirm을 실행했다. **2026-10-07T10:49:35.704Z**, 같은 공개111/ad1e78f에서 `MP335-GREEN-20261007 OK`와 완료를 확인했다. 파일 변경을 요청하지 않은 합성 승인 시험이므로 실제 코드 쓰기 성공을 주장하지 않는다.
+그 뒤 기존 실패 작업을 재실행하지 않고 새 job `task-muxzggjo-cc278df6`를 실제 Teams 탭에서 제출했다. inline 승인 확인의 전후 화면을 직접 열어 검수하고 두 번째 confirm을 실행했다. 같은 공개111/ad1e78f에서 `MP335-GREEN-20261007 OK`와 완료를 확인했다. 실제 store의 `finishedAt=2026-10-07T10:49:35.660Z`와 화면의 마지막 갱신 `2026-10-07T10:49:35.704Z`를 구분한다. `changedPaths=[]`와 활성 작업0개도 비밀 없는 store read-back으로 확인했다. 파일 변경을 요청하지 않은 합성 승인 시험이므로 실제 코드 쓰기 성공을 주장하지 않는다.
 
 증거: `/tmp/teams-catalog-update-20261006/mp335-fixture-git-preflight.json`; `ui-live-20261007/060-mp335-green-before-submit-ax.txt:153`, `063-mp335-green-approval-confirmation-ax.txt`, `065-mp335-green-terminal-ax.txt:287`; 각 동일 prefix PNG를 직접 열었다. 부모의 핵심 화면 검수·필수 릴리스/UI 게이트는 미완료라 Jira Done이나 전체 UI 완료로 처리하지 않는다.
 
