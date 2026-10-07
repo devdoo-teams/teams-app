@@ -68,13 +68,15 @@ type CoreOrchestrationAdaptiveCard = Readonly<{
   actions?: readonly Record<string, unknown>[];
 }>;
 
+type CoreOrchestrationAttachment = Readonly<{
+  contentType: 'application/vnd.microsoft.card.adaptive';
+  content: CoreOrchestrationAdaptiveCard;
+}>;
+
 export type CoreOrchestrationTeamsActivity = Readonly<{
   type: 'message';
-  attachmentLayout: 'list';
-  attachments: readonly [{
-    contentType: 'application/vnd.microsoft.card.adaptive';
-    content: CoreOrchestrationAdaptiveCard;
-  }];
+  attachmentLayout: 'list' | 'carousel';
+  attachments: readonly [CoreOrchestrationAttachment, ...CoreOrchestrationAttachment[]];
 }>;
 
 export type CoreOrchestrationCardOptions = Readonly<{

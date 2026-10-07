@@ -4309,7 +4309,7 @@ async function handleCoreJobPageAction(activity: any) {
   try {
     return await coreJobCardPages.act(coreOrchestrationCardValue(activity), scope, true,
       nonEmptyString(activity?.replyToId, 200) ?? '', activity?.type === 'invoke' ? 'invoke' : 'submit',
-      async (activityId, card, boundScope) => guardCoreCardPageUpdate(skipOutbound, async () => {
+      async (activityId, updatedActivity, boundScope) => guardCoreCardPageUpdate(skipOutbound, async () => {
         if (!teamsApp || !await personalNotifications.observeAuthenticatedActivity(activity)) {
           throw new Error('CARD_PAGE_UPDATE_REFERENCE_UNVERIFIED');
         }
@@ -4318,7 +4318,8 @@ async function handleCoreJobPageAction(activity: any) {
         return destination.conversations.updateActivity(boundScope.conversationId, activityId, {
           type: 'message', from: { id: teamsApp.id, role: 'bot' },
           conversation: { id: boundScope.conversationId, conversationType: 'personal', tenantId: boundScope.tenantId },
-          attachments: [{ contentType: 'application/vnd.microsoft.card.adaptive', content: card }],
+          attachmentLayout: updatedActivity.attachmentLayout,
+          attachments: updatedActivity.attachments,
         });
       }));
   } catch { return { ...invalid, statusCode: 500 }; }

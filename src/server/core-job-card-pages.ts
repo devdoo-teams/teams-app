@@ -11,11 +11,10 @@ import { withTeamsJobDeepLink } from './teams-tab-link.js';
 const PAGES = ['summary', 'progress', 'conversation', 'result'] as const;
 type Page = typeof PAGES[number];
 type RecordState = { key: string; jobId: string; scope: AgentJobScope; activityId?: string; page: Page;
-  cursor?: number; expiresAt: number; openTabUrl?: string };
-type PageCard = CoreOrchestrationTeamsActivity['attachments'][0]['content'];
+  cursor?: number; expiresAt: number; openTabUrl?: string; layout?: 'carousel' };
 type Response = { statusCode: number; type: string; value: unknown };
 type Options = { universalActions?: boolean; getJob: (jobId: string, scope: AgentJobScope) => CoreOrchestrationJob | undefined;
-  update: (activityId: string, card: PageCard, scope: AgentJobScope) => Promise<unknown> };
+  update: (activityId: string, activity: CoreOrchestrationTeamsActivity, scope: AgentJobScope) => Promise<unknown> };
 const text = (value: string, max = 800) => redactSensitiveText(value).slice(0, max);
 const validText = (value: unknown, max = 512): value is string => typeof value === 'string' && value.trim().length > 0
   && value.length <= max && !/[\u0000-\u001f\u007f]/u.test(value);
@@ -47,7 +46,8 @@ export class CoreJobCardPages {
       && (record.activityId === undefined || validText(record.activityId, 200))
       && (record.cursor === undefined || Number.isInteger(record.cursor) && record.cursor >= 0 && record.cursor < 20)
       && (record.openTabUrl === undefined || isSafeGenUiUrl(record.openTabUrl))
-      && Object.keys(record).every(key => ['key', 'jobId', 'scope', 'activityId', 'page', 'cursor', 'expiresAt', 'openTabUrl'].includes(key))
+      && (record.layout === undefined || record.layout === 'carousel')
+      && Object.keys(record).every(key => ['key', 'jobId', 'scope', 'activityId', 'page', 'cursor', 'expiresAt', 'openTabUrl', 'layout'].includes(key))
       && Object.keys(record.scope).every(key => ['tenantId', 'requesterId', 'conversationId'].includes(key));
   }
   private serial<T>(fn: () => Promise<T>): Promise<T> {
@@ -62,7 +62,7 @@ export class CoreJobCardPages {
       const records = this.records.filter(record => record.expiresAt > Date.now());
       if (records.length >= 4096) throw new Error('CORE_CARD_PAGE_CAPACITY');
       const record: RecordState = { key: crypto.randomBytes(32).toString('hex'), jobId, scope: { ...scope },
-        page: 'summary', expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+        page: 'summary', layout: 'carousel', expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
         ...(openTabUrl && isSafeGenUiUrl(openTabUrl) ? { openTabUrl } : {}) };
       if (!this.valid(record)) throw new Error('CORE_CARD_PAGE_SCOPE_INVALID');
       const card = this.render(record);
@@ -100,13 +100,16 @@ export class CoreJobCardPages {
         && record.activityId === activityId && !!record.activityId && sameScope(record.scope, scope)
         && record.expiresAt > Date.now());
       if (!record || !this.options.getJob(record.jobId, scope)) return errorResponse();
+      // New collections use Submit and update the entire activity. A single-card
+      // universal-action response would collapse the collection in the host.
+      if (record.layout === 'carousel' && transport === 'invoke') return errorResponse();
       const next = { ...record, page: input.page === 'refresh' ? record.page : input.page as Page,
         ...(input.cursor === undefined ? {} : { cursor: input.cursor as number }) };
       const card = this.render(next);
       if (!card) return errorResponse();
       // Do not claim success if an older-client update fails; never fall back to a new message.
       if (transport === 'submit') {
-        try { await update(activityId, card.attachments[0].content, scope); }
+        try { await update(activityId, card, scope); }
         catch { return { ...errorResponse(), statusCode: 500 }; }
       }
       await this.publish(this.records.map(current => current === record ? next : current));
@@ -116,15 +119,24 @@ export class CoreJobCardPages {
   private render(record: RecordState): CoreOrchestrationTeamsActivity | undefined {
     const job = this.options.getJob(record.jobId, record.scope); if (!job) return undefined;
     const base = createCoreOrchestrationJobActivity(job, { openTabUrl: record.openTabUrl });
+    if (record.layout !== 'carousel') return this.renderPage(record, job, base, record.page);
+    const cards = PAGES.map(page => this.renderPage(record, job, base, page));
+    if (cards.some(card => !card)) return undefined;
+    return { type: 'message', attachmentLayout: 'carousel', attachments: [
+      cards[0]!.attachments[0], ...cards.slice(1).map(card => card!.attachments[0]),
+    ] };
+  }
+  private renderPage(record: RecordState, job: CoreOrchestrationJob, base: CoreOrchestrationTeamsActivity,
+    page: Page): CoreOrchestrationTeamsActivity | undefined {
     const labels: Record<Page, string> = { summary: '요약', progress: '진행', conversation: '대화', result: '결과' };
     const block = (value: string) => ({ type: 'TextBlock', text: text(value), wrap: true });
     let body: Record<string, unknown>[];
-    if (record.page === 'summary') body = [block(text(job.prompt, 400)),
+    if (page === 'summary') body = [block(text(job.prompt, 400)),
       ...base.attachments[0].content.body.filter(element => element.type === 'FactSet'),
       { type: 'FactSet', facts: [{ title: '승인', value: job.status === 'awaiting_approval' ? '승인 필요' : '추가 승인 요청 없음' }] },
       block(job.progress.at(-1) ?? '진행 기록이 없습니다.')];
-    else if (record.page === 'progress') body = job.progress.slice(-5).map(block);
-    else if (record.page === 'result') body = [block(job.result ?? job.error ?? '아직 최종 결과가 없습니다.')];
+    else if (page === 'progress') body = job.progress.length ? job.progress.slice(-5).map(block) : [block('진행 기록이 없습니다.')];
+    else if (page === 'result') body = [block(job.result ?? job.error ?? '아직 최종 결과가 없습니다.')];
     else {
       const turns: CoreOrchestrationJob[] = []; const seen = new Set<string>(); let current: CoreOrchestrationJob | undefined = job;
       let incomplete = false;
@@ -148,13 +160,13 @@ export class CoreJobCardPages {
         ] },
       ];
     }
-    const actions = PAGES.map(page => this.action(record, page, `${record.page === page ? '✓ ' : ''}${labels[page]}`));
+    const actions = record.layout === 'carousel' ? [] : PAGES.map(target => this.action(record, target, `${page === target ? '✓ ' : ''}${labels[target]}`));
     actions.push(this.action(record, 'refresh', '새로고침'));
     // Only summary retains existing confirmation/mutation controls; each is still handled by its original owner gate.
-    const controls = record.page === 'summary' ? base.attachments[0].content.actions ?? [] : [];
+    const controls = page === 'summary' ? base.attachments[0].content.actions ?? [] : [];
     const link = withTeamsJobDeepLink(record.openTabUrl, job.id);
     return { ...base, attachments: [{ ...base.attachments[0], content: { ...base.attachments[0].content,
-      body: [block(`Core 에이전트 작업 · ${labels[record.page]}`), ...body],
+      body: [block(`Core 에이전트 작업 · ${labels[page]}`), ...body],
       actions: [...actions, ...controls.filter(action => action.type !== 'Action.OpenUrl'),
         ...(link && isSafeGenUiUrl(link) ? [{ type: 'Action.OpenUrl', title: '상세 대화 열기', url: link }] : [])],
     } }] };
@@ -163,7 +175,7 @@ export class CoreJobCardPages {
     const data = { schemaVersion: '1', action: 'orchestration.page', key: record.key, jobId: record.jobId, page,
       ...(cursor === undefined ? {} : { cursor }) };
     const submit = { type: 'Action.Submit', title, data, associatedInputs: 'none' };
-    return this.options.universalActions
+    return this.options.universalActions && record.layout !== 'carousel'
       ? { type: 'Action.Execute', title, verb: 'orchestration.page', data, associatedInputs: 'none', fallback: submit }
       : submit;
   }
