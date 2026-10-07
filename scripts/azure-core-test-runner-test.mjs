@@ -62,6 +62,7 @@ const hostileParentEnv = {
   TEAMS_TEST_TIMEOUT_MS: '5000',
   TEAMS_FILEPROVIDER_SERVER_REUSE: '1',
   BICEP_BIN: '/fixture/bin/bicep',
+  DOTNET_BUNDLE_EXTRACT_BASE_DIR: '/fixture/tmp/bicep-extraction',
   CODEX_HOME: '/host/codex-home',
   CODEX_BIN: '/host/bin/codex',
   CODEX_BIN_SHA256: 'host-codex-digest',
@@ -101,6 +102,7 @@ const expectedChildEnv = {
   TEAMS_FILEPROVIDER_SERVER_REUSE: hostileParentEnv.TEAMS_FILEPROVIDER_SERVER_REUSE,
   TEAMS_SOURCE_COMMIT: sourceCommit,
   BICEP_BIN: hostileParentEnv.BICEP_BIN,
+  DOTNET_BUNDLE_EXTRACT_BASE_DIR: hostileParentEnv.DOTNET_BUNDLE_EXTRACT_BASE_DIR,
 };
 for (const { env } of invocations) {
   assert.deepEqual(

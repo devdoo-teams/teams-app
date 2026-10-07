@@ -50,6 +50,8 @@ const CHILD_TEST_HARNESS_KEYS = new Set([
   'TEAMS_SOURCE_COMMIT',
   'TEAMS_TEST_TIMEOUT_MS',
   'TEAMS_FILEPROVIDER_SERVER_REUSE',
+  // Documented single-file CLI extraction path; no broader DOTNET_* pass-through.
+  'DOTNET_BUNDLE_EXTRACT_BASE_DIR',
 ]);
 
 function normalizedKeys(keys) {

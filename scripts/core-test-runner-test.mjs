@@ -14,6 +14,8 @@ const HOSTILE_PARENT_ENV = {
   TEAMS_TEST_TIMEOUT_MS: '5000',
   TEAMS_FILEPROVIDER_SERVER_REUSE: '1',
   BICEP_BIN: '/host/bin/bicep',
+  DOTNET_BUNDLE_EXTRACT_BASE_DIR: '/fixture/tmp/bicep-extraction',
+  DOTNET_STARTUP_HOOKS: '/host/untrusted-hook.dll',
   CODEX_HOME: '/host/codex-home',
   CODEX_BIN: '/host/bin/codex',
   CODEX_BIN_SHA256: 'host-codex-digest',
@@ -64,6 +66,11 @@ async function assertProcessReaped(pid, label, timeoutMs = 2_000) {
     env: HOSTILE_PARENT_ENV,
   });
   assert.ok(invocations.length > 2);
+  for (const invocation of invocations) {
+    assert.equal(invocation.env.DOTNET_BUNDLE_EXTRACT_BASE_DIR, HOSTILE_PARENT_ENV.DOTNET_BUNDLE_EXTRACT_BASE_DIR,
+      'nested Core children retain the explicit writable single-file extraction path');
+    assert.equal(invocation.env.DOTNET_STARTUP_HOOKS, undefined, 'an extraction path does not authorize arbitrary runtime hooks');
+  }
   const clientBuild = invocations.find(({ args }) => args.includes('scripts/build-client.mjs'));
   const serverBuild = invocations.find(({ args }) => args.includes('scripts/build-server.mjs'));
   const runtimeSmoke = invocations.find(({ args }) => args.includes('scripts/core-runtime-smoke.mjs'));
@@ -128,6 +135,7 @@ async function assertProcessReaped(pid, label, timeoutMs = 2_000) {
     TEAMS_TEST_TIMEOUT_MS: HOSTILE_PARENT_ENV.TEAMS_TEST_TIMEOUT_MS,
     TEAMS_FILEPROVIDER_SERVER_REUSE: HOSTILE_PARENT_ENV.TEAMS_FILEPROVIDER_SERVER_REUSE,
     TEAMS_SOURCE_COMMIT: SOURCE_COMMIT,
+    DOTNET_BUNDLE_EXTRACT_BASE_DIR: HOSTILE_PARENT_ENV.DOTNET_BUNDLE_EXTRACT_BASE_DIR,
   };
   assert.equal(invocations.every(({ env }) => env.TEAMS_SOURCE_COMMIT === SOURCE_COMMIT), true);
   assert.equal(
