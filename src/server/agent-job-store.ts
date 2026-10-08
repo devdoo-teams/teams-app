@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { readExecutionReceipt, sameExecutionReceipt } from './agent-execution-receipt.js';
 import type { CoreExecutionReceipt } from '../shared/core-orchestration.js';
+import { CORE_AGENT_PROMPT_MAX_LENGTH } from '../shared/core-orchestration.js';
 
 import { atomicWriteJson, readAtomicJsonStore } from './atomic-file.js';
 import type { CliAgentProvider } from './cli-agent-runner.js';
@@ -25,7 +26,7 @@ export type AgentJobStatus =
 
 export const MAX_AGENT_JOB_ID_LENGTH = 200;
 export const MAX_AGENT_SCOPE_VALUE_LENGTH = 256;
-export const MAX_AGENT_PROMPT_LENGTH = 2_000;
+export const MAX_AGENT_PROMPT_LENGTH = CORE_AGENT_PROMPT_MAX_LENGTH;
 export const MAX_AGENT_PROGRESS_MESSAGE_LENGTH = 2_000;
 export const MAX_AGENT_RESULT_LENGTH = 20_000;
 export const MAX_AGENT_ERROR_LENGTH = 10_000;

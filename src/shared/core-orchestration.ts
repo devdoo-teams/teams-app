@@ -1,3 +1,5 @@
+export const CORE_AGENT_PROMPT_MAX_LENGTH = 2_000;
+
 export type CoreExecutionEnvironment = 'local-macos' | 'local-linux' | 'local-windows' | 'external-worker';
 /** Trusted worker observations, independent of immutable submission selections. */
 export type CoreExecutionReceipt = Readonly<{

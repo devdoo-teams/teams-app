@@ -1,7 +1,7 @@
 import * as teamsSdk from '@microsoft/teams-js';
 const teamsApp = teamsSdk.app;
 import { parseRequestedJobId, loadRequestedJob, includeRequestedJob } from './job-deep-link.js';
-import { CORE_JOB_STATUS_LABELS } from '../shared/core-orchestration.js';
+import { CORE_AGENT_PROMPT_MAX_LENGTH, CORE_JOB_STATUS_LABELS } from '../shared/core-orchestration.js';
 import { projectReceiptFacts } from '../shared/receipt-presentation.js';
 import type { VisibleJobConversation } from '../shared/job-conversation.js';
 import { JobConversationView } from './JobConversationView.js';
@@ -125,6 +125,9 @@ export function validateOrchestrationSubmission(
   modelCatalog?: CoreCodexModelCatalog,
 ): string {
   if (!prompt.trim()) return '작업 내용을 입력하세요.';
+  if (prompt.trim().length > CORE_AGENT_PROMPT_MAX_LENGTH) {
+    return `작업 내용은 ${CORE_AGENT_PROMPT_MAX_LENGTH.toLocaleString('ko-KR')}자 이내로 입력하세요.`;
+  }
   if (!providerId.trim()) return '실행 제공자를 선택하세요.';
   const provider = providers.find((candidate) => candidate.provider === providerId);
   if (!provider) return '등록되지 않은 제공자입니다.';
@@ -392,11 +395,15 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
           작업 내용
           <textarea
             aria-label="작업 내용"
+            aria-describedby="agent-prompt-limit"
             disabled={props.phase === 'loading' || submitBusy}
             onChange={(event) => props.onPromptChange(event.currentTarget.value)}
             value={props.prompt}
           />
         </label>
+        <p className="panel-description" id="agent-prompt-limit">
+          작업 내용은 최대 {CORE_AGENT_PROMPT_MAX_LENGTH.toLocaleString('ko-KR')}자까지 입력할 수 있습니다.
+        </p>
         <button className="primary" disabled={props.phase === 'loading' || submitBusy} type="submit">
           {actionLabel('작업 실행', '제출 중…', submitBusy)}
         </button>
@@ -408,6 +415,7 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
       </form>
 
       {props.validationError ? <p className="error" role="alert">{props.validationError}</p> : null}
+      {props.error && props.phase !== 'error' ? <p className="error" role="alert">{props.error}</p> : null}
       {props.notice ? <p aria-live="polite" role="status">{props.notice}</p> : null}
 
       {props.phase === 'loading' ? (

@@ -8,6 +8,7 @@ okf_version: 0.2
 
 ## Concepts
 
+* [Tab prompt bounds and mutation failures](tab-prompt-and-mutation-errors.md) - MP360/361 distinct source and fixture defects, bounded synthetic126 observations and candidate127 gates
 * [Core native plan tool availability](codex-native-plan-tool-config.md) - MP358 official opt-in default, launch RED/GREEN and actual todo lifecycle
 * [Strict source typecheck and preserved user files](strict-source-typecheck.md) - MP352–355 clean baseline, strict semantic CI and SDK payload preservation
 * [Codex JSONL 계획 업데이트와 완료 결과](codex-jsonl-todo-updates.md) - MP-351 producer lifecycle, RED/GREEN, 중복 부작용과 실제 pin/운영 경계 분리

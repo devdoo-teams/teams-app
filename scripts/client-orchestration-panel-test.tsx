@@ -263,6 +263,13 @@ assert.equal(
   'an unavailable provider cannot be submitted as live',
 );
 assert.equal(validateOrchestrationSubmission('Run it', 'codex', [provider]), '', 'valid input is accepted');
+assert.equal(validateOrchestrationSubmission('X'.repeat(2_000), 'codex', [provider]), '', 'the server prompt boundary is accepted');
+assert.equal(validateOrchestrationSubmission(`  ${'X'.repeat(2_000)}  `, 'codex', [provider]), '', 'prompt length follows the trimmed submission contract');
+assert.equal(
+  validateOrchestrationSubmission('X'.repeat(2_001), 'codex', [provider]),
+  '작업 내용은 2,000자 이내로 입력하세요.',
+  'an over-limit prompt is rejected with actionable guidance before a provider request',
+);
 assert.equal(
   validateOrchestrationSubmission(
     'Run it',
@@ -518,5 +525,17 @@ assert.match(error, /role="alert"/);
 assert.match(error, /작업 목록을 불러오지 못했습니다/);
 assert.match(error, />다시 시도<\/button>/);
 assert.doesNotMatch(error, /아직 실행한 작업이 없습니다/);
+
+const mutationError = renderToStaticMarkup(<OrchestrationPanelView
+  {...baseProps}
+  phase="ready"
+  jobs={[task('completed', { result: 'Existing result.' })]}
+  selectedJob={null}
+  error="합성 요청을 처리하지 못했습니다."
+  mobile={false}
+/>);
+assert.match(mutationError, /role="alert"[^>]*>합성 요청을 처리하지 못했습니다\./, 'a failed mutation is visible while the already-loaded panel remains ready');
+assert.match(mutationError, /Existing result\.|완료/, 'mutation failure preserves the loaded job list');
+assert.equal((error.match(/작업 목록을 불러오지 못했습니다/g) ?? []).length, 1, 'list-load errors are displayed once');
 
 console.log('Client orchestration panel tests passed');
