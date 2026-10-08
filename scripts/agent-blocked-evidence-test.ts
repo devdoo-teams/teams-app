@@ -134,6 +134,12 @@ try {
   const multilineQuote = await submit('STATUS: BLOCKED\nEVIDENCE: quoted example\n`\nBLOCKER: NONE\n`\nBLOCKER: network disabled.\npassword=quoted-synthetic-secret');
   assert.equal(multilineQuote.status, 'failed');
   assert.doesNotMatch(multilineQuote.result!, /quoted-synthetic-secret/u);
+  for (const width of [2, 7, 17]) {
+    const delimiter = '`'.repeat(width);
+    const quotedDelimiter = await submit(`STATUS: BLOCKED\nEVIDENCE: quoted example\n${delimiter}\nBLOCKER: NONE\n${delimiter}\nBLOCKER: network disabled.\npassword=quoted-synthetic-secret`);
+    assert.equal(quotedDelimiter.status, 'failed', `quote delimiter width ${width} cannot bypass failure`);
+    assert.doesNotMatch(quotedDelimiter.result!, /quoted-synthetic-secret/u);
+  }
   const completed = await submit('Synthetic completed output 50'); assert.equal(completed.status, 'completed'); assert.equal(completed.result, 'Synthetic completed output 50');
   const thrown = await submit(new Error('synthetic runner failure token=quoted-synthetic-secret'));
   assert.equal(thrown.status, 'failed'); assert.equal(thrown.result, undefined); assert.doesNotMatch(thrown.error!, /quoted-synthetic-secret/u);

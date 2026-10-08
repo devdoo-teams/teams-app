@@ -99,10 +99,37 @@ export function diagnoseRemoteAgentResult(input: string): RemoteTroubleshootingA
 
 /** A report's leading status is authoritative; quoted examples are not. */
 export function isBlockedRemoteAgentResult(input: string): boolean {
-  const report = input.replace(/(```|~~~)[\s\S]*?(?:\1|$)/gu, '').replace(/`[^`]*(?:`|$)/gu, '');
+  const report = omitQuotedReportText(input);
   const blocker = report.match(/(?:^|\n)BLOCKER:\s*([^\n]*)/iu)?.[1];
   return /^\s*STATUS:\s*(?:BLOCKED|FAILED)\b/iu.test(input)
     && !(blocker && /^(?:NONE|없음)\b/iu.test(blocker));
+}
+
+/** Scan delimiter runs once, including multiline and unmatched quotes. */
+function omitQuotedReportText(input: string): string {
+  let quote: { character: string; width: number } | undefined;
+  let output = '';
+  for (let index = 0; index < input.length;) {
+    const character = input[index];
+    if (character === '`' || character === '~') {
+      let end = index + 1;
+      while (input[end] === character) end++;
+      const width = end - index;
+      if (character === '`' || width >= 3) {
+        if (!quote) {
+          quote = { character, width };
+          output += '[인용/코드 숨김]';
+        } else if (quote.character === character && quote.width === width) {
+          quote = undefined;
+        }
+        index = end;
+        continue;
+      }
+    }
+    if (!quote || character === '\n') output += character;
+    index++;
+  }
+  return output;
 }
 
 /** Retain safe report evidence before it reaches the owner-scoped store/API. */
@@ -110,10 +137,8 @@ export function retainBlockedAgentReport(input: string, paths: readonly (string 
   const protectedText = input
     .replace(/-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----[\s\S]*?(?:-----END(?: [A-Z0-9]+)* PRIVATE KEY-----|$)/giu, '[비밀키 숨김]')
     .replace(/(["']?authorization["']?\s*:\s*)(?:"[^"]*"|'[^']*'|[^\n]*)/giu, '$1[인증정보 숨김]');
-  const sanitized = redactCliDiagnostics(redactSensitiveText(protectedText), { paths, maxChars: Number.MAX_SAFE_INTEGER })
+  const sanitized = omitQuotedReportText(redactCliDiagnostics(redactSensitiveText(protectedText), { paths, maxChars: Number.MAX_SAFE_INTEGER }))
     .replace(/[\u0080-\u009f]/gu, '')
-    .replace(/(```|~~~)[\s\S]*?(?:\1|$)/gu, '[명령/코드 숨김]')
-    .replace(/`[^`]*(?:`|$)/gu, '[명령/코드 숨김]')
     .split('\n')
     .filter(line => /^(?:STATUS|EVIDENCE|COMPLETED|BLOCKER|NEXT ACTION):/iu.test(line))
     .map(line => {
