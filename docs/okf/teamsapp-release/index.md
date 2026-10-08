@@ -8,6 +8,7 @@ okf_version: 0.2
 
 ## Concepts
 
+* [Core native plan tool availability](codex-native-plan-tool-config.md) - MP358 official opt-in default, launch RED/GREEN and actual todo lifecycle
 * [Strict source typecheck and preserved user files](strict-source-typecheck.md) - MP352–355 clean baseline, strict semantic CI and SDK payload preservation
 * [Codex JSONL 계획 업데이트와 완료 결과](codex-jsonl-todo-updates.md) - MP-351 producer lifecycle, RED/GREEN, 중복 부작용과 실제 pin/운영 경계 분리
 * [실패 이력과 원인](failure-history.md) - Run 26–54와 이전에 확인된 실패군, 개선 및 현재 판정

@@ -338,6 +338,27 @@ try {
   await lease.spawn(scope, codexExecutable, selectedArgs, spawnOptions);
   assert.equal(spawnCalls.length, 2, 'a valid model/reasoning selection must remain launchable through the read-only lease');
   assert.deepEqual(spawnCalls[1]?.args, selectedArgs);
+  const launchedConfig = spawnCalls[1]!.args.flatMap((arg, index, launchedArgs) => (
+    arg === '-c' ? [launchedArgs[index + 1]] : []
+  ));
+  assert.equal(
+    launchedConfig.filter((value) => value === 'tools.update_plan.enabled=true').length,
+    1,
+    'a Core read-only launch must enable the native plan tool so the producer can emit todo lifecycle events',
+  );
+
+  const selectedPromptSeparator = selectedArgs.indexOf('--');
+  await assert.rejects(
+    () => lease.spawn(scope, codexExecutable, [
+      ...selectedArgs.slice(0, selectedPromptSeparator),
+      '-c',
+      'tools.update_plan.enabled=false',
+      ...selectedArgs.slice(selectedPromptSeparator),
+    ], spawnOptions),
+    (error: unknown) => error instanceof AgentExecutionUnavailableError
+      && error.reason === 'provider-rejected-request',
+    'a later config override must not disable the required native plan tool',
+  );
 
   await assert.rejects(
     () => lease.spawn(scope, codexExecutable, [...args.slice(0, 2), '--sandbox', 'read-only', ...args.slice(2)], spawnOptions),

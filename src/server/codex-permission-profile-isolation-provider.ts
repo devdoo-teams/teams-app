@@ -87,6 +87,8 @@ export const CODEX_READ_ONLY_PERMISSION_ARGS = Object.freeze([
   '-c',
   'web_search="disabled"',
   '-c',
+  'tools.update_plan.enabled=true',
+  '-c',
   DEFAULT_PERMISSION_VALUE,
   '-c',
   PERMISSION_PROFILE_VALUE,

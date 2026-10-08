@@ -1,5 +1,12 @@
 # TeamsApp release knowledge update log
 
+## 2026-10-08 — MP358 native plan tool configuration
+
+* **Official contract**: pinned Codex0.162.0-alpha.2 source makes `tools.update_plan.enabled` opt-in, absent=false; see [native plan tool concept](codex-native-plan-tool-config.md).
+* **RED/GREEN**: actual launch argument regression fails0!=1 before minimum config addition; same test passes and later disabling override remains rejected. Initial loopback EPERM is retained separately as environment evidence.
+* **Actual CLI**: production native preflight and signed/pinned child, observed real spawn with unchanged args/options, emits same-ID todo start/two updates/completion, final synthetic sum50 and canonical usage; child exits/lease disposes. This local dirty-source result is not deployed124 UI proof.
+* **Boundary**: existing authenticated public124/tunnel remain running. New committed release/CI/catalog/install/public/host UI remain required. About122 cause remains unconfirmed; scoped user-context catalog GET403 does not justify consent or policy changes. Native/mobile/full UI unverified; no Jira Done or Teams completion.
+
 ## 2026-10-08 — MP352–355 strict semantic source repair
 
 * **Official contract**: current TypeScript include/readonly documentation and pinned Teams SDK2.0.15 source; see [strict source typecheck concept](strict-source-typecheck.md).
