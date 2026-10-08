@@ -35,6 +35,7 @@ jobs:
       - name: Run bounded source checks
         run: |
           npm run typecheck:core
+          npm run typecheck
           npm run test:typecheck-boundary
           npm run test:core-source-check
           npm run test:ci-workflow-contract

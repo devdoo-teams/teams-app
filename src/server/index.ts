@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 import express from 'express';
+import type { IMessageActivity, IMessageActivityInput } from '@microsoft/teams.api';
 
 import { createUserAuthMiddleware, parseAcceptedAudiences } from './user-auth.js';
 import { ItemStore, MAX_ITEM_TITLE_LENGTH, type ItemScope } from './item-store.js';
@@ -1173,7 +1174,7 @@ function envelopeText(envelope: GenUiEnvelopeV1): string {
 }
 
 async function buildStatusEnvelope(): Promise<GenUiEnvelopeV1> {
-  const capabilities = azureQueueDispatch
+  const capabilities = azureQueueDispatch || !coreProviderCapabilities
     ? unknownCliCapabilities()
     : verifiedCoreCliCapabilities(coreProviderCapabilities);
   return genUi.status({
@@ -2604,7 +2605,7 @@ const personalNotifications = new PersonalNotificationBroker(
     const pageScope = { tenantId: reference.tenantId, requesterId: reference.requesterId,
       conversationId: reference.conversationId };
     const paged = envelope && coreJobCardPages
-      ? await coreJobCardPages.create(notification.jobId, pageScope, true, personalTabDeepLink)
+      ? await coreJobCardPages.create(job.id, pageScope, true, personalTabDeepLink)
       : undefined;
     const receipt = paged && envelope
       ? await sender(envelope.fallbackText ?? '요청 결과를 카드로 확인하세요.', undefined, paged.activity)
@@ -4303,12 +4304,13 @@ async function handleCoreJobPageAction(activity: any) {
         }
         const api = await import('@microsoft/teams.api');
         const destination = new api.Client(activity.serviceUrl, teamsApp.api.http.clone({ timeout: 10_000 }));
-        return destination.conversations.updateActivity(boundScope.conversationId, activityId, {
+        const messageUpdate: IMessageActivityInput & Pick<IMessageActivity, 'from' | 'conversation'> = {
           type: 'message', from: { id: teamsApp.id, role: 'bot' },
           conversation: { id: boundScope.conversationId, conversationType: 'personal', tenantId: boundScope.tenantId },
           attachmentLayout: updatedActivity.attachmentLayout,
-          attachments: updatedActivity.attachments,
-        });
+          attachments: [...updatedActivity.attachments],
+        };
+        return destination.conversations.updateActivity(boundScope.conversationId, activityId, messageUpdate);
       }));
   } catch { return { ...invalid, statusCode: 500 }; }
 }

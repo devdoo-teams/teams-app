@@ -1,5 +1,12 @@
 # TeamsApp release knowledge update log
 
+## 2026-10-08 — MP352–355 strict semantic source repair
+
+* **Official contract**: current TypeScript include/readonly documentation and pinned Teams SDK2.0.15 source; see [strict source typecheck concept](strict-source-typecheck.md).
+* **Observed evidence**: exact original command failed11 diagnostics, exact clean123 Git archive failed3. All11 user untracked files are preserved with hashes; configurations and dependencies remain unchanged.
+* **RED/GREEN**: narrow optional capabilities, use declared notification.job.id, and type the plain SDK update with a copied mutable attachment array. Clean-baseline overlay compiles152 root files with0 diagnostics; installed SDK synthetic transport preserves metadata/cards and omits text. New CI guard RED/GREEN registers existing full strict check.
+* **Live boundary**: public122, candidate123 evidence, auth/pin/trust/CLI untouched. Original-copy diagnostics and MP350/live UI gates remain separate; no real provider request or live completion.
+
 ## 2026-10-08 — MP351 Codex todo_list item.updated lifecycle
 
 * **Official contract**: current pinned OpenAI producer/event definitions and installed0.162.0-alpha.2 help; see [JSONL todo update concept](codex-jsonl-todo-updates.md). Source also defines the event in0.160.0 and stable0.161.0.

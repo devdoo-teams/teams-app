@@ -26,6 +26,12 @@ assert.notEqual(continuityStart, -1, 'workflow must define a continuity job');
 assert.notEqual(azureStart, -1, 'workflow must define an Azure deployment-runner compatibility job');
 assert.notEqual(optionalStart, -1, 'workflow must define an optional-provider job');
 const a2aJob = workflow.slice(a2aStart, continuityStart);
+const coreJob = workflow.slice(workflow.indexOf('\n  core:'), a2aStart);
+assert.match(
+  coreJob,
+  /npm run typecheck\s*\n/,
+  'clean CI checkout must run the full strict semantic release check, beyond the Core esbuild compile check',
+);
 assert.match(
   a2aJob,
   /npm run build:core/,
