@@ -169,6 +169,27 @@ assert.deepEqual(requests.at(-1), {
   },
 }, 'submit sends no client-controlled tenant, requester, or conversation scope');
 
+for (const notify of [false, true]) {
+  await client.submitJob({
+    provider: 'codex',
+    mode: 'read-only',
+    prompt: 'Synthetic notification preference check.',
+    idempotencyKey: `tab-notify-${notify}`,
+    notify,
+  });
+  assert.deepEqual(requests.at(-1), {
+    path: `${apiBasePath}/jobs`,
+    method: 'POST',
+    body: {
+      provider: 'codex',
+      mode: 'read-only',
+      prompt: 'Synthetic notification preference check.',
+      idempotencyKey: `tab-notify-${notify}`,
+      notify,
+    },
+  }, `submit preserves the user's explicit notification preference ${notify} in the actual JSON body`);
+}
+
 await client.cancelJob('task-1');
 assert.deepEqual(requests.at(-1), {
   path: `${apiBasePath}/jobs/task-1/cancel`,

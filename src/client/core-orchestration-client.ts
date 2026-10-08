@@ -146,6 +146,7 @@ export function createCoreOrchestrationClient(
           prompt: input.prompt,
           ...(input.provider ? { provider: input.provider } : {}),
           mode: input.mode,
+          ...(input.notify !== undefined ? { notify: input.notify } : {}),
           ...(input.model ? {
             model: input.model,
             reasoningEffort: input.reasoningEffort,

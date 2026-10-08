@@ -288,3 +288,8 @@
 * **RED**: synthetic restart test against original115 bundle failed exit1 with the same bound-payload conflict and no unrelated queued recovery. Independent review then reproduced a new candidate lookup missing stored-parent validation; a persisted scratch-store test failed with missing expected conflict rejection, mapped separately to MP-346.
 * **Source correction**: canonical future fingerprints, explicit historical Bot v1 compatibility, read-only existing completion lookup with parent/key validation, preserve settled receipts, and validate queued binding before delivery. Focused unit/store GREEN; clean new116 bundle restart/Core/CI/public gates remain separate pending evidence at this snapshot.
 * **Live boundary**:115PID46385/tunnel52764 remain untimed/authenticated. No user job retry, receipt reset, auth copying, policy or target expansion. MP338 live browser fault/recovery remains UNVERIFIED because root CDP URL blocking did not affect OOPIF requests and nonflattened iframe sessions failed. Native pipe and mobile independently unverified. No Jira Done or Teams completion.
+
+
+##2026-10-08 — MP-359 tab notification JSON boundary
+
+OBSERVED: d013d38/125 tab selection reaches submit identity but not client JSON. Controlled real-client false/true requests omit notify; no actual new tab job or notification was submitted for diagnosis. Different root from MP-314 binding and MP-349 layout. RED retained19:56:49Z; one-line serializer fix GREEN19:57:14Z; route fixture GREEN19:58:07Z. Candidate126 is pending complete Core/build/package/catalog/public/UI gates. Public125/PID93234 and existing tunnel52764 retained. Cause of About122 versus Graph125 remains UNVERIFIED; no cache diagnosis or forced reinstall. See personal-notifications.md and MP-359.

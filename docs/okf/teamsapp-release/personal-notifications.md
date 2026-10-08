@@ -8,9 +8,9 @@ sources:
     title: "Types of cards"
     location: "Support for Adaptive Cards, observed lines146–152 on2026-10-06; HTML lines maychange"
 generated: { by: "process:codex", at: "2026-10-06T16:29:00Z" }
-verified: { by: "process:functional-boundary-audit", at: "2026-10-07T09:17:34Z" }
+verified: { by: "process:mp359-client-request-boundary", at: "2026-10-08T19:58:07Z" }
 status: "UNVERIFIED"
-stale_after: "2026-10-14T09:17:34Z"
+stale_after: "2026-10-15T19:58:07Z"
 ---
 
 # Personal notification destination and receipt
@@ -30,3 +30,12 @@ New jobs persist notification intent. A tab checkbox supplies a validated boolea
 FIXTURE: personal-notification-test.ts tests synthetic reference, owner/tenant isolation, bot/group/fallback rejection, notify:false, legacy missing intent, duplicate/restart, pending and ambiguous outcomes. agent-service-notify-false-regression-test.ts reproduced execution failure caused by a rejected notification before the fix; after the fix the controlled runner completes with its authoritative result. Existing false/approval/followup/retry branches remain tested. core-orchestration-route-test.ts and service-test.ts cover validated opt-out and durable replay identity.
 
 LIVE RESULT (updated2026-10-07): the implementation is deployed in public111/ad1e78f; authenticated health and the exact hosted111 client asset were read back. This proves deployed code, not opt-in personal broker receipt in the actual Teams chat. The real old failed job is not retried. Its historic REST ID and absence of stored notification intent do not prove an SDK rejection or notify:false. Personal notification delivery and each UI branch remain UNVERIFIED until same-release authenticated synthetic work in the existing personal chat. The earlier A2A completion acceptance is a separate outbound path. See [current functional boundaries](functional-version-boundaries.md).
+
+
+## Tab request serialization boundary (MP-359, 2026-10-08)
+
+OBSERVED EVIDENCE: source d013d38e0df0488f4cbda874fc8b0595dcb0d26f / public125. OrchestrationPanel.tsx:767 includes notifyPersonal in submission identity, but core-orchestration-client.ts:144–154 omits it from JSON. A read-only controlled request adapter reproduced omission for both false and true without real fetch/jobs. The earlier statement that a tab checkbox supplies the boolean describes the intended contract; current125 does not satisfy this client transport boundary. The server route accepts and validates notify; this is distinct from the personal reference/broker boundary in MP-314 and checkbox layout in MP-349.
+
+FIXTURE: scripts/client-orchestration-panel-test.tsx:172 checks the real client's exact POST body for false and true, while the earlier omitted-input case remains unchanged. Before production change the false case failed with missing notify (exit1,2026-10-08T19:56:49Z). The minimum client serialization change includes notify only when !==undefined; the same test passed (exit0,19:57:14Z). Existing synthetic route regression passed19:58:07Z. Authentication, server-derived scope, notification destination, and server boolean validation are unchanged. CoreOrchestrationService normalizes notify into request identity, so a changed preference cannot silently replay the prior request. Local controlled request output does not prove actual notification receipt.
+
+LIVE RESULT: the fix is a1.0.126 candidate, not deployed. Public125/d013d38/PID93234 and tunnel52764 remain untouched. A current About readback on19:56:49Z displays122 while the separate personal Graph installation readback displays125; cause remains UNVERIFIED. No native desktop/mobile/notification delivery acceptance or Done is claimed. Retained RED/GREEN and route receipts: /tmp/teams-124-continuity-20261009-0409/mp359-client-json-red-receipt.json, mp359-client-json-green-receipt.json, mp359-route-regression-receipt.json.
