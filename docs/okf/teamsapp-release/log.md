@@ -1,5 +1,12 @@
 # TeamsApp release knowledge update log
 
+## 2026-10-08 — MP351 Codex todo_list item.updated lifecycle
+
+* **Official contract**: current pinned OpenAI producer/event definitions and installed0.162.0-alpha.2 help; see [JSONL todo update concept](codex-jsonl-todo-updates.md). Source also defines the event in0.160.0 and stable0.161.0.
+* **RED/GREEN**: synthetic official-order stream reproduced unsupported item.updated. Independent review added completed-plan reopen RED; minimum same-ID/type/payload/lifecycle validation and duplicate callback suppression pass focused runner/CLI/service fixtures. Unknown events and final message/terminal usage remain strict.
+* **Separate evidence**: broad TypeScript5.9.3 check fails with the same11 baseline/candidate diagnostics; tracked baseline defects MP352–354 deferred, user untracked copies preserved. Dirty full-source fixture stops on the existing untracked location file; clean pinned gates remain independent.
+* **Live boundary**: existing public122 process/tunnel and signed CLI/pin mismatch MP350 unchanged. No real provider request, auth/trust/CLI mutation, upload or operational restart. Candidate package/local commit/remote gates do not prove live compatibility or release completion. No Jira Done or Teams completion.
+
 ## 2026-10-08 — MP349 personal notification checkbox layout
 
 * **Official contract**: current WHATWG native label association, W3C flex items and Chrome viewport/AX schema; see [layout concept](personal-notification-layout.md).

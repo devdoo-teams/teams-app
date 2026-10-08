@@ -350,6 +350,8 @@ export class CodexRunner {
     let terminationRequested = false;
     let protocolState: ProtocolState = 'thread';
     let agentMessageCount = 0;
+    let activeTodoList: { id: string; snapshot: string } | undefined;
+    let completedTodoList = false;
     const currentProtocolState = (): ProtocolState => protocolState;
     let recoverablePreTurnErrorItemCount = 0;
     let tokenUsage: AgentTokenUsage | undefined;
@@ -378,7 +380,19 @@ export class CodexRunner {
       terminate(new CodexTerminalProtocolError(message));
     };
 
-    const observeEvent = (event: CodexRunEvent): void => {
+    const todoListIdentity = (raw: Record<string, unknown>): { id: string; snapshot: string } | undefined => {
+      const item = raw.item;
+      if (!isRecord(item) || item.type !== 'todo_list'
+        || typeof item.id !== 'string' || !item.id.trim()
+        || !Array.isArray(item.items)
+        || !item.items.every((entry) => isRecord(entry)
+          && typeof entry.text === 'string' && typeof entry.completed === 'boolean')) return undefined;
+      // Compare only the official projection; unrelated fields remain excluded
+      // from callbacks by sanitizeRunEvent, and wire records retain their budget.
+      return { id: item.id, snapshot: JSON.stringify(item.items.map((entry) => [entry.text, entry.completed])) };
+    };
+
+    const observeEvent = (event: CodexRunEvent, raw: Record<string, unknown>): void | false => {
       const type = event.type;
       if (typeof type !== 'string' || !type) {
         protocolFailure('Codex JSONL event type is missing.');
@@ -437,12 +451,44 @@ export class CodexRunner {
           protocolFailure('Codex item.started ordering or item type is invalid.');
           return;
         }
+        if (event.item.type === 'todo_list') {
+          const todo = todoListIdentity(raw);
+          if (!todo || activeTodoList || completedTodoList || errorPayload(event.error)) {
+            protocolFailure('Codex todo_list start identity, payload or ordering is invalid.');
+            return;
+          }
+          activeTodoList = todo;
+          return;
+        }
         protocolState = 'items';
+        return;
+      }
+      if (type === 'item.updated') {
+        const todo = todoListIdentity(raw);
+        if ((protocolState !== 'items' && protocolState !== 'message')
+          || !todo || !activeTodoList || todo.id !== activeTodoList.id || errorPayload(event.error)) {
+          protocolFailure('Codex item.updated todo_list identity, payload or ordering is invalid.');
+          return;
+        }
+        if (todo.snapshot === activeTodoList.snapshot) return false;
+        activeTodoList = todo;
         return;
       }
       if (type === 'item.completed') {
         if ((protocolState !== 'items' && protocolState !== 'message') || !event.item || typeof event.item.type !== 'string' || !event.item.type) {
           protocolFailure('Codex item.completed ordering or item type is invalid.');
+          return;
+        }
+        if (event.item.type === 'todo_list') {
+          const todo = todoListIdentity(raw);
+          if (!todo || todo.id !== activeTodoList?.id || errorPayload(event.error)) {
+            protocolFailure('Codex todo_list completion identity, payload or ordering is invalid.');
+            return;
+          }
+          activeTodoList = undefined;
+          completedTodoList = true;
+          // The official producer closes its plan after the last agent_message.
+          // This is not another result and must preserve the final-message state.
           return;
         }
         if (event.item.type !== 'agent_message') {
@@ -464,6 +510,10 @@ export class CodexRunner {
         return;
       }
       if (type === 'turn.completed') {
+        if (activeTodoList) {
+          protocolFailure('Codex must close its active todo_list before turn.completed.');
+          return;
+        }
         if (protocolState !== 'message' || agentMessageCount < 1 || errorPayload(event.error)) {
           protocolFailure('Codex must emit a non-empty final agent_message immediately before turn.completed.');
           return;
@@ -512,9 +562,9 @@ export class CodexRunner {
       }
       eventCount += 1;
       const event = sanitizeRunEvent(parsed);
-      observeEvent(event);
+      const suppressDuplicateUpdate = observeEvent(event, parsed) === false;
       if (terminationError) return;
-      queueEvent(event);
+      if (!suppressDuplicateUpdate) queueEvent(event);
     };
 
     const handleStdout = (chunk: string): void => {

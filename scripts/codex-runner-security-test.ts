@@ -58,7 +58,62 @@ const errorItem = (message, extra = {}) => console.log(JSON.stringify({
   ...extra,
 }));
 const completed = () => console.log(JSON.stringify({ type: 'turn.completed' }));
-if (caseName === 'malformed') {
+const todo = (type, id = 'plan-1', extra = {}) => console.log(JSON.stringify({
+  type,
+  item: { id, type: 'todo_list', items: [{ text: 'Synthetic inspection', completed: type !== 'item.started' }], ...extra },
+}));
+if (caseName === 'todo-updates') {
+  prefix();
+  todo('item.started');
+  todo('item.updated', 'plan-1', { text: 'PARTIAL_MUST_NOT_BECOME_RESULT' });
+  todo('item.updated', 'plan-1', { text: 'PARTIAL_MUST_NOT_BECOME_RESULT' });
+  message('FINAL_AFTER_TODO_UPDATES');
+  todo('item.completed');
+  console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 12, cached_input_tokens: 3, output_tokens: 4, reasoning_output_tokens: 1 } }));
+} else if (caseName === 'todo-updates-between-messages') {
+  prefix(); todo('item.started'); message('EARLY_PROGRESS');
+  todo('item.updated'); message('FINAL_AFTER_PROGRESS'); todo('item.completed'); completed();
+} else if (caseName === 'todo-only-update') {
+  prefix(); todo('item.started'); todo('item.updated', 'plan-1', { text: 'NOT_A_FINAL_MESSAGE' }); todo('item.completed'); completed();
+} else if (caseName === 'todo-update-before-turn') {
+  thread(); todo('item.updated');
+} else if (caseName === 'todo-update-before-start') {
+  prefix(); todo('item.updated');
+} else if (caseName === 'todo-update-wrong-id') {
+  prefix(); todo('item.started'); todo('item.updated', 'different-plan');
+} else if (caseName === 'todo-update-after-completed') {
+  prefix(); todo('item.started'); todo('item.completed'); todo('item.updated');
+} else if (caseName === 'todo-update-invalid-payload') {
+  prefix(); todo('item.started'); todo('item.updated', 'plan-1', { items: [{ text: 'Synthetic inspection', completed: 'true' }] });
+} else if (caseName === 'todo-update-missing-id') {
+  prefix(); todo('item.started'); todo('item.updated', undefined, { id: undefined });
+} else if (caseName === 'todo-complete-before-start') {
+  prefix(); todo('item.completed');
+} else if (caseName === 'todo-repeat-start') {
+  prefix(); todo('item.started'); todo('item.started');
+} else if (caseName === 'todo-repeat-completion') {
+  prefix(); todo('item.started'); todo('item.completed'); todo('item.completed');
+} else if (caseName === 'todo-open-at-terminal') {
+  prefix(); todo('item.started'); message('one'); completed();
+} else if (caseName === 'todo-reopen-same-id' || caseName === 'todo-reopen-new-id') {
+  const nextId = caseName === 'todo-reopen-same-id' ? 'plan-1' : 'plan-2';
+  prefix(); todo('item.started'); todo('item.completed'); todo('item.started', nextId);
+  message('PLAN_MUST_NOT_REOPEN'); todo('item.completed', nextId); completed();
+} else if (caseName === 'todo-empty') {
+  prefix(); todo('item.started', 'plan-1', { items: [] });
+  message('EMPTY_PLAN_FINAL'); todo('item.completed', 'plan-1', { items: [] }); completed();
+} else if (caseName === 'updated-agent-message') {
+  prefix(); console.log(JSON.stringify({ type: 'item.updated', item: { id: 'message-1', type: 'agent_message', text: 'PARTIAL_MESSAGE' } }));
+} else if (caseName === 'updated-error') {
+  prefix(); console.log(JSON.stringify({ type: 'item.updated', item: { id: 'error-1', type: 'error', message: 'partial error cannot bypass failure handling' } }));
+} else if (caseName === 'unknown-event') {
+  prefix(); console.log(JSON.stringify({ type: 'item.invented', item: { type: 'todo_list' } }));
+} else if (caseName === 'post-terminal-update') {
+  prefix(); todo('item.started'); message('one'); todo('item.completed'); completed(); todo('item.updated');
+} else if (caseName === 'todo-then-failure') {
+  prefix(); todo('item.started'); todo('item.updated'); message('before failure');
+  console.log(JSON.stringify({ type: 'turn.failed', error: { message: 'synthetic failure after update' } }));
+} else if (caseName === 'malformed') {
   process.stdout.write('not-json\\n');
 } else if (caseName === 'non-object') {
   process.stdout.write('[]\\n');
@@ -277,6 +332,24 @@ const negativeCases: Array<[string, RegExp, number?]> = [
   ['active-turn-item-error', /terminal|failure|protocol/i],
   ['pre-turn-top-level-error', /terminal|failure|protocol/i],
   ['excessive-pre-turn-errors', /terminal|failure|protocol/i],
+  ['todo-only-update', /agent.message|terminal|protocol/i],
+  ['todo-update-before-turn', /ordering|protocol/i],
+  ['todo-update-before-start', /todo|ordering|protocol/i],
+  ['todo-update-wrong-id', /todo|ordering|protocol/i],
+  ['todo-update-after-completed', /todo|ordering|protocol/i],
+  ['todo-update-invalid-payload', /todo|invalid|protocol/i],
+  ['todo-update-missing-id', /todo|invalid|protocol/i],
+  ['todo-complete-before-start', /todo|ordering|protocol/i],
+  ['todo-repeat-start', /todo|ordering|protocol/i],
+  ['todo-repeat-completion', /todo|ordering|protocol/i],
+  ['todo-open-at-terminal', /todo|terminal|protocol/i],
+  ['todo-reopen-same-id', /todo|ordering|protocol/i],
+  ['todo-reopen-new-id', /todo|ordering|protocol/i],
+  ['updated-agent-message', /updated|protocol/i],
+  ['updated-error', /updated|protocol/i],
+  ['unknown-event', /unsupported JSONL event/i],
+  ['post-terminal-update', /after turn.completed/i],
+  ['todo-then-failure', /terminal|failure|protocol/i],
 ];
 
 let attachmentChild: ReturnType<typeof spawnChild> | undefined;
@@ -296,6 +369,22 @@ try {
   assert.equal(result.executionReceipt?.reasoningEffort, undefined, 'requested reasoning is not observed effort evidence');
   assert.deepEqual(events, ['thread.started', 'turn.started', 'item.completed', 'turn.completed'], 'callbacks preserve FSM order');
   assert.equal(result.eventCount, 4);
+
+  const todoEvents: CodexRunEvent[] = [];
+  const todoResult = await runCase('todo-updates', (event) => { todoEvents.push(event); });
+  assert.equal(todoResult.finalMessage, 'FINAL_AFTER_TODO_UPDATES', 'partial todo updates never become the final answer');
+  assert.deepEqual(todoEvents.map((event) => event.type), [
+    'thread.started', 'turn.started', 'item.started', 'item.updated', 'item.completed', 'item.completed', 'turn.completed',
+  ], 'duplicate partial updates do not enqueue a second callback or synthesize another final message');
+  assert.equal(todoEvents.filter((event) => event.type === 'item.completed' && event.item?.type === 'agent_message').length, 1);
+  assert.equal(todoEvents.filter((event) => event.type === 'turn.completed').length, 1);
+  assert.equal(todoResult.eventCount, 8);
+  assert.deepEqual(todoResult.tokenUsage, {
+    source: 'codex.exec.jsonl.turn.completed.usage', inputTokens: 12, cachedInputTokens: 3, outputTokens: 4, reasoningOutputTokens: 1,
+  }, 'only terminal usage contributes to the final run result');
+  const todoProgressResult = await runCase('todo-updates-between-messages');
+  assert.equal(todoProgressResult.finalMessage, 'FINAL_AFTER_PROGRESS', 'a plan update after a progress message does not replace the later final answer');
+  assert.equal((await runCase('todo-empty')).finalMessage, 'EMPTY_PLAN_FINAL', 'an empty official plan is valid and still needs a final agent message');
 
   const redactedResult = await runCase('secret-result');
   assert.equal(redactedResult.finalMessage.includes('codex-runner-secret-fixture'), false, 'credential-shaped success output must not enter durable result sinks');

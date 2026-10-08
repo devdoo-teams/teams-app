@@ -66,11 +66,20 @@ if (process.argv.includes('exec')) {
   } else if (prompt.includes('CASE:slow')) {
     await new Promise(() => setInterval(() => {}, 1_000));
   } else {
+    if (prompt.includes('CASE:todo-updates')) {
+      emit({ type: 'item.started', item: { id: 'plan-1', type: 'todo_list', items: [{ text: 'Inspect synthetic input', completed: false }] } });
+      emit({ type: 'item.completed', item: { type: 'agent_message', text: 'CODEX_PROGRESS' } });
+      const update = { type: 'item.updated', item: { id: 'plan-1', type: 'todo_list', items: [{ text: 'Inspect synthetic input', completed: true }], text: 'TODO_MUST_NOT_BECOME_MESSAGE', command: 'TODO_MUST_NOT_BECOME_TOOL' } };
+      emit(update); emit(update);
+    }
     if (prompt.includes('CASE:progress')) {
       emit({ type: 'item.completed', item: { type: 'agent_message', text: 'CODEX_PROGRESS' } });
     }
     emit({ type: 'item.completed', item: { type: 'agent_message', text: 'CODEX_FINAL' } });
-    emit({ type: 'turn.completed' });
+    if (prompt.includes('CASE:todo-updates')) {
+      emit({ type: 'item.completed', item: { id: 'plan-1', type: 'todo_list', items: [{ text: 'Inspect synthetic input', completed: true }] } });
+      emit({ type: 'turn.completed', usage: { input_tokens: 8, cached_input_tokens: 2, output_tokens: 3, reasoning_output_tokens: 1 } });
+    } else emit({ type: 'turn.completed' });
   }
 } else {
   emit({ type: 'session.start', data: { sessionId: ${JSON.stringify(sessionId)} } });
@@ -492,6 +501,20 @@ try {
     timeoutMs: 1_000,
   });
   assert.equal(codexProgressResult.finalResult, 'CODEX_FINAL', 'the final non-empty agent_message is the result');
+
+  const todoLifecycleEvents: CliAgentLifecycleEvent[] = [];
+  const todoLifecycleResult = await runner.run({
+    provider: 'codex', jobId: 'codex-todo-updates', prompt: 'CASE:todo-updates',
+    workspace: root, mode: 'workspace-write', timeoutMs: 1_000,
+    onEvent: (event) => { todoLifecycleEvents.push(event); },
+  });
+  assert.deepEqual(todoLifecycleEvents.map((event) => event.type), [
+    'session.started', 'turn.started', 'agent.message', 'agent.message', 'turn.completed',
+  ], 'todo updates, duplicate updates and trailing completion add no normalized message/tool/terminal side effects');
+  assert.equal(todoLifecycleResult.finalResult, 'CODEX_FINAL');
+  assert.deepEqual(todoLifecycleResult.tokenUsage, {
+    source: 'codex.exec.jsonl.turn.completed.usage', inputTokens: 8, cachedInputTokens: 2, outputTokens: 3, reasoningOutputTokens: 1,
+  }, 'partial updates do not duplicate or replace terminal usage');
 
   for (const provider of ['codex', 'copilot'] as const) {
     const controller = new AbortController();

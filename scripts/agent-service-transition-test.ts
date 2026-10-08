@@ -226,6 +226,14 @@ try {
   await runner.emit({ type: 'thread.started', thread_id: 'retry-thread' });
   await runner.emit({ type: 'turn.started' });
   await runner.emit({ type: 'item.completed', item: { type: 'agent_message', text: 'first progress update' } });
+  const beforeTodoUpdates = JSON.stringify(store.get(delayedJob.id, scope));
+  const notificationsBeforeTodoUpdates = notifications.filter((notification) => notification.job.id === delayedJob.id).length;
+  await runner.emit({ type: 'item.started', item: { type: 'todo_list', text: 'TODO_MUST_NOT_BECOME_PROGRESS' } });
+  await runner.emit({ type: 'item.updated', item: { type: 'todo_list', text: 'TODO_MUST_NOT_BECOME_PROGRESS', command: 'TODO_MUST_NOT_BECOME_TOOL' } });
+  await runner.emit({ type: 'item.updated', item: { type: 'todo_list', text: 'TODO_MUST_NOT_BECOME_PROGRESS', command: 'TODO_MUST_NOT_BECOME_TOOL' } });
+  await runner.emit({ type: 'item.completed', item: { type: 'todo_list', text: 'TODO_MUST_NOT_BECOME_RESULT' } });
+  assert.equal(JSON.stringify(store.get(delayedJob.id, scope)), beforeTodoUpdates, 'todo lifecycle and duplicate updates do not mutate progress, result, usage or tool evidence');
+  assert.equal(notifications.filter((notification) => notification.job.id === delayedJob.id).length, notificationsBeforeTodoUpdates, 'todo lifecycle does not emit new Teams notifications');
   await runner.emit({ type: 'item.started', item: { type: 'command_execution', command: '/bin/zsh -lc rg' } });
   runner.release(0);
   await waitForStatus(store, delayedJob.id, scope, 'completed');
