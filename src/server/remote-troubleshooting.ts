@@ -1,3 +1,6 @@
+import { redactCliDiagnostics } from './cli-diagnostics.js';
+import { redactSensitiveText } from './sensitive-text.js';
+
 export type RemoteTroubleshootingCode =
   | 'codex-cli-auth'
   | 'teams-cli-auth'
@@ -87,15 +90,51 @@ export function diagnoseRemoteTroubleshooting(input: string): RemoteTroubleshoot
 }
 
 export function diagnoseRemoteAgentResult(input: string): RemoteTroubleshootingAdvice {
-  if (!/(?:^|\n)STATUS:\s*(?:BLOCKED|FAILED)\b/i.test(input)) {
-    return { code: 'unknown', summary: '', nextAction: '' };
-  }
-
-  if (/(?:^|\n)BLOCKER:\s*(?:NONE|없음)\b/i.test(input)) {
+  if (!isBlockedRemoteAgentResult(input)) {
     return { code: 'unknown', summary: '', nextAction: '' };
   }
 
   return diagnoseRemoteTroubleshooting(input);
+}
+
+/** A report's leading status is authoritative; quoted examples are not. */
+export function isBlockedRemoteAgentResult(input: string): boolean {
+  const report = input.replace(/(```|~~~)[\s\S]*?(?:\1|$)/gu, '').replace(/`[^`]*(?:`|$)/gu, '');
+  const blocker = report.match(/(?:^|\n)BLOCKER:\s*([^\n]*)/iu)?.[1];
+  return /^\s*STATUS:\s*(?:BLOCKED|FAILED)\b/iu.test(input)
+    && !(blocker && /^(?:NONE|없음)\b/iu.test(blocker));
+}
+
+/** Retain safe report evidence before it reaches the owner-scoped store/API. */
+export function retainBlockedAgentReport(input: string, paths: readonly (string | undefined)[]): string {
+  const protectedText = input
+    .replace(/-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----[\s\S]*?(?:-----END(?: [A-Z0-9]+)* PRIVATE KEY-----|$)/giu, '[비밀키 숨김]')
+    .replace(/(["']?authorization["']?\s*:\s*)(?:"[^"]*"|'[^']*'|[^\n]*)/giu, '$1[인증정보 숨김]');
+  const sanitized = redactCliDiagnostics(redactSensitiveText(protectedText), { paths, maxChars: Number.MAX_SAFE_INTEGER })
+    .replace(/[\u0080-\u009f]/gu, '')
+    .replace(/(```|~~~)[\s\S]*?(?:\1|$)/gu, '[명령/코드 숨김]')
+    .replace(/`[^`]*(?:`|$)/gu, '[명령/코드 숨김]')
+    .split('\n')
+    .filter(line => /^(?:STATUS|EVIDENCE|COMPLETED|BLOCKER|NEXT ACTION):/iu.test(line))
+    .map(line => {
+      const command = /:\s*(awk|cat|sed|grep|rg|curl|wget|git|npm|npx|node|python\d*|ruby|perl|sh|bash|zsh|codex|teams|devtunnel|az|printf|env|printenv|echo|ls|find|head|tail)\s+(.*)/iu.exec(line);
+      const description = command && /^(?:CLI\b|could\b|cannot\b|can't\b|is\b|was\b|failed\b|exited\b|exit\b|output\b|not\b|unavailable\b)/iu.test(command[2])
+        && !/["'{}]|--?[a-z]|[;&|]|\$\(/iu.test(command[2]);
+      return /:\s*\/?[^\s:]+\//iu.test(line) || (command && !description)
+        ? `${line.split(':', 1)[0]}: [원시 실행 정보 숨김]` : line;
+    })
+    .join('\n')
+    .replace(/\b(?:command|argv|arguments|stdout|stderr)\s*[:=][^\n]*/giu, '[원시 실행 정보 숨김]')
+    .replace(/https?:\/\/[^\s<>"'`]+/giu, '[URL 숨김]')
+    .replace(/(?:\\\\|\/\/)[^\r\n|,;]+/gu, '[경로 숨김]')
+    .replace(/[A-Za-z]:\\[^\r\n|,;]+/gu, '[경로 숨김]')
+    .replace(/~?\/(?:[^\s"'`,;|()[\]{}<>]+\/?)+/gu, '[경로 숨김]');
+  const suffix = '\n(차단 근거 일부 생략)';
+  return sanitized.length <= 4_000 ? sanitized : sanitized.slice(0, 4_000 - suffix.length) + suffix;
+}
+
+export function formatBlockedAgentDiagnostic(advice: RemoteTroubleshootingAdvice): string {
+  return `진단 코드: ${advice.code} (모델 응답 기반 분류; 실제 원인 미확인)\n보존된 차단 근거와 실제 도구 결과를 대조하세요. 도구 실행 시작 기록은 성공을 증명하지 않습니다.`;
 }
 
 export function formatRemoteTroubleshooting(advice: RemoteTroubleshootingAdvice): string {

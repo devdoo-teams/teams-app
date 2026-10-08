@@ -14,7 +14,7 @@ import { CodexRunner, type CodexRunEvent } from './codex-runner.js';
 import type { CliAgentProvider } from './cli-agent-runner.js';
 import { redactCliDiagnostics } from './cli-diagnostics.js';
 import { GitService, type GitWorkspaceSnapshot } from './git-service.js';
-import { diagnoseRemoteAgentResult, formatRemoteTroubleshooting } from './remote-troubleshooting.js';
+import { diagnoseRemoteAgentResult, formatBlockedAgentDiagnostic, isBlockedRemoteAgentResult, retainBlockedAgentReport } from './remote-troubleshooting.js';
 import { mergeObservedToolUsage, observeCodexToolUsage } from './agent-tool-observation.js';
 import type { CoreAgentToolUsage } from '../shared/core-orchestration.js';
 import type {
@@ -942,7 +942,8 @@ export class AgentService {
         : undefined;
 
       const diagnostic = diagnoseRemoteAgentResult(result.finalMessage);
-      const diagnosticMessage = formatRemoteTroubleshooting(diagnostic);
+      const blockedReport = isBlockedRemoteAgentResult(result.finalMessage);
+      const diagnosticMessage = blockedReport ? formatBlockedAgentDiagnostic(diagnostic) : '';
       let terminal: AgentJob | undefined;
       try {
         terminal = await this.withJobMutationLock(job.id, scope, async () => {
@@ -956,6 +957,9 @@ export class AgentService {
             ? this.store.update(job.id, scope, {
               status: 'failed',
               error: diagnosticMessage,
+              result: retainBlockedAgentReport(result.finalMessage, [this.workspace, process.env.HOME, process.env.USERPROFILE]),
+              ...(result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
+              ...(result.executionReceipt ? { executionReceipt: result.executionReceipt } : {}),
               ...(changedPaths ? { changedPaths } : {}),
               finishedAt: new Date().toISOString(),
             })
