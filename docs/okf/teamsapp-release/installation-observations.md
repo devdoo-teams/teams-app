@@ -1,6 +1,9 @@
 ---
 type: "Release observation contract"
 sources:
+  - resource: "https://learn.microsoft.com/en-us/graph/api/userteamwork-list-installedapps?view=graph-rest-1.0"
+    title: "List apps installed for user - Microsoft Graph v1.0"
+    location: "HTTP request/query/response lines58–78 and expanded teamsAppDefinition example209; read2026-10-08; HTML positions may change"
   - resource: "https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/deploy-and-publish/apps-upload#update-your-app"
     title: "Upload your app in Teams"
     location: "Update your app; observed HTML lines 100-122 on 2026-10-06; line positions may change"
@@ -11,10 +14,10 @@ generated:
   by: "process:teams-release-observation-review"
   at: "2026-10-06T15:25:00Z"
 verified:
-  by: "process:official-contract-readback-and-focused-tests"
-  at: "2026-10-06T15:25:00Z"
-status: stable
-stale_after: "2026-10-13T15:25:00Z"
+  by: "process:current124-independent-boundaries-and-client-ui-readback"
+  at: "2026-10-08T17:46:32Z"
+status: "PARTIAL_LIVE_CLIENT_LABEL_UNVERIFIED"
+stale_after: "2026-10-15T17:46:32Z"
 ---
 
 # Independent installation and runtime observations
@@ -86,3 +89,13 @@ originally reached the entry with active missing replay. GREEN: both commands
 pass after the minimal guards. Installed Node v24.13.1 help confirms `--import`
 and `--env-file-if-exists`; Core smoke uses the former only as a test read guard.
 Local GREEN is not LIVE RESULT for catalog, personal installation or desktop flow.
+
+## Current124 About boundary without session or policy changes
+
+OFFICIAL CONTRACT: the Update your app section was re-read on2026-10-08 (lines100–122, page updated2025-04-18). It describes Manage your apps > Update > Update now when an update is available. It does not guarantee About-label convergence time or identify a stale label's cause. The Graph installedApps contract independently defines GET, `$expand` and200 response; the expanded definition is a separate observation from the client label.
+
+OBSERVED EVIDENCE: the existing Admin Center catalog and authorized personal Graph installed definition both read1.0.124. Exact public HTTPS health and the actual Teams workhub header also read1.0.124/source`28ecee5626cbd091b2b30375e9710e7532fe598b`. The installed target remains one 백두산 user with org-default availability and no permission change. The same real synthetic private job completed once and its result appeared in the actual Bot card and private detail. These functional WEB observations do not establish native or mobile acceptance.
+
+OBSERVED EVIDENCE: at2026-10-08T17:33Z the existing Teams chat About still displayed1.0.122. At17:44Z the same-session Manage your apps entry had no Update/Update now option. Its personal scope displayed “이 앱을 제거할 수 있는 권한이 없습니다”; the app-level menu offered only details and copy link. The management details displayed1.0.122 too. Evidence: `/tmp/teams-mp347-followup-20261009-0240/about124-final-ax.txt:660`, `apps124-expanded-own-ax.txt:236`, `apps124-own-options-ax.txt:330`, `apps124-own-detail-open-ax.txt:432`, plus directly opened `about124-final.png`, `apps124-own-options.png` and `apps124-about-version-final.png`. Capture files and precise observation times are retained in the supplemental visual index.
+
+INFERENCE: cache or propagation could explain the difference, but the actual client metadata source/cause remains `UNVERIFIED`. No supported current Update control was available. Do not fix a host label by changing the product version text, clearing state, reinstalling, changing policies/permissions or opening a new login session. Keep MP118 In Progress and retain catalog/install/runtime/client-label/native/mobile as independent gates. This read-only diagnosis changes no app artifact and therefore requires no package publication or runtime replacement.
