@@ -400,10 +400,10 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
         <button className="primary" disabled={props.phase === 'loading' || submitBusy} type="submit">
           {actionLabel('작업 실행', '제출 중…', submitBusy)}
         </button>
-        {props.onNotifyPersonalChange ? <label>
+        {props.onNotifyPersonalChange ? <label className="personal-notification-option">
           <input type="checkbox" checked={props.notifyPersonal === true} disabled={props.phase === 'loading' || submitBusy}
             onChange={event => props.onNotifyPersonalChange?.(event.currentTarget.checked)} />
-          내 업무 허브 개인 채팅으로 진행·결과 알림 받기
+          <span>내 업무 허브 개인 채팅으로 진행·결과 알림 받기</span>
         </label> : null}
       </form>
 

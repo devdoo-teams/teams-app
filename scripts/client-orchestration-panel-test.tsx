@@ -358,6 +358,19 @@ assert.match(empty, /Codex 모델/);
 assert.match(empty, /추론 수준/);
 assert.match(empty, /자동 새로고침 3초/, 'the hub tells the user that progress is refreshed automatically');
 
+for (const phase of ['ready', 'loading'] as const) {
+  const notification = renderToStaticMarkup(<OrchestrationPanelView
+    {...baseProps} phase={phase} jobs={[]} selectedJob={null} error="" mobile={false}
+    notifyPersonal={true} onNotifyPersonalChange={noop}
+  />);
+  const nativeLabel = notification.match(/<label[^>]*>(<input[^>]*type="checkbox"[^>]*>.*?)<\/label>/)?.[1];
+  assert.ok(nativeLabel, 'notification checkbox remains inside its native label');
+  assert.match(nativeLabel, /내 업무 허브 개인 채팅으로 진행·결과 알림 받기/);
+  assert.match(nativeLabel, /checked=""/, 'controlled checked state is preserved');
+  assert.equal(/disabled=""/.test(nativeLabel), phase === 'loading', 'loading disables notification changes');
+}
+assert.doesNotMatch(empty, /type="checkbox"/, 'notification option is absent without its callback');
+
 const approval = renderToStaticMarkup(<OrchestrationPanelView
   {...baseProps}
   phase="ready"

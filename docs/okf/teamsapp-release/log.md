@@ -1,5 +1,12 @@
 # TeamsApp release knowledge update log
 
+## 2026-10-08 — MP349 personal notification checkbox layout
+
+* **Official contract**: current WHATWG native label association, W3C flex items and Chrome viewport/AX schema; see [layout concept](personal-notification-layout.md).
+* **Observed evidence**: current121 checkbox was centered above its text. Parent and delegated reviewer directly inspected the screenshots; MP-349 is assigned to self and In Progress.
+* **RED/GREEN**: actual React/CSS browser fixture failed with a686px checkbox; dedicated layout passed normal/narrow/200% CSS zoom and label/Tab/Space/repeat interactions with0 submits. Core/package/remote/public/catalog/installed/live gates remain separate pending results.
+* **Boundary**: no catalog-definition403 retry, new permissions/targets/policy, native-control workaround or optional provider. About cause/native/mobile/full release closure remain unverified.
+
 ## 2026-10-07 —120 acknowledgment overlap and candidate121
 
 * **Official contract**: [Container minHeight](https://learn.microsoft.com/en-us/adaptive-cards/schema-explorer/container#minheight), updated2025-12-15, section minHeight/observed lines633–659; [Teams card actions](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/cards/cards-actions), section Adaptive Cards actions; current2026-10-07 read. These do not guarantee arrow geometry or host focus restoration.

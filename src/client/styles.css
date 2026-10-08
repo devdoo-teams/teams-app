@@ -51,6 +51,20 @@ button { min-height: 44px; }
   width: 100%;
 }
 .work-item-detail textarea { min-height: 88px; resize: vertical; }
+.work-item-detail label.personal-notification-option {
+  align-items: flex-start;
+  display: flex;
+  gap: 8px;
+  line-height: 1.5;
+}
+.work-item-detail .personal-notification-option input[type="checkbox"] {
+  flex: none;
+  height: 1rem;
+  margin: 0.25rem 0 0;
+  padding: 0;
+  width: 1rem;
+}
+.personal-notification-option > span { min-width: 0; overflow-wrap: anywhere; }
 .work-item-list { display: grid; gap: 9px; }
 .work-item-card { border: 1px solid #e1e1e1; border-radius: 10px; padding: 12px; }
 .work-item-card.selected { border-color: #6264a7; box-shadow: 0 0 0 1px #6264a7; }

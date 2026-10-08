@@ -23,6 +23,7 @@ okf_version: 0.2
 * [Catalog·carousel 계약과 후보 릴리스](catalog-carousel-release113.md) - 최신 Teams 카드 컬렉션/기존 앱 업데이트,112 서비스 유지와 후보 fixture/live 독립 판정
 * [A2A completion fingerprint 속성 순서](a2a-completion-fingerprint-order.md) - MP345의 실제 accepted binding과 합성 restart RED, receipt 보존 및 새 후보 검증 경계
 * [캐러셀 본문 여백](carousel-content-inset.md) - MP347의116 실제 화살표 겹침, 최소 Container 후보와 RED/GREEN 및 새 릴리스 UI 경계
+* [개인 알림 체크박스 배치](personal-notification-layout.md) - MP349의 실제 분리 배치, native label 유지, 렌더링 RED/GREEN과 독립 live 검증 경계
 
 ## Reading order
 
