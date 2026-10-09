@@ -20,8 +20,9 @@ import {
 import { CodexRunner, reapChildProcess, type CodexRunEvent } from './codex-runner.js';
 import { redactCliDiagnostics } from './cli-diagnostics.js';
 import { isAgentTokenUsage, parseCodexTokenUsage, type AgentTokenUsage } from './agent-token-usage.js';
-import type { CoreCodexModelSelection, CoreAgentToolExecution } from '../shared/core-orchestration.js';
+import type { CoreCodexModelSelection, CoreAgentToolExecution, CoreExecutionReceipt } from '../shared/core-orchestration.js';
 import { observeCodexToolUsage } from './agent-tool-observation.js';
+import { readExecutionReceipt } from './agent-execution-receipt.js';
 import {
   ghcpCliCommandFromEnvironment,
   GHCP_SECRET_ENV_VARS,
@@ -50,6 +51,7 @@ export type CliAgentRunResult = Readonly<{
   finalResult: string;
   eventCount: number;
   tokenUsage?: AgentTokenUsage;
+  executionReceipt?: CoreExecutionReceipt;
 }>;
 
 export type CliAgentCommandSpec = Readonly<{
@@ -351,12 +353,14 @@ export class CliAgentRunner {
           if (normalized) await runOptions.onEvent?.(normalized);
         },
       });
+      const executionReceipt = readExecutionReceipt(result.executionReceipt);
       return {
         provider: 'codex',
         sessionId: result.threadId,
         finalResult: result.finalMessage,
         eventCount: result.eventCount,
         ...(result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
+        ...(executionReceipt ? { executionReceipt } : {}),
       };
     }
     if (runOptions.sessionId && !SESSION_ID_PATTERN.test(runOptions.sessionId)) {

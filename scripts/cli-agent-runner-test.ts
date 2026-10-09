@@ -478,12 +478,18 @@ try {
     timeoutMs: 1_000,
     onEvent: (event) => { codexEvents.push(event); },
   });
-  assert.deepEqual(codexResult, {
+  const { executionReceipt, ...codexResultWithoutReceipt } = codexResult;
+  assert.deepEqual(codexResultWithoutReceipt, {
     provider: 'codex',
     sessionId,
     finalResult: 'CODEX_FINAL',
     eventCount: 4,
   });
+  assert.equal(executionReceipt?.source, 'worker-observation');
+  assert.equal(executionReceipt?.platform, process.platform);
+  assert.ok(executionReceipt?.observedAt && new Date(executionReceipt.observedAt).toISOString() === executionReceipt.observedAt);
+  assert.equal(executionReceipt?.model, undefined, 'CLI model selection is not an observed model');
+  assert.equal(executionReceipt?.reasoningEffort, undefined, 'CLI effort selection is not observed effort');
   assert.deepEqual(codexEvents.map((event) => event.type), [
     'session.started',
     'turn.started',

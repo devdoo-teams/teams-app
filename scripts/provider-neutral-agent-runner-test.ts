@@ -5,8 +5,10 @@ import type {
   CliAgentRunOptions,
   CliAgentRunResult,
 } from '../src/server/cli-agent-runner.js';
-import type { CodexRunEvent } from '../src/server/codex-runner.js';
+import { CliAgentRunner } from '../src/server/cli-agent-runner.js';
+import type { CodexRunEvent, CodexRunResult } from '../src/server/codex-runner.js';
 import { ProviderNeutralAgentRunner } from '../src/server/provider-neutral-agent-runner.js';
+import type { CoreExecutionReceipt } from '../src/shared/core-orchestration.js';
 
 class FakeCliAgentRunner {
   runOptions: CliAgentRunOptions[] = [];
@@ -218,4 +220,62 @@ assert.deepEqual(copilotFake.cancelledJobIds, ['provider-neutral-explicit-copilo
 copilotRunner.close();
 assert.equal(copilotFake.closeCalls, 1);
 
-console.log('PASS: provider-neutral AgentService runner adapter contract');
+// Isolated boundaries: no CLI spawn, auth read, model call or live job.
+const receiptCli = new CliAgentRunner();
+let injectedResult: CodexRunResult;
+(receiptCli as unknown as { codexRunner: { run: () => Promise<CodexRunResult> } }).codexRunner.run =
+  async () => injectedResult;
+const receiptOptions = {
+  jobId: 'receipt-adapter-fixture', prompt: 'synthetic fixture only',
+  workspace: '/tmp/receipt-adapter-fixture', mode: 'read-only' as const,
+  selection: { model: 'selected-model', reasoningEffort: 'low' as const, catalogRevision: 'a'.repeat(64) },
+};
+for (const platform of ['darwin', 'linux', 'win32'] as const) {
+  const receipt: CoreExecutionReceipt = {
+    source: 'worker-observation', observedAt: '2026-10-09T03:18:05.035Z', platform,
+  };
+  injectedResult = { finalMessage: 'synthetic result', eventCount: 0, executionReceipt: receipt };
+  const cliResult = await receiptCli.run({ ...receiptOptions, provider: 'codex' });
+  if (process.env.RECEIPT_ADAPTER_CASE !== 'neutral') assert.deepEqual((cliResult as CliAgentRunResult & { executionReceipt?: CoreExecutionReceipt }).executionReceipt,
+    receipt, 'CLI adapter preserves original receipt source/time');
+  const neutral = new ProviderNeutralAgentRunner({ runner: {
+    run: async () => ({ provider: 'codex', finalResult: 'synthetic result', eventCount: 0, executionReceipt: receipt }),
+    cancel: () => false, close: () => undefined,
+  } });
+  const neutralResult = await neutral.run(receiptOptions);
+  assert.deepEqual(neutralResult.executionReceipt, receipt, 'neutral adapter independently preserves receipt');
+  assert.notEqual(neutralResult.executionReceipt, receipt, 'receipt is a detached whitelist copy');
+  assert.equal(neutralResult.executionReceipt?.model, undefined, 'requested model is not actual model evidence');
+  assert.equal(neutralResult.executionReceipt?.reasoningEffort, undefined, 'requested effort is not observed effort');
+  const throughBoth = await new ProviderNeutralAgentRunner({ runner: receiptCli }).run(receiptOptions);
+  assert.deepEqual(throughBoth.executionReceipt, receipt, 'platform-only receipt survives both adapters');
+}
+for (const invalid of [
+  null, { source: 'selected-config', observedAt: '2026-10-09T03:18:05.035Z', platform: 'darwin' },
+  { source: 'worker-observation', observedAt: 'invalid', platform: 'darwin' },
+  { source: 'worker-observation', observedAt: '2026-10-09T03:18:05.035Z', platform: 'unsupported' },
+  { source: 'worker-observation', observedAt: '2026-10-09T03:18:05.035Z', platform: 'darwin', secret: 'synthetic-credential' },
+  { source: 'worker-observation', observedAt: '2026-10-09T03:18:05.035Z', platform: 'darwin', model: 'x'.repeat(129) },
+  { source: 'worker-observation', observedAt: '2026-10-09T03:18:05.035Z', platform: 'darwin', model: 'token=synthetic-credential' },
+  { source: 'worker-observation', observedAt: '2026-10-09T03:18:05.035Z', platform: 'darwin', output: 'synthetic-credential'.repeat(4000) },
+]) {
+  injectedResult = { finalMessage: 'synthetic result', eventCount: 0, executionReceipt: invalid as CoreExecutionReceipt };
+  const neutral = new ProviderNeutralAgentRunner({ runner: {
+    run: async () => ({ provider: 'codex', finalResult: 'synthetic result', eventCount: 0, executionReceipt: invalid as CoreExecutionReceipt }),
+    cancel: () => false, close: () => undefined,
+  } });
+  const safeError = (error: unknown): boolean => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /execution receipt is invalid/);
+    assert.ok(error.message.length < 80);
+    assert.doesNotMatch(error.message, /synthetic-credential|token=|selected-config|xxxx/);
+    return true;
+  };
+  await assert.rejects(receiptCli.run({ ...receiptOptions, provider: 'codex' }), safeError);
+  await assert.rejects(neutral.run(receiptOptions), safeError);
+}
+injectedResult = { finalMessage: 'legacy synthetic result', eventCount: 0 };
+const noReceipt = await new ProviderNeutralAgentRunner({ runner: receiptCli }).run(receiptOptions);
+assert.equal(noReceipt.executionReceipt, undefined, 'legacy result never gains a receipt from selection');
+receiptCli.close();
+console.log('PASS: provider-neutral adapter lifecycle and trusted receipt contract');
