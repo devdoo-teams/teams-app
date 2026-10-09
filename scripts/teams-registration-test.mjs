@@ -69,6 +69,10 @@ const candidateManifest = {
     supportsFiles: false,
     commandLists: [{ scopes: ['personal', 'team', 'groupChat'], commands: [] }],
   }],
+  composeExtensions: [{
+    botId: 'bot-1',
+    commands: [{ id: 'delegateMessage', type: 'action', context: ['message'], fetchTask: true, title: 'Delegate' }],
+  }],
 };
 const registeredManifest = {
   ...candidateManifest,
@@ -78,6 +82,10 @@ const registeredManifest = {
     supportsCalling: false,
     supportsVideo: false,
     commandLists: [{ scopes: ['groupChat', 'personal', 'team'], commands: [] }],
+  }],
+  composeExtensions: [{
+    ...candidateManifest.composeExtensions[0],
+    commands: [{ ...candidateManifest.composeExtensions[0].commands[0], initialRun: false }],
   }],
 };
 for (const [directory, manifest] of [
@@ -109,6 +117,30 @@ assert.equal(normalizedVerified.status, 'VERIFIED');
 assert.equal(normalizedVerified.packageSha256, normalizedCandidateSha256);
 assert.equal(normalizedVerified.registeredPackageSha256, normalizedRegisteredSha256);
 assert.equal(normalizedVerified.packageComparison, 'manifest-normalized-assets-exact');
+
+// Only the official composeExtensions.commands initialRun=false default is
+// equivalent to omission. Real behavior, wrong locations and assets stay exact.
+for (const [name, mutate, icon] of [
+  ['initial-run-true', manifest => { manifest.composeExtensions[0].commands[0].initialRun = true; }],
+  ['message-context', manifest => { manifest.composeExtensions[0].commands[0].context = ['compose']; }],
+  ['fetch-task', manifest => { manifest.composeExtensions[0].commands[0].fetchTask = false; }],
+  ['unrelated-command-field', manifest => { manifest.bots[0].commandLists[0].commands = [{ id: 'other', initialRun: false }]; }],
+  ['changed-icon', () => {}, 'changed icon bytes'],
+]) {
+  const directory = path.join(normalizedPackageRoot, name);
+  await fs.mkdir(directory);
+  const manifest = structuredClone(registeredManifest);
+  mutate(manifest);
+  await fs.writeFile(path.join(directory, 'manifest.json'), JSON.stringify(manifest));
+  await fs.writeFile(path.join(directory, 'color.png'), Buffer.from(icon ?? 'same icon bytes'));
+  const zip = path.join(normalizedPackageRoot, name + '.zip');
+  execFileSync('zip', ['-X', '-q', zip, 'manifest.json', 'color.png'], { cwd: directory });
+  await assert.rejects(verifyTeamsRegistration({
+    appId: 'app-1', expectedVersion: '1.0.89', expectedEndpoint: 'https://runtime.example.com/api/messages',
+    expectedPackagePath: normalizedCandidateZip, expectedPackageSha256: normalizedCandidateSha256,
+    runCli: createCli({ version: '1.0.89', registeredPackagePath: zip }),
+  }), error => error.code === 'ETEAMSREGISTRATIONMISMATCH', name + ' must remain a real registration mismatch');
+}
 
 await assert.rejects(
   () => verifyTeamsRegistration({

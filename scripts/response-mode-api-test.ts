@@ -9,6 +9,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 
 import { createUserAuthMiddleware } from '../src/server/user-auth.js';
 import { ResponseModeStore } from '../src/server/response-mode-store.js';
+import { createFakeCodexRuntime } from './fake-codex.mjs';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -170,6 +171,7 @@ async function main(): Promise<void> {
   }
 
   const dataRoot = await mkdtemp(join(tmpdir(), 'response-mode-api-test-'));
+  const codexFixture = await createFakeCodexRuntime(join(dataRoot, 'cli-fixture'));
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const token = 'response-mode-local-test-token-0123456789';
@@ -188,8 +190,7 @@ async function main(): Promise<void> {
       GENUI_ACTION_STORE_PATH: join(dataRoot, 'genui-actions.json'),
       RESPONSE_MODE_STORE_PATH: join(dataRoot, 'response-modes.json'),
       AGENT_WORKSPACE: root,
-      CODEX_BIN: process.execPath,
-      CODEX_SCRIPT: join(root, 'scripts/fake-codex.mjs'),
+      ...codexFixture,
       COPILOTKIT_DETERMINISTIC_MODE: '',
       OPENAI_API_KEY: '',
       OPENAI_MODEL: '',

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import net from 'node:net';
+import { createFakeCodexRuntime } from './fake-codex.mjs';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -88,6 +89,7 @@ async function startServer(extraEnv = {}, options = {}) {
   const baseUrl = `http://127.0.0.1:${port}`;
   const token = crypto.randomBytes(32).toString('base64url');
   const tempRoot = await mkdtemp(path.join(tmpdir(), 'teams-operator-allowlist-'));
+  const codexFixture = await createFakeCodexRuntime(path.join(tempRoot, 'cli-fixture'));
   const itemStorePath = path.join(tempRoot, 'items.json');
   const agentJobStorePath = path.join(tempRoot, 'agent-jobs.json');
   if (options.initialItems) {
@@ -112,8 +114,7 @@ async function startServer(extraEnv = {}, options = {}) {
       GENUI_ACTION_STORE_PATH: path.join(tempRoot, 'genui-actions.json'),
       RESPONSE_MODE_STORE_PATH: path.join(tempRoot, 'response-modes.json'),
       AGENT_WORKSPACE: root,
-      CODEX_BIN: process.execPath,
-      CODEX_SCRIPT: path.join(root, 'scripts/fake-codex.mjs'),
+      ...codexFixture,
       COPILOTKIT_DETERMINISTIC_MODE: 'true',
       TEAMS_USE_SDK: 'false',
       TEAMS_SKIP_OUTBOUND: 'true',

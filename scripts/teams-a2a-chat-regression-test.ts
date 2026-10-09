@@ -6,6 +6,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
+import { createFakeCodexRuntime } from './fake-codex.mjs';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 import { TeamsA2AOutboundStore } from '../src/server/teams-a2a-outbound-store.js';
 
@@ -134,6 +135,7 @@ try {
   const isolatedNodePath = path.join(temporaryRoot, 'node');
   await fs.copyFile(process.execPath, isolatedNodePath);
   await fs.chmod(isolatedNodePath, 0o700);
+  const codexFixture = await createFakeCodexRuntime(path.join(temporaryRoot, 'cli-fixture'), { nodeExecutable: isolatedNodePath });
   await fs.mkdir(path.join(agentWorkspace, 'scripts'), { recursive: true });
   await fs.copyFile(
     path.join(root, 'scripts', 'fake-codex.mjs'),
@@ -172,8 +174,7 @@ try {
       RESPONSE_MODE_STORE_PATH: path.join(temporaryRoot, 'response-modes.json'),
       AGENT_WORKSPACE: agentWorkspace,
       TEAMS_TEST_PROCESS_ISOLATION: 'true',
-      CODEX_BIN: isolatedNodePath,
-      CODEX_SCRIPT: 'scripts/fake-codex.mjs',
+      ...codexFixture,
       TEAMS_AGENT_CLI_PROVIDER: 'codex',
       TEAMS_A2A_AGENT_PROVIDERS: 'codex,codex',
       TEAMS_AGENT_GLOBAL_LIMIT: '4',

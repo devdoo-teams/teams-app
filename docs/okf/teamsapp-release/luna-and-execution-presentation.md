@@ -16,6 +16,12 @@ sources:
   - resource: "https://learn.microsoft.com/en-us/javascript/api/%40microsoft/teams-js/urldialoginfo?view=msteams-client-js-latest"
     title: "Current TeamsJS UrlDialogInfo"
     location: "Inherited size: DialogSize property; lines43–84 observed2026-10-09; HTML positions may change"
+  - resource: "https://developer.microsoft.com/json-schemas/teams/v1.25/MicrosoftTeams.schema.json"
+    title: "Canonical Teams manifest1.25 schema"
+    location: "composeExtensions.commands.initialRun default=false; lines674–677 observed2026-10-09"
+  - resource: "https://microsoft.github.io/teams-sdk/cli/commands/app/update/"
+    title: "Teams Developer CLI existing app update"
+    location: "Existing app properties, scripted flags and version example; lines95–114 observed2026-10-09; installed teams3.0.3 --version option agrees"
 generated: { by: "process:codex", at: "2026-10-09T09:49:30Z" }
 verified: { by: "process:installed-contract-and-focused-synthetic-tests", at: "2026-10-09T09:49:30Z" }
 status: "INTEGRATION_IN_PROGRESS_LIVE_UNVERIFIED"
@@ -37,6 +43,8 @@ Installed CopilotKit Runtime/React are1.66.2, AG-UI client/core0.0.57. Use the O
 [MP-369](https://devdoo.atlassian.net/browse/MP-369), stable key `teams-core:task:execution-presentation-three-views`, uses one authorized existing job projection for text, summary and SDK views. Owner-derived tenant/requester display preferences persist atomically. Provider preferences remain independent. The optional SDK agent has only an owner-pinned read port and receives strict `{jobId}`; displaying or closing a view cannot submit/retry/approve/cancel a CLI job.
 
 Default `build:core` contains the pure summary component and a disabled loader, with no SDK client/server graph. Explicit `build:copilot-ui` creates a separately hashed, committed-source artifact. `TEAMS_COPILOT_UI_RUNTIME=true` loads it only when commit, file set and hashes match. This feature does not enable the optional Grok/OpenAI/MCP runtime. SDK telemetry is disabled before initialization. Public SDK discovery exposes metadata only; actual run requests require the existing user-auth middleware and owner-pinned lookup. Unsupported thread/connect/stop/provider routes remain closed.
+
+[MP-370](https://devdoo.atlassian.net/browse/MP-370), stable key `teams-core:bug:registration-initialrun-default`, records actual TDP download serializing `delegateMessage.initialRun=false` while the catalog ZIP omits this default. The official1.25 schema makes these equivalent. Registration comparison normalizes only that exact property path and preserves refusal of true, changed context/fetchTask, wrong fields, version/endpoint and icon drift. Same-version synthetic reproduction and negative fixtures pass after the focused RED; the real registered104≠catalog130 version mismatch remains a separate live boundary until an actual existing-app update and download read-back.
 
 ## FIXTURE
 

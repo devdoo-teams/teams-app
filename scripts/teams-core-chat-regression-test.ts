@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { ResponseModeStore } from '../src/server/response-mode-store.js';
+import { createFakeCodexRuntime } from './fake-codex.mjs';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 
 const root = process.cwd();
@@ -46,6 +47,7 @@ try {
   const isolatedNodePath = path.join(temporaryRoot, 'node');
   await fs.copyFile(process.execPath, isolatedNodePath);
   await fs.chmod(isolatedNodePath, 0o700);
+  const codexFixture = await createFakeCodexRuntime(path.join(temporaryRoot, 'cli-fixture'), { nodeExecutable: isolatedNodePath });
   await fs.mkdir(path.join(agentWorkspace, 'scripts'), { recursive: true });
   await fs.copyFile(
     path.join(root, 'scripts', 'fake-codex.mjs'),
@@ -84,8 +86,7 @@ try {
     RESPONSE_MODE_STORE_PATH: responseModeStorePath,
     AGENT_WORKSPACE: agentWorkspace,
     TEAMS_TEST_PROCESS_ISOLATION: 'true',
-    CODEX_BIN: isolatedNodePath,
-    CODEX_SCRIPT: 'scripts/fake-codex.mjs',
+    ...codexFixture,
     COPILOTKIT_DETERMINISTIC_MODE: '',
     TEAMS_OPERATOR_REQUESTER_ALLOWLIST: `${tenantId}/${requesterId}`,
     MCP_PUBLIC_ENABLED: '',

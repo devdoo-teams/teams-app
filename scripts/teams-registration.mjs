@@ -109,9 +109,9 @@ async function readZipEntries(packagePath) {
   return contents;
 }
 
-function canonicalizeManifest(value, parentKey = '') {
+function canonicalizeManifest(value, parentKey = '', propertyPath = '') {
   if (Array.isArray(value)) {
-    const items = value.map((item) => canonicalizeManifest(item, parentKey));
+    const items = value.map((item) => canonicalizeManifest(item, parentKey, propertyPath));
     if (parentKey === 'scopes') return items.sort((left, right) => String(left).localeCompare(String(right)));
     return items;
   }
@@ -119,7 +119,11 @@ function canonicalizeManifest(value, parentKey = '') {
     const result = {};
     for (const key of Object.keys(value).sort()) {
       if (parentKey === 'bots' && BOT_DEFAULT_FALSE_FIELDS.has(key) && value[key] === false) continue;
-      result[key] = canonicalizeManifest(value[key], key);
+      // Canonical Teams v1.25 schema lines674–677 declares this default false:
+      // https://developer.microsoft.com/json-schemas/teams/v1.25/MicrosoftTeams.schema.json
+      // TDP package download writes it explicitly; true still differs.
+      if (propertyPath === 'composeExtensions.commands' && key === 'initialRun' && value[key] === false) continue;
+      result[key] = canonicalizeManifest(value[key], key, propertyPath ? `${propertyPath}.${key}` : key);
     }
     return result;
   }

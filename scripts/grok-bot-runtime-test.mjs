@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
+import { createFakeCodexRuntime } from './fake-codex.mjs';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 
 const root = process.cwd();
@@ -164,6 +165,7 @@ try {
   const teamsPort = await listen(teamsPortServer);
   await close(teamsPortServer);
   const baseUrl = `http://127.0.0.1:${teamsPort}`;
+  const codexFixture = await createFakeCodexRuntime(path.join(dataRoot, 'cli-fixture'));
   const serverEnv = {
     ...process.env,
     NODE_ENV: 'test',
@@ -178,8 +180,7 @@ try {
     GENUI_ACTION_STORE_PATH: path.join(dataRoot, 'genui-actions.json'),
     RESPONSE_MODE_STORE_PATH: path.join(dataRoot, 'response-modes.json'),
     AGENT_WORKSPACE: root,
-    CODEX_BIN: process.execPath,
-    CODEX_SCRIPT: path.join(root, 'scripts/fake-codex.mjs'),
+    ...codexFixture,
     TEAMS_OPTIONAL_RUNTIME: 'true',
     XAI_API_KEY: xaiKey,
     XAI_LOOPBACK_TEST_KEY: loopbackKey,

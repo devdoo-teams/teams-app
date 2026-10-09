@@ -7,6 +7,7 @@ import fs from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { createFakeCodexRuntime } from './fake-codex.mjs';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 
 const root = process.cwd();
@@ -27,7 +28,6 @@ const azureRuntimeIdentity = Object.freeze({
   serverBundleSha256: runtimeServerBuildMarker.bundleSha256,
 });
 const runtimeOutputReaders = new Map();
-const codexExecutableSha256 = crypto.createHash('sha256').update(await fs.readFile(process.execPath)).digest('hex');
 
 function assert(condition, message) {
   if (!condition) throw new Error(`FAIL: ${message}`);
@@ -325,8 +325,7 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
   const port = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const localAccessToken = production ? '' : crypto.randomBytes(32).toString('base64url');
-  const codexHome = path.join(path.dirname(jobDataFile), `${path.basename(jobDataFile)}.codex-home`);
-  await fs.mkdir(codexHome, { recursive: true, mode: 0o700 });
+  const codexFixture = await createFakeCodexRuntime(path.join(path.dirname(jobDataFile), `${path.basename(jobDataFile)}.cli-fixture`));
   if (!production) localAccessTokens.set(baseUrl, localAccessToken);
   const command = process.execPath;
   const child = spawn(command, [runtimeEntry], {
@@ -345,10 +344,7 @@ async function startServer({ production, dataFile, jobDataFile, teamsSdk = false
       GENUI_ACTION_STORE_PATH: `${jobDataFile}.genui-actions.json`,
       RESPONSE_MODE_STORE_PATH: `${jobDataFile}.response-modes.json`,
       AGENT_WORKSPACE: workspace,
-      AGENT_CODEX_HOME: codexHome,
-      CODEX_BIN: process.execPath,
-      CODEX_BIN_SHA256: codexExecutableSha256,
-      CODEX_SCRIPT: path.join(root, 'scripts/fake-codex.mjs'),
+      ...codexFixture,
       COPILOTKIT_DETERMINISTIC_MODE: production ? '' : 'true',
       TEAMS_USE_SDK: teamsSdk ? 'true' : 'false',
       TEAMS_RUNTIME_DIST_DIR: runtimeDistRoot,
@@ -476,6 +472,7 @@ async function expectStartupFailure(label, extraEnv, expectedMessage) {
 }
 
 async function expectStoreLeaseConflict(dataFile, jobDataFile) {
+  const codexFixture = await createFakeCodexRuntime(path.join(path.dirname(jobDataFile), `${path.basename(jobDataFile)}.cli-fixture`));
   const port = await getFreePort();
   const localAccessToken = crypto.randomBytes(32).toString('base64url');
   const child = spawn(process.execPath, [runtimeEntry], {
@@ -490,8 +487,7 @@ async function expectStoreLeaseConflict(dataFile, jobDataFile) {
       AGENT_JOB_STORE_PATH: jobDataFile,
       GENUI_ACTION_STORE_PATH: `${jobDataFile}.genui-actions.json`,
       AGENT_WORKSPACE: root,
-      CODEX_BIN: process.execPath,
-      CODEX_SCRIPT: path.join(root, 'scripts/fake-codex.mjs'),
+      ...codexFixture,
       COPILOTKIT_DETERMINISTIC_MODE: 'true',
       TEAMS_USE_SDK: 'false',
       TEAMS_SKIP_OUTBOUND: 'true',

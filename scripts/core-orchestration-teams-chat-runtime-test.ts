@@ -5,28 +5,32 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
+import { createFakeCodexRuntime, createMeasuredTeamsCliServerFixture } from './fixtures/teams-cli-agent-policy-fixture.js';
+import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
+
 const root = process.cwd();
+const runtimeDistRoot = resolveRuntimeDistRoot(root);
 const token = 'mp258-local-token-0123456789abcdef';
 const tenantId = 'mp258-tenant';
 const requesterId = 'mp258-user';
 const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mp258-chat-runtime-'));
 await fs.chmod(runtimeRoot, 0o700);
-const copilotFixture = path.join(runtimeRoot, 'copilot-fixture');
-await createMeasuredCopilotFixture(copilotFixture);
+const codexFixture = await createFakeCodexRuntime(path.join(runtimeRoot, 'cli-fixture'));
+const fixtureEntry = await createMeasuredTeamsCliServerFixture(path.join(runtimeDistRoot, 'server/index.js'), runtimeRoot, codexFixture);
 let child: ChildProcess | undefined;
 let output = '';
 
 try {
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
-  child = spawn(process.execPath, [path.join(root, 'dist/server/index.js')], {
+  child = spawn(process.execPath, [fixtureEntry], {
     cwd: root,
     env: {
       ...process.env,
       NODE_ENV: 'test', PORT: String(port), TEAMS_USE_SDK: 'false',
-      TEAMS_AGENT_CLI_PROVIDER: 'copilot',
-      GHCP_BIN: copilotFixture,
-      TEAMS_GHCP_CAPABILITY_PROBE: 'true',
+      TEAMS_AGENT_CLI_PROVIDER: 'codex',
+      ...codexFixture,
+      TEAMS_RUNTIME_DIST_DIR: runtimeDistRoot,
       TEAMS_SKIP_AUTH: 'true', TEAMS_SKIP_OUTBOUND: 'true', TEAMS_LOCAL_DEV: 'true',
       TEAMS_LOCAL_ACCESS_TOKEN: token,
       BOT_CLIENT_ID: '00000000-0000-4000-8000-000000000001',
@@ -153,8 +157,8 @@ async function assertMeasuredProvider(baseUrl: string): Promise<void> {
   });
   assert.equal(response.status, 200);
   const body = await response.json() as { providers?: Array<{ provider?: string; availability?: string; capabilities?: string[] }> };
-  const provider = body.providers?.find((candidate) => candidate.provider === 'copilot');
-  assert.equal(provider?.availability, 'available', 'fixture must use measured Copilot readiness');
+  const provider = body.providers?.find((candidate) => candidate.provider === 'codex');
+  assert.equal(provider?.availability, 'available', 'fixture must use bounded synthetic Codex completion readiness');
   assert.deepEqual(
     provider?.capabilities,
     ['approve', 'cancel', 'retry', 'submit'],
@@ -191,20 +195,6 @@ async function waitForHealth(baseUrl: string, process: ChildProcess): Promise<vo
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   assert.fail(`server health timeout: ${output.slice(-2_000)}`);
-}
-
-async function createMeasuredCopilotFixture(executable: string): Promise<void> {
-  await fs.writeFile(executable, `#!/bin/sh
-if [ "$1" = "--help" ]; then
-  printf '%s\\n' 'GitHub Copilot CLI help'
-  exit 0
-fi
-printf '%s\\n' \\
-  '{"type":"session.start","data":{"sessionId":"019fd700-51cd-7862-a4ef-74ccae0f2b4e"}}' \\
-  '{"type":"assistant.turn_start","data":{"turnId":"turn-1"}}' \\
-  '{"type":"assistant.message","data":{"content":"GHCP_CAPABILITY_OK"}}' \\
-  '{"type":"assistant.turn_end","data":{"turnId":"turn-1"}}'
-`, { mode: 0o700 });
 }
 
 async function stop(process: ChildProcess): Promise<void> {
