@@ -20,7 +20,8 @@ import {
 import { CodexRunner, reapChildProcess, type CodexRunEvent } from './codex-runner.js';
 import { redactCliDiagnostics } from './cli-diagnostics.js';
 import { isAgentTokenUsage, parseCodexTokenUsage, type AgentTokenUsage } from './agent-token-usage.js';
-import type { CoreCodexModelSelection } from '../shared/core-orchestration.js';
+import type { CoreCodexModelSelection, CoreAgentToolExecution } from '../shared/core-orchestration.js';
+import { observeCodexToolUsage } from './agent-tool-observation.js';
 import {
   ghcpCliCommandFromEnvironment,
   GHCP_SECRET_ENV_VARS,
@@ -32,11 +33,12 @@ export type CliAgentProvider = 'codex' | 'copilot';
 
 export type CliAgentLifecycleEvent = Readonly<{
   provider: CliAgentProvider;
-  type: 'session.started' | 'turn.started' | 'tool.started' | 'agent.message' | 'turn.completed';
+  type: 'session.started' | 'turn.started' | 'tool.started' | 'tool.completed' | 'agent.message' | 'turn.completed';
   sessionId?: string;
   message?: string;
   tokenUsage?: AgentTokenUsage;
   command?: string;
+  commandExecution?: CoreAgentToolExecution;
   toolName?: string;
   mcpServerName?: string;
   mcpToolName?: string;
@@ -288,8 +290,11 @@ function normalizeCodexEvent(event: CodexRunEvent): CliAgentLifecycleEvent | und
     return { provider: 'codex', type: 'session.started', sessionId: event.thread_id };
   }
   if (event.type === 'turn.started') return { provider: 'codex', type: 'turn.started' };
-  if (event.type === 'item.started' && event.item?.type === 'command_execution') {
-    return { provider: 'codex', type: 'tool.started', command: event.item.command };
+  if ((event.type === 'item.started' || event.type === 'item.completed') && event.item?.type === 'command_execution') {
+    const commandExecution = observeCodexToolUsage(event)[0]?.execution;
+    if (event.type === 'item.completed' && !commandExecution) return undefined;
+    return { provider: 'codex', type: event.type === 'item.started' ? 'tool.started' : 'tool.completed', command: event.item.command,
+      ...(commandExecution ? {commandExecution} : {}) };
   }
   if (event.type === 'item.completed' && event.item?.type === 'agent_message') {
     const message = event.item.text?.trim();

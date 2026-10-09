@@ -24,6 +24,7 @@ import { CODEX_READ_ONLY_PERMISSION_ARGS } from './codex-permission-profile-isol
 import { redactSensitiveText, redactSensitiveValue } from './sensitive-text.js';
 import { isAgentTokenUsage, parseCodexTokenUsage, type AgentTokenUsage } from './agent-token-usage.js';
 import { assertSafeCodexModelSelection } from './codex-model-catalog.js';
+import { maskAgentToolOutput } from './agent-tool-execution.js';
 import type { CoreCodexModelSelection } from '../shared/core-orchestration.js';
 
 export interface CodexRunEvent {
@@ -35,6 +36,12 @@ export interface CodexRunEvent {
     message?: string;
     name?: string;
     server?: string;
+    id?: string;
+    status?: string;
+    exit_code?: number | null;
+    aggregated_output?: string;
+    /** Internal truncation flag after masking the wire output. */
+    outputTruncated?: boolean;
   };
   thread_id?: string;
   error?: unknown;
@@ -223,6 +230,16 @@ function sanitizeRunEvent(value: Record<string, unknown>): CodexRunEvent {
     if (typeof value.item.message === 'string') item.message = value.item.message;
     if (typeof value.item.name === 'string') item.name = value.item.name;
     if (typeof value.item.server === 'string') item.server = value.item.server;
+    if (value.item.type === 'command_execution') {
+      if (typeof value.item.id === 'string') item.id = value.item.id;
+      if (typeof value.item.status === 'string') item.status = value.item.status;
+      if (typeof value.item.exit_code === 'number' || value.item.exit_code === null) item.exit_code = value.item.exit_code;
+      if (typeof value.item.aggregated_output === 'string') {
+        const safe = maskAgentToolOutput(value.item.aggregated_output);
+        item.aggregated_output = safe.output;
+        item.outputTruncated = safe.outputTruncated;
+      }
+    }
     if (Object.keys(item).length > 0) event.item = item;
   }
 

@@ -1,5 +1,10 @@
 # TeamsApp release knowledge update log
 
+## 2026-10-09 — MP364 command terminal observation
+
+* Actual signed/pinned CLI raw item_1 completed/exit0/output17,25,42 was lost in sanitizer, production adapters and same-length tool persistence. See [command terminal concept](codex-command-terminal-observation.md).
+* RED→GREEN covers ownership/reload/correlation, model-text separation and independent review's JSON argv/ANSI/C1/subshell cases. Prior128 ephemeral terminal remains UNVERIFIED. Public128 is preserved until a matching committed candidate passes its release gates. Output settings remain design-only; MCP/CopilotKit runtime unchanged; native/full/mobile/user gates independent.
+
 ## 2026-10-08 — MP358 native plan tool configuration
 
 * **Official contract**: pinned Codex0.162.0-alpha.2 source makes `tools.update_plan.enabled` opt-in, absent=false; see [native plan tool concept](codex-native-plan-tool-config.md).

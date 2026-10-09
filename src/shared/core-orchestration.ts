@@ -47,10 +47,22 @@ export type CoreOrchestrationJobStatus =
   | 'cancelled';
 
 export type CoreAgentToolCategory = 'skill' | 'plugin' | 'mcp' | 'cli' | 'builtin';
+export type CoreAgentToolExecution = Readonly<{
+  source: 'codex.exec.jsonl.command_execution';
+  itemId: string;
+  status: 'in_progress' | 'completed' | 'failed' | 'declined';
+  /** Time the structured terminal event was observed, independent of model text. */
+  observedAt?: string;
+  exitCode?: number;
+  /** Masked, bounded excerpt of aggregated stdout/stderr, never the raw wire. */
+  output?: string;
+  outputTruncated?: boolean;
+}>;
 export type CoreAgentToolUsage = Readonly<{
   category: CoreAgentToolCategory;
   name: string;
   observedAt: string;
+  execution?: CoreAgentToolExecution;
 }>;
 
 /** Display identity only. Expiry/consumption belong to existing confirmation grants. */

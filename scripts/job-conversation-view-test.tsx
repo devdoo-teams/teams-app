@@ -11,7 +11,7 @@ assert.match(markup,/aria-label="작업 대화 이력"/,'selected task should re
 assert.match(markup,/이전 대화 일부를 불러올 수 없습니다/);
 assert.match(markup,/&lt;script&gt;request&lt;\/script&gt;/);
 assert.doesNotMatch(markup,/<script>|<img src=x/);
-assert.match(markup,/도구 결과 원문은 저장되지 않았습니다/);
+assert.match(markup,/관측된 CLI 종료 정보와 마스킹한 출력 요약만 표시합니다/);
 const deliveryMarkup = renderToStaticMarkup(<OrchestrationPanelView {...props} notifyPersonal={false} onNotifyPersonalChange={() => undefined}
   selectedJob={{ ...props.selectedJob!, notificationDelivery: { state:'accepted', observedAt:'2026-10-06T00:00:00Z' } }} />);
 assert.match(deliveryMarkup, /내 업무 허브 개인 채팅으로 진행·결과 알림 받기/);

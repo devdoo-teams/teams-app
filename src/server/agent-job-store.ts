@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { readCommandExecution } from './agent-tool-execution.js';
 import { readExecutionReceipt, sameExecutionReceipt } from './agent-execution-receipt.js';
 import type { CoreExecutionReceipt } from '../shared/core-orchestration.js';
 import { CORE_AGENT_PROMPT_MAX_LENGTH } from '../shared/core-orchestration.js';
@@ -423,7 +424,7 @@ export class AgentJobStore {
       if (index === -1) return undefined;
       const job = this.jobs[index];
       const tools = mergeObservedToolUsage(job.tools ?? [], observations);
-      if (tools.length === (job.tools?.length ?? 0)) return cloneAgentJob(job);
+      if (JSON.stringify(tools) === JSON.stringify(job.tools ?? [])) return cloneAgentJob(job);
       const updated = { ...job, tools, updatedAt: new Date().toISOString() };
       this.jobs = this.jobs.map((candidate, jobIndex) => jobIndex === index ? updated : candidate);
       return cloneAgentJob(updated);
@@ -541,7 +542,7 @@ function cloneAgentJob(job: AgentJob): AgentJob {
     ...(job.durableNotifications ? { durableNotifications: {
       enabled: job.durableNotifications.enabled, delivered: [...job.durableNotifications.delivered],
     } } : {}),
-    ...(job.tools ? { tools: job.tools.map((usage) => ({ ...usage })) } : {}),
+    ...(job.tools ? { tools: job.tools.map((usage) => ({ ...usage, ...(usage.execution ? { execution: { ...usage.execution } } : {}) })) } : {}),
     ...(job.changedPaths ? { changedPaths: [...job.changedPaths] } : {}),
     ...(job.tokenUsage ? { tokenUsage: { ...job.tokenUsage } } : {}),
     ...(job.executionReceipt ? { executionReceipt: { ...job.executionReceipt } } : {}),
@@ -819,10 +820,12 @@ function readTools(value: JobRecord, index: number): LoadedValue<CoreAgentToolUs
       throw invalidJob(index, `tools[${toolIndex}].name is invalid`);
     }
     const observedAt = readTimestamp(raw.observedAt, `tools[${toolIndex}].observedAt`, index, false).value;
-    const key = `${category}:${name}`;
+    const execution = hasOwn(raw, 'execution') ? readCommandExecution(raw.execution) : undefined;
+    if (hasOwn(raw, 'execution') && (!execution || category !== 'cli')) throw invalidJob(index, `tools[${toolIndex}].execution is invalid`);
+    const key = `${category}:${execution ? `id:${execution.itemId}` : `name:${name}`}`;
     if (seen.has(key)) throw invalidJob(index, 'tools entries must be unique');
     seen.add(key);
-    tools.push({ category, name, observedAt });
+    tools.push({ category, name, observedAt, ...(execution ? { execution } : {}) });
   }
   return { value: tools, migrated: false };
 }

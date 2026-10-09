@@ -1,3 +1,4 @@
+import { readCommandExecution } from './agent-tool-execution.js';
 import {
   CliAgentRunner,
   type CliAgentLifecycleEvent,
@@ -41,6 +42,19 @@ function toCodexRunEvent(event: CliAgentLifecycleEvent, provider: CliAgentProvid
     case 'turn.started':
       return { type: 'turn.started' };
     case 'tool.started':
+    case 'tool.completed':
+      if (event.commandExecution) {
+        const execution = event.provider === 'codex' ? readCommandExecution(event.commandExecution) : undefined;
+        if (!execution || (event.type === 'tool.started') !== (execution.status === 'in_progress')) {
+          throw new Error('Agent command observation contract is invalid.');
+        }
+        return { type: event.type === 'tool.started' ? 'item.started' : 'item.completed', item: {
+          type:'command_execution', command:event.command, id:execution.itemId, status:execution.status,
+          ...(execution.exitCode !== undefined ? {exit_code:execution.exitCode} : {}),
+          ...(execution.output !== undefined ? {aggregated_output:execution.output,outputTruncated:execution.outputTruncated} : {}),
+        } };
+      }
+      if (event.type === 'tool.completed') throw new Error('Agent terminal command observation is missing.');
       if (event.mcpServerName && event.mcpToolName) {
         return {
           type: 'item.started',

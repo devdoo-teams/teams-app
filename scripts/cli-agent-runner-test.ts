@@ -9,6 +9,8 @@ import {
   type CliAgentLifecycleEvent,
 } from '../src/server/cli-agent-runner.js';
 import { probeGitHubCopilotCliCapability } from '../src/server/ghcp-cli-adapter.js';
+import { ProviderNeutralAgentRunner } from '../src/server/provider-neutral-agent-runner.js';
+import type { CodexRunEvent } from '../src/server/codex-runner.js';
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-cli-agent-runner-'));
 const fakeCliPath = path.join(root, 'fake-cli.mjs');
@@ -74,6 +76,10 @@ if (process.argv.includes('exec')) {
     }
     if (prompt.includes('CASE:progress')) {
       emit({ type: 'item.completed', item: { type: 'agent_message', text: 'CODEX_PROGRESS' } });
+    }
+    if (prompt.includes('CASE:command-terminal')) {
+      const item={id:'item_1',type:'command_execution',command:'(printf 42)',status:'in_progress',exit_code:null,aggregated_output:''};
+      emit({type:'item.started',item});emit({type:'item.completed',item:{...item,status:'completed',exit_code:0,aggregated_output:'values17,25 sum42'}});
     }
     emit({ type: 'item.completed', item: { type: 'agent_message', text: 'CODEX_FINAL' } });
     if (prompt.includes('CASE:todo-updates')) {
@@ -491,6 +497,13 @@ try {
     ['--model', 'gpt-5.6-sol', '--config', 'model_reasoning_effort="high"'],
     'the provider-neutral local Codex path preserves the validated selection',
   );
+
+  const terminalEvents:CodexRunEvent[]=[];
+  await new ProviderNeutralAgentRunner({provider:'codex',runner}).run({jobId:'codex-command-terminal',prompt:'CASE:command-terminal',workspace:root,mode:'workspace-write',timeoutMs:1000,onEvent:e=>{terminalEvents.push(e);}});
+  const terminal:any=terminalEvents.find(e=>e.type==='item.completed'&&e.item?.type==='command_execution')?.item;
+  assert.equal(terminal?.exit_code,0,'production CLI and provider-neutral adapters preserve structured terminal evidence end-to-end');
+  assert.equal(terminal?.id,'item_1');assert.equal(terminal?.status,'completed');
+  assert.match(terminal.aggregated_output,/values17,25 sum42/);
 
   const codexProgressResult = await runner.run({
     provider: 'codex',

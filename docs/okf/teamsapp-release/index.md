@@ -8,6 +8,7 @@ okf_version: 0.2
 
 ## Concepts
 
+* [CLI command terminal observation](codex-command-terminal-observation.md) - MP364 pinned wire, adapter/store loss, privacy RED/GREEN and independent live gates
 * [Tab prompt bounds and mutation failures](tab-prompt-and-mutation-errors.md) - MP360/361 distinct source and fixture defects, bounded synthetic126 observations and candidate127 gates
 * [Core native plan tool availability](codex-native-plan-tool-config.md) - MP358 official opt-in default, launch RED/GREEN and actual todo lifecycle
 * [Strict source typecheck and preserved user files](strict-source-typecheck.md) - MP352–355 clean baseline, strict semantic CI and SDK payload preservation

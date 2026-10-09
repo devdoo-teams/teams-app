@@ -1,5 +1,6 @@
 import type { CoreAgentToolUsage } from '../shared/core-orchestration.js';
 import type { CodexRunEvent } from './codex-runner.js';
+import { projectCommandExecution, readCommandExecution } from './agent-tool-execution.js';
 
 export const MAX_OBSERVED_AGENT_TOOLS = 32;
 export const MAX_AGENT_TOOL_NAME_LENGTH = 120;
@@ -48,22 +49,28 @@ function pushUnique(target: CoreAgentToolUsage[], usage: CoreAgentToolUsage): vo
 
 /**
  * Project a Codex JSONL event into a bounded, argument-free audit record.
- * Raw commands, tool input, output, paths, and credentials are never returned.
+ * Raw commands/inputs/wire output are excluded. CLI output excerpts are masked
+ * and bounded; structured invocation identity/outcome is independent of text.
  */
 export function observeCodexToolUsage(
   event: CodexRunEvent,
   observedAt = new Date().toISOString(),
 ): CoreAgentToolUsage[] {
-  if (event.type !== 'item.started' || !event.item) return [];
+  if ((event.type !== 'item.started' && event.type !== 'item.completed') || !event.item) return [];
   const observed: CoreAgentToolUsage[] = [];
 
   if (event.item.type === 'command_execution' && typeof event.item.command === 'string') {
-    const executable = commandExecutable(event.item.command);
-    if (executable) pushUnique(observed, { category: 'cli', name: executable, observedAt });
+    const execution = projectCommandExecution(event.type, event.item, observedAt);
+    const executable = commandExecutable(event.item.command) ?? (execution ? 'shell' : undefined);
+    if (executable && (event.type === 'item.started' || execution)) {
+      pushUnique(observed, { category: 'cli', name: executable, observedAt, ...(execution ? {
+        execution: { ...execution, ...(event.item.outputTruncated === true ? { outputTruncated: true } : {}) },
+      } : {}) });
+    }
 
   }
 
-  if (event.item.type === 'mcp_tool_call') {
+  if (event.type === 'item.started' && event.item.type === 'mcp_tool_call') {
     const server = safePart(event.item.server);
     const name = safePart(event.item.name);
     if (server && name) {
@@ -71,7 +78,7 @@ export function observeCodexToolUsage(
     }
   }
 
-  if (event.item.type === 'tool_call') {
+  if (event.type === 'item.started' && event.item.type === 'tool_call') {
     const name = safePart(event.item.name);
     if (name) pushUnique(observed, { category: 'builtin', name, observedAt });
   }
@@ -92,8 +99,17 @@ export function mergeObservedToolUsage(
     }
     const nameParts = usage.name.split('/');
     if (usage.name.length > MAX_AGENT_TOOL_NAME_LENGTH || nameParts.some((part) => !safePart(part))) continue;
-    pushUnique(merged, { ...usage });
-    if (merged.length >= MAX_OBSERVED_AGENT_TOOLS) break;
+    const execution = usage.category === 'cli' ? readCommandExecution(usage.execution) : undefined;
+    if (usage.execution !== undefined && !execution) continue;
+    const safe = { category: usage.category, name: usage.name, observedAt: usage.observedAt, ...(execution ? { execution } : {}) };
+    const index = merged.findIndex(candidate => candidate.category === safe.category
+      && (execution ? candidate.execution?.itemId === execution.itemId : !candidate.execution && candidate.name === safe.name));
+    if (index >= 0) {
+      const current = merged[index];
+      if (current.execution?.status === 'in_progress' && execution?.status !== 'in_progress') {
+        merged[index] = { ...safe, name:current.name, observedAt: current.observedAt };
+      }
+    } else if (merged.length < MAX_OBSERVED_AGENT_TOOLS) merged.push(safe);
   }
   return merged;
 }

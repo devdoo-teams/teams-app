@@ -1141,7 +1141,7 @@ export class AgentService {
       return;
     }
 
-    if (event.type === 'item.started'
+    if ((event.type === 'item.started' || event.type === 'item.completed')
       && (event.item?.type === 'command_execution'
         || event.item?.type === 'mcp_tool_call'
         || event.item?.type === 'tool_call')) {
@@ -1153,6 +1153,7 @@ export class AgentService {
           await this.store.appendToolUsage(job.id, scope, observations);
         });
       }
+      if (event.type === 'item.completed') return;
       await this.flushPendingAgentMessage(job, state);
       await this.publishProgress(job, state, 'tools', 'tools', `${this.agentLabel}가 필요한 도구를 실행하고 있습니다.`, `${this.agentLabel}가 필요한 도구를 실행하고 있습니다.`);
       return;

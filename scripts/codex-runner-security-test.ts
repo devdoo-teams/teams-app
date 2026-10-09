@@ -62,7 +62,13 @@ const todo = (type, id = 'plan-1', extra = {}) => console.log(JSON.stringify({
   type,
   item: { id, type: 'todo_list', items: [{ text: 'Synthetic inspection', completed: type !== 'item.started' }], ...extra },
 }));
-if (caseName === 'todo-updates') {
+if (caseName === 'command-terminal') {
+  prefix();
+  const item = {id:'item_1',type:'command_execution',command:'cat synthetic.txt',status:'in_progress',aggregated_output:'',exit_code:null};
+  console.log(JSON.stringify({type:'item.started',item}));
+  console.log(JSON.stringify({type:'item.completed',item:{...item,status:'failed',exit_code:17,aggregated_output:'values17,25 sum42 password=secret-fixture /Users/synthetic/private.txt'}}));
+  message('MODEL_CLAIM exit_code=0'); completed();
+} else if (caseName === 'todo-updates') {
   prefix();
   todo('item.started');
   todo('item.updated', 'plan-1', { text: 'PARTIAL_MUST_NOT_BECOME_RESULT' });
@@ -369,6 +375,15 @@ try {
   assert.equal(result.executionReceipt?.reasoningEffort, undefined, 'requested reasoning is not observed effort evidence');
   assert.deepEqual(events, ['thread.started', 'turn.started', 'item.completed', 'turn.completed'], 'callbacks preserve FSM order');
   assert.equal(result.eventCount, 4);
+
+  const commandEvents:CodexRunEvent[]=[];
+  const commandResult=await runCase('command-terminal',event=>{commandEvents.push(event);});
+  const commandEnd:any=commandEvents.find(e=>e.type==='item.completed'&&e.item?.type==='command_execution')?.item;
+  assert.equal(commandEnd?.exit_code,17,'runner callback retains actual structured exit rather than model-written zero');
+  assert.equal(commandEnd?.id,'item_1');assert.equal(commandEnd?.status,'failed');
+  assert.match(commandEnd.aggregated_output,/values17,25 sum42/);
+  assert.doesNotMatch(commandEnd.aggregated_output,/secret-fixture|Users\/synthetic|private\.txt/,'callback output is already masked');
+  assert.equal(commandResult.finalMessage,'MODEL_CLAIM exit_code=0');
 
   const todoEvents: CodexRunEvent[] = [];
   const todoResult = await runCase('todo-updates', (event) => { todoEvents.push(event); });

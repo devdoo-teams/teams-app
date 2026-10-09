@@ -19,7 +19,7 @@ function visibleTurn(job: CoreOrchestrationJob): VisibleJobTurn {
     ...(job.result ? { response: visibleText(job.result) } : {}),
     ...(job.error ? { error: visibleText(job.error) } : {}),
     progress: job.progress.slice(-20).map(visibleText),
-    tools: (job.tools ?? []).slice(-30).map(tool => ({ category: tool.category, name: visibleText(tool.name), observedAt: tool.observedAt })),
+    tools: (job.tools ?? []).slice(-30).map(tool => ({ category: tool.category, name: visibleText(tool.name), observedAt: tool.observedAt, ...(tool.execution ? {execution:{...tool.execution}} : {}) })),
     createdAt: job.createdAt,
     truncated: text.some(value => value.length > MAX_TEXT) || job.progress.length > 20 || (job.tools?.length ?? 0) > 30,
   };

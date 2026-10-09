@@ -10,6 +10,7 @@ import { createLatestDetailRequestController } from './latest-detail-request.js'
 export { createLatestDetailRequestController } from './latest-detail-request.js';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 
+import { agentToolOutcomeText } from '../shared/agent-tool-presentation.js';
 import {
   CoreOrchestrationClientError,
   createCoreOrchestrationClient,
@@ -486,7 +487,7 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
             {(props.selectedJob.tools?.length ?? 0) > 0 ? (
               <ul aria-label="관찰된 도구">
                 {props.selectedJob.tools?.map((usage) => (
-                  <li key={`${usage.category}:${usage.name}`}>{toolCategoryLabels[usage.category]} · {usage.name}</li>
+                  <li key={`${usage.category}:${usage.execution?.itemId ?? usage.name}`} style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{toolCategoryLabels[usage.category]} · {usage.name}{agentToolOutcomeText(usage) ? ` · ${agentToolOutcomeText(usage)}` : ''}</li>
                 ))}
               </ul>
             ) : <span> 없음 (스킬·플러그인은 제공자가 식별자를 보고한 경우에만 표시)</span>}

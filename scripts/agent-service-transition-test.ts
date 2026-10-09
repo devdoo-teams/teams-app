@@ -234,7 +234,9 @@ try {
   await runner.emit({ type: 'item.completed', item: { type: 'todo_list', text: 'TODO_MUST_NOT_BECOME_RESULT' } });
   assert.equal(JSON.stringify(store.get(delayedJob.id, scope)), beforeTodoUpdates, 'todo lifecycle and duplicate updates do not mutate progress, result, usage or tool evidence');
   assert.equal(notifications.filter((notification) => notification.job.id === delayedJob.id).length, notificationsBeforeTodoUpdates, 'todo lifecycle does not emit new Teams notifications');
-  await runner.emit({ type: 'item.started', item: { type: 'command_execution', command: '/bin/zsh -lc rg' } });
+  await runner.emit({ type: 'item.started', item: { id:'item_1',type: 'command_execution', command: '/bin/zsh -lc rg',status:'in_progress' } } as any);
+  await runner.emit({ type: 'item.completed', item: { id:'item_1',type: 'command_execution', command: '/bin/zsh -lc rg',status:'completed',exit_code:0,aggregated_output:'synthetic match42' } } as any);
+  assert.equal((store.get(delayedJob.id,scope)?.tools?.[0] as any)?.execution?.exitCode,0,'service saves observed terminal command fields before runner result');
   runner.release(0);
   await waitForStatus(store, delayedJob.id, scope, 'completed');
   await waitForNotification(notifications, (notification) => notification.job.id === delayedJob.id && notification.phase === 'completed');
@@ -246,6 +248,7 @@ try {
     category: 'cli',
     name: 'rg',
     observedAt: store.get(delayedJob.id, scope)?.tools?.[0]?.observedAt,
+    execution: {source:'codex.exec.jsonl.command_execution',itemId:'item_1',status:'completed',observedAt:(store.get(delayedJob.id,scope)?.tools?.[0] as any)?.execution?.observedAt,exitCode:0,output:'synthetic match42',outputTruncated:false},
   }], 'safe observed CLI identity is durably attached to the job without raw command arguments');
   assert.ok(delayedNotifications.some((notification) => notification.kind === 'progress' && notification.phase === 'agent-update'), 'agent update notification is emitted');
   assert.ok(delayedNotifications.some((notification) => notification.kind === 'result' && notification.phase === 'completed'), 'terminal completion notification is emitted');

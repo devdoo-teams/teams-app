@@ -8,6 +8,7 @@ import type { AgentJob } from './agent-job-store.js';
 import type { AgentNotification } from './agent-service.js';
 import type { GenUiActionStore } from './genui-action-store.js';
 import type { Item } from './item-store.js';
+import { agentToolOutcomeText } from '../shared/agent-tool-presentation.js';
 import type {
   CoreAgentToolCategory,
   CoreCodexModelCatalog,
@@ -158,7 +159,7 @@ function providerFactLabel(provider: CoreProviderFact): string {
 function orchestrationDetailAction(job: CoreOrchestrationJob): Record<string, unknown> {
   const tools = job.tools ?? [];
   const observedTools = tools.length > 0
-    ? tools.map((usage) => `• ${toolUsageLabel(usage.category)} · ${identifierText(usage.name, 120, '이름 미확인')}`).join('\n')
+    ? tools.slice(0,32).map((usage) => `• ${toolUsageLabel(usage.category)} · ${identifierText(usage.name, 120, '이름 미확인')}${agentToolOutcomeText(usage) ? ` · ${agentToolOutcomeText(usage)}` : ''}`).join('\n')
     : '실행 제공자가 이름을 보고한 도구가 없습니다. 스킬·플러그인은 제공자가 식별자를 보고한 경우에만 표시됩니다.';
   return {
     type: 'Action.ShowCard',
