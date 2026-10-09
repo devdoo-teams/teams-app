@@ -8,6 +8,7 @@ import { CoreOrchestrationService, createServerDerivedCoreScope } from '../src/s
 import { GenUiActionStore } from '../src/server/genui-action-store.js';
 import { GitService } from '../src/server/git-service.js';
 import { deriveServerOwnedRestConversationId } from '../src/server/rest-scope.js';
+import { observeTeamsCliTestCatalog, teamsCliTestCatalog } from './fixtures/teams-cli-agent-policy-fixture.js';
 const module = await import('../src/server/core-message-extension.js').catch(() => ({}));
 assert.equal(typeof module.CoreMessageExtension, 'function', 'message action must offer a reviewed, scoped submission flow');
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'core-message-action-'));
@@ -18,11 +19,11 @@ let dispatches = 0, notifications = 0;
 const agent = new AgentService(jobs, undefined, root, async () => { notifications++; }, new GitService(root), {
   canReadScope: () => true, canMutateScope: () => true,
   admissionJournalPath: path.join(root, 'admission.json'),
+  observeCodexModelCatalog: observeTeamsCliTestCatalog,
   executionDispatcher: { kind: 'azure-queue', dispatch: async () => { dispatches++; }, observe: async () => undefined, cancel: async () => {} },
 });
 await agent.initialize();
-const catalog = { revision: 'a'.repeat(64), observedAt: '2026-10-06T00:00:00.000Z', source: 'codex-debug-models' as const,
-  models: [{ id: 'fixture-model', label: 'Fixture model', defaultReasoningEffort: 'high' as const, reasoningEfforts: ['high' as const] }] };
+const catalog = teamsCliTestCatalog;
 const core = new CoreOrchestrationService({ agentService: agent, jobStore: jobs,
   observeProviderFacts: () => [{ provider: 'codex', availability: 'available', capabilities: ['submit', 'approve', 'cancel'], source: 'runtime-observation', observedAt: catalog.observedAt }],
   observeCodexModelCatalog: async () => catalog,
@@ -45,7 +46,7 @@ try {
   assert.match(JSON.stringify(card), /신뢰되지 않은/);
   assert.match(JSON.stringify(card), /개인/);
   const payload = { ...card.actions[0].data, prompt: 'Reviewed task description', mode: 'workspace-write',
-    model: 'fixture-model', reasoningEffort: 'high' };
+    model: 'gpt-6-luna', reasoningEffort: 'xhigh' };
   const submitValue = { commandId: 'delegateMessage', commandContext: 'message', data: payload };
   for (const wrongScope of [{ ...scope, requesterId: 'other' }, { ...scope, tenantId: 'other' }, { ...scope, conversationId: 'other' }]) {
     await assert.rejects(() => ext.submit(wrongScope, submitValue), /확인|권한/);
@@ -58,7 +59,8 @@ try {
   assert.equal(privateJobs.length, 1);
   assert.equal(privateJobs[0].prompt, 'Reviewed task description');
   assert.equal(privateJobs[0].status, 'awaiting_approval', 'reviewing workspace-write does not approve it');
-  assert.equal(privateJobs[0].model, 'fixture-model');
+  assert.equal(privateJobs[0].model, 'gpt-6-luna');
+  assert.equal(privateJobs[0].reasoningEffort, 'xhigh');
   assert.equal(dispatches, 0);
   assert.equal(notifications, 0, 'no group notification may expose selected content');
   assert.equal(core.get(createServerDerivedCoreScope(scope, 'conversation'), { jobId: privateJobs[0].id }), undefined);
@@ -69,7 +71,7 @@ try {
   await core.cancel(personalScope, { jobId: privateJobs[0].id });
   const readOnlyOpen = await ext.open(scope, value);
   const readOnlyData = { ...readOnlyOpen.task.value.card.content.actions[0].data,
-    prompt: 'Explicitly reviewed read-only job', mode: 'read-only', model: 'fixture-model', reasoningEffort: 'high' };
+    prompt: 'Explicitly reviewed read-only job', mode: 'read-only', model: 'gpt-6-luna', reasoningEffort: 'xhigh' };
   await ext.submit(scope, { ...submitValue, data: readOnlyData });
   assert.equal(dispatches, 1, 'only explicit read-only submission dispatches');
   assert.equal(notifications, 0, 'private extension job cancellation/start never posts into group');
@@ -78,7 +80,7 @@ try {
   const expiringExt = new module.CoreMessageExtension({ core, grants: expiringGrants, canSubmit: () => true });
   const expiringOpen = await expiringExt.open(scope, value);
   const expiredData = { ...expiringOpen.task.value.card.content.actions[0].data,
-    prompt: 'expired review', mode: 'read-only', model: 'fixture-model', reasoningEffort: 'high' };
+    prompt: 'expired review', mode: 'read-only', model: 'gpt-6-luna', reasoningEffort: 'xhigh' };
   await new Promise(resolve => setTimeout(resolve, 15));
   await assert.rejects(() => expiringExt.submit(scope, { ...submitValue, data: expiredData }), /만료/);
   const denied = new module.CoreMessageExtension({ core, grants, canSubmit: () => false });

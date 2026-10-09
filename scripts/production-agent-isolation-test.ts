@@ -11,6 +11,7 @@ import {
 } from '../src/server/agent-execution-policy.js';
 import { CODEX_READ_ONLY_PERMISSION_ARGS } from '../src/server/codex-permission-profile-isolation-provider.js';
 import { createProductionAgentExecutionPolicy } from '../src/server/production-agent-isolation.js';
+import { TEAMS_CLI_AGENT_MODEL_ARGS } from '../src/shared/teams-cli-agent-policy.js';
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-production-agent-isolation-'));
 const sourceWorkspace = path.join(root, 'source');
@@ -175,7 +176,8 @@ try {
     prepared.isolationLease?.bindJob('job-1');
     const args = [
       'exec', '--json', ...CODEX_READ_ONLY_PERMISSION_ARGS,
-      '--cd', prepared.workspace, '--', 'inspect only the projected workspace',
+      '--cd', prepared.workspace, ...TEAMS_CLI_AGENT_MODEL_ARGS,
+      '--', 'inspect only the projected workspace',
     ];
     await prepared.isolationLease?.spawn(
       { ...scope, jobId: 'job-1' },
