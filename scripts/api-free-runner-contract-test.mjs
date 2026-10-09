@@ -13,6 +13,7 @@ const responseModeApiTest = fs.readFileSync(new URL('./response-mode-api-test.ts
 const authStartupTest = fs.readFileSync(new URL('./auth-startup-gate-test.mjs', import.meta.url), 'utf8');
 const operatorAllowlistTest = fs.readFileSync(new URL('./operator-allowlist-runtime-test.mjs', import.meta.url), 'utf8');
 const runtimeTest = fs.readFileSync(new URL('./runtime-test.mjs', import.meta.url), 'utf8');
+const fakeCodex = fs.readFileSync(new URL('./fake-codex.mjs', import.meta.url), 'utf8');
 const coreSourceCheck = fs.readFileSync(new URL('./core-source-check.mjs', import.meta.url), 'utf8');
 const coreSourceCheckModule = fs.readFileSync(new URL('./core-source-check-lib.mjs', import.meta.url), 'utf8');
 const coreTestRunner = fs.readFileSync(new URL('./core-test-runner.mjs', import.meta.url), 'utf8');
@@ -131,12 +132,22 @@ assert.match(
 );
 assert.match(
   runtimeTest,
-  /AGENT_CODEX_HOME:\s*codexHome/,
-  'production runtime fixtures must provide an isolated Codex home without copying live credentials',
+  /await createFakeCodexRuntime\(/,
+  'runtime fixtures must create their shared isolated synthetic CLI environment',
 );
 assert.match(
   runtimeTest,
-  /CODEX_BIN_SHA256:\s*codexExecutableSha256/,
+  /\.\.\.codexFixture,/,
+  'runtime fixtures must pass the isolated synthetic CLI environment into the server',
+);
+assert.match(
+  fakeCodex,
+  /AGENT_CODEX_HOME:\s*home/,
+  'production runtime fixtures must provide an isolated Codex home without copying live credentials',
+);
+assert.match(
+  fakeCodex,
+  /CODEX_BIN_SHA256:\s*crypto\.createHash\('sha256'\)\.update\(content\)\.digest\('hex'\)/,
   'production runtime fixtures must provide the actual test executable digest',
 );
 assert.match(
