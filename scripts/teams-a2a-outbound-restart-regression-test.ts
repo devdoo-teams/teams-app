@@ -8,12 +8,12 @@ import path from 'node:path';
 
 import { A2AStore } from '../src/server/a2a-store.js';
 import { TeamsA2AOutboundStore, readTeamsA2ACompletionIntent, readTeamsA2AIntent } from '../src/server/teams-a2a-outbound-store.js';
-import { createFakeCodexRuntime } from './fake-codex.mjs';
+import { createFakeCodexRuntime, createIndexedA2ACodexServerFixture } from './fixtures/teams-cli-agent-policy-fixture.js';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 
 const root = process.cwd();
 const runtimeDistRoot = resolveRuntimeDistRoot(root);
-const entry = path.join(runtimeDistRoot, 'server', 'index.js');
+const sourceEntry = path.join(runtimeDistRoot, 'server', 'index.js');
 const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-a2a-outbound-restart-'));
 const accessToken = crypto.randomBytes(32).toString('base64url');
 const scope = {
@@ -148,6 +148,7 @@ try {
   await fs.copyFile(process.execPath, isolatedNodePath);
   await fs.chmod(isolatedNodePath, 0o700);
   const codexFixture = await createFakeCodexRuntime(path.join(temporaryRoot, 'cli-fixture'), { nodeExecutable: isolatedNodePath });
+  const entry = await createIndexedA2ACodexServerFixture(sourceEntry, temporaryRoot, codexFixture);
   await fs.mkdir(path.join(agentWorkspace, 'scripts'), { recursive: true });
   await fs.copyFile(
     path.join(root, 'scripts', 'fake-codex.mjs'),
@@ -187,6 +188,7 @@ try {
       AGENT_WORKSPACE: agentWorkspace,
       TEAMS_TEST_PROCESS_ISOLATION: 'true',
       ...codexFixture,
+      TEAMS_RUNTIME_DIST_DIR: runtimeDistRoot,
       TEAMS_AGENT_CLI_PROVIDER: 'codex',
       TEAMS_A2A_AGENT_PROVIDERS: 'codex',
       TEAMS_AGENT_GLOBAL_LIMIT: '4',

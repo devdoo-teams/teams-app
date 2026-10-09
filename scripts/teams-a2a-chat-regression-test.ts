@@ -6,7 +6,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
-import { createFakeCodexRuntime } from './fake-codex.mjs';
+import { createFakeCodexRuntime, createIndexedA2ACodexServerFixture } from './fixtures/teams-cli-agent-policy-fixture.js';
 import { resolveRuntimeDistRoot } from './runtime-dist.mjs';
 import { TeamsA2AOutboundStore } from '../src/server/teams-a2a-outbound-store.js';
 
@@ -74,7 +74,7 @@ type Observation = {
 
 const root = process.cwd();
 const runtimeDistRoot = resolveRuntimeDistRoot(root);
-const entry = path.join(runtimeDistRoot, 'server', 'index.js');
+const sourceEntry = path.join(runtimeDistRoot, 'server', 'index.js');
 const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-a2a-chat-regression-'));
 const accessToken = crypto.randomBytes(32).toString('base64url');
 const tenantId = 'teams-a2a-chat-tenant';
@@ -136,6 +136,7 @@ try {
   await fs.copyFile(process.execPath, isolatedNodePath);
   await fs.chmod(isolatedNodePath, 0o700);
   const codexFixture = await createFakeCodexRuntime(path.join(temporaryRoot, 'cli-fixture'), { nodeExecutable: isolatedNodePath });
+  const entry = await createIndexedA2ACodexServerFixture(sourceEntry, temporaryRoot, codexFixture);
   await fs.mkdir(path.join(agentWorkspace, 'scripts'), { recursive: true });
   await fs.copyFile(
     path.join(root, 'scripts', 'fake-codex.mjs'),
@@ -175,6 +176,7 @@ try {
       AGENT_WORKSPACE: agentWorkspace,
       TEAMS_TEST_PROCESS_ISOLATION: 'true',
       ...codexFixture,
+      TEAMS_RUNTIME_DIST_DIR: runtimeDistRoot,
       TEAMS_AGENT_CLI_PROVIDER: 'codex',
       TEAMS_A2A_AGENT_PROVIDERS: 'codex,codex',
       TEAMS_AGENT_GLOBAL_LIMIT: '4',
@@ -334,6 +336,7 @@ try {
       `A2A schema: ${String(observed.a2a.schemaVersion ?? 'missing')}`,
       `A2A outbound schema: ${String(observed.outbound.schemaVersion ?? 'missing')}`,
       `Observed activity tail: ${JSON.stringify(observed.activities).slice(-2_000)}`,
+      `Synthetic A2A policy failures: ${serverOutput.match(/^SYNTHETIC_A2A_POLICY_FAILURE=.*$/gmu)?.join('\n') ?? 'none'}`,
       `Server tail: ${serverOutput.slice(-2_000)}`,
     ].join('\n'),
   );
