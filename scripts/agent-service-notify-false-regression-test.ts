@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
+import { observeTeamsCliTestCatalog } from './fixtures/teams-cli-agent-policy-fixture.js';
 import {
   AgentJobStore,
   type AgentJob,
@@ -151,7 +152,7 @@ const service = new AgentService(
     notifications.push(notification);
   },
   new GitService(workspace),
-  { canMutateScope: () => true, canReadScope: () => true, executionPolicy },
+  { observeCodexModelCatalog: observeTeamsCliTestCatalog, canMutateScope: () => true, canReadScope: () => true, executionPolicy },
 );
 
 try {

@@ -1,1 +1,2 @@
-export function createCopilotExpressHandler(options: Record<string, unknown>): unknown;
+import type { Router } from 'express';
+export function createCopilotExpressHandler(options: Record<string, unknown>): Router;

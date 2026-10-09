@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import { observeTeamsCliTestCatalog, teamsCliTestCatalog, teamsCliTestSelection } from './fixtures/teams-cli-agent-policy-fixture.js';
 import { AgentJobStore, type AgentJob, type AgentJobScope } from '../src/server/agent-job-store.js';
 import { AgentService, type AgentExecutionDispatcher } from '../src/server/agent-service.js';
 import { GitService } from '../src/server/git-service.js';
@@ -11,7 +12,6 @@ import {
   CoreOrchestrationService,
   createServerDerivedCoreScope,
 } from '../src/server/core-orchestration-service.js';
-import { parseCodexModelCatalogPayload } from '../src/server/codex-model-catalog.js';
 import type { CoreCodexReasoningEffort } from '../src/shared/core-orchestration.js';
 import {
   CoreOrchestrationIdempotencyConflictError,
@@ -29,13 +29,7 @@ const measuredProviderFacts = () => [{
   observedAt: '2026-09-04T00:00:00.000Z',
   source: 'runtime-observation' as const,
 }];
-const modelCatalog = parseCodexModelCatalogPayload([{
-  slug: 'gpt-5.6-sol',
-  display_name: 'GPT-5.6-Sol',
-  visibility: 'list',
-  default_reasoning_level: 'low',
-  supported_reasoning_levels: [{ effort: 'low' }, { effort: 'high' }],
-}], '2026-09-05T04:00:00.000Z');
+const modelCatalog = teamsCliTestCatalog;
 
 let submitCalls = 0;
 let executionLaunches = 0;
@@ -84,6 +78,7 @@ const agentService = {
       scope: scoped,
       parentJobId: previous.id,
       threadId: previous.threadId,
+      model: previous.model, reasoningEffort: previous.reasoningEffort, catalogRevision: previous.catalogRevision,
     });
   },
   list: (scope: AgentJobScope, limit?: number) => store.list(scope, limit),
@@ -112,11 +107,11 @@ const agentService = {
 };
 
 const service = new CoreOrchestrationService({
+  observeCodexModelCatalog: observeTeamsCliTestCatalog,
   agentService,
   jobStore: store,
   defaultProvider: 'codex',
   observeProviderFacts: measuredProviderFacts,
-  observeCodexModelCatalog: async () => modelCatalog,
 });
 const scope = createServerDerivedCoreScope({
   tenantId: 'tenant-a',
@@ -144,6 +139,7 @@ assert.equal(submitCalls, 1, 'an active replay is resolved before AgentService a
 assert.equal(executionLaunches, 1, 'an idempotent replay does not launch duplicate execution');
 
 const threaded = await store.create({
+  ...teamsCliTestSelection,
   prompt: 'durable conversation seed',
   provider: 'codex',
   mode: 'read-only',
@@ -177,21 +173,28 @@ const selected = await service.submit(scope, {
   prompt: 'inspect with selected model',
   provider: 'codex',
   mode: 'read-only',
-  model: 'gpt-5.6-sol',
-  reasoningEffort: 'high',
+  model: 'gpt-6-luna',
+  reasoningEffort: 'xhigh',
   catalogRevision: modelCatalog.revision,
 });
-assert.equal(selected.job.model, 'gpt-5.6-sol');
-assert.equal(selected.job.reasoningEffort, 'high');
+assert.equal(selected.job.model, 'gpt-6-luna');
+assert.equal(selected.job.reasoningEffort, 'xhigh');
 assert.equal(selected.job.catalogRevision, modelCatalog.revision);
 assert.deepEqual(await service.listCodexModelCatalog(), modelCatalog);
+const beforeConflictingModel = submitCalls;
+await assert.rejects(service.submit(scope, {
+  idempotencyKey: 'conflicting-supported-model', prompt: 'must not replace the fixed policy',
+  provider: 'codex', mode: 'read-only', model: 'gpt-5.6-sol', reasoningEffort: 'high', catalogRevision: modelCatalog.revision,
+}), /Teams CLI policy.*fixed to gpt-6-luna\/xhigh/u);
+assert.equal(submitCalls, beforeConflictingModel, 'conflicting model does not reach execution or persistence');
+
 await assert.rejects(service.submit(scope, {
   idempotencyKey: 'stale-model',
   prompt: 'reject stale catalog',
   provider: 'codex',
   mode: 'read-only',
-  model: 'gpt-5.6-sol',
-  reasoningEffort: 'high',
+  model: 'gpt-6-luna',
+  reasoningEffort: 'xhigh',
   catalogRevision: '0'.repeat(64),
 }), CoreOrchestrationValidationError);
 await assert.rejects(service.submit(scope, {
@@ -199,7 +202,7 @@ await assert.rejects(service.submit(scope, {
   prompt: 'reject partial selection',
   provider: 'codex',
   mode: 'read-only',
-  model: 'gpt-5.6-sol',
+  model: 'gpt-6-luna',
 }), CoreOrchestrationValidationError);
 
 const otherConversation = createServerDerivedCoreScope({
@@ -283,6 +286,7 @@ assert.equal(await service.provideInput(otherTenant, { jobId: first.job.id, inpu
 
 const inputResumeCalls: Array<{ jobId: string; scope: AgentJobScope; input: unknown }> = [];
 const resumableService = new CoreOrchestrationService({
+  observeCodexModelCatalog: observeTeamsCliTestCatalog,
   agentService,
   jobStore: store,
   inputResume: {
@@ -315,6 +319,7 @@ assert.deepEqual(inputResumeCalls, [{
 
 let unsupportedResumeCalls = 0;
 const unsupportedInputService = new CoreOrchestrationService({
+  observeCodexModelCatalog: observeTeamsCliTestCatalog,
   agentService,
   jobStore: store,
   inputResume: {
@@ -342,6 +347,7 @@ assert.deepEqual(await unsupportedInputService.provideInput(scope, {
 assert.equal(unsupportedResumeCalls, 0, 'an unsupported measured provider is never asked to resume');
 
 const notAwaitingInputService = new CoreOrchestrationService({
+  observeCodexModelCatalog: observeTeamsCliTestCatalog,
   agentService,
   jobStore: store,
   inputResume: {
@@ -363,6 +369,7 @@ assert.equal((await notAwaitingInputService.provideInput(scope, {
 }))?.reason, 'job-not-awaiting-input');
 
 const mismatchedIdentityService = new CoreOrchestrationService({
+  observeCodexModelCatalog: observeTeamsCliTestCatalog,
   agentService,
   jobStore: store,
   inputResume: {
@@ -395,6 +402,7 @@ await assert.rejects(
 
 const observedAt = new Date().toISOString();
 const factsService = new CoreOrchestrationService({
+  observeCodexModelCatalog: observeTeamsCliTestCatalog,
   agentService,
   jobStore: store,
   observeProviderFacts: () => [{
@@ -418,6 +426,7 @@ assert.deepEqual(facts, [{
 assert.equal('configured' in facts[0]!, false, 'configuration is never projected as live availability');
 assert.throws(
   () => new CoreOrchestrationService({
+  observeCodexModelCatalog: observeTeamsCliTestCatalog,
     agentService,
     jobStore: store,
     observeProviderFacts: () => [{
@@ -435,6 +444,7 @@ const restartedStore = new AgentJobStore(path.join(root, 'agent-jobs.json'));
 await restartedStore.initialize();
 let restartedSubmits = 0;
 const restartedService = new CoreOrchestrationService({
+  observeCodexModelCatalog: observeTeamsCliTestCatalog,
   jobStore: restartedStore,
   defaultProvider: 'codex',
   observeProviderFacts: measuredProviderFacts,
@@ -449,6 +459,7 @@ const restartedService = new CoreOrchestrationService({
         scope: input.scope,
         idempotencyKey: input.idempotencyKey,
         requestHash: input.requestHash,
+        model: input.model, reasoningEffort: input.reasoningEffort, catalogRevision: input.catalogRevision,
       });
     },
     get: (id, scoped) => restartedStore.get(id, scoped),
@@ -484,6 +495,7 @@ const integrationAgentService = new AgentService(
   async () => undefined,
   new GitService(root),
   {
+    observeCodexModelCatalog: observeTeamsCliTestCatalog,
     canReadScope: () => true,
     canMutateScope: () => true,
     admissionJournalPath: path.join(root, 'integration-admission.json'),
@@ -492,6 +504,7 @@ const integrationAgentService = new AgentService(
 );
 await integrationAgentService.initialize();
 const integrationService = new CoreOrchestrationService({
+  observeCodexModelCatalog: observeTeamsCliTestCatalog,
   agentService: integrationAgentService,
   jobStore: integrationStore,
   defaultProvider: 'codex',

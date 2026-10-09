@@ -55,6 +55,10 @@ const runtimeTests = [
   'scripts/core-orchestration-confirmation-chat-runtime-test.ts',
 ];
 const tsTests = [
+  'scripts/teams-cli-agent-policy-test.ts',
+  'scripts/execution-presentation-test.ts',
+  'scripts/execution-presentation-store-test.ts',
+  'scripts/execution-presentation-route-test.ts',
   'scripts/core-orchestration-service-test.ts',
   'scripts/core-orchestration-cross-surface-test.ts',
   'scripts/core-message-extension-test.ts',

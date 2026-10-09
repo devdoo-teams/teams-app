@@ -11,6 +11,7 @@ const root = process.cwd();
 const token = 'mp259-runtime-token-0123456789abcdef';
 
 await verifyUnknownRuntimeFailsClosed();
+await verifyMeasuredCopilotCannotBypassPolicy();
 await verifyMeasuredRuntimeComposesCapabilitiesAndInputResume();
 await verifyMeasuredCodexModelSelectionRoundTrip();
 
@@ -20,21 +21,27 @@ async function verifyUnknownRuntimeFailsClosed(): Promise<void> {
   const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mp285-codex-login-status-'));
   try {
     const loginStatusFixture = path.join(fixtureRoot, 'codex-login-status.mjs');
-    await fs.writeFile(loginStatusFixture, `
+    const codexHome = path.join(fixtureRoot, 'codex-home');
+    await fs.mkdir(codexHome, { mode: 0o700 });
+    await fs.writeFile(loginStatusFixture, `#!${process.execPath}
 const args = process.argv.slice(2);
 if (args.length === 2 && args[0] === 'login' && args[1] === 'status') {
   console.log('Logged in using ChatGPT');
   process.exit(0);
 }
+if (args[0] === 'debug' && args[1] === 'models') {
+  console.log(JSON.stringify({ models: [{ slug: 'gpt-6-luna', display_name: 'GPT-6-Luna', visibility: 'list', default_reasoning_level: 'xhigh', supported_reasoning_levels: [{ effort: 'xhigh' }] }] }));
+  process.exit(0);
+}
 console.error('unsupported Codex fixture command');
 process.exit(2);
-`);
+`, { mode: 0o700 });
 
     await withRuntime({
       provider: 'codex',
       extraEnv: {
-        CODEX_BIN: process.execPath,
-        CODEX_SCRIPT: loginStatusFixture,
+        CODEX_BIN: loginStatusFixture,
+        AGENT_CODEX_HOME: codexHome,
       },
     }, async (origin) => {
       const response = await api(origin, '/providers');
@@ -73,8 +80,8 @@ process.exit(2);
           mode: 'read-only',
         },
       });
-      assert.equal(rejectedSelected.status, 503);
-      assert.equal(rejectedSelected.body.error.code, 'CORE_ORCHESTRATION_PROVIDER_UNAVAILABLE');
+      assert.equal(rejectedSelected.status, 400);
+      assert.equal(rejectedSelected.body.error.code, 'CORE_ORCHESTRATION_INVALID_REQUEST');
 
       const after = await api(origin, '/jobs');
       assert.equal(after.status, 200);
@@ -85,7 +92,7 @@ process.exit(2);
   }
 }
 
-async function verifyMeasuredRuntimeComposesCapabilitiesAndInputResume(): Promise<void> {
+async function verifyMeasuredCopilotCannotBypassPolicy(): Promise<void> {
   const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mp259-measured-provider-'));
   try {
     const executable = path.join(fixtureRoot, 'copilot-fixture');
@@ -128,20 +135,45 @@ printf '%s\\n' \
           mode: 'workspace-write',
         },
       });
-      assert.equal(created.status, 201);
-      assert.equal(created.body.job.status, 'awaiting_approval');
-
-      const resumed = await api(origin, `/jobs/${created.body.job.id}/input`, {
-        method: 'POST',
-        body: { input: { answer: 'continue safely' } },
-      });
-      assert.equal(resumed.status, 200);
-      assert.equal(resumed.body.status, 'accepted');
-      assert.equal(resumed.body.job.id, created.body.job.id, 'input resume preserves durable job identity');
+      assert.equal(created.status, 400);
+      assert.equal(created.body.error.code, 'CORE_ORCHESTRATION_INVALID_REQUEST');
+      const jobs = await api(origin, '/jobs');
+      assert.deepEqual(jobs.body.jobs, [], 'measured provider readiness cannot authorize an unverified model policy');
     });
   } finally {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   }
+}
+
+async function verifyMeasuredRuntimeComposesCapabilitiesAndInputResume(): Promise<void> {
+  const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mp259-measured-codex-input-'));
+  try {
+    const executable = path.join(fixtureRoot, 'codex-fixture');
+    const codexHome = path.join(fixtureRoot, 'codex-home');
+    await fs.mkdir(codexHome, { mode: 0o700 });
+    await fs.writeFile(executable, `#!${process.execPath}
+const args = process.argv.slice(2);
+if (args[0] === 'login' && args[1] === 'status') { console.log('Logged in using ChatGPT'); process.exit(0); }
+if (args[0] === 'debug' && args[1] === 'models') {
+  console.log(JSON.stringify({ models: [{ slug: 'gpt-6-luna', display_name: 'GPT-6-Luna', visibility: 'list', default_reasoning_level: 'xhigh', supported_reasoning_levels: [{ effort: 'xhigh' }] }] }));
+  process.exit(0);
+}
+process.exit(2);
+`, { mode: 0o700 });
+    await withRuntime({ provider: 'codex', measuredInputRuntime: true, measuredCodexRuntime: true,
+      extraEnv: { CODEX_BIN: executable, AGENT_CODEX_HOME: codexHome } }, async origin => {
+      const facts = await api(origin, '/providers');
+      assert.deepEqual(facts.body.providers.find((candidate: any) => candidate.provider === 'codex').capabilities,
+        ['approve', 'cancel', 'input', 'retry', 'submit']);
+      const created = await api(origin, '/jobs', { method: 'POST', body: {
+        idempotencyKey: 'mp259-supported-input', prompt: 'Wait for measured input', provider: 'codex', mode: 'workspace-write',
+      } });
+      assert.equal(created.status, 201); assert.equal(created.body.job.status, 'awaiting_approval');
+      const resumed = await api(origin, `/jobs/${created.body.job.id}/input`, { method: 'POST', body: { input: { answer: 'continue safely' } } });
+      assert.equal(resumed.status, 200); assert.equal(resumed.body.status, 'accepted');
+      assert.equal(resumed.body.job.id, created.body.job.id, 'input resume preserves durable job identity');
+    });
+  } finally { await fs.rm(fixtureRoot, { recursive: true, force: true }); }
 }
 
 async function verifyMeasuredCodexModelSelectionRoundTrip(): Promise<void> {
@@ -160,11 +192,11 @@ if (args[0] === 'login' && args[1] === 'status') {
 }
 if (args[0] === 'debug' && args[1] === 'models') {
   console.log(JSON.stringify({ models: [{
-    slug: 'gpt-5.6-sol',
-    display_name: 'GPT-5.6-Sol',
+    slug: 'gpt-6-luna',
+    display_name: 'GPT-6-Luna',
     visibility: 'list',
-    default_reasoning_level: 'low',
-    supported_reasoning_levels: [{ effort: 'low' }, { effort: 'high' }],
+    default_reasoning_level: 'xhigh',
+    supported_reasoning_levels: [{ effort: 'xhigh' }],
   }] }));
   process.exit(0);
 }
@@ -196,30 +228,29 @@ process.exit(2);
       const modelResponse = await teamsPost(baseUrl, teamsActivity('agent choose 저장소를 점검해줘', 'choose'));
       const modelCard = teamsCard(modelResponse.body, 'Codex 모델 선택');
       const modelInput = modelCard.body?.find((item: any) => item.type === 'Input.ChoiceSet' && item.id === 'model');
-      assert.deepEqual(modelInput?.choices, [{ title: 'GPT-5.6-Sol', value: 'gpt-5.6-sol' }]);
+      assert.deepEqual(modelInput?.choices, [{ title: 'GPT-6-Luna', value: 'gpt-6-luna' }]);
       const modelAction = modelCard.actions?.find((action: any) => action.data?.action === 'orchestration.select-model');
       assert.ok(modelAction?.data, 'model card must include the server-bound catalog revision');
 
       const reasoningResponse = await teamsPost(baseUrl, teamsActivity('', 'select-model', {
         ...modelAction.data,
-        model: 'gpt-5.6-sol',
+        model: 'gpt-6-luna',
       }));
       const reasoningCard = teamsCard(reasoningResponse.body, 'Codex 추론 수준 선택');
       const reasoningInput = reasoningCard.body?.find((item: any) => item.type === 'Input.ChoiceSet' && item.id === 'reasoningEffort');
       assert.deepEqual(reasoningInput?.choices, [
-        { title: 'low', value: 'low' },
-        { title: 'high', value: 'high' },
+        { title: 'xhigh', value: 'xhigh' },
       ]);
       const submitAction = reasoningCard.actions?.find((action: any) => action.data?.action === 'orchestration.submit-selected');
       assert.ok(submitAction?.data, 'reasoning card must preserve the same immutable model selection identity');
 
       const submitted = await teamsPost(baseUrl, teamsActivity('', 'submit-selected', {
         ...submitAction.data,
-        reasoningEffort: 'high',
+        reasoningEffort: 'xhigh',
       }));
-      const submittedCard = teamsCard(submitted.body, 'gpt-5.6-sol');
+      const submittedCard = teamsCard(submitted.body, 'gpt-6-luna');
       const jobId = cardFact(submittedCard, '작업 ID');
-      assert.equal(cardFact(submittedCard, '선택 추론 수준'), 'high');
+      assert.equal(cardFact(submittedCard, '선택 추론 수준'), 'xhigh');
 
       const completedCard = await waitForCompletedTeamsJob(baseUrl, jobId);
       assert.equal(cardFact(completedCard, '상태'), 'completed');
@@ -228,10 +259,10 @@ process.exit(2);
       assert.equal(cardFact(completedCard, '계정 잔여량'), 'Codex CLI에서 제공되지 않음');
 
       const argv = JSON.parse(await fs.readFile(argvLog, 'utf8')) as string[];
-      assert.deepEqual(argv.slice(argv.indexOf('--model'), argv.indexOf('--model') + 2), ['--model', 'gpt-5.6-sol']);
+      assert.deepEqual(argv.slice(argv.indexOf('--model'), argv.indexOf('--model') + 2), ['--model', 'gpt-6-luna']);
       assert.deepEqual(argv.slice(argv.indexOf('--config'), argv.indexOf('--config') + 2), [
         '--config',
-        'model_reasoning_effort="high"',
+        'model_reasoning_effort="xhigh"',
       ]);
     });
   } finally {

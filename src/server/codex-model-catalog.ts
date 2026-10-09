@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { TEAMS_CLI_AGENT_POLICY, TeamsCliAgentPolicyError, assertTeamsCliAgentSelection } from '../shared/teams-cli-agent-policy.js';
 
 import type {
   CoreCodexModelCatalog,
@@ -203,6 +204,34 @@ export function assertSafeCodexModelSelection(value: CoreCodexModelSelection): C
     throw new CodexModelCatalogError('Codex model catalog revision is invalid.');
   }
   return Object.freeze({ model: value.model, reasoningEffort: effort, catalogRevision: value.catalogRevision });
+}
+
+/** Keep the raw parser generic; the deployed Teams policy narrows its observed catalog. */
+export function constrainTeamsCodexModelCatalog(value: CoreCodexModelCatalog): CoreCodexModelCatalog {
+  const catalog = assertCoreCodexModelCatalog(value);
+  const model = catalog.models.find(candidate => candidate.id === TEAMS_CLI_AGENT_POLICY.model);
+  if (!model || !model.reasoningEfforts.includes(TEAMS_CLI_AGENT_POLICY.reasoningEffort)) {
+    throw new TeamsCliAgentPolicyError('The installed catalog does not support gpt-6-luna/xhigh; no fallback model or effort will run.');
+  }
+  return parseCodexModelCatalogPayload([{
+    slug: model.id, display_name: model.label, visibility: 'list',
+    default_reasoning_level: TEAMS_CLI_AGENT_POLICY.reasoningEffort,
+    supported_reasoning_levels: [{ effort: TEAMS_CLI_AGENT_POLICY.reasoningEffort }],
+  }], catalog.observedAt);
+}
+
+export function selectTeamsCodexModel(
+  catalog: CoreCodexModelCatalog | undefined,
+  selection?: CoreCodexModelSelection,
+): CoreCodexModelSelection {
+  assertTeamsCliAgentSelection(selection);
+  if (!catalog) throw new TeamsCliAgentPolicyError('The installed model catalog is unavailable; gpt-6-luna/xhigh cannot be verified.');
+  const policyCatalog = constrainTeamsCodexModelCatalog(catalog);
+  return assertCoreCodexModelSelection(policyCatalog, selection ?? {
+    model: TEAMS_CLI_AGENT_POLICY.model,
+    reasoningEffort: TEAMS_CLI_AGENT_POLICY.reasoningEffort,
+    catalogRevision: policyCatalog.revision,
+  });
 }
 
 export async function loadCodexModelCatalog(options: Readonly<{

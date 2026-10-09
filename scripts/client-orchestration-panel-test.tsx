@@ -1,5 +1,6 @@
 import { strict as assert } from 'node:assert';
 import React from 'react';
+import { teamsCliTestCatalog } from './fixtures/teams-cli-agent-policy-fixture.js';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import {
@@ -262,9 +263,10 @@ assert.equal(
   '현재 사용할 수 없는 제공자입니다.',
   'an unavailable provider cannot be submitted as live',
 );
-assert.equal(validateOrchestrationSubmission('Run it', 'codex', [provider]), '', 'valid input is accepted');
-assert.equal(validateOrchestrationSubmission('X'.repeat(2_000), 'codex', [provider]), '', 'the server prompt boundary is accepted');
-assert.equal(validateOrchestrationSubmission(`  ${'X'.repeat(2_000)}  `, 'codex', [provider]), '', 'prompt length follows the trimmed submission contract');
+assert.notEqual(validateOrchestrationSubmission('Run it', 'codex', [provider]), '', 'missing policy support cannot fall back to a default model');
+assert.equal(validateOrchestrationSubmission('Run it', 'codex', [provider], 'gpt-6-luna', 'xhigh', teamsCliTestCatalog), '', 'policy-bound valid input is accepted');
+assert.equal(validateOrchestrationSubmission('X'.repeat(2_000), 'codex', [provider], 'gpt-6-luna', 'xhigh', teamsCliTestCatalog), '', 'the server prompt boundary is accepted');
+assert.equal(validateOrchestrationSubmission(`  ${'X'.repeat(2_000)}  `, 'codex', [provider], 'gpt-6-luna', 'xhigh', teamsCliTestCatalog), '', 'prompt length follows the trimmed submission contract');
 assert.equal(
   validateOrchestrationSubmission('X'.repeat(2_001), 'codex', [provider]),
   '작업 내용은 2,000자 이내로 입력하세요.',
@@ -279,7 +281,7 @@ assert.equal(
     'minimal',
     modelCatalog,
   ),
-  '선택한 모델이 해당 추론 수준을 지원하지 않습니다.',
+  'Teams 에이전트는 gpt-6-luna · xhigh로 고정되어 있습니다.',
 );
 assert.equal(
   orchestrationMutationNotice({
@@ -335,9 +337,9 @@ const baseProps = {
   prompt: '',
   providerId: 'codex',
   mode: 'read-only' as const,
-  modelCatalog,
-  modelId: 'gpt-5.6-sol',
-  reasoningEffort: 'high' as const,
+  modelCatalog: teamsCliTestCatalog,
+  modelId: 'gpt-6-luna',
+  reasoningEffort: 'xhigh' as const,
   inputValue: '',
   busyAction: '',
   notice: '',

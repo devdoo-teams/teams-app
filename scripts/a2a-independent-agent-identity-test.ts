@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import { observeTeamsCliTestCatalog } from './fixtures/teams-cli-agent-policy-fixture.js';
 import type { A2AScope } from '../src/server/a2a-contract.js';
 import { AgentAdmissionController } from '../src/server/agent-admission-controller.js';
 import { AgentJobStore } from '../src/server/agent-job-store.js';
@@ -45,6 +46,7 @@ async function testProductionRegistryRoutesIndependentProviderRunners(): Promise
     async () => undefined,
     new GitService(workspace),
     {
+      observeCodexModelCatalog: observeTeamsCliTestCatalog,
       canReadScope: () => true,
       canMutateScope: () => true,
       executionPolicy: new AgentExecutionPolicy(workspace, {
@@ -93,31 +95,35 @@ async function testProductionRegistryRoutesIndependentProviderRunners(): Promise
     });
 
     assert.deepEqual(codexRunner.prompts, ['Review the bounded change.']);
-    assert.deepEqual(ghcpRunner.prompts, ['Run the bounded tests.']);
+    assert.deepEqual(ghcpRunner.prompts, [], 'unverified Copilot policy never invokes the alternate provider');
     assert.deepEqual(result.childResults.map((child) => ({
       childKey: child.childKey,
       agentId: child.agentId,
       providerId: child.providerId,
       result: child.result,
+      status: child.status,
     })).sort(byChildKey), [
       {
         childKey: 'review',
         agentId: 'codex-reviewer',
         providerId: 'codex-cli',
         result: 'codex result',
+        status: 'completed',
       },
       {
         childKey: 'tests',
         agentId: 'ghcp-tester',
         providerId: 'official-copilot-cli',
-        result: 'ghcp result',
+        result: undefined,
+        status: 'failed',
       },
     ]);
+    assert.match(result.childResults.find(child => child.childKey === 'tests')!.error ?? '', /Teams CLI policy.*unverified/u);
     const persistedJobs = JSON.parse(await fs.readFile(jobsPath, 'utf8')) as Array<{ provider?: string }>;
     assert.deepEqual(
       persistedJobs.map((job) => job.provider).sort(),
-      ['codex', 'copilot'],
-      'provider identity is persisted with each child job for restart-safe routing',
+      ['codex'],
+      'the unavailable provider cannot persist a job or fall back to the Codex agent',
     );
   } finally {
     await service.close();

@@ -29,7 +29,7 @@ async function assertClientRuntime(outputDir) {
  * A failed build therefore cannot remove the client currently served by the
  * public Teams process.
  */
-export async function buildClientAtomically({ outputDir, buildImplementation }) {
+export async function buildClientAtomically({ outputDir, buildImplementation, validateRuntime = assertClientRuntime }) {
   if (!outputDir || typeof buildImplementation !== 'function') {
     throw new TypeError('outputDir and buildImplementation are required');
   }
@@ -43,14 +43,14 @@ export async function buildClientAtomically({ outputDir, buildImplementation }) 
 
   try {
     await buildImplementation(temporaryDir);
-    await assertClientRuntime(temporaryDir);
+    await validateRuntime(temporaryDir);
     if (await exists(outputDir)) {
       await fs.rename(outputDir, backupDir);
       movedExisting = true;
     }
     try {
       await fs.rename(temporaryDir, outputDir);
-      await assertClientRuntime(outputDir);
+      await validateRuntime(outputDir);
       committed = true;
     } catch (error) {
       if (await exists(outputDir)) {

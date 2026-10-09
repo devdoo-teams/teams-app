@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import { observeTeamsCliTestCatalog } from './fixtures/teams-cli-agent-policy-fixture.js';
 import {
   AgentAdmissionController,
   AgentCapacityError,
@@ -239,6 +240,7 @@ try {
     async () => undefined,
     new GitService(workspace),
     {
+      observeCodexModelCatalog: observeTeamsCliTestCatalog,
       canMutateScope: () => true,
       canReadScope: () => true,
       admissionController: serviceController,
@@ -281,6 +283,7 @@ try {
     async () => undefined,
     new GitService(workspace),
     {
+      observeCodexModelCatalog: observeTeamsCliTestCatalog,
       canMutateScope: () => true,
       canReadScope: () => true,
       admissionController: failingController,
@@ -304,6 +307,7 @@ try {
     async () => undefined,
     new GitService(workspace),
     {
+      observeCodexModelCatalog: observeTeamsCliTestCatalog,
       canMutateScope: () => true,
       canReadScope: () => true,
       admissionController: terminalController,
@@ -335,6 +339,7 @@ try {
     async () => undefined,
     new GitService(workspace),
     {
+      observeCodexModelCatalog: observeTeamsCliTestCatalog,
       canMutateScope: () => true,
       canReadScope: () => true,
       admissionController: restartControllerA,
@@ -355,6 +360,7 @@ try {
     async () => undefined,
     new GitService(workspace),
     {
+      observeCodexModelCatalog: observeTeamsCliTestCatalog,
       canMutateScope: () => true,
       canReadScope: () => true,
       admissionController: restartControllerB,

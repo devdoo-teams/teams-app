@@ -11,6 +11,7 @@ import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
+import { assertTeamsCliAgentEnvironment, TEAMS_CLI_AGENT_MODEL_ARGS } from '../shared/teams-cli-agent-policy.js';
 
 import {
   AgentExecutionUnavailableError,
@@ -72,8 +73,6 @@ export const CODEX_EXTERNAL_TOOL_SURFACE_POLICY = Object.freeze({
 
 const DEFAULT_PERMISSION_VALUE = `default_permissions="${PROFILE_NAME}"`;
 const PERMISSION_PROFILE_VALUE = `permissions.${PROFILE_NAME}={description="Teams Core read only",filesystem={":minimal"="read",":workspace_roots"={"."="read"}},network={enabled=false}}`;
-const CODEX_MODEL_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
-const CODEX_REASONING_CONFIG_PATTERN = /^model_reasoning_effort="(?:minimal|low|medium|high|xhigh|max|ultra)"$/u;
 
 export const CODEX_READ_ONLY_PERMISSION_ARGS = Object.freeze([
   '--strict-config',
@@ -308,6 +307,7 @@ function validateLaunch(input: {
     throw rejected('Codex launch arguments are invalid.');
   }
   buildTrustedExecArgs(input.args, input.workspace);
+  assertTeamsCliAgentEnvironment(input.options.env);
   if (!samePath(input.options.cwd, input.workspace)) {
     throw rejected('spawn cwd does not match the projected workspace.');
   }
@@ -329,17 +329,10 @@ function buildTrustedExecArgs(args: readonly string[], workspace: string): strin
     throw rejected('Codex launch arguments must exactly match the provider-owned read-only grammar.');
   }
   const suffix = commandArgs.slice(base.length);
-  let selectionLength = 0;
-  if (suffix[0] === '--model') {
-    if (suffix.length < 4
-      || !CODEX_MODEL_ID_PATTERN.test(suffix[1] ?? '')
-      || suffix[2] !== '--config'
-      || !CODEX_REASONING_CONFIG_PATTERN.test(suffix[3] ?? '')) {
-      throw rejected('Codex model selection arguments are invalid.');
-    }
-    selectionLength = 4;
+  if (!arraysEqual(suffix.slice(0, TEAMS_CLI_AGENT_MODEL_ARGS.length), TEAMS_CLI_AGENT_MODEL_ARGS)) {
+    throw rejected('Teams CLI policy requires the fixed gpt-6-luna/xhigh/provider arguments.');
   }
-  const selectionAndResumeArgs = suffix.slice(selectionLength);
+  const selectionAndResumeArgs = suffix.slice(TEAMS_CLI_AGENT_MODEL_ARGS.length);
   const isFresh = selectionAndResumeArgs.length === 0;
   const resumeArgs = selectionAndResumeArgs;
   const isResume = arraysEqual(commandArgs.slice(0, base.length), base)
@@ -467,6 +460,7 @@ async function runNativePermissionPreflight(input: {
     const authenticated = await execFileClosedStdin(input.codexExecutable, [
       'exec', '--json', ...CODEX_READ_ONLY_PERMISSION_ARGS,
       '--cd', input.workspace,
+      ...TEAMS_CLI_AGENT_MODEL_ARGS,
       '--', 'Reply with exactly TEAMS_CODEX_AUTH_PREFLIGHT_OK. Do not call any tool.',
     ], {
       env: environment,

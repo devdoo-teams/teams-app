@@ -21,7 +21,10 @@ import type {
   CoreAgentTokenUsage,
   CoreCodexModelSelection,
   CoreCodexReasoningEffort,
+  CoreCodexModelCatalog,
 } from '../shared/core-orchestration.js';
+import { loadCodexModelCatalog, selectTeamsCodexModel, assertSafeCodexModelSelection } from './codex-model-catalog.js';
+import { assertTeamsCliAgentProvider, assertTeamsCliAgentSelection, TeamsCliAgentPolicyError } from '../shared/teams-cli-agent-policy.js';
 
 export type AgentNotificationKind = 'progress' | 'result' | 'error' | 'cancelled';
 export type AgentNotificationPhase =
@@ -164,6 +167,7 @@ export class AgentService {
       providerRunners?: Partial<Record<CliAgentProvider, CodexRunner>>;
       executionDispatcher?: AgentExecutionDispatcher;
       durableObservationIntervalMs?: number;
+      observeCodexModelCatalog?: () => CoreCodexModelCatalog | undefined | Promise<CoreCodexModelCatalog | undefined>;
     } = {},
   ) {
     this.agentLabel = options.agentLabel?.trim() || 'Codex';
@@ -266,6 +270,7 @@ export class AgentService {
     } else {
       this.assertReadAllowed(input.scope);
     }
+    const selection = await this.resolveModelSelection(provider, input);
     const admission = await this.admissionController.tryAcquire(input.scope);
     if (!admission.ok) throw new AgentCapacityError(admission);
 
@@ -277,7 +282,7 @@ export class AgentService {
         if (!this.options.executionDispatcher) {
           executionWorkspace = await this.executionPolicy.prepareWorkspace(input.mode, input.scope, prompt);
         }
-        job = await this.store.create({ ...input, prompt, provider,
+        job = await this.store.create({ ...input, ...selection, prompt, provider,
           executionEnvironment: this.options.executionDispatcher ? 'external-worker'
             : process.platform === 'darwin' ? 'local-macos'
             : process.platform === 'win32' ? 'local-windows'
@@ -324,6 +329,8 @@ export class AgentService {
     const ephemeral = provider === 'codex' && previous.mode === 'read-only';
     if (!previous.threadId && !ephemeral) return undefined;
     if (previous.mode === 'workspace-write') this.assertMutationAllowed(scope);
+    else this.assertReadAllowed(scope);
+    assertHistoricalCliPolicy(previous);
 
     return this.submit({
       prompt: normalizedPrompt,
@@ -393,6 +400,8 @@ export class AgentService {
       if (job.status !== 'awaiting_approval') {
         throw new AgentJobConflictError('approve', snapshotAgentJob(job));
       }
+      assertHistoricalCliPolicy(job);
+      await this.resolveModelSelection(this.providerForJob(job), job);
 
       const refreshed = await this.store.update(id, scope, { status: 'queued', error: undefined });
       if (!refreshed) {
@@ -557,6 +566,8 @@ export class AgentService {
       throw new AgentJobConflictError('retry', snapshotAgentJob(previous));
     }
     if (previous.mode === 'workspace-write') this.assertMutationAllowed(scope);
+    else this.assertReadAllowed(scope);
+    assertHistoricalCliPolicy(previous);
 
     return this.submit({
       prompt: previous.prompt,
@@ -819,6 +830,24 @@ export class AgentService {
     return job.provider;
   }
 
+  private async resolveModelSelection(provider: CliAgentProvider, input: Readonly<{
+    model?: string; reasoningEffort?: CoreCodexReasoningEffort; catalogRevision?: string;
+  }>): Promise<CoreCodexModelSelection> {
+    assertTeamsCliAgentProvider(provider);
+    assertTeamsCliAgentSelection(input);
+    const present = [input.model, input.reasoningEffort, input.catalogRevision].filter(value => value !== undefined).length;
+    if (present !== 0 && present !== 3) throw new TeamsCliAgentPolicyError('Incomplete model selection is refused.');
+    const selection = present === 3 ? assertSafeCodexModelSelection(input as CoreCodexModelSelection) : undefined;
+    let catalog: CoreCodexModelCatalog | undefined;
+    if (this.options.observeCodexModelCatalog) catalog = await this.options.observeCodexModelCatalog();
+    else {
+      const executable = process.env.CODEX_BIN?.trim(), codexHome = process.env.AGENT_CODEX_HOME?.trim();
+      if (!executable || !codexHome) throw new TeamsCliAgentPolicyError('The installed model catalog is unavailable; configure the explicit worker catalog observer.');
+      catalog = await loadCodexModelCatalog({ executable, codexHome });
+    }
+    return selectTeamsCodexModel(catalog, selection);
+  }
+
   private runnerFor(provider: CliAgentProvider): CodexRunner {
     const runner = this.providerRunners.get(provider);
     if (!runner) throw new AgentProviderUnavailableError(provider);
@@ -876,6 +905,7 @@ export class AgentService {
       runningJob = await this.withJobMutationLock(job.id, scope, async () => {
         const current = this.store.get(job.id, scope);
         if (!current || current.status !== 'queued') return undefined;
+        assertHistoricalCliPolicy(current);
 
         const started = await this.store.update(job.id, scope, {
           status: 'running',
@@ -1366,6 +1396,13 @@ function jobSelection(job: AgentJob): CoreCodexModelSelection | undefined {
         catalogRevision: job.catalogRevision,
       }
     : undefined;
+}
+
+function assertHistoricalCliPolicy(job: AgentJob): void {
+  assertTeamsCliAgentProvider(job.provider);
+  const selection = jobSelection(job);
+  if (!selection) throw new TeamsCliAgentPolicyError('Historical CLI model selection is unverified; start a new policy-bound job.');
+  assertTeamsCliAgentSelection(selection);
 }
 
 function isTerminalStatus(status: AgentJob['status']): boolean {

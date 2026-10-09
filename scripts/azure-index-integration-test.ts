@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { observeTeamsCliTestCatalog } from './fixtures/teams-cli-agent-policy-fixture.js';
 import {
   AgentService,
   type AgentExecutionDispatcher,
@@ -71,6 +72,7 @@ async function verifyMeasuredAzureCoreSubmitGate(): Promise<void> {
     async () => undefined,
     new GitService(temporaryRoot),
     {
+      observeCodexModelCatalog: observeTeamsCliTestCatalog,
       executionPolicy: executionPolicy as never,
       executionDispatcher: dispatcher,
       canReadScope: () => true,
@@ -82,6 +84,7 @@ async function verifyMeasuredAzureCoreSubmitGate(): Promise<void> {
   assert.equal(ledger.jobs.length, 0, 'first-submit test must start with an empty durable AgentJob ledger');
   assert.equal(state.records.size, 0, 'first-submit test must start with no durable dispatch records');
   const options: CoreOrchestrationServiceOptions = {
+    observeCodexModelCatalog: observeTeamsCliTestCatalog,
     agentService,
     jobStore: store,
     defaultProvider: 'codex',
@@ -350,6 +353,7 @@ async function verifyQueueOnlyAgentService(): Promise<void> {
     async () => undefined,
     new GitService(temporaryRoot),
     {
+      observeCodexModelCatalog: observeTeamsCliTestCatalog,
       executionPolicy: executionPolicy as never,
       executionDispatcher: dispatcher,
       canReadScope: () => true,

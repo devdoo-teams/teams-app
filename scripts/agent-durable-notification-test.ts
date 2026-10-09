@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { observeTeamsCliTestCatalog } from './fixtures/teams-cli-agent-policy-fixture.js';
 import { AgentAdmissionController } from '../src/server/agent-admission-controller.js';
 import { AgentJobStore, type AgentJob, type AgentJobScope } from '../src/server/agent-job-store.js';
 import { AgentService, type AgentExecutionDispatcher, type AgentExecutionObservation, type AgentNotification } from '../src/server/agent-service.js';
@@ -53,6 +54,7 @@ async function fixture() {
       notifications.push(notification);
       await afterDelivery?.();
     }, new GitService(root), {
+      observeCodexModelCatalog: observeTeamsCliTestCatalog,
       canReadScope: () => true, canMutateScope: () => true, executionDispatcher: dispatcher,
       durableObservationIntervalMs: interval,
       admissionController: controller ?? new AgentAdmissionController({ globalLimit: 4, perTenantLimit: 4, perRequesterLimit: 4 }, { journalPath: path.join(root, 'admission.json') }),
@@ -298,6 +300,7 @@ const cases: Array<[string, () => Promise<void>]> = [
       assert.equal(restartedController.snapshot().global, 1, 'restart cannot automatically release unresolved capacity');
       assert.match(restarted.store.get(job.id,scope)?.error ?? '', /AGENT_RECONCILIATION_REQUIRED/);
       const denied = new AgentService(restarted.store, undefined, f.root, async () => undefined, new GitService(f.root), {
+      observeCodexModelCatalog: observeTeamsCliTestCatalog,
         canReadScope: () => true, canMutateScope: () => false, admissionController: restartedController,
       });
       await assert.rejects(denied.reconcileTerminal(job.id,scope), /허용|권한|operator|authorized/i);

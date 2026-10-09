@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import { observeTeamsCliTestCatalog } from './fixtures/teams-cli-agent-policy-fixture.js';
 import { AgentJobStore } from '../src/server/agent-job-store.js';
 import { AgentService, type AgentExecutionDispatcher } from '../src/server/agent-service.js';
 import { CoreOrchestrationService, createServerDerivedCoreScope } from '../src/server/core-orchestration-service.js';
@@ -25,6 +26,7 @@ const agentService = new AgentService(
   async () => undefined,
   new GitService(root),
   {
+      observeCodexModelCatalog: observeTeamsCliTestCatalog,
     canReadScope: () => true,
     canMutateScope: () => true,
     admissionJournalPath: path.join(root, 'admission.json'),
@@ -35,6 +37,7 @@ await agentService.initialize();
 
 const observedAt = '2026-09-04T00:00:00.000Z';
 const service = new CoreOrchestrationService({
+  observeCodexModelCatalog: observeTeamsCliTestCatalog,
   agentService,
   jobStore: store,
   observeProviderFacts: () => [{

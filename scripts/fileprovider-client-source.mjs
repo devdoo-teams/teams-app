@@ -1,5 +1,7 @@
 const OPTIONAL_CLIENT_SOURCE_FILES = new Set([
   'src/client/CopilotWorkspaceAssistant.tsx',
+  'src/client/CopilotJobView.tsx',
+  'src/client/copilot-job-view.css',
 ]);
 
 export function isOptionalClientSource(relativeFile) {

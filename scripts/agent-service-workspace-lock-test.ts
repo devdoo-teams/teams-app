@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import { observeTeamsCliTestCatalog } from './fixtures/teams-cli-agent-policy-fixture.js';
 import { AgentJobStore, type AgentJobScope } from '../src/server/agent-job-store.js';
 import { AgentAdmissionController } from '../src/server/agent-admission-controller.js';
 import { AgentService } from '../src/server/agent-service.js';
@@ -81,6 +82,7 @@ const service = new AgentService(
   async () => undefined,
   git as never,
   {
+    observeCodexModelCatalog: observeTeamsCliTestCatalog,
     canMutateScope: () => true,
     // This fixture intentionally queues two jobs from one requester so it can
     // prove workspace serialization. Keep production's requester admission

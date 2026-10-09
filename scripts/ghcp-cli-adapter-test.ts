@@ -458,7 +458,7 @@ async function testUnexpectedNonZeroExitIsExecutionFailed(): Promise<void> {
   assert.equal(result.steps[1]?.exitStatus, 2);
 }
 
-async function testConfiguredCopilotModelReachesChildProcess(): Promise<void> {
+async function testConfiguredCopilotModelCannotBypassTeamsPolicy(): Promise<void> {
   const sessionId = '019fd700-51cd-7862-a4ef-74ccae0f2b4e';
   const fakeCli = [
     `console.log(JSON.stringify({ type: 'session.start', data: { sessionId: ${JSON.stringify(sessionId)} } }));`,
@@ -466,13 +466,15 @@ async function testConfiguredCopilotModelReachesChildProcess(): Promise<void> {
     "console.log(JSON.stringify({ type: 'assistant.message', data: { content: 'model=' + (process.env.COPILOT_MODEL || '<missing>') } }));",
     "console.log(JSON.stringify({ type: 'assistant.turn_end', data: {} }));",
   ].join('');
+  let spawns = 0;
   const runner = new CliAgentRunner({
+    spawn: () => { spawns++; throw new Error('Copilot policy must fail before spawn'); },
     commands: { copilot: { executable: process.execPath, prefixArgs: ['-e', fakeCli, '--'] } },
     resolveGhcpExecutable: async (command) => ({ state: 'resolved', command }),
     processControllerOptions: { graceMs: 20, cleanupWaitMs: 200 },
   });
 
-  const result = await runner.run({
+  await assert.rejects(runner.run({
     provider: 'copilot',
     jobId: 'copilot-model-forwarding',
     prompt: 'bounded model forwarding check',
@@ -480,17 +482,13 @@ async function testConfiguredCopilotModelReachesChildProcess(): Promise<void> {
     mode: 'workspace-write',
     timeoutMs: 1_000,
     environmentOverrides: { COPILOT_MODEL: 'gpt-5.4' },
-  });
+  }), /Teams CLI policy.*unverified/u);
 
-  assert.equal(
-    result.finalResult,
-    'model=gpt-5.4',
-    'official COPILOT_MODEL configuration must reach the Copilot child process',
-  );
+  assert.equal(spawns, 0, 'COPILOT_MODEL cannot override the fixed Teams model policy');
   runner.close();
 }
 
-async function testConfiguredCopilotHostsReachChildProcess(): Promise<void> {
+async function testConfiguredCopilotHostsCannotBypassTeamsPolicy(): Promise<void> {
   const sessionId = '019fd700-51cd-7862-a4ef-74ccae0f2b4e';
   const fakeCli = [
     `console.log(JSON.stringify({ type: 'session.start', data: { sessionId: ${JSON.stringify(sessionId)} } }));`,
@@ -498,13 +496,15 @@ async function testConfiguredCopilotHostsReachChildProcess(): Promise<void> {
     "console.log(JSON.stringify({ type: 'assistant.message', data: { content: 'copilot=' + (process.env.COPILOT_GH_HOST || '<missing>') + ';gh=' + (process.env.GH_HOST || '<missing>') } }));",
     "console.log(JSON.stringify({ type: 'assistant.turn_end', data: {} }));",
   ].join('');
+  let spawns = 0;
   const runner = new CliAgentRunner({
+    spawn: () => { spawns++; throw new Error('Copilot policy must fail before spawn'); },
     commands: { copilot: { executable: process.execPath, prefixArgs: ['-e', fakeCli, '--'] } },
     resolveGhcpExecutable: async (command) => ({ state: 'resolved', command }),
     processControllerOptions: { graceMs: 20, cleanupWaitMs: 200 },
   });
 
-  const result = await runner.run({
+  await assert.rejects(runner.run({
     provider: 'copilot',
     jobId: 'copilot-host-forwarding',
     prompt: 'bounded host forwarding check',
@@ -515,13 +515,9 @@ async function testConfiguredCopilotHostsReachChildProcess(): Promise<void> {
       COPILOT_GH_HOST: 'https://copilot.example.ghe.com',
       GH_HOST: 'https://shared.example.ghe.com',
     },
-  });
+  }), /Teams CLI policy.*unverified/u);
 
-  assert.equal(
-    result.finalResult,
-    'copilot=https://copilot.example.ghe.com;gh=https://shared.example.ghe.com',
-    'official Copilot host-selection environment variables must reach the child process',
-  );
+  assert.equal(spawns, 0, 'host configuration cannot authorize unverified model execution');
   runner.close();
 }
 
@@ -541,7 +537,7 @@ await testExitZeroLicensePolicyOutputIsPolicyBlocked();
 await testExitZeroArbitraryTextCannotProveAuthentication();
 await testTimeoutStaysUnknown();
 await testUnexpectedNonZeroExitIsExecutionFailed();
-await testConfiguredCopilotModelReachesChildProcess();
-await testConfiguredCopilotHostsReachChildProcess();
+await testConfiguredCopilotModelCannotBypassTeamsPolicy();
+await testConfiguredCopilotHostsCannotBypassTeamsPolicy();
 
 console.log('GHCP CLI adapter tests passed');

@@ -3,9 +3,10 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import { observeTeamsCliTestCatalog } from './fixtures/teams-cli-agent-policy-fixture.js';
 import { AgentJobStore, type AgentJob, type AgentJobScope } from '../src/server/agent-job-store.js';
 import { CoreOrchestrationService, createServerDerivedCoreScope } from '../src/server/core-orchestration-service.js';
-import type { CoreProviderFact } from '../src/shared/core-orchestration.js';
+import type { CoreCodexModelSelection, CoreProviderFact } from '../src/shared/core-orchestration.js';
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-core-provider-gate-'));
 const store = new AgentJobStore(path.join(root, 'agent-jobs.json'));
@@ -41,6 +42,7 @@ const fakeAgentService = {
     scope: AgentJobScope;
     idempotencyKey?: string;
     requestHash?: string;
+    model?: string; reasoningEffort?: CoreCodexModelSelection['reasoningEffort']; catalogRevision?: string;
   }): Promise<AgentJob> {
     submitCalls += 1;
     return store.create({
@@ -50,6 +52,7 @@ const fakeAgentService = {
       scope: input.scope,
       idempotencyKey: input.idempotencyKey,
       requestHash: input.requestHash,
+      model: input.model, reasoningEffort: input.reasoningEffort, catalogRevision: input.catalogRevision,
     });
   },
   get(id: string, scoped: AgentJobScope) { return store.get(id, scoped); },
@@ -69,10 +72,12 @@ const fakeAgentService = {
       mode: previous.mode,
       scope: scoped,
       parentJobId: previous.id,
+      model: previous.model, reasoningEffort: previous.reasoningEffort, catalogRevision: previous.catalogRevision,
     });
   },
 };
 const service = new CoreOrchestrationService({
+  observeCodexModelCatalog: observeTeamsCliTestCatalog,
   agentService: fakeAgentService,
   jobStore: store,
   defaultProvider: 'codex',
@@ -148,7 +153,7 @@ try {
       provider: 'copilot',
       mode: 'read-only',
     }),
-    providerError('CORE_ORCHESTRATION_PROVIDER_UNAVAILABLE'),
+    /Teams CLI policy.*gpt-6-luna/u,
   );
   assert.equal(submitCalls, 1, 'only the measured provider submission reached the agent service');
 
@@ -163,6 +168,7 @@ try {
   }, 'provider readiness dimensions remain observable after service validation');
 
   const invalidReadinessService = new CoreOrchestrationService({
+  observeCodexModelCatalog: observeTeamsCliTestCatalog,
     agentService: fakeAgentService,
     jobStore: store,
     observeProviderFacts: () => [{

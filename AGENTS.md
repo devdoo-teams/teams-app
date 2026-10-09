@@ -170,3 +170,8 @@ Matt Pocock 스킬의 기본 triage 역할을 같은 이름의 Jira 라벨에 �
 ### Domain docs
 
 이 저장소는 단일 컨텍스트다. 기능 용어·ADR·릴리스 도메인 문서를 읽거나 갱신할 때 [`docs/agents/domain.md`](docs/agents/domain.md)를 따른다.
+
+
+## Teams CLI agent fixed-model policy (2026-10-09)
+
+For CLI agents launched by this Teams application only, use `gpt-6-luna` with `xhigh`. Refuse unsupported catalogs or conflicting overrides; never substitute another model. Preserve historical selections and report actual observations separately. Do not change the development agent, another project, or the user's global Codex configuration. See [the scope and verified launcher contract](docs/teams-cli-agent-policy.md).

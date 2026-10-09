@@ -26,6 +26,7 @@ import { isAgentTokenUsage, parseCodexTokenUsage, type AgentTokenUsage } from '.
 import { assertSafeCodexModelSelection } from './codex-model-catalog.js';
 import { maskAgentToolOutput } from './agent-tool-execution.js';
 import type { CoreCodexModelSelection } from '../shared/core-orchestration.js';
+import { assertTeamsCliAgentEnvironment, assertTeamsCliAgentPrefix, assertTeamsCliAgentSelection, TEAMS_CLI_AGENT_MODEL_ARGS } from '../shared/teams-cli-agent-policy.js';
 
 export interface CodexRunEvent {
   type?: string;
@@ -131,6 +132,8 @@ export function buildCodexExecArguments(options: Readonly<{
     throw new Error('Ephemeral Codex read-only sessions cannot be resumed.');
   }
   const selection = options.selection ? assertSafeCodexModelSelection(options.selection) : undefined;
+  assertTeamsCliAgentSelection(selection);
+  assertTeamsCliAgentPrefix(options.prefixArgs);
   const args = [
     ...options.prefixArgs,
     'exec',
@@ -140,12 +143,7 @@ export function buildCodexExecArguments(options: Readonly<{
       : ['--sandbox', options.mode]),
     '--cd',
     options.workspace,
-    ...(selection ? [
-      '--model',
-      selection.model,
-      '--config',
-      `model_reasoning_effort="${selection.reasoningEffort}"`,
-    ] : []),
+    ...TEAMS_CLI_AGENT_MODEL_ARGS,
   ];
   if (options.threadId) args.push('resume', options.threadId, '--', options.enrichedPrompt);
   else args.push('--', options.enrichedPrompt);
@@ -276,6 +274,9 @@ export class CodexRunner {
     onEvent?: (event: CodexRunEvent) => Promise<void> | void;
     selection?: CoreCodexModelSelection;
   }): Promise<CodexRunResult> {
+    assertTeamsCliAgentEnvironment(process.env);
+    assertTeamsCliAgentEnvironment(options.environmentOverrides);
+    assertTeamsCliAgentSelection(options.selection);
     if (options.signal?.aborted) throw new Error('Codex 작업이 취소되었습니다.');
     if (options.threadId && !CODEX_THREAD_ID_PATTERN.test(options.threadId)) {
       throw new Error('Invalid Codex thread ID.');

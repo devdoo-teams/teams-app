@@ -1,0 +1,19 @@
+.execution-presentation-card { overflow-wrap: anywhere; }
+.execution-presentation-card h3, .execution-presentation-card h4 { margin: 0 0 8px; }
+.execution-presentation-card > section, .execution-presentation-card > details { margin-top: 16px; }
+.execution-presentation-card summary { cursor: pointer; font-weight: 600; min-height: 32px; }
+.execution-presentation-text { font-family: inherit; line-height: 1.5; margin: 8px 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.execution-presentation-facts { display: grid; gap: 8px; margin: 12px 0; }
+.execution-presentation-facts > div { display: grid; gap: 4px; grid-template-columns: minmax(100px, 150px) minmax(0, 1fr); }
+.execution-presentation-facts dt { font-weight: 600; }
+.execution-presentation-facts dd { margin: 0; }
+.execution-presentation-tools ul { list-style: none; padding: 0; }
+.execution-presentation-tools li { border-top: 1px solid #d1d1d1; padding: 8px 0; }
+.execution-presentation-observed { color: #616161; font-size: .875rem; }
+.execution-presentation-error { color: #a4262c; }
+@media (max-width: 480px) { .execution-presentation-facts > div { grid-template-columns: 1fr; } }
+@media (prefers-color-scheme: dark) {
+  .execution-presentation-observed { color: #c8c8c8; }
+  .execution-presentation-tools li { border-color: #616161; }
+  .execution-presentation-error { color: #f3a8ac; }
+}

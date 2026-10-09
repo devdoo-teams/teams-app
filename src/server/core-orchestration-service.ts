@@ -31,10 +31,12 @@ import {
   CoreOrchestrationValidationError,
 } from '../shared/core-orchestration.js';
 import {
-  assertCoreCodexModelSelection,
   assertSafeCodexModelSelection,
   CodexModelCatalogError,
+  constrainTeamsCodexModelCatalog,
+  selectTeamsCodexModel,
 } from './codex-model-catalog.js';
+import { assertTeamsCliAgentProvider, assertTeamsCliAgentSelection, TeamsCliAgentPolicyError } from '../shared/teams-cli-agent-policy.js';
 
 const SERVER_SCOPE = Symbol('server-derived-core-orchestration-scope');
 const CONVERSATION_ONLY = Symbol('conversation-only-core-scope');
@@ -200,6 +202,7 @@ export class CoreOrchestrationService {
     if (!job) return undefined;
     const storedScope = storedScopeForPrincipal(job, scope);
     if (!storedScope) return undefined;
+    assertHistoricalCliPolicy(job);
     await this.assertProviderCapability(storedScope, this.providerForJob(job), 'submit');
     return mapOptional(await this.options.agentService.continue(job.id, normalized.prompt, storedScope));
   }
@@ -237,6 +240,7 @@ export class CoreOrchestrationService {
 
   async approve(scope: ServerDerivedCoreScope, request: CoreJobRequest): Promise<CoreOrchestrationJob | undefined> {
     return this.mutate(scope, request, async (job, storedScope) => {
+      assertHistoricalCliPolicy(job);
       await this.assertProviderCapability(storedScope, this.providerForJob(job), 'approve');
       return this.options.agentService.approve(job.id, storedScope);
     });
@@ -244,6 +248,7 @@ export class CoreOrchestrationService {
 
   async retry(scope: ServerDerivedCoreScope, request: CoreJobRequest): Promise<CoreOrchestrationJob | undefined> {
     return this.mutate(scope, request, async (job, storedScope) => {
+      assertHistoricalCliPolicy(job);
       await this.assertProviderCapability(storedScope, this.providerForJob(job), 'retry');
       return this.options.agentService.retry(job.id, storedScope);
     });
@@ -298,26 +303,20 @@ export class CoreOrchestrationService {
 
   async listCodexModelCatalog(): Promise<CoreCodexModelCatalog | undefined> {
     const catalog = await this.options.observeCodexModelCatalog?.();
-    return catalog ? cloneModelCatalog(catalog) : undefined;
+    return catalog ? cloneModelCatalog(constrainTeamsCodexModelCatalog(catalog)) : undefined;
   }
 
   private async validateModelSelection(
     provider: CoreOrchestrationProvider,
     request: Omit<CoreSubmitRequest, 'idempotencyKey'>,
   ): Promise<Omit<CoreSubmitRequest, 'idempotencyKey'>> {
-    const selection = selectionFromRequest(request);
-    if (!selection) return request;
-    if (provider !== 'codex') {
-      throw new CoreOrchestrationValidationError('Codex model selection requires the codex provider.');
-    }
-    const catalog = await this.listCodexModelCatalog();
-    if (!catalog) {
-      throw new CoreOrchestrationValidationError('The deployed Codex worker model catalog is unavailable.');
-    }
     try {
-      return { ...request, ...assertCoreCodexModelSelection(catalog, selection) };
+      assertTeamsCliAgentProvider(provider);
+      const selection = selectionFromRequest(request);
+      const catalog = await this.listCodexModelCatalog();
+      return { ...request, ...selectTeamsCodexModel(catalog, selection) };
     } catch (error) {
-      if (error instanceof CodexModelCatalogError) {
+      if (error instanceof CodexModelCatalogError || error instanceof TeamsCliAgentPolicyError) {
         throw new CoreOrchestrationValidationError(error.message);
       }
       throw error;
@@ -566,6 +565,8 @@ function assertNoClientScope(request: object): void {
   }
 }
 
+export { toCoreJob as projectCoreOrchestrationJob };
+
 function toCoreJob(job: AgentJob): CoreOrchestrationJob {
   const pendingOperation = projectPendingOperation(job);
   return {
@@ -593,6 +594,20 @@ function toCoreJob(job: AgentJob): CoreOrchestrationJob {
     ...(job.startedAt ? { startedAt: job.startedAt } : {}),
     ...(job.finishedAt ? { finishedAt: job.finishedAt } : {}),
   };
+}
+
+function assertHistoricalCliPolicy(job: AgentJob): void {
+  try {
+    assertTeamsCliAgentProvider(job.provider);
+    const selection = selectionFromRequest(job);
+    if (!selection) throw new TeamsCliAgentPolicyError('Historical CLI model selection is unverified; start a new policy-bound job.');
+    assertTeamsCliAgentSelection(selection);
+  } catch (error) {
+    if (error instanceof TeamsCliAgentPolicyError || error instanceof CodexModelCatalogError) {
+      throw new CoreOrchestrationValidationError(error.message);
+    }
+    throw error;
+  }
 }
 
 function cloneModelCatalog(catalog: CoreCodexModelCatalog): CoreCodexModelCatalog {

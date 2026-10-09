@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
+import { observeTeamsCliTestCatalog } from './fixtures/teams-cli-agent-policy-fixture.js';
 import { AgentJobStore, type AgentJobScope } from '../src/server/agent-job-store.js';
 import {
   AgentJobConflictError,
@@ -182,7 +183,7 @@ const service = new AgentService(
   root,
   async (notification) => notifications.push(notification),
   new GitService(root),
-  { canMutateScope: () => true, canReadScope: () => true, executionPolicy },
+  { observeCodexModelCatalog: observeTeamsCliTestCatalog, canMutateScope: () => true, canReadScope: () => true, executionPolicy },
 );
 
 try {

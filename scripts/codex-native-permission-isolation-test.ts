@@ -304,6 +304,9 @@ try {
     ...CODEX_READ_ONLY_PERMISSION_ARGS,
     '--cd',
     lease.workspace,
+    '--model', 'gpt-6-luna',
+    '--config', 'model_reasoning_effort="xhigh"',
+    '--config', 'model_provider="openai"',
     '--',
     'inspect only the projected workspace',
   ];
@@ -330,14 +333,29 @@ try {
     workspace: lease.workspace,
     enrichedPrompt: 'inspect the projected workspace with the selected model',
     selection: {
-      model: 'gpt-6-astra',
-      reasoningEffort: 'medium',
+      model: 'gpt-6-luna',
+      reasoningEffort: 'xhigh',
       catalogRevision: 'a'.repeat(64),
     },
   });
   await lease.spawn(scope, codexExecutable, selectedArgs, spawnOptions);
   assert.equal(spawnCalls.length, 2, 'a valid model/reasoning selection must remain launchable through the read-only lease');
   assert.deepEqual(spawnCalls[1]?.args, selectedArgs);
+  for (const [original, override] of [
+    ['gpt-6-luna', 'gpt-6.1-sol'],
+    ['model_reasoning_effort="xhigh"', 'model_reasoning_effort="low"'],
+    ['model_provider="openai"', 'model_provider="different"'],
+  ]) {
+    await assert.rejects(
+      lease.spawn(scope, codexExecutable, selectedArgs.map(arg => arg === original ? override : arg), spawnOptions),
+      /policy|fixed|gpt-6-luna/i,
+      'the final isolation lease independently rejects tampered model, effort and provider arguments',
+    );
+  }
+  await assert.rejects(lease.spawn(scope, codexExecutable, selectedArgs, {
+    ...spawnOptions, env: { ...spawnOptions.env, CODEX_PROFILE: 'different-profile' },
+  }), /policy|override/i, 'per-launch profile overrides are rejected by the lease');
+  assert.equal(spawnCalls.length, 2, 'policy tampering never reaches process spawn');
   const launchedConfig = spawnCalls[1]!.args.flatMap((arg, index, launchedArgs) => (
     arg === '-c' ? [launchedArgs[index + 1]] : []
   ));

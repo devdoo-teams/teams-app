@@ -44,7 +44,7 @@ class TestIsolationProvider extends AgentIsolationProvider {
   }
 }
 
-const fakeSource = `
+const fakeSource = `#!${process.execPath}
 const caseName = process.argv.at(-1)?.match(/CASE:([a-z0-9-]+)/i)?.[1] ?? 'success';
 const emit = (event) => console.log(JSON.stringify(event));
 if (caseName === 'stderr') {
@@ -143,8 +143,8 @@ try {
   await fs.mkdir(path.join(isolatedHome, '.codex'), { recursive: true });
   await fs.mkdir(protectedRoot, { recursive: true });
   await fs.writeFile(fakeCodexPath, fakeSource, { mode: 0o700 });
-  process.env.CODEX_BIN = process.execPath;
-  process.env.CODEX_SCRIPT = fakeCodexPath;
+  process.env.CODEX_BIN = fakeCodexPath;
+  delete process.env.CODEX_SCRIPT;
   process.env.PATH = '/usr/bin:/bin';
 
   const callbackEvents: CodexRunEvent[] = [];

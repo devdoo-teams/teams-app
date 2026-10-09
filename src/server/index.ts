@@ -69,6 +69,10 @@ import {
   type CoreOrchestrationChatCommand,
 } from './response-engine-deterministic.js';
 import { ResponseModeStore } from './response-mode-store.js';
+import { ExecutionPresentationStore } from './execution-presentation-store.js';
+import { mountExecutionPresentationRoutes } from './execution-presentation-route.js';
+import { loadCopilotUiArtifact } from './copilot-ui-loader.js';
+import { createExecutionPresentationActivity, type PresentedCoreActivity } from './execution-presentation-activity.js';
 import {
   createResponseModeCardActivity,
   isResponseModeCardAction,
@@ -196,6 +200,7 @@ import {
 } from './azure-agent-dispatch-queue.js';
 import {
   CoreOrchestrationService,
+  projectCoreOrchestrationJob,
   createServerDerivedCoreScope,
   type CoreInputResumeObservation,
   type CoreInputResumePort,
@@ -309,6 +314,8 @@ const a2aOutboundStorePath = process.env.A2A_OUTBOUND_STORE_PATH ?? path.resolve
 const agentAdmissionJournalPath = process.env.AGENT_ADMISSION_JOURNAL_PATH ?? path.resolve(process.cwd(), 'data/agent-admission.json');
 const genUiActionStorePath = process.env.GENUI_ACTION_STORE_PATH ?? path.resolve(process.cwd(), 'data/genui-actions.json');
 const responseModeStorePath = process.env.RESPONSE_MODE_STORE_PATH ?? path.resolve(process.cwd(), 'data/response-modes.json');
+const executionPresentationStorePath = path.join(path.dirname(agentJobStorePath), 'execution-presentation.json');
+const executionPresentationStore = new ExecutionPresentationStore(executionPresentationStorePath);
 const providerMutationReplayStorePath = process.env.PROVIDER_MUTATION_REPLAY_STORE_PATH ?? path.resolve(process.cwd(), 'data/provider-mutation-replay.json');
 const providerLifecycleStorePath = process.env.PROVIDER_LIFECYCLE_STORE_PATH ?? path.resolve(process.cwd(), 'data/provider-lifecycle.json');
 const remoteA2ARoster = parseA2ARemotePeerRoster(process.env.TEAMS_A2A_REMOTE_AGENTS);
@@ -675,6 +682,11 @@ const azureReleaseIdentity = resolveAzureReleaseIdentity(process.env, {
 // gate or an explicit authenticated-provider contract; the `--core` bundle
 // replaces this constant at build time with `true`.
 const coreBuild = process.env.TEAMS_CORE_BUILD === 'true';
+const copilotUiArtifact = await loadCopilotUiArtifact({
+  enabled: process.env.TEAMS_COPILOT_UI_RUNTIME === 'true',
+  runtimeDistRoot,
+  sourceCommit: serverBuildIdentity.sourceCommit ?? '',
+});
 // Optional CopilotKit/LLM runtime is explicitly opt-in in every environment.
 // The deterministic Teams Bot and tab must start without an OpenAI/API key and
 // must not load an optional provider graph merely because the process is local.
@@ -848,6 +860,7 @@ storeProcessLease = await acquireStoreProcessLease([
   agentAdmissionJournalPath,
   genUiActionStorePath,
   responseModeStorePath,
+  executionPresentationStorePath,
   ...(providerLifecycleStore ? [providerLifecycleStorePath] : []),
 ]);
 process.once('exit', () => storeProcessLease?.releaseSync());
@@ -859,6 +872,7 @@ await a2aStore.initialize();
 await a2aOutboundStore.initialize();
 await genUiActionStore.initialize();
 await responseModeStore.initialize();
+await executionPresentationStore.initialize();
 await providerLifecycleStore?.initialize();
 
 const runtimeStore = await createRuntimeStore({
@@ -1899,6 +1913,12 @@ http.get('/api/health', async (_request: any, response: any) => {
     },
     copilotKit: optionalRuntimeEnabled ? 'enabled' : 'disabled',
     copilotKitRuntime: optionalRuntimeEnabled ? '/api/copilotkit' : 'disabled',
+    executionPresentation: {
+      modes: copilotUiArtifact ? ['text', 'summary', 'rich'] : ['text', 'summary'],
+      rich: copilotUiArtifact ? 'real-sdk-readonly' : 'disabled',
+      ...(copilotUiArtifact ? { runtime: '/api/copilot-ui', sdkVersion: '1.66.2', agUiVersion: '0.0.57',
+        sourceCommit: copilotUiArtifact.marker.sourceCommit } : {}),
+    },
     genAI: process.env.COPILOTKIT_DETERMINISTIC_MODE === 'true'
       ? 'deterministic-test'
       : grokConfigured
@@ -2601,6 +2621,16 @@ const personalNotifications = new PersonalNotificationBroker(
       ...(activity as object), from: { id: teamsApp.id, role: 'bot' },
       conversation: { id: reference.conversationId, conversationType: 'personal', tenantId: reference.tenantId },
     }));
+    const displayMode = await executionPresentationStore.get({ tenantId: reference.tenantId, requesterId: reference.requesterId });
+    if (displayMode !== 'summary') {
+      const activity = createExecutionPresentationActivity(projectCoreOrchestrationJob(job), displayMode, {
+        ...coreOrchestrationCardOptions, richEnabled: Boolean(copilotUiArtifact),
+      });
+      const receipt = await sender('', undefined, activity);
+      return { state: receipt.state === 'connector-accepted' ? 'accepted' as const
+        : receipt.state === 'connector-rejected' ? 'rejected' as const : 'ambiguous' as const,
+        ...(receipt.activityId ? { activityId: receipt.activityId } : {}) };
+    }
     const envelope = genUiMode === 'legacy' ? undefined : genUi.notification(notification);
     const pageScope = { tenantId: reference.tenantId, requesterId: reference.requesterId,
       conversationId: reference.conversationId };
@@ -2637,6 +2667,16 @@ const notifyConversation = async (notification: AgentNotification): Promise<{ ac
     const { tenantId, requesterId } = notification.job;
     return { accepted: Boolean(tenantId && requesterId && personalNotifications.status(notification.job.id, { tenantId, requesterId })?.state === 'accepted') };
   }
+  if (notification.job.tenantId && notification.job.requesterId) {
+    const displayMode = await executionPresentationStore.get({ tenantId: notification.job.tenantId, requesterId: notification.job.requesterId });
+    if (displayMode !== 'summary') {
+      const activity = createExecutionPresentationActivity(projectCoreOrchestrationJob(notification.job), displayMode, {
+        ...coreOrchestrationCardOptions, richEnabled: Boolean(copilotUiArtifact),
+      });
+      const receipt = await createConversationBotSender(conversationId)('', undefined, activity);
+      return { accepted: receipt.state === 'connector-accepted' };
+    }
+  }
   const envelope = genUiMode === 'legacy'
     ? undefined
     : genUi.notification(notification);
@@ -2644,6 +2684,7 @@ const notifyConversation = async (notification: AgentNotification): Promise<{ ac
   return { accepted: receipt.state === 'connector-accepted' };
 };
 
+let localCodexModelCatalog: ReturnType<typeof loadCodexModelCatalog> | undefined;
 agentService = new AgentService(
   agentJobStore,
   codexRunner,
@@ -2657,6 +2698,7 @@ agentService = new AgentService(
     admissionController: agentAdmissionController,
     agentLabel,
     defaultProvider: agentProvider,
+    observeCodexModelCatalog: observeCoreCodexModelCatalog,
     providerRunners,
     executionDispatcher: agentExecutionDispatcher,
   },
@@ -2879,8 +2921,6 @@ function observeCoreProviderFacts(): CoreProviderFact[] {
     });
 }
 
-let localCodexModelCatalog: ReturnType<typeof loadCodexModelCatalog> | undefined;
-
 async function observeCoreCodexModelCatalog() {
   if (codexWorkerCatalogPort) return codexWorkerCatalogPort.read();
   if (agentProvider !== 'codex') return undefined;
@@ -2922,6 +2962,32 @@ mountCoreOrchestrationRoutes(http, {
   }),
   resolveAuthenticatedScope: coreOrchestrationRestScope,
 });
+const presentationAuth = createUserAuthMiddleware({
+  allowUnauthenticated: skipAuth, validator: userAuthValidator,
+  configuredTenantId: configuredTenantId || undefined, acceptedAudiences: acceptedUserAudiences,
+});
+mountExecutionPresentationRoutes(http, {
+  store: executionPresentationStore, authenticate: presentationAuth,
+  resolveScope: (q, s) => {
+    const scope = coreOrchestrationRestScope(q, s);
+    return scope ? { tenantId: scope.tenantId!, requesterId: scope.requesterId } : undefined;
+  },
+  richEnabled: () => Boolean(copilotUiArtifact),
+});
+if (copilotUiArtifact) {
+  const info = copilotUiArtifact.createHandler({ getJob: async () => undefined });
+  http.get('/api/copilot-ui/info', info);
+  http.post('/api/copilot-ui/agent/execution-projection/run', presentationAuth, (q: any, s: any, next: any) => {
+    const scope = coreOrchestrationRestScope(q, s);
+    if (!scope) { s.status(401).json({ error: 'validated owner identity required' }); return; }
+    const handler = copilotUiArtifact.createHandler({
+      getJob: jobId => coreOrchestrationService.get(createServerDerivedCoreScope(scope, 'principal'), { jobId }),
+    });
+    return handler(q, s, next);
+  });
+  http.use('/api/copilot-ui', (_q: any, s: any) => { s.status(404).json({ error: 'unsupported presentation operation' }); });
+  http.use('/tabs/copilot-ui', express.static(copilotUiArtifact.clientDist));
+}
 
 // Each ready production A2A identity owns a distinct AgentService/runner
 // pair. The job store and admission controller remain shared so limits and
@@ -2946,6 +3012,12 @@ for (const configuredAgent of a2aAgentProviders) {
       admissionController: agentAdmissionController,
       agentLabel: configuredAgent.provider === 'copilot' ? 'GitHub Copilot CLI' : 'Codex CLI',
       defaultProvider: configuredAgent.provider,
+      observeCodexModelCatalog: () => {
+        const profile = a2aCodexProfileByOrdinal.get(configuredAgent.ordinal);
+        return configuredAgent.provider === 'codex' && profile
+          ? loadCodexModelCatalog({ executable: profile.codexExecutable, codexHome: profile.codexHome })
+          : Promise.resolve(undefined);
+      },
       providerRunners: { [configuredAgent.provider]: runner },
     },
   );
@@ -3966,9 +4038,17 @@ function coreOrchestrationErrorActivity(
 
 async function sendCoreOrchestrationActivity(
   send: BotSend,
-  activity: CoreOrchestrationTeamsActivity,
+  activity: PresentedCoreActivity,
 ): Promise<void> {
   await send('', undefined, activity);
+}
+
+async function preferredCoreJobActivity(job: CoreOrchestrationJob, scope: AgentJobScope): Promise<PresentedCoreActivity> {
+  const mode = scope.tenantId && scope.requesterId
+    ? await executionPresentationStore.get({ tenantId: scope.tenantId, requesterId: scope.requesterId }) : 'summary';
+  return createExecutionPresentationActivity(job, mode, {
+    ...coreOrchestrationCardOptions, richEnabled: Boolean(copilotUiArtifact),
+  });
 }
 
 function coreOrchestrationActivityIdempotencyKey(activity: any, scope: AgentJobScope): string {
@@ -3991,7 +4071,7 @@ async function resolveCoreOrchestrationCommand(
   activity: any,
   scope: AgentJobScope,
   command: CoreOrchestrationChatCommand,
-): Promise<CoreOrchestrationTeamsActivity> {
+): Promise<PresentedCoreActivity> {
   const serverScope = coreOrchestrationBotScope(activity, scope);
   if (command.kind === 'select-submit') {
     const catalog = await coreOrchestrationService.listCodexModelCatalog();
@@ -4010,7 +4090,7 @@ async function resolveCoreOrchestrationCommand(
       prompt: command.prompt,
       mode: command.kind === 'new' ? 'read-only' : command.mode,
     });
-    return createCoreOrchestrationJobActivity(result.job, coreOrchestrationCardOptions);
+    return await preferredCoreJobActivity(result.job, scope);
   }
   if (command.kind === 'continue') {
     const job = await coreOrchestrationService.continue(serverScope, {
@@ -4018,7 +4098,7 @@ async function resolveCoreOrchestrationCommand(
       prompt: command.prompt,
     });
     return job
-      ? createCoreOrchestrationJobActivity(job, coreOrchestrationCardOptions)
+      ? await preferredCoreJobActivity(job, scope)
       : coreOrchestrationErrorActivity('선택한 작업을 이어갈 수 없습니다. 작업 ID와 durable Codex thread를 확인하세요.');
   }
   if (command.kind === 'list') {
@@ -4031,7 +4111,7 @@ async function resolveCoreOrchestrationCommand(
   if (command.kind === 'status') {
     const job = coreOrchestrationService.get(serverScope, { jobId: command.jobId });
     return job
-      ? createCoreOrchestrationJobActivity(job, coreOrchestrationCardOptions)
+      ? await preferredCoreJobActivity(job, scope)
       : coreOrchestrationErrorActivity('요청한 작업을 찾을 수 없습니다.');
   }
   if (command.kind === 'approve' || command.kind === 'cancel') {
@@ -4049,11 +4129,11 @@ async function resolveCoreOrchestrationCommand(
     if (result.status === 'unsupported') {
       return coreOrchestrationErrorActivity('이 작업은 현재 추가 입력 재개를 지원하지 않습니다.');
     }
-    return createCoreOrchestrationJobActivity(result.job, coreOrchestrationCardOptions);
+    return await preferredCoreJobActivity(result.job, scope);
   }
   const job = await coreOrchestrationService[command.kind](serverScope, request);
   return job
-    ? createCoreOrchestrationJobActivity(job, coreOrchestrationCardOptions)
+    ? await preferredCoreJobActivity(job, scope)
     : coreOrchestrationErrorActivity('요청한 작업을 찾을 수 없습니다.');
 }
 
@@ -4162,7 +4242,7 @@ async function handleCoreOrchestrationCardSubmission(activity: any, send: BotSen
         reasoningEffort: String(value.reasoningEffort) as CoreCodexReasoningEffort,
         catalogRevision: String(value.catalogRevision),
       });
-      await sendCoreOrchestrationActivity(send, createCoreOrchestrationJobActivity(result.job, coreOrchestrationCardOptions));
+      await sendCoreOrchestrationActivity(send, await preferredCoreJobActivity(result.job, scope));
     } catch (error) {
       const message = error instanceof CoreOrchestrationValidationError
         ? '선택한 모델 또는 추론 수준이 현재 Codex worker와 일치하지 않습니다. 다시 선택하세요.'
@@ -4186,7 +4266,7 @@ async function handleCoreOrchestrationCardSubmission(activity: any, send: BotSen
         return;
       }
       if (value.action === 'orchestration.dismiss-confirmation') {
-        await sendCoreOrchestrationActivity(send, createCoreOrchestrationJobActivity(job, coreOrchestrationCardOptions));
+        await sendCoreOrchestrationActivity(send, await preferredCoreJobActivity(job, scope));
         return;
       }
       const action = value.action === 'orchestration.confirm-approve' ? 'approve' : 'cancel';
@@ -4257,7 +4337,7 @@ async function handleCoreOrchestrationCardSubmission(activity: any, send: BotSen
       await sendCoreOrchestrationActivity(
         send,
         updated
-          ? createCoreOrchestrationJobActivity(updated, coreOrchestrationCardOptions)
+          ? await preferredCoreJobActivity(updated, scope)
           : coreOrchestrationErrorActivity('요청한 작업을 찾을 수 없습니다.'),
       );
     } catch (error) {

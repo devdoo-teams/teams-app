@@ -3,8 +3,9 @@ const teamsApp = teamsSdk.app;
 import { parseRequestedJobId, loadRequestedJob, includeRequestedJob } from './job-deep-link.js';
 import { CORE_AGENT_PROMPT_MAX_LENGTH, CORE_JOB_STATUS_LABELS } from '../shared/core-orchestration.js';
 import { projectReceiptFacts } from '../shared/receipt-presentation.js';
+import { TEAMS_CLI_AGENT_POLICY } from '../shared/teams-cli-agent-policy.js';
 import type { VisibleJobConversation } from '../shared/job-conversation.js';
-import { JobConversationView } from './JobConversationView.js';
+import { ExecutionPresentationPanel } from './ExecutionPresentationPanel.js';
 import { loadJobConversation, refreshVisibleJobConversation } from './job-conversation.js';
 import { createLatestDetailRequestController } from './latest-detail-request.js';
 export { createLatestDetailRequestController } from './latest-detail-request.js';
@@ -136,6 +137,11 @@ export function validateOrchestrationSubmission(
     return '현재 사용할 수 없는 제공자입니다.';
   }
   if (providerId !== 'codex' && providerId !== 'copilot') return '등록되지 않은 제공자입니다.';
+  if (providerId !== 'codex') return '이 제공자의 고정 모델 지원이 확인되지 않아 실행을 차단합니다.';
+  if (!modelCatalog) return '고정 모델 gpt-6-luna · xhigh의 지원을 확인할 수 없습니다.';
+  if (modelId !== TEAMS_CLI_AGENT_POLICY.model || reasoningEffort !== TEAMS_CLI_AGENT_POLICY.reasoningEffort) {
+    return 'Teams 에이전트는 gpt-6-luna · xhigh로 고정되어 있습니다.';
+  }
   if (providerId === 'codex' && modelCatalog) {
     const model = modelCatalog.models.find((candidate) => candidate.id === modelId);
     if (!model) return 'Codex 모델을 선택하세요.';
@@ -352,7 +358,7 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
               Codex 모델
               <select
                 aria-label="Codex 모델"
-                disabled={props.phase === 'loading' || submitBusy}
+                disabled
                 onChange={(event) => props.onModelChange(event.currentTarget.value)}
                 value={props.modelId}
               >
@@ -365,7 +371,7 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
               추론 수준
               <select
                 aria-label="추론 수준"
-                disabled={props.phase === 'loading' || submitBusy || !selectedModel}
+                disabled
                 onChange={(event) => props.onReasoningEffortChange(
                   event.currentTarget.value as CoreCodexReasoningEffort,
                 )}
@@ -378,7 +384,7 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
             </label>
           </>
         ) : (
-          <p className="panel-description">Codex 모델 카탈로그를 확인할 수 없어 CLI 기본값을 사용합니다.</p>
+          <p className="panel-description">고정 모델 gpt-6-luna · xhigh의 지원을 확인할 수 없어 새 실행을 차단합니다.</p>
         ) : null}
         <label>
           실행 모드
@@ -492,14 +498,7 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
               </ul>
             ) : <span> 없음 (스킬·플러그인은 제공자가 식별자를 보고한 경우에만 표시)</span>}
           </div>
-          {props.conversation ? <JobConversationView conversation={props.conversation} /> : null}
-          {!props.conversation && props.selectedJob.progress.length > 0 ? (
-            <ul aria-label="작업 진행 기록">
-              {props.selectedJob.progress.map((entry, index) => <li key={`${index}-${entry}`}>{entry}</li>)}
-            </ul>
-          ) : null}
-          {!props.conversation && props.selectedJob.result ? <p>{props.selectedJob.result}</p> : null}
-          {!props.conversation && props.selectedJob.error ? <p className="error" role="alert">{props.selectedJob.error}</p> : null}
+          <ExecutionPresentationPanel job={props.selectedJob} conversation={props.conversation} />
 
           {props.selectedJob.status === 'awaiting_approval' ? (
             <div>

@@ -256,6 +256,10 @@ async function testWorkerCompositionPreservesModeAndPrivateCodexHome(): Promise<
         AGENT_CODEX_HOME: agentCodexHome,
       },
       runner,
+      observeCodexModelCatalog: async () => parseCodexModelCatalogPayload([{
+        slug: 'gpt-6-luna', display_name: 'GPT-6-Luna', visibility: 'list', default_reasoning_level: 'xhigh',
+        supported_reasoning_levels: [{ effort: 'xhigh' }],
+      }], '2026-10-09T09:00:00.000Z'),
     });
     const checkpoints: Array<{ message: string; tools: unknown[] }> = [];
     const context = {
@@ -264,13 +268,16 @@ async function testWorkerCompositionPreservesModeAndPrivateCodexHome(): Promise<
         checkpoints.push({ message, tools: structuredClone([...tools]) });
       },
     };
-    const catalogRevision = 'a'.repeat(64);
+    const catalogRevision = parseCodexModelCatalogPayload([{
+      slug: 'gpt-6-luna', display_name: 'GPT-6-Luna', visibility: 'list', default_reasoning_level: 'xhigh',
+      supported_reasoning_levels: [{ effort: 'xhigh' }],
+    }], '2026-10-09T09:00:00.000Z').revision;
     const selectedTask = {
       ...task('task-mode-write'),
       schemaVersion: 3 as const,
       modelSelection: {
-        model: 'gpt-5.6-sol',
-        reasoningEffort: 'high' as const,
+        model: 'gpt-6-luna',
+        reasoningEffort: 'xhigh' as const,
         catalogRevision,
       },
     };
@@ -293,7 +300,7 @@ async function testWorkerCompositionPreservesModeAndPrivateCodexHome(): Promise<
     assert.ok(spawnCalls[0].args.includes('workspace-write'));
     assert.deepEqual(
       spawnCalls[0].args.slice(spawnCalls[0].args.indexOf('--model'), spawnCalls[0].args.indexOf('--model') + 4),
-      ['--model', 'gpt-5.6-sol', '--config', 'model_reasoning_effort="high"'],
+      ['--model', 'gpt-6-luna', '--config', 'model_reasoning_effort="xhigh"'],
       'the selected installed model and reasoning effort reach the final Codex argv boundary',
     );
     assert.equal(spawnCalls[0].options.env.CODEX_HOME, agentCodexHome);

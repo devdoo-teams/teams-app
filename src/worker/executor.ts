@@ -6,12 +6,16 @@ import {
   type AgentDispatchTask,
 } from '../server/queue/agent-dispatch-queue.js';
 import type { WorkerExecutionPort } from './index.js';
+import type { CoreCodexModelCatalog } from '../shared/core-orchestration.js';
+import { loadCodexModelCatalog, selectTeamsCodexModel } from '../server/codex-model-catalog.js';
+import { assertTeamsCliAgentEnvironment, assertTeamsCliAgentProvider, assertTeamsCliAgentSelection } from '../shared/teams-cli-agent-policy.js';
 
 type WorkerRunner = Pick<CodexRunner, 'run' | 'cancel'>;
 
 export function createWorkerExecutor(options: {
   env: Record<string, string | undefined>;
   runner?: WorkerRunner;
+  observeCodexModelCatalog?: () => CoreCodexModelCatalog | undefined | Promise<CoreCodexModelCatalog | undefined>;
 }): WorkerExecutionPort {
   const workspace = requiredEnvironment(options.env, 'TEAMS_WORKER_WORKSPACE');
   const agentCodexHome = requiredEnvironment(options.env, 'AGENT_CODEX_HOME');
@@ -23,7 +27,10 @@ export function createWorkerExecutor(options: {
 
   return Object.freeze({
     async start(task: AgentDispatchTask, context: Parameters<WorkerExecutionPort['start']>[1]) {
-      if (task.provider !== 'codex') throw new Error(`Unsupported Azure worker provider: ${task.provider}`);
+      assertTeamsCliAgentProvider(task.provider);
+      assertTeamsCliAgentEnvironment(options.env);
+      const requestedSelection = task.schemaVersion === 3 ? task.modelSelection : undefined;
+      assertTeamsCliAgentSelection(requestedSelection);
       if (task.execution.workspaceReference !== AGENT_DISPATCH_WORKSPACE_REFERENCE) {
         throw new Error(`Unsupported Azure worker workspace reference: ${task.execution.workspaceReference}`);
       }
@@ -33,6 +40,10 @@ export function createWorkerExecutor(options: {
           'Linux read-only isolation is unavailable; the worker refused to spawn a child with workspace-write authority.',
         );
       }
+
+      const catalog = options.observeCodexModelCatalog ? await options.observeCodexModelCatalog()
+        : await loadCodexModelCatalog({ executable: requiredEnvironment(options.env, 'CODEX_BIN'), codexHome: agentCodexHome });
+      const selection = selectTeamsCodexModel(catalog, requestedSelection);
 
       const abort = new AbortController();
       const propagateAbort = () => abort.abort(context.signal.reason);
@@ -51,9 +62,7 @@ export function createWorkerExecutor(options: {
           conversationId: task.conversationId,
           jobId: task.taskId,
         },
-        ...(task.schemaVersion === 3 && task.modelSelection
-          ? { selection: task.modelSelection }
-          : {}),
+        selection,
         onEvent: async (event) => {
           if (event.type) await context.checkpoint(event.type, observeCodexToolUsage(event));
         },

@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import { observeTeamsCliTestCatalog, teamsCliTestSelection } from './fixtures/teams-cli-agent-policy-fixture.js';
 import { AgentJobStore, type AgentJobScope } from '../src/server/agent-job-store.js';
 import { AgentService } from '../src/server/agent-service.js';
 import { AgentExecutionPolicy, AgentIsolationProvider, type AgentIsolationAcquireInput } from '../src/server/agent-execution-policy.js';
@@ -53,6 +54,7 @@ const copilot = new SyntheticRunner();
 const notifications: string[] = [];
 const service = new AgentService(store, runner as unknown as CodexRunner, workspace,
   async ({ job }) => { notifications.push(job.id); }, new GitService(workspace), {
+      observeCodexModelCatalog: observeTeamsCliTestCatalog,
     canReadScope: () => true,
     canMutateScope: () => true,
     executionPolicy: new AgentExecutionPolicy(workspace, {
@@ -63,7 +65,7 @@ const service = new AgentService(store, runner as unknown as CodexRunner, worksp
 
 try {
   await service.initialize();
-  const parent = await store.create({ prompt: 'Synthetic prior request: what is 17+25?', provider: 'codex', mode: 'read-only', scope,
+  const parent = await store.create({ ...teamsCliTestSelection, prompt: 'Synthetic prior request: what is 17+25?', provider: 'codex', mode: 'read-only', scope,
     threadId: '22222222-2222-4222-8222-222222222222', durableNotifications: { enabled: false, delivered: [] } });
   await store.update(parent.id, scope, { status: 'running' });
   await store.update(parent.id, scope, { status: 'completed', result: 'SYNTHETIC_PRIOR_RESULT: 42', finishedAt: new Date().toISOString() });
@@ -86,7 +88,7 @@ try {
   assert.equal(await service.continue(parent.id, 'foreign attempt', { ...scope, requesterId: 'other-user' }), undefined);
   assert.equal(runner.calls.length, beforeForeign, 'scoped foreign context cannot reach the runner');
 
-  const personal = await store.create({ prompt: 'Personal synthetic context', provider: 'codex', mode: 'read-only', scope,
+  const personal = await store.create({ ...teamsCliTestSelection, prompt: 'Personal synthetic context', provider: 'codex', mode: 'read-only', scope,
     threadId: '33333333-3333-4333-8333-333333333333', durableNotifications: { enabled: true, delivered: [] } });
   await store.update(personal.id, scope, { status: 'running' });
   await store.update(personal.id, scope, { status: 'completed', result: 'PERSONAL_OK', finishedAt: new Date().toISOString() });
@@ -95,12 +97,12 @@ try {
   await store.update(foreignProvider.id, scope, { status: 'running' });
   await store.update(foreignProvider.id, scope, { status: 'completed', result: 'COPILOT_OK', finishedAt: new Date().toISOString() });
   assert.equal(service.latestCompletedForConversation(scope)?.id, personal.id, 'implicit continuation stays with the configured personal provider');
-  const explicitCopilot = await service.continue(foreignProvider.id, 'Persistent provider follow-up', scope, { notify: false });
-  assert.ok(explicitCopilot);
-  assert.equal((await service.waitForTerminal(explicitCopilot.id, scope, 5_000)).status, 'completed');
-  assert.equal(copilot.calls[0].threadId, foreignProvider.threadId, 'other provider native-session contract is unchanged');
+  const beforeCopilot = store.listLocalOnly(100).length;
+  await assert.rejects(service.continue(foreignProvider.id, 'Persistent provider follow-up', scope, { notify: false }), /Teams CLI policy.*unverified/u);
+  assert.equal(copilot.calls.length, 0, 'unverified provider cannot resume using its default model');
+  assert.equal(store.listLocalOnly(100).length, beforeCopilot, 'Copilot rejection creates no replacement job');
 
-  const failed = await store.create({ prompt: 'Synthetic retry request', provider: 'codex', mode: 'read-only', scope,
+  const failed = await store.create({ ...teamsCliTestSelection, prompt: 'Synthetic retry request', provider: 'codex', mode: 'read-only', scope,
     threadId: parent.threadId, parentJobId: parent.id, durableNotifications: { enabled: false, delivered: [] } });
   await store.update(failed.id, scope, { status: 'running' });
   await store.update(failed.id, scope, { status: 'failed', error: 'synthetic missing rollout', finishedAt: new Date().toISOString() });
@@ -110,7 +112,7 @@ try {
   assert.equal(runner.calls.at(-1)?.threadId, undefined, 'retry cannot reintroduce stale ephemeral resume');
   assert.ok(runner.calls.at(-1)?.prompt.includes('SYNTHETIC_PRIOR_RESULT: 42'), 'retry follows scoped parent linkage to completed context');
 
-  const large = await store.create({ prompt: 'Large synthetic context', provider: 'codex', mode: 'read-only', scope,
+  const large = await store.create({ ...teamsCliTestSelection, prompt: 'Large synthetic context', provider: 'codex', mode: 'read-only', scope,
     durableNotifications: { enabled: false, delivered: [] } });
   await store.update(large.id, scope, { status: 'running' });
   await store.update(large.id, scope, { status: 'completed', result: 'SYNTHETIC_LONG_START' + '한'.repeat(19_900), finishedAt: new Date().toISOString() });

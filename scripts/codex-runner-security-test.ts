@@ -43,7 +43,7 @@ class TestIsolationProvider extends AgentIsolationProvider {
 }
 
 const provider = new TestIsolationProvider();
-const fakeSource = `
+const fakeSource = `#!${process.execPath}
 const caseName = process.argv.at(-1)?.match(/CASE:([a-z0-9-]+)/i)?.[1] ?? 'success';
 const threadId = ${JSON.stringify(threadId)};
 const thread = () => console.log(JSON.stringify({ type: 'thread.started', thread_id: threadId }));
@@ -191,9 +191,9 @@ fs.writeFileSync(${JSON.stringify(attachmentGrandchildPidPath)}, String(grandchi
 setInterval(() => {}, 1000);
 `;
 
-const baseEnvironment: Record<string, string> = {
-  CODEX_BIN: process.execPath,
-  CODEX_SCRIPT: fakeCodexPath,
+const baseEnvironment: Record<string, string | undefined> = {
+  CODEX_BIN: fakeCodexPath,
+  CODEX_SCRIPT: undefined,
   CODEX_TIMEOUT_MS: '1000',
   PATH: '/usr/bin:/bin',
   HOME: homePath,

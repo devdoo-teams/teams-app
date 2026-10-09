@@ -8,6 +8,8 @@ okf_version: 0.2
 
 ## Concepts
 
+* [Fixed Luna CLI and saved execution views](luna-and-execution-presentation.md) - MP368/369 fixed Teams-only launcher policy, real optional OSS SDK and independent live gates
+
 * [Worker receipt adapter propagation](worker-receipt-adapter-propagation.md) - MP366 source/time/platform transport, shape versus authenticity and hash-bound RED/GREEN
 * [CLI command terminal observation](codex-command-terminal-observation.md) - MP364 pinned wire, adapter/store loss, privacy RED/GREEN and independent live gates
 * [Tab prompt bounds and mutation failures](tab-prompt-and-mutation-errors.md) - MP360/361 distinct source and fixture defects, bounded synthetic126 observations and candidate127 gates

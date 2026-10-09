@@ -23,6 +23,7 @@ import { isAgentTokenUsage, parseCodexTokenUsage, type AgentTokenUsage } from '.
 import type { CoreCodexModelSelection, CoreAgentToolExecution, CoreExecutionReceipt } from '../shared/core-orchestration.js';
 import { observeCodexToolUsage } from './agent-tool-observation.js';
 import { readExecutionReceipt } from './agent-execution-receipt.js';
+import { assertTeamsCliAgentProvider } from '../shared/teams-cli-agent-policy.js';
 import {
   ghcpCliCommandFromEnvironment,
   GHCP_SECRET_ENV_VARS,
@@ -334,6 +335,7 @@ export class CliAgentRunner {
     if (runOptions.provider !== 'codex' && runOptions.provider !== 'copilot') {
       throw new Error(`Unsupported CLI agent provider: ${String(runOptions.provider)}`);
     }
+    assertTeamsCliAgentProvider(runOptions.provider);
     if (runOptions.signal?.aborted) throw new Error(`${runOptions.provider} CLI agent execution was cancelled.`);
     if (runOptions.provider === 'codex') {
       const result = await this.codexRunner.run({

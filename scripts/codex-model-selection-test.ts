@@ -119,7 +119,7 @@ const args = buildCodexExecArguments({
   mode: 'workspace-write',
   workspace: '/srv/teams-app',
   enrichedPrompt: 'USER REQUEST:\nrun tests',
-  selection,
+  selection: { model: 'gpt-6-luna', reasoningEffort: 'xhigh', catalogRevision: catalog.revision },
 });
 assert.deepEqual(args.slice(0, 10), [
   'exec',
@@ -129,9 +129,9 @@ assert.deepEqual(args.slice(0, 10), [
   '--cd',
   '/srv/teams-app',
   '--model',
-  'gpt-5.6-sol',
+  'gpt-6-luna',
   '--config',
-  'model_reasoning_effort="ultra"',
+  'model_reasoning_effort="xhigh"',
 ]);
 assert.deepEqual(args.slice(-2), ['--', 'USER REQUEST:\nrun tests']);
 assert.throws(() => buildCodexExecArguments({

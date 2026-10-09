@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import { observeTeamsCliTestCatalog } from './fixtures/teams-cli-agent-policy-fixture.js';
 import { AgentAdmissionController } from '../src/server/agent-admission-controller.js';
 import { AgentJobStore, type AgentJob, type AgentJobScope } from '../src/server/agent-job-store.js';
 import {
@@ -53,6 +54,7 @@ function createService(
     async (notification) => { notifications.push(notification); },
     new GitService(root),
     {
+      observeCodexModelCatalog: observeTeamsCliTestCatalog,
       canReadScope: () => true,
       canMutateScope: () => true,
       executionDispatcher: dispatcher,

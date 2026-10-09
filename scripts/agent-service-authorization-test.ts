@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import { observeTeamsCliTestCatalog } from './fixtures/teams-cli-agent-policy-fixture.js';
 import { AgentJobStore, type AgentJobScope } from '../src/server/agent-job-store.js';
 import {
   AgentMutationAuthorizationError,
@@ -110,7 +111,7 @@ try {
     workspace,
     async () => undefined,
     gitService,
-    { canMutateScope: (scope) => scope.requesterId === allowed.requesterId, admissionJournalPath: path.join(root, 'blocked-admission.json') },
+    { observeCodexModelCatalog: observeTeamsCliTestCatalog, canMutateScope: (scope) => scope.requesterId === allowed.requesterId, admissionJournalPath: path.join(root, 'blocked-admission.json') },
   );
   await blockedService.initialize();
   await assert.rejects(
@@ -132,7 +133,7 @@ try {
     workspace,
     async () => undefined,
     gitService,
-    { canMutateScope: () => true, canReadScope: () => true, admissionJournalPath: path.join(root, 'unavailable-admission.json') },
+    { observeCodexModelCatalog: observeTeamsCliTestCatalog, canMutateScope: () => true, canReadScope: () => true, admissionJournalPath: path.join(root, 'unavailable-admission.json') },
   );
   await unavailableService.initialize();
   await assert.rejects(
@@ -161,7 +162,7 @@ try {
     workspace,
     async () => undefined,
     gitService,
-    { canMutateScope: () => true, canReadScope: () => true, executionPolicy: projectionPolicy, admissionController: projectionController },
+    { observeCodexModelCatalog: observeTeamsCliTestCatalog, canMutateScope: () => true, canReadScope: () => true, executionPolicy: projectionPolicy, admissionController: projectionController },
   );
   await projectionService.initialize();
   const projected = await projectionService.submit({ prompt: 'inspect allowlisted source', mode: 'read-only', scope: allowed });
@@ -193,7 +194,7 @@ try {
     workspace,
     async () => undefined,
     gitService,
-    { canMutateScope: () => true, canReadScope: () => true, executionPolicy: unstablePolicy, admissionJournalPath: path.join(root, 'unstable-admission.json') },
+    { observeCodexModelCatalog: observeTeamsCliTestCatalog, canMutateScope: () => true, canReadScope: () => true, executionPolicy: unstablePolicy, admissionJournalPath: path.join(root, 'unstable-admission.json') },
   );
   await unstableService.initialize();
   await assert.rejects(

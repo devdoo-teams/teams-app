@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { observeTeamsCliTestCatalog } from './fixtures/teams-cli-agent-policy-fixture.js';
 import { AgentJobStore, type AgentJobScope } from '../src/server/agent-job-store.js';
 import { AgentService, type AgentNotification } from '../src/server/agent-service.js';
 import { AgentExecutionPolicy, AgentIsolationProvider, type AgentIsolationAcquireInput } from '../src/server/agent-execution-policy.js';
@@ -49,6 +50,7 @@ const scope: AgentJobScope = { tenantId: 'synthetic-tenant', requesterId: 'synth
 const notifications: AgentNotification[] = [];
 const service = new AgentService(store, runner as unknown as CodexRunner, workspace,
   async notification => { notifications.push(notification); }, new GitService(workspace), {
+      observeCodexModelCatalog: observeTeamsCliTestCatalog,
     canReadScope: () => true,
     canMutateScope: candidate => candidate.tenantId === scope.tenantId
       && candidate.requesterId === scope.requesterId && candidate.conversationId === scope.conversationId,
@@ -60,7 +62,7 @@ const service = new AgentService(store, runner as unknown as CodexRunner, worksp
     }),
     admissionJournalPath: path.join(root, 'admission.json'),
   });
-const core = new CoreOrchestrationService({ agentService: service, jobStore: store });
+const core = new CoreOrchestrationService({ observeCodexModelCatalog: observeTeamsCliTestCatalog, agentService: service, jobStore: store });
 const serverScope = createServerDerivedCoreScope(scope);
 async function submit(outcome: string | Error, notify = false) {
   runner.outcome = outcome;

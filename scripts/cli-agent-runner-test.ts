@@ -241,7 +241,7 @@ try {
   });
 
   const attachmentFailureRunner = new CliAgentRunner({
-    commands: { copilot: { executable: process.execPath } },
+    commands: { codex: { executable: process.execPath } },
     resolveGhcpExecutable: async (command) => ({ state: 'resolved', command }),
     platform: 'linux',
     processControllerOptions: { graceMs: 20, cleanupWaitMs: 200, retryDelayMs: 10, maxAttempts: 20 },
@@ -259,8 +259,8 @@ try {
   });
   await assert.rejects(
     () => attachmentFailureRunner.run({
-      provider: 'copilot',
-      jobId: 'copilot-controller-attachment-failure',
+      provider: 'codex',
+      jobId: 'codex-controller-attachment-failure',
       prompt: 'attachment must fail closed',
       workspace: root,
       mode: 'workspace-write',
@@ -269,66 +269,27 @@ try {
       && (error as Error & { reason?: unknown }).reason === 'process-tree-control-required',
     'missing controller attachment fails closed after cleanup begins',
   );
-  assert.ok(attachmentChild, 'the Copilot attachment regression must spawn a child');
-  assert.equal(await childClosedWithin(attachmentChild), true, 'a Copilot child is reaped when controller attachment returns no controller');
-  assert.ok(attachmentGrandchildPid, 'the Copilot attachment regression must spawn a real grandchild');
+  assert.ok(attachmentChild, 'the Codex attachment regression must spawn a child');
+  assert.equal(await childClosedWithin(attachmentChild), true, 'a Codex child is reaped when controller attachment returns no controller');
+  assert.ok(attachmentGrandchildPid, 'the Codex attachment regression must spawn a real grandchild');
   assert.equal(
     await processExitedWithin(attachmentGrandchildPid),
     true,
-    'process-tree cleanup reaps a grandchild after Copilot controller attachment fails',
+    'process-tree cleanup reaps a grandchild after Codex controller attachment fails',
   );
 
-  const result = await runner.run({
-    provider: 'copilot',
-    jobId: 'copilot-success',
-    prompt: 'inspect the repository',
-    workspace: root,
-    mode: 'workspace-write',
-    timeoutMs: 1_000,
-    onEvent: (event) => { events.push(event); },
+  let refusedResolutions = 0, refusedSpawns = 0;
+  const unavailableCopilot = new CliAgentRunner({
+    resolveGhcpExecutable: async command => { refusedResolutions++; return { state: 'resolved', command }; },
+    spawn: () => { refusedSpawns++; throw new Error('unverified provider must not spawn'); },
   });
-
-  assert.deepEqual(result, {
-    provider: 'copilot',
-    sessionId,
-    finalResult: 'COPILOT_FINAL',
-    eventCount: 7,
-  });
-  assert.deepEqual(events.map((event) => event.type), [
-    'session.started',
-    'turn.started',
-    'tool.started',
-    'tool.started',
-    'agent.message',
-    'turn.completed',
-  ]);
-  assert.deepEqual(events[2], {
-    provider: 'copilot',
-    type: 'tool.started',
-    toolName: 'shell',
-  }, 'official Copilot toolName is preserved without arguments');
-  assert.deepEqual(events[3], {
-    provider: 'copilot',
-    type: 'tool.started',
-    mcpServerName: 'jira',
-    mcpToolName: 'search_issues',
-  }, 'official Copilot MCP identifiers are preserved without arguments');
-  assert.equal(JSON.stringify(events).includes('must-never-persist'), false);
-
-  const args = JSON.parse(await fs.readFile(argvPath, 'utf8')) as string[];
-  assert.deepEqual(args.slice(0, 4), [
-    '--prompt',
-    'inspect the repository',
-    '--output-format',
-    'json',
-  ], 'official Copilot automation uses --prompt with JSONL output');
-  assert.equal(args.includes('login'), false, 'execution and health paths never automate copilot login');
-  assert.equal(args.includes('--allow-all-tools'), false, 'Copilot execution never bypasses tool permissions');
-  assert.ok(args.includes('--allow-tool=read,write'), 'workspace-write Copilot execution uses the bounded default tool set');
-  assert.ok(
-    args.includes('--secret-env-vars=COPILOT_GITHUB_TOKEN,GH_TOKEN,GITHUB_TOKEN'),
-    'Copilot execution marks the explicitly forwarded authentication variables as secret at the child boundary',
-  );
+  for (const environmentOverrides of [undefined, { COPILOT_MODEL: 'gpt-5.4' }, { COPILOT_MODEL: 'gpt-6-luna' }]) {
+    await assert.rejects(unavailableCopilot.run({ provider: 'copilot', jobId: 'copilot-policy-unavailable',
+      prompt: 'inspect the repository', workspace: root, mode: 'workspace-write', environmentOverrides,
+      onEvent: event => { events.push(event); } }), /Teams CLI policy.*unverified/u);
+  }
+  assert.equal(refusedResolutions, 0); assert.equal(refusedSpawns, 0);
+  assert.deepEqual(events, [], 'refused provider cannot produce a success event or receipt');
 
   const identityRoot = path.join(root, 'ghcp-identity');
   const firstExecutableDirectory = path.join(identityRoot, 'first');
@@ -372,19 +333,15 @@ try {
       },
       processControllerOptions: { graceMs: 20, cleanupWaitMs: 200 },
     });
-    await identityRunner.run({
+    await assert.rejects(identityRunner.run({
       provider: 'copilot',
       jobId: 'copilot-resolved-identity',
       prompt: 'prove one resolved executable identity',
       workspace: root,
       mode: 'workspace-write',
       timeoutMs: 1_000,
-    });
-    assert.equal(
-      identityExecutionCommand,
-      health.resolvedCommand,
-      'execution must use the same immutable resolved executable identity as health after PATH changes',
-    );
+    }), /Teams CLI policy.*unverified/u);
+    assert.equal(identityExecutionCommand, undefined, 'health observation cannot authorize an unverified provider model');
   } finally {
     if (previousIdentityBin === undefined) delete process.env.GHCP_BIN;
     else process.env.GHCP_BIN = previousIdentityBin;
@@ -416,38 +373,15 @@ try {
       },
       processControllerOptions: { graceMs: 20, cleanupWaitMs: 200 },
     });
-    await environmentRunner.run({
+    await assert.rejects(environmentRunner.run({
       provider: 'copilot',
       jobId: 'copilot-environment-command',
       prompt: 'inspect with the configured GHCP command',
       workspace: root,
       mode: 'workspace-write',
       timeoutMs: 1_000,
-    });
-    assert.deepEqual(JSON.parse(await fs.readFile(environmentProbePath, 'utf8')), {
-      ci: '1',
-      pathPresent: true,
-      approvedTokenKeys: Object.keys(approvedTokenValues),
-      approvedTokenMatches: Object.fromEntries(Object.keys(approvedTokenValues).map((key) => [key, true])),
-      unrelatedSecretKeys: [],
-    }, 'Copilot receives only the explicitly approved token keys and preserves CI/PATH');
-    assert.deepEqual(requestedCommand, {
-      executable: '/opt/copilot',
-      args: [
-        'node',
-        '--prompt',
-        'inspect with the configured GHCP command',
-        '--output-format',
-        'json',
-        '--stream',
-        'off',
-        '--no-color',
-        '--no-auto-update',
-        '--no-ask-user',
-        '--allow-tool=read,write',
-        '--secret-env-vars=COPILOT_GITHUB_TOKEN,GH_TOKEN,GITHUB_TOKEN',
-      ],
-    }, 'GHCP_BIN and GHCP_SCRIPT must prefix the official Copilot execution args');
+    }), /Teams CLI policy.*unverified/u);
+    assert.equal(requestedCommand, undefined, 'configured executable/prefix/token variables cannot bypass policy refusal');
   } finally {
     if (previousGhcpBin === undefined) delete process.env.GHCP_BIN;
     else process.env.GHCP_BIN = previousGhcpBin;
@@ -471,8 +405,8 @@ try {
     workspace: root,
     mode: 'workspace-write',
     selection: {
-      model: 'gpt-5.6-sol',
-      reasoningEffort: 'high',
+      model: 'gpt-6-luna',
+      reasoningEffort: 'xhigh',
       catalogRevision: 'a'.repeat(64),
     },
     timeoutMs: 1_000,
@@ -499,8 +433,8 @@ try {
   const codexArgs = JSON.parse(await fs.readFile(argvPath, 'utf8')) as string[];
   assert.deepEqual(codexArgs.slice(0, 4), ['exec', '--json', '--sandbox', 'workspace-write']);
   assert.deepEqual(
-    codexArgs.slice(codexArgs.indexOf('--model'), codexArgs.indexOf('--model') + 4),
-    ['--model', 'gpt-5.6-sol', '--config', 'model_reasoning_effort="high"'],
+    codexArgs.slice(codexArgs.indexOf('--model'), codexArgs.indexOf('--model') + 6),
+    ['--model', 'gpt-6-luna', '--config', 'model_reasoning_effort="xhigh"', '--config', 'model_provider="openai"'],
     'the provider-neutral local Codex path preserves the validated selection',
   );
 
@@ -535,7 +469,7 @@ try {
     source: 'codex.exec.jsonl.turn.completed.usage', inputTokens: 8, cachedInputTokens: 2, outputTokens: 3, reasoningOutputTokens: 1,
   }, 'partial updates do not duplicate or replace terminal usage');
 
-  for (const provider of ['codex', 'copilot'] as const) {
+  for (const provider of ['codex'] as const) {
     const controller = new AbortController();
     controller.abort();
     await assert.rejects(
@@ -553,7 +487,7 @@ try {
     );
   }
 
-  for (const provider of ['codex', 'copilot'] as const) {
+  for (const provider of ['codex'] as const) {
     await assert.rejects(
       () => runner.run({
         provider,
@@ -604,24 +538,6 @@ try {
 
   await assert.rejects(
     () => runner.run({
-      provider: 'copilot',
-      jobId: 'copilot-redaction',
-      prompt: 'CASE:redaction',
-      workspace: root,
-      mode: 'workspace-write',
-      timeoutMs: 1_000,
-    }),
-    (error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      assert.match(message, /<redacted>/u);
-      assert.doesNotMatch(message, /secret-token|ABCD-EFGH/u);
-      assert.doesNotMatch(message, new RegExp(root.replace(/[.*+?^\${}()|[\]\\]/gu, '\\$&'), 'u'));
-      return true;
-    },
-  );
-
-  await assert.rejects(
-    () => runner.run({
       provider: 'codex',
       jobId: 'codex-redaction',
       prompt: 'CASE:redaction',
@@ -653,20 +569,18 @@ try {
       }),
       (error: unknown) => {
         assert.ok(error instanceof Error);
-        assert.equal(error.name, 'CopilotCliAuthRequiredError');
-        assert.equal((error as Error & { code?: unknown }).code, 'COPILOT_AUTH_REQUIRED');
-        assert.equal((error as Error & { type?: unknown }).type, 'auth-required');
-        assert.match(error.message, /<redacted>/u);
-        assert.doesNotMatch(error.message, /secret-token/u);
-        assert.doesNotMatch(error.message, new RegExp(root.replace(/[.*+?^\${}()|[\]\\]/gu, '\\$&'), 'u'));
+        assert.equal(error.name, 'TeamsCliAgentPolicyError');
+        assert.equal((error as Error & { code?: unknown }).code, 'TEAMS_CLI_AGENT_POLICY_UNAVAILABLE');
+        assert.match(error.message, /unverified/u);
+        assert.doesNotMatch(error.message, /secret-token|ABCD-EFGH/u);
         return true;
       },
-      `${jobId} is classified as stable auth-required instead of a generic provider failure`,
+      `${jobId} is refused before authentication/model fallback`,
     );
     assert.equal(runner.cancel(jobId), false, `${jobId} is cleaned up after auth-required failure`);
   }
 
-  console.log('PASS: provider-neutral CLI runner selects independent Codex and official Copilot JSONL adapters');
+  console.log('PASS: fixed Luna Codex runner preserves lifecycle/process-tree/redaction and refuses unverified Copilot without spawn');
 } finally {
   if (attachmentChild && attachmentChild.exitCode === null && attachmentChild.signalCode === null) {
     attachmentChild.kill('SIGKILL');
