@@ -1,5 +1,12 @@
 # TeamsApp release knowledge update log
 
+## 2026-10-10 — Teams 1.0.139 existing-service update baseline
+
+* **Official contract**: current Microsoft Teams Admin Center docs say update the existing app from its details page with **Upload file**, preserving prior app policies; current Microsoft Dev Tunnels docs mark the CLI as public preview and not recommended for production; installed Node v24.13.1 docs define relative `--env-file` resolution and inherited-environment precedence. See [1.0.139 update concept](teams-139-existing-service-update.md).
+* **Observed**: candidate ZIP SHA `561fa93224336db7f1078415e328b265aaab4171da59f997699bafbd009269c6`, app `e915b402-eed4-4ee2-ba1f-c31d75c870a5`, version `1.0.139`, exact-source CI run `38074683657` PASS. Existing PID7583/tunnel8391 still serve 1.0.138 at the same target; actual store root is `/private/tmp/teams-local-ready-20261005-0ng2szzn/data`, with no active agent/A2A jobs and accepted notification receipts. A value-free file fingerprint is retained; no user record contents were copied.
+* **Gate**: complete candidate loopback staging with synthetic stores, exact server/client asset comparison, and rollback copy before touching the existing process. Then read back public health and assets, and only after foreground control returns use the same Admin Center tab to upload and verify the catalog/installed version/menu.
+* **Boundary**: no catalog upload, Teams foreground interaction, new tunnel/target, permission/policy change, or live synthetic message has occurred at this snapshot.
+
 ## 2026-10-10 — MP377 safe CLI launch metadata
 
 * **Official contract**: current Codex non-interactive documentation, installed0.162.0-alpha.2 help and pinned exec event schema; see [launch metadata concept](cli-launch-metadata.md).

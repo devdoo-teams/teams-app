@@ -8,6 +8,8 @@ okf_version: 0.2
 
 ## Concepts
 
+* [Existing-service 1.0.139 update](teams-139-existing-service-update.md) - verified candidate identity, existing public process and private stores, same-service staging/rollback gates, and separate catalog/install/UI read-back
+
 * [Mobile reference presentation](mobile-reference-presentation.md) - MP383 shared safe image rows, collapsed diagnostics, compact composer, mobile viewport and real host gates
 
 * [Three-view candidate and exact-commit CI](three-view-candidate-ci.md) - MP380/381 independent review corrections, SDK event fixtures, remote synchronization and separate visual/live gates
