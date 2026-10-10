@@ -170,8 +170,15 @@ function confirmationPayload(card: Record<string, any>, action: string): Record<
   const payload = card.actions?.find((candidate: any) => candidate.data?.action === action)?.data;
   assert.equal(payload?.schemaVersion, '1');
   assert.equal(payload?.action, action);
-  assert.equal(typeof payload?.confirmationToken, 'string');
-  assert.equal(typeof payload?.correlationId, 'string');
+  if (action === 'orchestration.approve') {
+    assert.match(payload?.approvalId, /^approval-[a-f0-9-]+$/u);
+    assert.match(payload?.revision, /^[a-f0-9]{64}$/u);
+    assert.equal(payload?.confirmationToken, undefined, 'approval retains durable identity rather than a transient grant');
+    assert.equal(payload?.correlationId, undefined);
+  } else {
+    assert.equal(typeof payload?.confirmationToken, 'string');
+    assert.equal(typeof payload?.correlationId, 'string');
+  }
   return payload;
 }
 
