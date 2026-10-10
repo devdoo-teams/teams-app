@@ -8,6 +8,8 @@ okf_version: 0.2
 
 ## Concepts
 
+* [Three-view candidate and exact-commit CI](three-view-candidate-ci.md) - MP380/381 independent review corrections, SDK event fixtures, remote synchronization and separate visual/live gates
+
 * [Safe CLI launch metadata](cli-launch-metadata.md) - MP377 immutable prelaunch model/effort/version, provider observations kept separate, cancellation and privacy gates
 
 * [Fixed Luna CLI and saved execution views](luna-and-execution-presentation.md) - MP368/369 fixed Teams-only launcher policy, real optional OSS SDK and independent live gates
