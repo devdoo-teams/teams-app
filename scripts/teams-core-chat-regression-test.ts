@@ -165,8 +165,10 @@ try {
   assert.equal('text' in completionActivity, false, 'completion card activity must not duplicate content as top-level text');
   const completionCard = adaptiveCard(completionActivity)!;
   assert.equal(completionCard.type, 'AdaptiveCard');
-  assert.equal(completionCard.version, '1.2');
-  assert.match(JSON.stringify(completionCard), /Codex(?: CLI)? 작업 완료/);
+  assert.equal(completionCard.version, '1.6');
+  assert.match(JSON.stringify(completionCard.body), /Core 에이전트 작업 · 요약/);
+  assert.match(JSON.stringify(completionCard.body), /FAKE_CODEX_OK/);
+  assert.ok(completionCard.actions?.some((action: any) => action.type === 'Action.ShowCard'), 'same-job details expand using the supported native action');
   assert.match(JSON.stringify(completionCard), new RegExp(job.id));
   assert.match(JSON.stringify(completionCard), /completed/);
 
