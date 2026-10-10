@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-import { buildTeamsPersonalTabDeepLink } from '../src/server/teams-tab-link.js';
+import { buildTeamsPersonalTabDeepLink, withTeamsCopilotJobDeepLink } from '../src/server/teams-tab-link.js';
 
 const link = buildTeamsPersonalTabDeepLink({
   catalogAppId: '9b20fd94-2ac9-4423-ac1f-ff528ab245c1',
@@ -17,6 +17,16 @@ assert.equal(buildTeamsPersonalTabDeepLink({
   catalogAppId: '9b20fd94-2ac9-4423-ac1f-ff528ab245c1',
   tabDomain: 'https://example.com/tabs/home',
 }), undefined);
+
+const copilotLink = new URL(withTeamsCopilotJobDeepLink(link, 'task-detail-1')!);
+assert.equal(copilotLink.pathname, new URL(link!).pathname, 'rich navigation reuses the existing catalog and tab identity');
+assert.deepEqual(JSON.parse(copilotLink.searchParams.get('context')!), { subEntityId: 'copilot-ui:task-detail-1' });
+const webCopilot = new URL(copilotLink.searchParams.get('webUrl')!);
+assert.equal(webCopilot.searchParams.get('view'), 'copilot');
+assert.equal(webCopilot.searchParams.get('jobId'), 'task-detail-1');
+assert.equal(webCopilot.pathname, '/tabs/home/');
+assert.equal(withTeamsCopilotJobDeepLink('https://synthetic.invalid/', 'task-detail-1'), undefined);
+assert.equal(withTeamsCopilotJobDeepLink(link, '../foreign'), undefined);
 assert.equal(buildTeamsPersonalTabDeepLink({
   catalogAppId: '9b20fd94-2ac9-4423-ac1f-ff528ab245c1',
   tabDomain: 'example.com',

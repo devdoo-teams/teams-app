@@ -20,6 +20,7 @@ try {
   assert.equal(await store.get(scope), 'rich');
   assert.equal(await store.get(otherUser), 'summary');
   assert.equal(await store.get(otherTenant), 'summary');
+  assert.deepEqual((await store.getSelection(scope)).details, ['tool','steps','diagnostics'], 'legacy mode-only records retain all detail defaults');
   assert.equal(await new ExecutionPresentationStore(file).get(scope), 'rich', 'selection survives restart');
   const persisted = JSON.parse(await fs.readFile(file, 'utf8'));
   assert.deepEqual(Object.keys(persisted[0]).sort(), ['mode', 'requesterId', 'tenantId', 'updatedAt']);
@@ -27,6 +28,15 @@ try {
   await store.set(scope, 'text');
   assert.equal(await new ExecutionPresentationStore(file, { defaultMode: 'rich' }).get(scope), 'text');
   assert.equal(await new ExecutionPresentationStore(file, { defaultMode: 'rich' }).get(otherUser), 'rich');
+  await store.setSelection(scope, {mode:'text',details:[],richSurface:'dialog'});
+  assert.deepEqual(await new ExecutionPresentationStore(file).getSelection(scope), {mode:'text',details:[],richSurface:'dialog'});
+  await store.set(scope, 'summary');
+  assert.deepEqual(await store.getSelection(scope), {mode:'summary',details:[],richSurface:'dialog'}, 'mode-only updates preserve selected details/surface');
+  await store.set(scope,'text');
+  assert.deepEqual((await store.getSelection(otherUser)).details,['tool','steps','diagnostics']);
+  assert.equal((await store.getSelection(otherTenant)).richSurface,'tab');
+  await assert.rejects(()=>store.setSelection(scope,{mode:'text',details:['tool','tool']}));
+  await assert.rejects(()=>store.setSelection(scope,{mode:'text',richSurface:'new-window'} as any));
   await assert.rejects(() => store.set(scope, 'openai' as any), /presentation|display|mode/i);
   await assert.rejects(() => store.get({ ...scope, tenantId: ' ' }), /scope/i);
   await assert.rejects(() => store.get({ ...scope, requesterId: 'user\u0000other' }), /scope/i);

@@ -17,3 +17,26 @@
   .execution-presentation-tools li { border-color: #616161; }
   .execution-presentation-error { color: #f3a8ac; }
 }
+.presentation-toolbar { display:flex;flex-wrap:wrap;gap:1rem;align-items:center;padding:1rem;margin:1rem 0 1.5rem;border:1px solid #ddddec;border-radius:1rem;background:#fff; }
+.presentation-mode-buttons { display:flex;flex-wrap:wrap;gap:.5rem;width:100%; }
+.presentation-mode-buttons button[aria-pressed="true"] { background:#6057b5;color:#fff; }
+.presentation-toolbar fieldset { display:flex;flex-wrap:wrap;gap:1rem;border:0;padding:0;margin:0; }
+.presentation-toolbar label { display:flex;align-items:center;gap:.5rem; }
+.presentation-toolbar input[type="checkbox"] { width:auto; }
+.presentation-toolbar select { width:auto; }
+.presentation-mandatory-note { width:100%;font-size:.875rem;color:#555; }
+.presentation-chat { display:grid;gap:1rem; }
+.presentation-user,.presentation-assistant { padding:1rem;border:1px solid #ddddec;border-radius:1rem;white-space:pre-wrap;overflow-wrap:anywhere; }
+.presentation-user { max-width:85%;justify-self:end;background:#eeecfc; }
+.presentation-assistant { background:#fff;width:100%;box-sizing:border-box; }
+.presentation-selected-details section { padding:.75rem 0;border-top:1px solid #ddddec; }
+.presentation-selected-details pre { white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%; }
+.presentation-selected-details time { font-size:.875rem; }
+.execution-presentation-detail-toggle > summary,.presentation-chat summary { cursor:pointer;color:#5148a8;padding:.75rem 0; }
+.presentation-settings-error { padding:1rem; }
+.presentation-workspace-entry { padding:1rem;border:1px solid #ddddec;border-radius:1rem;white-space:pre-wrap;overflow-wrap:anywhere; }
+@media(max-width:600px) { .presentation-toolbar { padding:.75rem; } .presentation-mode-buttons button { flex:1 1 100%; } .presentation-user { max-width:95%; } }
+
+.presentation-job-selector, .presentation-detail-controls { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; margin: .75rem 0; }
+.presentation-job-selector select { flex: 1; min-width: 0; }
+.presentation-selected-details pre { white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -2624,10 +2624,11 @@ const personalNotifications = new PersonalNotificationBroker(
       ...(activity as object), from: { id: teamsApp.id, role: 'bot' },
       conversation: { id: reference.conversationId, conversationType: 'personal', tenantId: reference.tenantId },
     }));
-    const displayMode = await executionPresentationStore.get({ tenantId: reference.tenantId, requesterId: reference.requesterId });
-    if (displayMode !== 'summary') {
+    const displaySelection = await executionPresentationStore.getSelection({ tenantId: reference.tenantId, requesterId: reference.requesterId });
+    const displayMode = displaySelection.mode;
+    if (displayMode !== 'summary' || genUiMode !== 'legacy') {
       const activity = createExecutionPresentationActivity(projectCoreOrchestrationJob(job), displayMode, {
-        ...coreOrchestrationCardOptions, richEnabled: Boolean(copilotUiArtifact),
+        ...coreOrchestrationCardOptions, richEnabled: Boolean(copilotUiArtifact), details: displaySelection.details,
       });
       const receipt = await sender('', undefined, activity);
       return { state: receipt.state === 'connector-accepted' ? 'accepted' as const
@@ -2671,10 +2672,11 @@ const notifyConversation = async (notification: AgentNotification): Promise<{ ac
     return { accepted: Boolean(tenantId && requesterId && personalNotifications.status(notification.job.id, { tenantId, requesterId })?.state === 'accepted') };
   }
   if (notification.job.tenantId && notification.job.requesterId) {
-    const displayMode = await executionPresentationStore.get({ tenantId: notification.job.tenantId, requesterId: notification.job.requesterId });
-    if (displayMode !== 'summary') {
+    const displaySelection = await executionPresentationStore.getSelection({ tenantId: notification.job.tenantId, requesterId: notification.job.requesterId });
+    const displayMode = displaySelection.mode;
+    if (displayMode !== 'summary' || genUiMode !== 'legacy') {
       const activity = createExecutionPresentationActivity(projectCoreOrchestrationJob(notification.job), displayMode, {
-        ...coreOrchestrationCardOptions, richEnabled: Boolean(copilotUiArtifact),
+        ...coreOrchestrationCardOptions, richEnabled: Boolean(copilotUiArtifact), details: displaySelection.details,
       });
       const receipt = await createConversationBotSender(conversationId)('', undefined, activity);
       return { accepted: receipt.state === 'connector-accepted' };
@@ -4047,10 +4049,10 @@ async function sendCoreOrchestrationActivity(
 }
 
 async function preferredCoreJobActivity(job: CoreOrchestrationJob, scope: AgentJobScope): Promise<PresentedCoreActivity> {
-  const mode = scope.tenantId && scope.requesterId
-    ? await executionPresentationStore.get({ tenantId: scope.tenantId, requesterId: scope.requesterId }) : 'summary';
-  return createExecutionPresentationActivity(job, mode, {
-    ...coreOrchestrationCardOptions, richEnabled: Boolean(copilotUiArtifact),
+  const selection = scope.tenantId && scope.requesterId
+    ? await executionPresentationStore.getSelection({ tenantId: scope.tenantId, requesterId: scope.requesterId }) : { mode: 'summary' as const, details: undefined };
+  return createExecutionPresentationActivity(job, selection.mode, {
+    ...coreOrchestrationCardOptions, richEnabled: Boolean(copilotUiArtifact), details: selection.details,
   });
 }
 

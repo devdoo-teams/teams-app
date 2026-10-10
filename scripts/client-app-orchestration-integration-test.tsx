@@ -52,7 +52,8 @@ for (const search of ['', '?view=orchestration', '?view=work', '?view=settings']
   assert.match(markup, /<h2[^>]*>에이전트 작업<\/h2>/, 'the shipped tab renders the durable agent work surface');
   assert.doesNotMatch(markup, /<nav/, 'the single-purpose tab has no redundant section navigation');
   assert.doesNotMatch(markup, /현재 위치|날씨|weather/i, 'weather and device location are absent from the shipped tab');
-  assert.doesNotMatch(markup, /오늘 업무|Atlassian parity|협업|응답 모드|CopilotKit/i, 'unrelated legacy surfaces are absent from the shipped tab');
+  assert.doesNotMatch(markup, /오늘 업무|Atlassian parity|협업|응답 모드/i, 'unrelated legacy surfaces are absent from the shipped tab');
+  assert.match(markup, /CopilotKit 대화 열기/, 'the SDK conversation is reachable from the ordinary tab');
 }
 
 hooks.deregister();

@@ -10,10 +10,13 @@ import type { CoreOrchestrationJob } from '../src/shared/core-orchestration.js';
 // the production component/controller and installed AG-UI transport run intact.
 const fixtureGlobal = globalThis as typeof globalThis & { __copilotStaleViewFixture?: any };
 const hooks = registerHooks({ resolve(specifier, context, nextResolve) {
+  if (specifier === '@microsoft/teams-js') return { format:'module',shortCircuit:true,
+    url:'data:text/javascript,export const app={}; export const dialog={url:{isSupported:()=>false}};' };
   if (/\/src\/client\/CopilotJobView\.(?:tsx|js)$/.test(context.parentURL ?? '')) {
     const code = specifier === '@copilotkit/react-core/v2' ? `
       export function CopilotKit({children}) { return children; }
-      export function CopilotChat() { return globalThis.__copilotStaleViewFixture.renderTranscript(); }
+      export function CopilotChatConfigurationProvider({children}) { return children; }
+      export function useRenderToolCall() { return () => globalThis.__copilotStaleViewFixture.renderTranscript(); }
       export function useAgent() { return {agent:globalThis.__copilotStaleViewFixture.agent,isReady:true}; }
       export function useRenderTool() {}
     ` : specifier === './auth.js' ? `
@@ -29,7 +32,7 @@ const hooks = registerHooks({ resolve(specifier, context, nextResolve) {
 const previousFetch = globalThis.fetch;
 const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
 globalThis.fetch = async () => { throw new Error('REAL_NETWORK_FORBIDDEN'); };
-Object.defineProperty(globalThis, 'window', { configurable: true, value: { location: { origin: 'https://synthetic.invalid' } } });
+Object.defineProperty(globalThis, 'window', { configurable: true, value: { location: { origin: 'https://synthetic.invalid', hash: '', search: '' } } });
 const deadline = setTimeout(() => { console.error('MP375_FIXTURE_DEADLINE_30000_MS'); process.exit(124); }, 30_000);
 
 type Element = ReactElement<any>;
@@ -45,6 +48,13 @@ function scheduler() {
   const states: any[] = [], effects: Array<{ dependencies: unknown[]; effect: () => unknown; pending: boolean }> = [], cleanups: Function[] = [];
   let cursor = 0;
   const dispatcher = {
+    useContext(context: any) { return context._currentValue; },
+    useRef(initial: unknown) {
+      const index = cursor++;
+      if (!(index in states)) states[index] = { current: initial };
+      return states[index];
+    },
+    useCallback(callback: Function) { cursor++; return callback; },
     useState(initial: unknown) {
       const index = cursor++;
       if (!(index in states)) states[index] = typeof initial === 'function' ? initial() : initial;
@@ -120,7 +130,11 @@ try {
   } };
   const outer = scheduler();
   let shell = outer.render(view.CopilotJobView, { jobId: job.id });
+  const observeConversation = (value: any) => find(shell, node => typeof node.type === 'function' && node.type.name === 'ConnectedCoreConversation')!.props.onStateChange(value);
+  observeConversation({ jobId: job.id, phase: 'ready', job, uncertain: false });
+  shell = outer.render(view.CopilotJobView, { jobId: job.id });
   const inner = find(shell, node => typeof node.type === 'function' && node.type.name === 'ConnectedProjectionView'); assert.ok(inner);
+  assert.equal(inner.props.authorized, true, 'owner-authorized Core conversation enables its tool projection');
   const state = scheduler(); disposers.push(() => state.dispose());
   let tree = state.render(inner.type as Function, inner.props); state.flush(); tree = state.render(inner.type as Function, inner.props);
   const renderView = () => { tree = state.render(inner.type as Function, inner.props); return tree; };
@@ -161,7 +175,7 @@ try {
 
   // A renderer-level SDK error is also fail-closed without any execution call.
   agent.setState({ stale: 'display-error' }); const beforeDisplayError = requests.length;
-  find(tree, node => (node.type as Function)?.name === 'CopilotChat')!.props.onError(); renderView();
+  find(tree, node => (node.type as Function)?.name === 'ProjectionTranscript')!.props.onError(); renderView();
   assert.equal(transcript().props.hidden, true); assert.deepEqual(agent.messages, []); assert.deepEqual(agent.state, {});
   assert.equal(requests.length, beforeDisplayError); await succeed('SYNTHETIC_DISPLAY_RETRY');
 
@@ -178,6 +192,8 @@ try {
   assert.equal(find(shell, node => typeof node.type === 'function' && node.type.name === 'ConnectedProjectionView'), undefined);
   state.dispose(); assert.deepEqual(agent.messages, []); assert.deepEqual(agent.state, {});
   find(shell, node => node.type === 'button')!.props.onClick(); shell = outer.render(view.CopilotJobView, { jobId: job.id });
+  observeConversation({ jobId: job.id, phase: 'ready', job, uncertain: false });
+  shell = outer.render(view.CopilotJobView, { jobId: job.id });
   const reconnected = find(shell, node => typeof node.type === 'function' && node.type.name === 'ConnectedProjectionView');
   assert.ok(reconnected, 'Explicit reconnect permits a fresh same-job view');
   const retryState = scheduler(); disposers.push(() => retryState.dispose());

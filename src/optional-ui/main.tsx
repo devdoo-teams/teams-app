@@ -1,6 +1,6 @@
 import { createRoot } from 'react-dom/client';
 import * as teamsSdk from '@microsoft/teams-js';
-import { CopilotJobView } from '../client/CopilotJobView.js';
+import { CopilotConversationWorkspace } from '../client/CopilotConversationWorkspace.js';
 import { markTeamsHostReady, setAuthRequired } from '../client/auth.js';
 import { parseRequestedJobId } from '../client/job-deep-link.js';
 import '@copilotkit/react-core/v2/styles.css';
@@ -77,7 +77,7 @@ if (typeof document !== 'undefined') {
   if (!container) throw new Error('Teams optional UI root is missing');
   const root = createRoot(container);
   const jobId = parseRequestedJobId(window.location.search);
-  const backLink = `/tabs/home/${jobId ? `?jobId=${encodeURIComponent(jobId)}` : ''}`;
+  const backLink = `/tabs/home/?view=core${jobId ? `&jobId=${encodeURIComponent(jobId)}` : ''}`;
   const controller = createOptionalTeamsBootstrap({
     initialize: () => teamsSdk.app.isInitialized() ? Promise.resolve() : teamsSdk.app.initialize(),
     requireAuth: () => setAuthRequired(true),
@@ -85,14 +85,13 @@ if (typeof document !== 'undefined') {
     notifySuccess: () => teamsSdk.app.notifySuccess(),
     renderState: state => {
       root.render(<main className="shell optional-execution-ui">
-        <h1>업무 허브 · 풍부한 보기</h1>
-        <a href={backLink}>개인 작업으로 돌아가기</a>
+        <h1>업무 허브 · CopilotKit 대화</h1>
+        {state.kind !== 'ready' ? <a href={backLink}>개인 작업으로 돌아가기</a> : null}
         {state.kind === 'loading' ? <p role="status" aria-live="polite">Teams 연결을 확인하고 있습니다.</p> : null}
         {state.kind === 'blocked' ? <section role="alert"><p>{state.message}</p>
           {state.retryAcknowledgement ? <button type="button" onClick={() => { void controller.start(); }}>연결 다시 확인</button> : null}
         </section> : null}
-        {state.kind === 'ready' ? jobId ? <CopilotJobView jobId={jobId} />
-          : <p role="alert">작업 ID가 없습니다. 개인 작업의 풍부한 보기에서 다시 열어 주세요.</p> : null}
+        {state.kind === 'ready' ? <CopilotConversationWorkspace initialJobId={jobId} /> : null}
       </main>);
     },
   });

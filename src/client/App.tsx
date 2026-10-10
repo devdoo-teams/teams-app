@@ -2,6 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { apiFetch, setAuthRequired } from './auth.js';
 import { OrchestrationPanel } from './OrchestrationPanel.js';
+import { ExecutionPresentationProvider, ExecutionPresentationToolbar } from './ExecutionPresentationSettings.js';
+import * as teamsSdk from '@microsoft/teams-js';
+const teamsApp = teamsSdk.app;
+import { parseRequestedCopilotJobId } from './job-deep-link.js';
 
 export type HealthResponse = {
   ok: boolean;
@@ -99,6 +103,17 @@ export function App() {
   const [healthLoading, setHealthLoading] = useState(true);
   const [healthError, setHealthError] = useState('');
   const request = useRef<AbortController | null>(null);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    let current = true;
+    const navigate = (subPageId?: unknown) => {
+      if (!current) return;
+      const jobId = parseRequestedCopilotJobId(window.location.search, subPageId);
+      if (jobId) window.location.replace(`/tabs/copilot-ui/?jobId=${encodeURIComponent(jobId)}`);
+    };
+    void teamsApp.getContext().then(context => navigate(context.page.subPageId)).catch(() => navigate());
+    return () => { current = false; };
+  }, []);
 
   const loadHealth = useCallback(async () => {
     request.current?.abort();
@@ -136,7 +151,7 @@ export function App() {
   });
 
   return (
-    <main className="shell agent-hub-shell">
+    <ExecutionPresentationProvider><main className="shell agent-hub-shell">
       <header className="hero agent-hub-hero">
         <div>
           <p className="eyebrow">TEAMS AGENT CORE</p>
@@ -148,6 +163,7 @@ export function App() {
         </span>
       </header>
 
+      <ExecutionPresentationToolbar />
       <section className="runtime-panel agent-runtime-panel" aria-label="에이전트 런타임 상태">
         <div className="runtime-panel-heading">
           <span>실행 상태</span>
@@ -178,6 +194,6 @@ export function App() {
 
       <OrchestrationPanel />
       <footer>Teams SDK · Agent execution · Durable history</footer>
-    </main>
+    </main></ExecutionPresentationProvider>
   );
 }

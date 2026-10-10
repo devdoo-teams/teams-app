@@ -5,10 +5,18 @@ export function parseRequestedJobId(search: string, subPageId?: unknown): string
   const params = new URLSearchParams(search);
   if (params.getAll('jobId').length > 1) return undefined;
   const query = params.get('jobId');
-  const context = typeof subPageId === 'string' && subPageId ? subPageId : undefined;
+  const context = typeof subPageId === 'string' && subPageId ? subPageId.replace(/^copilot-ui:/, '') : undefined;
   if (query !== null && context !== undefined && query !== context) return undefined;
   const id = context ?? query;
   return typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(id) ? id : undefined;
+}
+
+export function parseRequestedCopilotJobId(search: string, subPageId?: unknown): string | undefined {
+  const params = new URLSearchParams(search);
+  if (params.getAll('view').length > 1 || params.get('view') === 'core') return undefined;
+  const isCopilotHint = typeof subPageId === 'string' && subPageId.startsWith('copilot-ui:');
+  if (!isCopilotHint && params.get('view') !== 'copilot') return undefined;
+  return parseRequestedJobId(search, subPageId);
 }
 
 export function loadRequestedJob(id: string, client: Pick<CoreOrchestrationClient, 'getJob'>, signal?: AbortSignal) {

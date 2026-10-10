@@ -1,6 +1,6 @@
-import type { ComponentType, HTMLAttributes, ReactElement, ReactNode } from 'react';
+import type { ComponentType, HTMLAttributes, ReactElement, ReactNode, TextareaHTMLAttributes, ButtonHTMLAttributes } from 'react';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
-import type { AbstractAgent } from './ag-ui-client.js';
+import type { AbstractAgent, Message, ToolCall } from './ag-ui-client.js';
 
 // Installed @copilotkit/react-core 1.66.2 public v2 declarations. Focused
 // subset used by Teams; props and named schema output retain strict types.
@@ -15,7 +15,7 @@ export type RenderToolProps<S extends StandardSchemaV1> = {
 type Slot<Props> = ComponentType<Props> | string | Partial<Props>;
 type HiddenCompatibleSlot = Slot<HTMLAttributes<HTMLDivElement>>;
 type AssistantMessageProps = {
-  markdownRenderer?: HiddenCompatibleSlot; toolbar?: HiddenCompatibleSlot;
+  markdownRenderer?: Slot<{content:string}>; toolbar?: HiddenCompatibleSlot;
 };
 type MessageViewProps = {
   assistantMessage?: Slot<AssistantMessageProps>;
@@ -39,6 +39,28 @@ export type CopilotChatProps = HTMLAttributes<HTMLDivElement> & {
   onError?: (event: SdkErrorEvent) => void | Promise<void>;
 };
 export const CopilotChat: ComponentType<CopilotChatProps>;
+// Installed1.66.2 CopilotChatInput/CopilotChatView/ConfigurationProvider public
+// slots. Keep controlled input callbacks separate from the agent run transport.
+export type CopilotChatInputProps = Omit<HTMLAttributes<HTMLDivElement>, 'onChange'> & {
+  mode?: 'input' | 'transcribe' | 'processing'; isRunning?: boolean;
+  onSubmitMessage?: (value: string) => void; onStop?: () => void;
+  value?: string; onChange?: (value: string) => void;
+  textArea?: Slot<TextareaHTMLAttributes<HTMLTextAreaElement>>;
+  sendButton?: Slot<ButtonHTMLAttributes<HTMLButtonElement>>;
+};
+export const CopilotChatInput: ComponentType<CopilotChatInputProps>;
+export type CopilotChatViewProps = HTMLAttributes<HTMLDivElement> & {
+  messages?: Message[]; autoScroll?: boolean | 'pin-to-bottom' | 'pin-to-send' | 'none';
+  isRunning?: boolean; welcomeScreen?: boolean;
+  input?: Slot<CopilotChatInputProps>; messageView?: Slot<MessageViewProps>;
+  inputValue?: string; onInputChange?: (value: string) => void;
+  onSubmitMessage?: (value: string) => void; onStop?: () => void;
+};
+export const CopilotChatView: ComponentType<CopilotChatViewProps>;
+export const CopilotChatConfigurationProvider: ComponentType<{
+  children: ReactNode; agentId?: string; threadId?: string; hasExplicitThreadId?: boolean;
+}>;
+export function useRenderToolCall(): (props: { toolCall: ToolCall; toolMessage?: Extract<Message, {role:'tool'}> }) => ReactElement | null;
 export function useCopilotChatConfiguration(): { threadId?: string; agentId?: string } | null;
 export function useAgentContext(options: { description: string; value: unknown }): void;
 export function useRenderTool<S extends StandardSchemaV1>(config: {

@@ -493,7 +493,8 @@ const promptAndTools = renderToStaticMarkup(<OrchestrationPanelView
   error=""
   mobile={false}
 />);
-assert.match(promptAndTools, /프롬프트:<\/strong> 배포 상태를 공식 문서와 비교해줘/);
+assert.match(promptAndTools, /요청 보기<\/summary><pre>배포 상태를 공식 문서와 비교해줘/);
+assert.ok(promptAndTools.indexOf('선택한 대화') < promptAndTools.indexOf('aria-label="작업 내용"'), 'selected conversation appears before the new execution form');
 assert.match(promptAndTools, /스킬 · systematic-debugging/);
 assert.match(promptAndTools, /MCP · jira\/search_issues/);
 assert.match(promptAndTools, /gpt-5.6-sol/);

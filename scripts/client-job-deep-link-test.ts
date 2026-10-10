@@ -4,6 +4,11 @@ assert.equal(typeof module.parseRequestedJobId, 'function', 'personal tab must r
 assert.equal(module.parseRequestedJobId('?jobId=task-a'), 'task-a');
 assert.equal(module.parseRequestedJobId('', 'task-b'), 'task-b');
 assert.equal(module.parseRequestedJobId('?jobId=task-a', 'task-a'), 'task-a');
+assert.equal(module.parseRequestedJobId('?jobId=task-a', 'copilot-ui:task-a'),'task-a');
+assert.equal(module.parseRequestedCopilotJobId('', 'copilot-ui:task-a'),'task-a');
+assert.equal(module.parseRequestedCopilotJobId('?jobId=task-a&view=copilot'),'task-a');
+assert.equal(module.parseRequestedCopilotJobId('?jobId=task-a&view=core','copilot-ui:task-a'),undefined,'return link must not loop back to SDK');
+assert.equal(module.parseRequestedCopilotJobId('?jobId=task-b&view=copilot','copilot-ui:task-a'),undefined,'conflicting navigation hints are rejected');
 assert.equal(module.parseRequestedJobId('?jobId=task-a', 'task-b'), undefined);
 assert.equal(module.parseRequestedJobId('?jobId=task-a&jobId=task-b'), undefined);
 for (const id of ['../other', '', 'task a', 'x'.repeat(201)]) assert.equal(module.parseRequestedJobId(`?jobId=${encodeURIComponent(id)}`), undefined);

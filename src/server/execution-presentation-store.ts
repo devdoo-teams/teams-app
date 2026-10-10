@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { atomicWriteJson, readAtomicJsonStore } from './atomic-file.js';
 import {
   DEFAULT_EXECUTION_PRESENTATION_MODE, ExecutionPresentationModeSchema, ExecutionPresentationScopeSchema,
+  ExecutionPresentationSelectionSchema, executionPresentationPreferences,
+  type ExecutionPresentationSelection, type ExecutionPresentationPreferences,
   type ExecutionPresentationMode, type ExecutionPresentationScope,
 } from '../shared/execution-presentation.js';
 
@@ -9,6 +11,8 @@ const MAX_ENTRIES = 1_000;
 const MAX_STORE_BYTES = 1_048_576;
 const recordSchema = ExecutionPresentationScopeSchema.extend({
   mode: ExecutionPresentationModeSchema,
+  details: ExecutionPresentationSelectionSchema.shape.details,
+  richSurface: ExecutionPresentationSelectionSchema.shape.richSurface,
   updatedAt: z.string().max(30).refine(value => {
     const timestamp = Date.parse(value);
     return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
@@ -46,20 +50,29 @@ export class ExecutionPresentationStore {
   }
 
   async get(scope: ExecutionPresentationScope): Promise<ExecutionPresentationMode> {
+    return (await this.getSelection(scope)).mode;
+  }
+
+  async getSelection(scope: ExecutionPresentationScope): Promise<ExecutionPresentationPreferences> {
     const valid = parseScope(scope);
     return this.enqueue(async () => {
       await this.loadIfNeeded();
-      return this.preferences.find(item => sameScope(item, valid))?.mode ?? this.defaultMode;
+      return executionPresentationPreferences(this.preferences.find(item => sameScope(item, valid)) ?? { mode: this.defaultMode });
     });
   }
 
   async set(scope: ExecutionPresentationScope, mode: ExecutionPresentationMode): Promise<void> {
+    await this.setSelection(scope, { mode: parseMode(mode) });
+  }
+
+  async setSelection(scope: ExecutionPresentationScope, selection: ExecutionPresentationSelection): Promise<void> {
     const valid = parseScope(scope);
-    const selected = parseMode(mode);
+    const selected = ExecutionPresentationSelectionSchema.parse(selection);
     await this.enqueue(async () => {
       await this.loadIfNeeded();
       const next = this.preferences.filter(item => !sameScope(item, valid));
-      next.push({ ...valid, mode: selected, updatedAt: new Date().toISOString() });
+      const previous = this.preferences.find(item => sameScope(item, valid));
+      next.push({ ...previous, ...valid, ...selected, updatedAt: new Date().toISOString() });
       if (next.length > this.maxEntries) throw new RangeError('Execution presentation store capacity exceeded');
       await atomicWriteJson(this.dataFile, next);
       this.preferences = next;

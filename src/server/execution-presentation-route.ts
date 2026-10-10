@@ -21,9 +21,9 @@ export function mountExecutionPresentationRoutes(http: Express, options: Executi
         if (selection.data.mode === 'rich' && !options.richEnabled()) {
           return response.status(503).json({ error: 'CopilotKit 화면을 현재 사용할 수 없습니다.' });
         }
-        await options.store.set(scope.data, selection.data.mode);
+        await options.store.setSelection(scope.data, selection.data);
       }
-      return response.json({ mode: await options.store.get(scope.data),
+      return response.json({ ...await options.store.getSelection(scope.data),
         availableModes: options.richEnabled() ? ['text', 'summary', 'rich'] : ['text', 'summary'] });
     } catch {
       return response.status(503).json({ error: '표시 설정을 저장하거나 읽지 못했습니다. 다시 시도하세요.' });

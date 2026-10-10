@@ -1,8 +1,15 @@
 import assert from 'node:assert/strict';
 import { mountExecutionPresentationRoutes } from '../src/server/execution-presentation-route.js';
+import { ExecutionPresentationStore } from '../src/server/execution-presentation-store.js';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 const routes = new Map<string, Function[]>();
-const selections = new Map<string, string>();
+const root = await fs.mkdtemp(path.join(os.tmpdir(), 'presentation-route-'));
+const store = new ExecutionPresentationStore(path.join(root, 'preferences.json'));
+const setSelection = store.setSelection.bind(store);
+store.setSelection = async (...args) => { writes++; await setSelection(...args); };
 let writes = 0;
 let rich = false;
 mountExecutionPresentationRoutes({
@@ -10,10 +17,7 @@ mountExecutionPresentationRoutes({
   post: (p: string, ...h: Function[]) => routes.set(`POST ${p}`, h),
 } as any, {
   authenticate: (_q, _s, next) => next(),
-  store: {
-    get: async (s: any) => selections.get(`${s.tenantId}:${s.requesterId}`) ?? 'summary',
-    set: async (s: any, m: string) => { writes++; selections.set(`${s.tenantId}:${s.requesterId}`, m); },
-  } as any,
+  store,
   resolveScope: (_q, s) => s.locals.owner,
   richEnabled: () => rich,
 });
@@ -37,4 +41,10 @@ assert.equal((await call('GET', {}, bob)).body.mode, 'summary');
 rich = true;
 assert.equal((await call('POST', { mode: 'rich' }, alice)).body.mode, 'rich');
 assert.deepEqual((await call('GET', {}, alice)).body.availableModes, ['text', 'summary', 'rich']);
+assert.equal((await call('POST', {mode:'rich',details:[],richSurface:'dialog'}, alice)).statusCode,200);
+assert.deepEqual((await call('GET', {}, alice)).body.details,[]);
+assert.equal((await call('GET', {}, alice)).body.richSurface,'dialog');
+assert.deepEqual((await call('GET', {}, bob)).body.details,['tool','steps','diagnostics']);
+assert.equal((await call('POST', {mode:'rich',details:['tool','tool']},alice)).statusCode,400);
+await fs.rm(root,{recursive:true,force:true});
 console.log('Execution presentation authenticated owner routes: PASS');

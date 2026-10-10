@@ -54,3 +54,16 @@ export function withTeamsJobDeepLink(base: string | undefined, jobId: string): s
     return url.toString();
   } catch { return undefined; }
 }
+
+/** The existing home tab consumes this navigation hint, then opens the same
+ * origin SDK page. It grants no job access and adds no static tab identity. */
+export function withTeamsCopilotJobDeepLink(base: string | undefined, jobId: string): string | undefined {
+  const validated = withTeamsJobDeepLink(base, jobId);
+  if (!validated) return undefined;
+  const url = new URL(validated);
+  const web = new URL(url.searchParams.get('webUrl')!);
+  web.searchParams.set('view', 'copilot');
+  url.searchParams.set('webUrl', web.toString());
+  url.searchParams.set('context', JSON.stringify({ subEntityId: `copilot-ui:${jobId}` }));
+  return url.toString();
+}

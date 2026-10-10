@@ -14,7 +14,20 @@ const scopeId = z.string().max(256).refine(value => value.trim().length > 0)
   .refine(value => !/[\u0000-\u001f\u007f-\u009f]/u.test(value));
 export const ExecutionPresentationScopeSchema = z.object({ tenantId: scopeId, requesterId: scopeId }).strict();
 export type ExecutionPresentationScope = z.infer<typeof ExecutionPresentationScopeSchema>;
-export const ExecutionPresentationSelectionSchema = z.object({ mode: ExecutionPresentationModeSchema }).strict();
+export const EXECUTION_PRESENTATION_DETAILS = ['tool', 'steps', 'diagnostics'] as const;
+export const ExecutionPresentationDetailSchema = z.enum(EXECUTION_PRESENTATION_DETAILS);
+export type ExecutionPresentationDetail = z.infer<typeof ExecutionPresentationDetailSchema>;
+export const ExecutionPresentationSelectionSchema = z.object({
+  mode: ExecutionPresentationModeSchema,
+  details: z.array(ExecutionPresentationDetailSchema).max(3)
+    .refine(values => new Set(values).size === values.length, 'Duplicate display detail').optional(),
+  richSurface: z.enum(['tab', 'dialog']).optional(),
+}).strict();
+export type ExecutionPresentationSelection = z.infer<typeof ExecutionPresentationSelectionSchema>;
+export type ExecutionPresentationPreferences = Required<ExecutionPresentationSelection>;
+export function executionPresentationPreferences(selection: ExecutionPresentationSelection): ExecutionPresentationPreferences {
+  return { mode: selection.mode, details: selection.details ?? [...EXECUTION_PRESENTATION_DETAILS], richSurface: selection.richSurface ?? 'tab' };
+}
 export const ExecutionPresentationJobIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u);
 
 const factSchema = z.object({ label: z.string().max(100), value: z.string().max(1_000) }).strict();

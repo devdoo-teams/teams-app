@@ -2,7 +2,6 @@ import * as teamsSdk from '@microsoft/teams-js';
 const teamsApp = teamsSdk.app;
 import { parseRequestedJobId, loadRequestedJob, includeRequestedJob } from './job-deep-link.js';
 import { CORE_AGENT_PROMPT_MAX_LENGTH, CORE_JOB_STATUS_LABELS } from '../shared/core-orchestration.js';
-import { projectReceiptFacts } from '../shared/receipt-presentation.js';
 import { TEAMS_CLI_AGENT_POLICY } from '../shared/teams-cli-agent-policy.js';
 import type { VisibleJobConversation } from '../shared/job-conversation.js';
 import { ExecutionPresentationPanel } from './ExecutionPresentationPanel.js';
@@ -11,7 +10,6 @@ import { createLatestDetailRequestController } from './latest-detail-request.js'
 export { createLatestDetailRequestController } from './latest-detail-request.js';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 
-import { agentToolOutcomeText } from '../shared/agent-tool-presentation.js';
 import {
   CoreOrchestrationClientError,
   createCoreOrchestrationClient,
@@ -42,13 +40,7 @@ export function settleOrchestrationRefreshNotice(
 const DEFAULT_CLIENT = createCoreOrchestrationClient();
 const ORCHESTRATION_POLL_INTERVAL_MS = 3_000;
 const statusLabels = CORE_JOB_STATUS_LABELS;
-const toolCategoryLabels = {
-  skill: '스킬',
-  plugin: '플러그인',
-  mcp: 'MCP',
-  cli: 'CLI',
-  builtin: '기본 도구',
-} as const;
+
 
 function nextIdempotencyKey(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -326,6 +318,123 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
         </aside>
       ) : null}
 
+      <label className="presentation-job-selector">표시할 개인 작업
+        <select aria-label="표시할 개인 작업" disabled={props.phase === 'loading' || selectedBusy} value={props.selectedJob?.id ?? ''}
+          onChange={event => { if (event.currentTarget.value) void props.onSelectTask(event.currentTarget.value); }}>
+          <option value="">기존 작업을 선택하세요.</option>
+          {includeRequestedJob(props.jobs, props.selectedJob ?? undefined).map(job => <option value={job.id} key={job.id}>{job.id} · {statusLabels[job.status]}</option>)}
+        </select>
+      </label>
+
+      {props.selectedJob ? (
+        <article aria-labelledby="orchestration-detail-heading" className="work-item-detail" id="orchestration-job-detail" tabIndex={-1}>
+          <h3 id="orchestration-detail-heading">선택한 대화</h3>
+          <ExecutionPresentationPanel job={props.selectedJob} conversation={props.conversation} />
+          {props.selectedJob.pendingOperation ? <p>승인 대상: {props.selectedJob.pendingOperation.jobId} · revision: {props.selectedJob.pendingOperation.revision}</p> : null}
+          <p><strong>상태:</strong> {statusLabels[props.selectedJob.status]}</p>
+          <p><strong>작업 ID:</strong> {props.selectedJob.id}</p>
+          {props.selectedJob.notificationDelivery ? <p aria-label="개인 채팅 알림 상태">
+            <strong>개인 채팅 알림:</strong> {({
+              'waiting-personal-chat': '개인 채팅 연결 대기 — 업무 허브 개인 채팅에서 메시지를 보내세요.',
+              pending: '전송 대기', sending: '전송 확인 중', accepted: 'Teams가 전송을 수락함 — 실제 수신 여부는 채팅에서 확인하세요.',
+              rejected: 'Teams가 전송을 거부함 — 앱 설치·차단 상태를 확인하세요.', ambiguous: '전송 결과 미확인 — 중복 방지를 위해 자동 재전송하지 않습니다.',
+            })[props.selectedJob.notificationDelivery.state]}
+          </p> : null}
+
+          {props.selectedJob.status === 'awaiting_approval' ? (
+            <div>
+              <p>이 작업을 계속하려면 승인이 필요합니다.</p>
+              {pendingConfirmation?.kind === 'approve' ? (
+                <div aria-label="작업 승인 확인" className="delete-confirmation" role="group">
+                  <span>실행하기 전에 승인 여부를 다시 확인합니다.</span>
+                  <button
+                    className="primary"
+                    disabled={selectedBusy || !supports(selectedProvider, 'approve')}
+                    onClick={() => void props.onApprove(props.selectedJob!.id)}
+                    type="button"
+                  >
+                    {actionLabel('승인 확인', '승인 중…', props.busyAction === `approval:${props.selectedJob.id}`)}
+                  </button>
+                  <button className="secondary" disabled={selectedBusy} onClick={() => props.onDismissConfirmation?.()} type="button">
+                    돌아가기
+                  </button>
+                </div>
+              ) : (
+                <button
+                  className="primary"
+                  disabled={selectedBusy || !supports(selectedProvider, 'approve')}
+                  onClick={() => props.onRequestConfirmation?.('approve', props.selectedJob!.id)}
+                  type="button"
+                >
+                  승인
+                </button>
+              )}
+            </div>
+          ) : null}
+
+          {props.selectedJob.status === 'input_required' ? (
+            <form onSubmit={sendInput}>
+              <label>
+                추가 입력이 필요합니다.
+                <textarea
+                  aria-label="추가 입력"
+                  disabled={selectedBusy || !supports(selectedProvider, 'input')}
+                  onChange={(event) => props.onInputChange(event.currentTarget.value)}
+                  required
+                  value={props.inputValue}
+                />
+              </label>
+              <button className="primary" disabled={selectedBusy || !supports(selectedProvider, 'input')} type="submit">
+                {actionLabel('입력 보내기', '전송 중…', props.busyAction === `input:${props.selectedJob.id}`)}
+              </button>
+              {!supports(selectedProvider, 'input') ? (
+                <p className="panel-description">이 제공자는 탭에서 추가 입력 재개를 지원하지 않습니다.</p>
+              ) : null}
+            </form>
+          ) : null}
+
+          <div className="work-item-actions">
+            {canCancel ? (
+              pendingConfirmation?.kind === 'cancel' ? (
+                <div aria-label="작업 취소 확인" className="delete-confirmation" role="group">
+                  <span>작업 취소 요청을 보내기 전에 다시 확인합니다.</span>
+                  <button
+                    className="secondary"
+                    disabled={selectedBusy}
+                    onClick={() => void props.onCancel(props.selectedJob!.id)}
+                    type="button"
+                  >
+                    {actionLabel('취소 확인', '취소 중…', props.busyAction === `cancel:${props.selectedJob.id}`)}
+                  </button>
+                  <button className="secondary" disabled={selectedBusy} onClick={() => props.onDismissConfirmation?.()} type="button">
+                    돌아가기
+                  </button>
+                </div>
+              ) : (
+                <button
+                  className="secondary"
+                  disabled={selectedBusy}
+                  onClick={() => props.onRequestConfirmation?.('cancel', props.selectedJob!.id)}
+                  type="button"
+                >
+                  작업 취소
+                </button>
+              )
+            ) : null}
+            {props.selectedJob.status === 'failed' && supports(selectedProvider, 'retry') ? (
+              <button
+                className="secondary"
+                disabled={selectedBusy}
+                onClick={() => void props.onRetryTask(props.selectedJob!.id)}
+                type="button"
+              >
+                {actionLabel('작업 다시 시도', '재시도 중…', props.busyAction === `retry:${props.selectedJob.id}`)}
+              </button>
+            ) : null}
+          </div>
+        </article>
+      ) : null}
+
       <form className="work-item-detail" onSubmit={submit}>
         <label>
           실행 제공자
@@ -470,129 +579,7 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
         </div>
       ) : null}
 
-      {props.selectedJob ? (
-        <article aria-labelledby="orchestration-detail-heading" className="work-item-detail" id="orchestration-job-detail" tabIndex={-1}>
-          <h3 id="orchestration-detail-heading">작업 상세</h3>
-          {props.selectedJob.pendingOperation ? <p>승인 대상: {props.selectedJob.pendingOperation.jobId} · revision: {props.selectedJob.pendingOperation.revision}</p> : null}
-          <p><strong>상태:</strong> {statusLabels[props.selectedJob.status]}</p>
-          <p><strong>작업 ID:</strong> {props.selectedJob.id}</p>
-          {props.selectedJob.notificationDelivery ? <p aria-label="개인 채팅 알림 상태">
-            <strong>개인 채팅 알림:</strong> {({
-              'waiting-personal-chat': '개인 채팅 연결 대기 — 업무 허브 개인 채팅에서 메시지를 보내세요.',
-              pending: '전송 대기', sending: '전송 확인 중', accepted: 'Teams가 전송을 수락함 — 실제 수신 여부는 채팅에서 확인하세요.',
-              rejected: 'Teams가 전송을 거부함 — 앱 설치·차단 상태를 확인하세요.', ambiguous: '전송 결과 미확인 — 중복 방지를 위해 자동 재전송하지 않습니다.',
-            })[props.selectedJob.notificationDelivery.state]}
-          </p> : null}
-          <p><strong>제출 실행경계:</strong> {props.selectedJob.executionEnvironment ?? '확인되지 않음'}</p>
-          <p><strong>실제 실행환경:</strong> {props.selectedJob.executionReceipt?.platform ?? '확인되지 않음'}</p>
-          <p><strong>작업 마지막 갱신:</strong> {props.selectedJob.updatedAt ?? '제공되지 않음'}</p>
-          {!props.conversation ? <p><strong>프롬프트:</strong> {props.selectedJob.prompt}</p> : null}
-          {projectReceiptFacts(props.selectedJob).map(fact => <p key={fact.label}><strong>{fact.label}:</strong> {fact.value}</p>)}
-          <div>
-            <strong>제공자가 보고한 도구:</strong>
-            {(props.selectedJob.tools?.length ?? 0) > 0 ? (
-              <ul aria-label="관찰된 도구">
-                {props.selectedJob.tools?.map((usage) => (
-                  <li key={`${usage.category}:${usage.execution?.itemId ?? usage.name}`} style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{toolCategoryLabels[usage.category]} · {usage.name}{agentToolOutcomeText(usage) ? ` · ${agentToolOutcomeText(usage)}` : ''}</li>
-                ))}
-              </ul>
-            ) : <span> 없음 (스킬·플러그인은 제공자가 식별자를 보고한 경우에만 표시)</span>}
-          </div>
-          <ExecutionPresentationPanel job={props.selectedJob} conversation={props.conversation} />
 
-          {props.selectedJob.status === 'awaiting_approval' ? (
-            <div>
-              <p>이 작업을 계속하려면 승인이 필요합니다.</p>
-              {pendingConfirmation?.kind === 'approve' ? (
-                <div aria-label="작업 승인 확인" className="delete-confirmation" role="group">
-                  <span>실행하기 전에 승인 여부를 다시 확인합니다.</span>
-                  <button
-                    className="primary"
-                    disabled={selectedBusy || !supports(selectedProvider, 'approve')}
-                    onClick={() => void props.onApprove(props.selectedJob!.id)}
-                    type="button"
-                  >
-                    {actionLabel('승인 확인', '승인 중…', props.busyAction === `approval:${props.selectedJob.id}`)}
-                  </button>
-                  <button className="secondary" disabled={selectedBusy} onClick={() => props.onDismissConfirmation?.()} type="button">
-                    돌아가기
-                  </button>
-                </div>
-              ) : (
-                <button
-                  className="primary"
-                  disabled={selectedBusy || !supports(selectedProvider, 'approve')}
-                  onClick={() => props.onRequestConfirmation?.('approve', props.selectedJob!.id)}
-                  type="button"
-                >
-                  승인
-                </button>
-              )}
-            </div>
-          ) : null}
-
-          {props.selectedJob.status === 'input_required' ? (
-            <form onSubmit={sendInput}>
-              <label>
-                추가 입력이 필요합니다.
-                <textarea
-                  aria-label="추가 입력"
-                  disabled={selectedBusy || !supports(selectedProvider, 'input')}
-                  onChange={(event) => props.onInputChange(event.currentTarget.value)}
-                  required
-                  value={props.inputValue}
-                />
-              </label>
-              <button className="primary" disabled={selectedBusy || !supports(selectedProvider, 'input')} type="submit">
-                {actionLabel('입력 보내기', '전송 중…', props.busyAction === `input:${props.selectedJob.id}`)}
-              </button>
-              {!supports(selectedProvider, 'input') ? (
-                <p className="panel-description">이 제공자는 탭에서 추가 입력 재개를 지원하지 않습니다.</p>
-              ) : null}
-            </form>
-          ) : null}
-
-          <div className="work-item-actions">
-            {canCancel ? (
-              pendingConfirmation?.kind === 'cancel' ? (
-                <div aria-label="작업 취소 확인" className="delete-confirmation" role="group">
-                  <span>작업 취소 요청을 보내기 전에 다시 확인합니다.</span>
-                  <button
-                    className="secondary"
-                    disabled={selectedBusy}
-                    onClick={() => void props.onCancel(props.selectedJob!.id)}
-                    type="button"
-                  >
-                    {actionLabel('취소 확인', '취소 중…', props.busyAction === `cancel:${props.selectedJob.id}`)}
-                  </button>
-                  <button className="secondary" disabled={selectedBusy} onClick={() => props.onDismissConfirmation?.()} type="button">
-                    돌아가기
-                  </button>
-                </div>
-              ) : (
-                <button
-                  className="secondary"
-                  disabled={selectedBusy}
-                  onClick={() => props.onRequestConfirmation?.('cancel', props.selectedJob!.id)}
-                  type="button"
-                >
-                  작업 취소
-                </button>
-              )
-            ) : null}
-            {props.selectedJob.status === 'failed' && supports(selectedProvider, 'retry') ? (
-              <button
-                className="secondary"
-                disabled={selectedBusy}
-                onClick={() => void props.onRetryTask(props.selectedJob!.id)}
-                type="button"
-              >
-                {actionLabel('작업 다시 시도', '재시도 중…', props.busyAction === `retry:${props.selectedJob.id}`)}
-              </button>
-            ) : null}
-          </div>
-        </article>
-      ) : null}
     </section>
   );
 }

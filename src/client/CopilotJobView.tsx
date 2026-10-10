@@ -1,9 +1,11 @@
-import { CopilotKit, CopilotChat, useAgent, useRenderTool } from '@copilotkit/react-core/v2';
+import { CopilotKit, CopilotChatConfigurationProvider, useAgent, useRenderTool, useRenderToolCall } from '@copilotkit/react-core/v2';
 import { HttpAgent } from '@ag-ui/client';
-import { useEffect, useState, type ReactElement } from 'react';
+import { Component, useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import { z } from 'zod';
 import { apiFetch, getCachedAuthHeaders, isApiAuthError, type ApiOperationRequest } from './auth.js';
-import { ExecutionPresentationCard } from './ExecutionPresentationCard.js';
+import { ExecutionPresentationCard, ExecutionPresentationDetails } from './ExecutionPresentationCard.js';
+import { ConnectedCoreConversation } from './CopilotConversation.js';
+import { useExecutionPresentation } from './ExecutionPresentationSettings.js';
 import {
   createExecutionPresentation,
   EXECUTION_PRESENTATION_AGENT_ID,
@@ -11,8 +13,10 @@ import {
   ExecutionPresentationJobIdSchema,
   ExecutionPresentationSchema,
   type ExecutionPresentation,
+  type ExecutionPresentationDetail,
 } from '../shared/execution-presentation.js';
 import type { CoreOrchestrationJob } from '../shared/core-orchestration.js';
+import type { CoreConversationState } from './copilot-conversation-controller.js';
 
 export const COPILOT_PROJECTION_RUNTIME_PATH = '/api/copilot-ui';
 export const COPILOT_PROJECTION_AGENT_ID = EXECUTION_PRESENTATION_AGENT_ID;
@@ -183,7 +187,7 @@ export function createCopilotProjectionController({ agent, jobId, origin, reques
 
 export function renderExecutionPresentationTool(props: {
   status: 'inProgress' | 'executing' | 'complete'; parameters: unknown; result?: string;
-}, jobId: string): ReactElement {
+}, jobId: string, details?: readonly ExecutionPresentationDetail[], detailsOnly = false): ReactElement {
   if (props.status !== 'complete') return <p role="status" aria-live="polite">작업 표시를 불러오고 있습니다.</p>;
   try {
     const parsed = toolParametersSchema.safeParse(props.parameters);
@@ -192,33 +196,56 @@ export function renderExecutionPresentationTool(props: {
     }
     const result = ExecutionPresentationSchema.safeParse(JSON.parse(props.result));
     if (!result.success || JSON.stringify(result.data) !== JSON.stringify(parsed.data.presentation)) throw new ProjectionViewError('blocked');
-    return <ExecutionPresentationCard presentation={result.data} />;
+    return detailsOnly ? <section aria-label="관측된 작업 상세"><ExecutionPresentationDetails presentation={result.data} details={details} /></section>
+      : <ExecutionPresentationCard presentation={result.data} details={details} />;
   } catch {
     return <p role="alert">현재 작업의 표시 데이터를 확인하지 못했습니다. 표시 새로고침으로 다시 시도하세요.</p>;
   }
 }
 
-const HiddenSdkSlot = () => null;
-const projectionMessageView = {
-  assistantMessage: { markdownRenderer: HiddenSdkSlot, toolbar: HiddenSdkSlot },
-  userMessage: HiddenSdkSlot, reasoningMessage: HiddenSdkSlot,
-};
+class ProjectionBoundary extends Component<{ children: ReactNode; onError: () => void }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch() { this.props.onError(); }
+  render() { return this.state.failed ? <p role="alert">도구 표시를 확인하지 못했습니다.</p> : this.props.children; }
+}
 
-function ConnectedProjectionView({ jobId }: { jobId: string }): ReactElement {
+function ProjectionToolCalls({ agent }: { agent: HttpAgent }): ReactElement {
+  const renderToolCall = useRenderToolCall();
+  return <>{agent.messages.flatMap(message => message.role === 'assistant' ? (message.toolCalls ?? []).map(call => {
+    const result = agent.messages.find(row => row.role === 'tool' && row.toolCallId === call.id);
+    return <div key={call.id}>{renderToolCall({ toolCall: call, toolMessage: result?.role === 'tool' ? result : undefined })}</div>;
+  }) : [])}</>;
+}
+function ProjectionTranscript({ agent, onError }: { agent: HttpAgent; onError: () => void }): ReactElement {
+  return <ProjectionBoundary onError={onError}><CopilotChatConfigurationProvider agentId={COPILOT_PROJECTION_AGENT_ID}>
+    <ProjectionToolCalls agent={agent} />
+  </CopilotChatConfigurationProvider></ProjectionBoundary>;
+}
+
+function ConnectedProjectionView({ jobId, autoLoad = false, revision = '', authorized = true }: {
+  jobId: string; autoLoad?: boolean; revision?: string; authorized?: boolean;
+}): ReactElement {
   const { agent, isReady } = useAgent({ agentId: COPILOT_PROJECTION_AGENT_ID });
   const [controller, setController] = useState<CopilotProjectionController | null>(null);
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [message, setMessage] = useState('');
+  const observedRevision = useRef('');
+  const { selection } = useExecutionPresentation();
   useRenderTool({ name: COPILOT_PROJECTION_TOOL_NAME, agentId: COPILOT_PROJECTION_AGENT_ID,
-    parameters: toolParametersSchema, render: props => renderExecutionPresentationTool(props, jobId) }, [jobId]);
+    parameters: toolParametersSchema, render: props => renderExecutionPresentationTool(props, jobId, selection.details, true) }, [jobId, selection.details]);
   useRenderTool({ name: '*', agentId: COPILOT_PROJECTION_AGENT_ID, render: () => <></> }, []);
   useEffect(() => {
     if (!isReady || !(agent instanceof HttpAgent)) return;
+    if (!authorized) {
+      agent.setMessages([]); agent.setState({}); setLoaded(false); setController(null);
+      observedRevision.current = ''; return;
+    }
     const next = createCopilotProjectionController({ agent, jobId, origin: window.location.origin });
     setController(next);
     return () => { next.dispose(); };
-  }, [agent, isReady, jobId]);
+  }, [agent, isReady, jobId, authorized]);
   const unsupported = isReady && !(agent instanceof HttpAgent);
   async function refresh(): Promise<void> {
     if (!controller || busy) return;
@@ -230,45 +257,59 @@ function ConnectedProjectionView({ jobId }: { jobId: string }): ReactElement {
     if (result.status === 'failed') setMessage(result.message ?? unavailableMessage);
     setBusy(false);
   }
+  useEffect(() => {
+    if (!autoLoad || !controller || busy || !revision || observedRevision.current === revision) return;
+    observedRevision.current = revision;
+    void refresh();
+  }, [controller, autoLoad, revision, busy]);
   return (
     <section aria-label="CopilotKit 작업 보기" aria-busy={busy} className="copilot-projection-view">
-      <p>선택한 작업의 결과와 실행 영수증을 표시합니다.</p>
+      <p>관측된 도구·진행·진단 정보를 선택한 항목만 표시합니다.</p>
       {!isReady ? <p role="status">풍부한 보기를 연결하고 있습니다.</p> : null}
       {unsupported ? <p role="alert">현재 SDK 전송 방식은 읽기 전용 표시를 지원하지 않습니다.</p> : null}
       {message ? <p role="alert">{message}</p> : null}
-      <button type="button" disabled={!controller || unsupported || busy} onClick={() => { void refresh(); }}>
+      <button type="button" disabled={!authorized || !controller || unsupported || busy} onClick={() => { void refresh(); }}>
         {busy ? '불러오는 중…' : loaded ? '표시 새로고침' : '보기 불러오기'}
       </button>
-      {/* CopilotChat initializes its unscoped thread on mount. Mount it before
-          the first explicit display run so that initialization cannot clear a
-          newly received result. Visibility changes preserve the same instance. */}
-      {isReady ? <div hidden={!loaded} className="copilot-projection-transcript">
-        <CopilotChat agentId={COPILOT_PROJECTION_AGENT_ID} input={HiddenSdkSlot}
-          suggestionView={HiddenSdkSlot} welcomeScreen={false} messageView={projectionMessageView}
-          autoScroll="none" onError={() => {
+      {isReady ? <div hidden={!authorized || !loaded} className="copilot-projection-transcript">
+        {authorized && loaded && agent instanceof HttpAgent ? <ProjectionTranscript agent={agent} onError={() => {
             agent.setMessages([]); agent.setState({});
             setLoaded(false); setMessage(unavailableMessage);
-          }} />
+          }} /> : null}
       </div> : null}
     </section>
   );
 }
 
 /** Import this file only from the explicit optional entry. Core uses the pure card. */
-export function CopilotJobView({ jobId }: { jobId: string }): ReactElement {
+export function CopilotJobView({ jobId, autoLoad = false, onJobChange }: {
+  jobId: string; autoLoad?: boolean; onJobChange?: (id: string) => void;
+}): ReactElement {
   const [connectionAttempt, setConnectionAttempt] = useState(0);
   const [connectionError, setConnectionError] = useState('');
+  const [activeJobId, setActiveJobId] = useState(jobId);
+  const [revision, setRevision] = useState('');
+  const [authorized, setAuthorized] = useState(false);
+  const changeJob = useCallback((id: string) => { setRevision(''); setActiveJobId(id); onJobChange?.(id); }, [onJobChange]);
+  const observeState = useCallback((state: CoreConversationState) => {
+    const job = state.job;
+    setAuthorized(Boolean(job && ['ready', 'sending'].includes(state.phase)));
+    setRevision(job ? `${job.id}:${job.updatedAt ?? job.createdAt}:${job.status}:${job.progress.length}` : '');
+  }, []);
   if (!ExecutionPresentationJobIdSchema.safeParse(jobId).success) return <p role="alert">작업 ID를 확인하지 못했습니다.</p>;
   return (
     <div className="copilot-job-shell">
       {connectionError ? <section role="alert"><p>{connectionError}</p>
         <button type="button" onClick={() => { setConnectionError(''); setConnectionAttempt(attempt => attempt + 1); }}>연결 다시 시도</button>
       </section> : null}
-      <CopilotKit key={`${jobId}-${connectionAttempt}`} runtimeUrl={COPILOT_PROJECTION_RUNTIME_PATH}
+      <CopilotKit key={`${activeJobId}-${connectionAttempt}`} runtimeUrl={COPILOT_PROJECTION_RUNTIME_PATH}
         agent={COPILOT_PROJECTION_AGENT_ID} headers={getCachedAuthHeaders} credentials="same-origin"
         useSingleEndpoint={false} showDevConsole={false} enableInspector={false}
-        onError={() => setConnectionError(unavailableMessage)}>
-        {connectionError ? null : <ConnectedProjectionView jobId={jobId} />}
+        onError={() => { setAuthorized(false); setRevision(''); setConnectionError(unavailableMessage); }}>
+        {connectionError ? null : <>
+          <ConnectedCoreConversation jobId={activeJobId} onJobChange={changeJob} onStateChange={observeState} />
+          <ConnectedProjectionView jobId={activeJobId} autoLoad={autoLoad} revision={revision} authorized={authorized} />
+        </>}
       </CopilotKit>
     </div>
   );
