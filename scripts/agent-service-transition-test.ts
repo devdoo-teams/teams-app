@@ -203,14 +203,16 @@ try {
     service.approve(approvalJob.id, scope),
     service.approve(approvalJob.id, scope),
   ]);
-  assert.equal(approvals.filter((result) => result.status === 'fulfilled').length, 1, 'approval transitions once');
-  assert.equal(approvals.filter((result) => result.status === 'rejected').length, 1, 'stale approval conflicts');
-  assert.ok(approvals.find((result) => result.status === 'rejected')?.reason instanceof AgentJobConflictError);
+  assert.equal(approvals.filter((result) => result.status === 'fulfilled').length, 2,
+    'concurrent identical decisions return the same persisted transition or its replay');
+  assert.ok(approvals.every(result => result.status === 'fulfilled' && result.value?.id === approvalJob.id));
+  assert.equal(store.get(approvalJob.id, scope)?.durableApproval?.state, 'accepted');
   await runner.waitForStart(1);
   assert.equal(store.get(approvalJob.id, scope)?.status, 'running', 'approved job enters running exactly once');
 
   runner.release(0);
   await waitForStatus(store, approvalJob.id, scope, 'completed');
+  assert.equal(runner.starts, 1, 'identical approval replay launches only one execution');
   assert.deepEqual(store.get(approvalJob.id, scope)?.tokenUsage, {
     source: 'codex.exec.jsonl.turn.completed.usage',
     inputTokens: 21_460,

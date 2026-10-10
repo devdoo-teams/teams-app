@@ -125,10 +125,24 @@ try {
   await inputs.initialize(); const input = await inputs.create(job.id, scope, true); assert.ok(input); collection(input.activity);
   assert.ok(JSON.stringify(input.activity.attachments[0]).includes('Input.Text')); assert.ok(JSON.stringify(input.activity.attachments[1]).includes('진행 기록이 없습니다.'));
   assert.ok(input.activity.attachments.slice(1).every(attachment => !JSON.stringify(attachment).includes('Input.Text')));
-  const pending = new CoreJobCardPages(path.join(root, 'pending.json'), { ...options, getJob: () => ({ ...job, parentJobId: undefined, status: 'awaiting_approval' }) });
+  const pendingJob: CoreOrchestrationJob = { ...job, parentJobId: undefined, result: undefined,
+    mode: 'workspace-write', status: 'awaiting_approval', approval: {
+      schemaVersion: '1', approvalId: 'approval-00000000-0000-4000-8000-000000000001', revision: 'a'.repeat(64),
+      approverId: scope.requesterId, tenantId: scope.tenantId, deadline: new Date(Date.now() + 900_000).toISOString(), state: 'pending',
+    } };
+  const pending = new CoreJobCardPages(path.join(root, 'pending.json'), { ...options, getJob: () => pendingJob });
   await pending.initialize(); const pendingCard = await pending.create(job.id, scope, true); assert.ok(pendingCard);
   const summary = JSON.stringify(pendingCard.activity.attachments[0]);
-  assert.ok(summary.includes('orchestration.confirm-approve') && summary.includes('orchestration.confirm-cancel'));
+  assert.ok(summary.includes('orchestration.confirm-approve') && summary.includes('orchestration.confirm-deny'));
+  assert.ok(!summary.includes('orchestration.confirm-cancel'), 'durable pending approval uses an explicit deny decision');
+  assert.ok(summary.includes(pendingJob.approval!.approvalId) && summary.includes(pendingJob.approval!.revision));
   assert.ok(!summary.includes('confirmationToken'), 'page reads never mint approval grants');
+  const legacyPending = new CoreJobCardPages(path.join(root, 'legacy-pending.json'), { ...options,
+    getJob: () => ({ ...pendingJob, approval: undefined }) });
+  await legacyPending.initialize(); const legacyCard = await legacyPending.create(job.id, scope, true); assert.ok(legacyCard);
+  const legacySummary = JSON.stringify(legacyCard.activity.attachments[0]);
+  assert.ok(!legacySummary.includes('orchestration.confirm-approve') && !legacySummary.includes('orchestration.confirm-deny'),
+    'legacy pending records have no durable decision authority');
+  assert.ok(legacySummary.includes('orchestration.confirm-cancel'), 'legacy cancellation remains available');
   console.log('PASS: four-card carousel, same-activity update, legacy invoke, owner isolation, restart/cursor, masked views and confirmation gates');
 } finally { await fs.rm(root, { recursive: true, force: true }); }

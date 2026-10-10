@@ -57,10 +57,15 @@ const fakeAgentService = {
   },
   get(id: string, scoped: AgentJobScope) { return store.get(id, scoped); },
   list(scoped: AgentJobScope, limit?: number) { return store.list(scoped, limit); },
-  async cancelStrict(id: string, scoped: AgentJobScope) { return store.update(id, scoped, { status: 'cancelled' }); },
+  async cancelStrict(id: string, scoped: AgentJobScope) { return store.update(id, scoped, { status: 'cancelled', finishedAt: new Date().toISOString() }); },
   async approve(id: string, scoped: AgentJobScope) {
     approveCalls += 1;
     return store.update(id, scoped, { status: 'queued' });
+  },
+  async decideApproval(id: string, scoped: AgentJobScope, request: Parameters<AgentJobStore['decideApproval']>[2],
+    decision: Parameters<AgentJobStore['decideApproval']>[3]) {
+    approveCalls += 1;
+    return store.decideApproval(id, scoped, request, decision);
   },
   async retry(id: string, scoped: AgentJobScope) {
     retryCalls += 1;
@@ -127,7 +132,8 @@ try {
   });
   facts = [{ ...facts[0]!, capabilities: ['submit', 'retry'] }];
   await assert.rejects(
-    service.approve(scope, { jobId: awaitingApproval.job.id }),
+    service.approve(scope, { jobId: awaitingApproval.job.id,
+      approvalId: awaitingApproval.job.approval!.approvalId, revision: awaitingApproval.job.approval!.revision }),
     providerError('CORE_ORCHESTRATION_PROVIDER_CAPABILITY_UNAVAILABLE', 'approve'),
   );
   assert.equal(approveCalls, 0, 'approve is not called when its measured capability is absent');
@@ -136,7 +142,7 @@ try {
   await store.update(awaitingApproval.job.id, scope, {
     status: 'failed',
     error: 'measured failure',
-    finishedAt: '2026-09-04T00:01:00.000Z',
+    finishedAt: new Date().toISOString(),
   });
   facts = [{ ...facts[0]!, capabilities: ['submit', 'approve'] }];
   await assert.rejects(

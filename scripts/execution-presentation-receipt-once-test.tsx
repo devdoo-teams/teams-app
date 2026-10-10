@@ -12,6 +12,14 @@ const html = renderToStaticMarkup(<ExecutionPresentationDetails presentation={pr
 assert.equal(html.split(job.model).length - 1, 1, 'React selected diagnostics shows each receipt value once');
 for (const mode of ['text', 'summary'] as const) {
   const activity = createExecutionPresentationActivity(job, mode, { richEnabled: false, details: ['diagnostics'] });
+  if (mode === 'text') {
+    assert.equal('attachments' in activity, false, 'native text remains a real message');
+    for (const receipt of presentation.receiptFacts) {
+      assert.equal((activity as {text:string}).text.split(`${receipt.label}: ${receipt.value}`).length - 1, 1,
+        `text: selected ${receipt.label} appears once`);
+    }
+    continue;
+  }
   const nested = (activity as any).attachments[0].content.actions[0].card;
   const facts = nested.body.flatMap((item: any) => item.facts ?? []);
   for (const receipt of presentation.receiptFacts) assert.equal(facts.filter((fact: any) => fact.title === receipt.label && fact.value === receipt.value).length, 1, `${mode}: ${receipt.label} appears once`);

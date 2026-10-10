@@ -105,7 +105,9 @@ try {
     await check(`historical incompatible ${action} leaves the job unchanged`, async () => {
       const historicalStore = new AgentJobStore(path.join(root, `${action}-historical.json`)); await historicalStore.initialize();
       const historical = await historicalStore.create({ scope, mode: 'workspace-write', prompt: 'historical synthetic', provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'xhigh', catalogRevision: catalog.revision, threadId: '12345678-1234-4234-9234-123456789abc' });
-      await historicalStore.update(historical.id, scope, { status: action === 'approve' ? 'awaiting_approval' : action === 'retry' ? 'failed' : 'completed', ...(action === 'continue' ? { result: 'historical synthetic result' } : {}) });
+      await historicalStore.update(historical.id, scope, { status: action === 'approve' ? 'awaiting_approval' : action === 'retry' ? 'failed' : 'completed',
+        ...(action !== 'approve' ? { finishedAt: new Date().toISOString() } : {}),
+        ...(action === 'continue' ? { result: 'historical synthetic result' } : {}) });
       const historicalAgents = new AgentService(historicalStore, undefined, root, async () => undefined, new GitService(root), {
         canReadScope: () => true, canMutateScope: () => true, observeCodexModelCatalog: async () => catalog,
         executionDispatcher: { kind: 'azure-queue', dispatch: async () => { dispatches += 1; }, observe: async () => undefined, cancel: async () => undefined },
@@ -117,7 +119,9 @@ try {
         await assert.rejects(action === 'continue' ? historicalAgents.continue(historical.id, 'synthetic follow-up', scope) : historicalAgents[action](historical.id, scope), /policy|고정|Luna|luna/i);
         await assert.rejects(action === 'continue'
           ? historicalCore.continue(scope, { jobId: historical.id, prompt: 'synthetic follow-up' })
-          : historicalCore[action](scope, { jobId: historical.id }),
+          : action === 'approve'
+            ? historicalCore.approve(scope, { jobId: historical.id, approvalId: historical.durableApproval!.approvalId, revision: historical.durableApproval!.revision })
+            : historicalCore.retry(scope, { jobId: historical.id }),
           error => error instanceof CoreOrchestrationValidationError && /Teams CLI policy/u.test(error.message),
           'Core history rejection must reach the stable validation response instead of generic 500');
         assert.equal(JSON.stringify(historicalStore.get(historical.id, scope)), before); assert.equal(dispatches, dispatchedBefore);

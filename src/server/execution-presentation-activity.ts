@@ -17,7 +17,21 @@ export function createExecutionPresentationActivity(job: CoreOrchestrationJob, m
   const base = createCoreOrchestrationJobActivity(job, options);
   const baseCard = base.attachments?.[0]?.content as any;
   const link = options.richEnabled ? withTeamsCopilotJobDeepLink(options.openTabUrl, job.id) : undefined;
-  if (mode === 'text') return { type: 'message', text: `${presentation.statusLabel} (${job.status})\n${clip(presentation.result || presentation.summary, 12000)}${presentation.error ? `\n${clip(presentation.error, 1000)}` : ''}\n작업 ID: ${job.id}${link ? `\n같은 작업의 상세: ${link}` : ''}${job.status === 'awaiting_approval' ? '\n승인이 필요합니다. 같은 작업의 개인 작업 화면에서 승인 또는 거부할 수 있습니다.' : ''}` };
+  const details = options.details ?? [...EXECUTION_PRESENTATION_DETAILS];
+  if (mode === 'text') {
+    const sections = [`${presentation.statusLabel} (${job.status})`, clip(presentation.result || presentation.summary, 10000),
+      ...(presentation.error ? [`오류: ${clip(presentation.error, 1000)}`] : []), `작업 ID: ${job.id}`];
+    if (details.includes('tool')) sections.push('도구 결과', clip(presentation.tools.length
+      ? presentation.tools.map(tool => `${tool.category} · ${tool.name}: ${tool.outcome || '종료 결과 미관측'}`).join('\n')
+      : '보고된 도구 없음', 4000));
+    if (details.includes('steps')) sections.push('진행 단계', clip(presentation.progress.join('\n') || '기록된 진행 단계 없음', 1600));
+    if (details.includes('diagnostics')) sections.push('진단 정보', clip(presentation.facts
+      .filter(fact => !['상태', '작업 ID'].includes(fact.label))
+      .map(fact => `${clip(fact.label, 90)}: ${clip(fact.value, 160)}`).join('\n'), 6000));
+    if (link) sections.push(`같은 작업의 상세: ${link}`);
+    if (job.status === 'awaiting_approval') sections.push('승인이 필요합니다. 같은 작업의 개인 작업 화면에서 승인 또는 거부할 수 있습니다.');
+    return { type: 'message', text: sections.join('\n\n') };
+  }
   if (mode === 'rich') {
     if (!link) return { type: 'message', text: `${presentation.statusLabel}\n${clip(presentation.result || presentation.summary, 2000)}${presentation.error ? `\n${clip(presentation.error, 1000)}` : ''}\n작업 ID: ${job.id}\nCopilotKit 대화를 현재 사용할 수 없습니다.` };
     return { type: 'message', attachmentLayout: 'list', attachments: [{ contentType: 'application/vnd.microsoft.card.adaptive', content: {
@@ -30,7 +44,6 @@ export function createExecutionPresentationActivity(job: CoreOrchestrationJob, m
         ...(baseCard?.actions ?? []).filter((action: {type:string}) => action.type !== 'Action.OpenUrl')],
     } }] };
   }
-  const details = options.details ?? [...EXECUTION_PRESENTATION_DETAILS];
   const nested: any[] = [];
   if (details.includes('tool')) {
     nested.push(text('도구 결과'));

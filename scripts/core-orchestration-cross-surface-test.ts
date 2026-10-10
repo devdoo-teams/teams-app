@@ -96,14 +96,16 @@ try {
     'group scope must hide the owner personal job');
   assert.deepEqual(service.list(groupScope), [], 'group list must not expose private jobs');
   for (const action of ['approve', 'cancel', 'retry'] as const) {
-    assert.equal(await service[action](groupScope, { jobId: tabCreated.job.id }), undefined);
+    assert.equal(await service[action](groupScope, { jobId: tabCreated.job.id,
+      ...(action === 'approve' ? { approvalId: tabCreated.job.approval!.approvalId, revision: tabCreated.job.approval!.revision } : {}) }), undefined);
   }
   assert.equal(await service.continue(groupScope, { jobId: tabCreated.job.id, prompt: 'private continuation' }), undefined);
   assert.equal(await service.provideInput(groupScope, { jobId: tabCreated.job.id, input: 'private input' }), undefined);
   assert.equal(service.get(chatScope, { jobId: tabCreated.job.id })?.id, tabCreated.job.id,
     'personal cross-surface access remains available');
 
-  const approvedFromChat = await service.approve(chatScope, { jobId: tabCreated.job.id });
+  const approvedFromChat = await service.approve(chatScope, { jobId: tabCreated.job.id,
+    approvalId: tabCreated.job.approval!.approvalId, revision: tabCreated.job.approval!.revision });
   assert.equal(approvedFromChat?.id, tabCreated.job.id);
   assert.equal(approvedFromChat?.status, 'queued');
   assert.equal(dispatches, 2, 'read-only submit and cross-surface approval dispatch once each');
