@@ -32,6 +32,8 @@ The approved four-reference comparison is `/tmp/teams137-mobile-reference-review
 
 ## FIXTURE
 
+MP-384 records the mobile settings failure in the first 138 candidate: the installed SDK's later stylesheet kept `display:flex`, a block label and a 68px selector inside a 336px settings container. `/tmp/teams-mobile138-20261010/controls-RED.json` and `controls-RED.png` bind the retained old DOM to commit `784572a4b41c01e3d79d8e0ab2fb9ea1369fadb0`. The correction pins the grid after the SDK base rule and places the location label above its full-width selector (`src/client/copilot-job-view.css:35`, `src/client/execution-presentation.css:59`). New committed-source captures replace the first candidate's screenshots; old captures are not current acceptance evidence.
+
 Narrow and wide mobile viewport captures must run actual committed production components and installed SDK against synthetic owner API responses. All requested screenshots require direct visual review with file, time, reviewer, observation and verdict. Browser viewport emulation is not an actual Teams mobile host, keyboard, permission or iOS WebView test.
 
 ## LIVE RESULT

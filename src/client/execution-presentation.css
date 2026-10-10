@@ -55,7 +55,9 @@
 .presentation-runtime-details > .runtime-panel { margin-top: 8px; }
 @media (max-width: 600px) {
   .presentation-toolbar { gap: 12px; margin: 0; }
-  .presentation-toolbar fieldset, .presentation-detail-controls { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; gap: 8px; }
+  .presentation-toolbar fieldset, .presentation-toolbar .presentation-detail-controls { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; gap: 8px; }
+  .presentation-detail-controls > label { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; gap: 6px; }
+  .presentation-detail-controls > label select { width: 100%; }
   .presentation-toolbar select { width: 100%; }
   .presentation-job-selector { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; }
   .presentation-job-selector select { width: 100%; max-width: 100%; }

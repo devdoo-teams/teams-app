@@ -32,6 +32,10 @@
 .presentation-detail-controls { display:flex; flex-wrap:wrap; align-items:center; gap:12px; }
 .presentation-job-selector { display:grid; gap:6px; margin-bottom:16px; }
 @media (max-width: 600px) {
+  .presentation-detail-controls { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; gap: 8px; }
+  .presentation-detail-controls fieldset { display: grid; gap: 8px; border: 0; margin: 0; padding: 0; }
+  .presentation-detail-controls fieldset label { display: flex; align-items: center; gap: 8px; }
+  .presentation-detail-controls input[type="checkbox"] { width: auto; }
   .copilot-job-shell { padding: 0; }
   .execution-presentation-facts > div { grid-template-columns: 1fr; }
   .execution-presentation-card .work-item-card-heading { align-items: flex-start; flex-direction: column; }
