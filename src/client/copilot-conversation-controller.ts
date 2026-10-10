@@ -72,8 +72,10 @@ export function createCoreConversationController({ client, jobId, onChange, time
       publish({ ...state, phase: 'sending', error: undefined });
       const { job } = await client.continueJob(previous.id, prompt.trim(), signal);
       assertCurrent(signal);
+      const ephemeral = (previous.provider ?? 'codex') === 'codex' && previous.mode === 'read-only';
       if (!ExecutionPresentationJobIdSchema.safeParse(job?.id).success || job.id === previous.id || job.parentJobId !== previous.id
-        || (previous.threadId && job.threadId && previous.threadId !== job.threadId)) throw new Error('Unconfirmed continuation response');
+        || (job.provider ?? 'codex') !== (previous.provider ?? 'codex') || job.mode !== previous.mode
+        || (!ephemeral && previous.threadId && job.threadId && previous.threadId !== job.threadId)) throw new Error('Unconfirmed continuation response');
       createExecutionPresentation(job);
       publish({ jobId: job.id, job, phase: 'ready', uncertain: false });
     });

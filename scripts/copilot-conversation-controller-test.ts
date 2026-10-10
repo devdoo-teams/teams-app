@@ -91,6 +91,24 @@ const malformed = createCoreConversationController({ client: { ...client,
 await malformed.load(); assert.equal(await malformed.send('Synthetic'), 'failed');
 assert.equal(malformedStates.at(-1).uncertain, true); assert.equal(malformedStates.at(-1).conversation, undefined);
 malformed.dispose();
+failure='none';
+const ephemeral = createCoreConversationController({ client: { ...client,
+ continueJob: async (id:string,prompt:string) => ({job:{...base,id:'synthetic-ephemeral-child',parentJobId:id,prompt,threadId:'synthetic-fresh-cli-thread'}}),
+}, jobId:base.id,onChange:()=>{} });
+await ephemeral.load();
+assert.equal(await ephemeral.send('Synthetic next request'),'succeeded','read-only Codex continuation inherits ancestry while using a fresh ephemeral CLI thread');
+ephemeral.dispose();
+for (const changed of [{ mode:'workspace-write' as const },{ provider:'copilot' as const }]) {
+ const wrong = createCoreConversationController({client:{...client,
+  continueJob:async(id:string)=>({job:{...base,id:'synthetic-changed-boundary',parentJobId:id,...changed}}),
+ },jobId:base.id,onChange:()=>{}});
+ await wrong.load();assert.equal(await wrong.send('Synthetic'),'failed','continuation cannot change provider or execution mode');wrong.dispose();
+}
+const persistent = createCoreConversationController({client:{...client,
+ getJob:async()=>({...base,mode:'workspace-write' as const}),
+ continueJob:async(id:string)=>({job:{...base,mode:'workspace-write' as const,id:'synthetic-persistent-child',parentJobId:id,threadId:'foreign-thread'}}),
+},jobId:base.id,onChange:()=>{}});
+await persistent.load();assert.equal(await persistent.send('Synthetic'),'failed','persistent write continuation retains the existing CLI thread');persistent.dispose();
 // Existing conversation loader remains owner scoped; no caller-supplied owner/thread override.
 assert.equal((await loadJobConversation(base.id, client.getJob)).conversation.selectedJobId, base.id);
 console.log('PASS: real conversation reads owner API; explicit continuation is bounded, single-send, terminal-only, and stale/ambiguous failures fail closed');

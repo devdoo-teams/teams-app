@@ -439,7 +439,10 @@ function teamsCard(body: any, expected: string): Record<string, any> {
 }
 
 function cardFact(card: Record<string, any>, title: string): string {
-  const value = card.body
+  // Mandatory identity/status stays visible; selected diagnostics are inside ShowCard.
+  const sources = ['작업 ID', '상태'].includes(title) ? [card] : [card,
+    ...(card.actions ?? []).filter((action: any) => action.type === 'Action.ShowCard').map((action: any) => action.card)];
+  const value = sources.flatMap(source => source.body ?? [])
     ?.flatMap((item: any) => item.type === 'Container' ? item.items ?? [] : [item])
     .filter((item: any) => item.type === 'FactSet')
     .flatMap((item: any) => item.facts ?? [])
