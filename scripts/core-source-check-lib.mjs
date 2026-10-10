@@ -10,8 +10,8 @@ import {
 } from './fileprovider-git-clean.mjs';
 
 export const CORE_SOURCE_CHECK_FILES = [
-  'src/server/agent-cli-invocation-receipt.ts',
   'src/server/codex-capability.ts',
+  'src/server/agent-cli-invocation-receipt.ts',
   'src/server/agent-token-usage.ts',
   'src/server/cli-agent-runner.ts',
   'src/server/provider-neutral-agent-runner.ts',
