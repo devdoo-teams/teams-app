@@ -12,7 +12,7 @@ export function ExecutionPresentationPanel({ job, conversation }: { job: CoreOrc
   return <section aria-label="작업 결과 표시 방식">
     {selection.mode === 'text' ? <section className="presentation-chat" aria-label="채팅 중심 작업 결과">
       <article className="presentation-user"><strong>내 요청</strong><p>{presentation.prompt}</p></article>
-      <article className="presentation-assistant"><strong>업무 허브</strong><span className="badge">{presentation.statusLabel}</span>
+      <article className="presentation-assistant"><strong>업무 허브</strong><span className="badge" data-job-status={presentation.status}>{presentation.statusLabel}</span>
         <ExecutionPresentationResult presentation={presentation} />
         {presentation.error ? <p role="alert" className="error">{presentation.error}</p> : null}
         <p className="presentation-progress-summary">기록된 진행 {presentation.progress.length}개</p>
@@ -23,7 +23,7 @@ export function ExecutionPresentationPanel({ job, conversation }: { job: CoreOrc
     </section> : selection.mode === 'summary'
       ? <ExecutionPresentationCard key={job.id} presentation={presentation} details={selection.details} />
       : <section className="presentation-workspace-entry"><h4>채팅 + 별도 상세 화면</h4>
-        <span className="badge">{presentation.statusLabel}</span><ExecutionPresentationResult presentation={presentation} />
+        <span className="badge" data-job-status={presentation.status}>{presentation.statusLabel}</span><ExecutionPresentationResult presentation={presentation} />
         {presentation.error ? <p role="alert" className="error">{presentation.error}</p> : null}
         <button type="button" disabled={!available.includes('rich')} onClick={() => openRich(job.id)}>같은 작업의 CopilotKit 대화 열기</button>
       </section>}

@@ -571,7 +571,7 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
                 <button className="work-item-title" onClick={() => void props.onSelectTask(job.id)} type="button">
                   {job.prompt}
                 </button>
-                <span className={`badge${job.status === 'failed' ? ' warning' : ''}`}>{statusLabels[job.status]}</span>
+                <span className="badge" data-job-status={job.status}>{statusLabels[job.status]}</span>
               </div>
               <p className="work-item-meta">작업 ID: {job.id} · 제공자: {job.provider ?? 'codex'} · 모드: {job.mode}</p>
             </article>

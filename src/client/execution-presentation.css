@@ -40,3 +40,7 @@
 .presentation-job-selector, .presentation-detail-controls { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; margin: .75rem 0; }
 .presentation-job-selector select { flex: 1; min-width: 0; }
 .presentation-selected-details pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.badge[data-job-status="failed"] { background: #fce8e6; color: #a4262c; }
+.badge[data-job-status="awaiting_approval"], .badge[data-job-status="input_required"] { background: #fff4ce; color: #805b00; }
+.badge[data-job-status="cancelled"] { background: #e5e5e5; color: #424242; }
+.badge[data-job-status="queued"], .badge[data-job-status="running"] { background: #e5efff; color: #174b85; }

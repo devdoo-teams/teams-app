@@ -38,7 +38,7 @@ export function ExecutionPresentationCard({ presentation, details = [...EXECUTIO
     <article className="work-item-card execution-presentation-card" aria-label={`${presentation.title} 요약`} data-job-id={presentation.jobId}>
       <header className="work-item-card-heading">
         <h3>{presentation.title}</h3>
-        <span className="badge">{presentation.statusLabel}</span>
+        <span className="badge" data-job-status={presentation.status}>{presentation.statusLabel}</span>
       </header>
       {presentation.result?.trim() ? (
         <section aria-label="작업 결과">
