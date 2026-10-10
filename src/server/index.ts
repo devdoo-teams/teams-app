@@ -73,6 +73,7 @@ import { ExecutionPresentationStore } from './execution-presentation-store.js';
 import { mountExecutionPresentationRoutes } from './execution-presentation-route.js';
 import { loadCopilotUiArtifact } from './copilot-ui-loader.js';
 import { createExecutionPresentationActivity, type PresentedCoreActivity } from './execution-presentation-activity.js';
+import { adaptiveCardTextFallback } from './adaptive-card-text-fallback.js';
 import {
   createResponseModeCardActivity,
   isResponseModeCardAction,
@@ -1436,24 +1437,25 @@ function createBotSender(
 ): BotSend {
   return async (text, envelope, activityOverride) => {
     const normalized = envelope ? GenUiEnvelopeV1Schema.parse(envelope) : undefined;
+    const fallbackText = activityOverride && !text.trim() ? adaptiveCardTextFallback(activityOverride) : text;
     const effectiveOverride = activityOverride && genUiMode !== 'legacy' ? activityOverride : undefined;
     const activity = effectiveOverride ?? (normalized && genUiMode !== 'legacy'
       ? createAdaptiveCardActivity(normalized)
-      : { type: 'message', text });
+      : { type: 'message', text: fallbackText });
 
     if (messages) {
       if (normalized) recordChannelsShadowComparison(normalized, activity);
-      messages.push(text);
+      messages.push(fallbackText);
       activities?.push(activity);
       return { state: 'connector-accepted' };
     }
 
     if (effectiveOverride) {
       if (!deliver) return { state: 'ambiguous' };
-      return deliverAdaptiveCardWithFallback(deliver, effectiveOverride, { type: 'message', text });
+      return deliverAdaptiveCardWithFallback(deliver, effectiveOverride, { type: 'message', text: fallbackText });
     }
 
-    return deliverGenUiActivity(deliver, text, normalized);
+    return deliverGenUiActivity(deliver, fallbackText, normalized);
   };
 }
 
