@@ -470,7 +470,7 @@ function verifyIndexCompositionContract(): void {
   assert.match(source, /migrated:\s*0/);
   assert.match(source, /'PersonalNotificationBroker'/);
   assert.match(source, /'CoreJobCardPages'/);
-  assert.match(source, /total:\s*13/);
+  assert.match(source, /total:\s*14/);
   assert.match(source, /horizontalSafe:\s*false/);
 }
 
