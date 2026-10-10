@@ -74,6 +74,7 @@ import { mountExecutionPresentationRoutes } from './execution-presentation-route
 import { loadCopilotUiArtifact } from './copilot-ui-loader.js';
 import { createExecutionPresentationActivity, type PresentedCoreActivity } from './execution-presentation-activity.js';
 import { adaptiveCardTextFallback } from './adaptive-card-text-fallback.js';
+import { coreJobDialogResponse } from './core-job-dialog.js';
 import {
   createResponseModeCardActivity,
   isResponseModeCardAction,
@@ -207,6 +208,15 @@ import {
   type CoreInputResumePort,
 } from './core-orchestration-service.js';
 import { mountCoreOrchestrationRoutes } from './core-orchestration-route.js';
+import { assertApprovalIdentity, CoreApprovalRecoveryError } from './core-approval-recovery.js';
+import { captureCoreResultOrigin, readCoreResultOrigin, CoreResultPublicationService, CoreResultConnectorRejectedError } from './core-result-publication.js';
+import { mountCoreResultRoutes } from './core-result-route.js';
+import { TeamsJobProgressTransport, type TeamsJobProgressBinding, type TeamsJobProgressSnapshot } from './teams-job-progress.js';
+import { TeamsJobProgressJsonStore } from './teams-job-progress-store.js';
+import { createTeamsJobProgressSdkAdapter } from './teams-job-progress-sdk-adapter.js';
+import { TeamsJobProgressCoordinator } from './teams-job-progress-coordinator.js';
+import { loadChannelsNativeRenderer } from './channels-renderer-loader.js';
+import { readClientBuildIdentity } from './client-build-identity.js';
 import {
   CoreOrchestrationProviderCapabilityError,
   CoreOrchestrationProviderUnavailableError,
@@ -310,6 +320,7 @@ const workItemStorePath = process.env.WORK_ITEM_STORE_PATH ?? path.resolve(proce
 const collaborationStorePath = process.env.COLLABORATION_STORE_PATH ?? path.resolve(process.cwd(), 'data/collaboration.json');
 const agentJobStorePath = process.env.AGENT_JOB_STORE_PATH ?? path.resolve(process.cwd(), 'data/agent-jobs.json');
 const coreJobCardPageStorePath = path.join(path.dirname(agentJobStorePath), 'core-job-card-pages.json');
+const teamsJobProgressStorePath = path.join(path.dirname(agentJobStorePath), 'teams-job-progress.json');
 let coreJobCardPages: CoreJobCardPages | undefined;
 const a2aStorePath = process.env.A2A_STORE_PATH ?? path.resolve(process.cwd(), 'data/a2a.json');
 const a2aOutboundStorePath = process.env.A2A_OUTBOUND_STORE_PATH ?? path.resolve(process.cwd(), 'data/a2a-outbound.json');
@@ -679,6 +690,11 @@ const azureReleaseIdentity = resolveAzureReleaseIdentity(process.env, {
   sourceCommit: serverBuildIdentity.sourceCommit,
   serverBundleSha256: serverBuildIdentity.serverBundleSha256,
 });
+const clientBuildIdentity = readClientBuildIdentity(runtimeDistRoot, { version: appVersion, sourceCommit: serverBuildIdentity.sourceCommit });
+const channelsNativeRenderer = await loadChannelsNativeRenderer({
+  enabled: process.env.TEAMS_CHANNELS_NATIVE_RENDERER === 'true', runtimeDistRoot,
+  sourceCommit: serverBuildIdentity.sourceCommit,
+});
 // The core artifact must not carry optional MCP/CopilotKit runtime graphs. A
 // normal source/optional build keeps MCP behind either the loopback-only local
 // gate or an explicit authenticated-provider contract; the `--core` bundle
@@ -859,6 +875,7 @@ storeProcessLease = await acquireStoreProcessLease([
   a2aStorePath,
   a2aOutboundStorePath,
   coreJobCardPageStorePath,
+  teamsJobProgressStorePath,
   agentAdmissionJournalPath,
   genUiActionStorePath,
   responseModeStorePath,
@@ -1876,6 +1893,13 @@ http.get('/api/health', async (_request: any, response: any) => {
     version: appVersion,
     sourceCommit: serverBuildIdentity.sourceCommit,
     serverBundleSha256: serverBuildIdentity.serverBundleSha256,
+    ...(clientBuildIdentity ? { clientBuildIdentity } : {}),
+    clientIdentityState: clientBuildIdentity ? 'served-assets-verified' : 'unverified',
+    channelsNativeRenderer: channelsNativeRenderer ? {
+      state: 'enabled', sourceCommit: channelsNativeRenderer.marker.sourceCommit,
+      artifactSha256: channelsNativeRenderer.marker.artifactSha256,
+      packageVersion: '0.7.3', deliveredVersion: '1.6',
+    } : { state: 'disabled' },
     ...(azureReleaseIdentity ? { azureReleaseIdentity } : {}),
     environment: process.env.NODE_ENV ?? 'development',
     auth: safeLocal ? 'local-bypass' : teamsApp ? 'teams-authenticated' : 'not-configured',
@@ -1904,9 +1928,10 @@ http.get('/api/health', async (_request: any, response: any) => {
         'ProviderMutationReplayStore',
         'PersonalNotificationBroker',
         'CoreJobCardPages',
+        'TeamsJobProgressJsonStore',
       ],
       migrated: 0,
-      total: 13,
+      total: 14,
       horizontalSafe: false,
     },
     dispatch: {
@@ -2611,6 +2636,71 @@ http.post('/api/collaboration/notifications', async (request: any, response: any
 
 let agentService: AgentService;
 
+const teamsJobProgressStore = new TeamsJobProgressJsonStore(teamsJobProgressStorePath);
+await teamsJobProgressStore.initialize();
+const teamsApi = teamsApp && !skipAuth && !skipOutbound ? await import('@microsoft/teams.api') : undefined;
+function nativeProgressBinding(job: AgentJob): TeamsJobProgressBinding | undefined {
+  const origin = readCoreResultOrigin(job.resultOrigin, job);
+  // Private message-menu review retains its original conversation for an
+  // explicit publication. It must never auto-notify that shared conversation.
+  if (!origin || origin.conversationId !== job.conversationId) return undefined;
+  return { jobId: job.id, tenantId: origin.tenantId, requesterId: origin.requesterId,
+    conversationId: origin.conversationId, conversationType: origin.conversationType,
+    originActivityId: origin.activityId, originThreadId: origin.originThreadId ?? origin.activityId,
+    serviceUrl: origin.serviceUrl };
+}
+function authoritativeProgressJob(binding: TeamsJobProgressBinding): AgentJob | undefined {
+  const job = agentJobStore.getForPrincipal(binding.jobId, binding);
+  if (!job) return undefined;
+  const expected = nativeProgressBinding(job);
+  return expected && JSON.stringify(expected) === JSON.stringify(binding) ? job : undefined;
+}
+async function nativeProgressSnapshot(job: AgentJob): Promise<Omit<TeamsJobProgressSnapshot, 'revision'>> {
+  const message = await preferredCoreJobActivity(projectCoreOrchestrationJob(job), job);
+  const labels = { queued: '대기', awaiting_approval: '승인 필요', running: '실행 중', completed: '완료', failed: '실패', cancelled: '중지됨' };
+  // The runner does not expose response token deltas. This is native
+  // informative progress followed by the canonical final presentation.
+  return { status: job.status, text: job.progress.at(-1) ?? labels[job.status], message };
+}
+const teamsJobProgressTransport = new TeamsJobProgressTransport({
+  state: teamsJobProgressStore,
+  adapter: teamsApi && teamsApp ? createTeamsJobProgressSdkAdapter({
+    botId: teamsApp.id,
+    clientFor: binding => {
+      if (!teamsApp || skipAuth || skipOutbound || !authoritativeProgressJob(binding)) throw new Error('TEAMS_PROGRESS_AUTHORITY_BLOCKED');
+      return new teamsApi.Client(binding.serviceUrl, teamsApp.api.http.clone({ timeout: 10_000 }));
+    },
+  }) : { send: async () => ({ state: 'rejected' as const, reason: 'rejected' as const }) },
+});
+const teamsJobProgressCoordinator = new TeamsJobProgressCoordinator(teamsJobProgressStore, teamsJobProgressTransport, {
+  latestSnapshot: async binding => {
+    const job = authoritativeProgressJob(binding);
+    return teamsApp && !skipAuth && !skipOutbound && job ? nativeProgressSnapshot(job) : undefined;
+  },
+  onStopped: async binding => {
+    const job = authoritativeProgressJob(binding);
+    if (!teamsApp || skipAuth || skipOutbound || !job) throw new Error('TEAMS_PROGRESS_STOP_AUTHORITY_BLOCKED');
+    if (['queued', 'awaiting_approval', 'running'].includes(job.status)) {
+      await agentService.cancel(job.id, job, { notify: true });
+    }
+  },
+});
+async function publishNativeCoreJob(job: AgentJob): Promise<{ handled: boolean; accepted: boolean }> {
+  if (!teamsApp || skipAuth || skipOutbound) return { handled: false, accepted: false };
+  const latest = agentJobStore.getForPrincipal(job.id, job);
+  const binding = latest && nativeProgressBinding(latest);
+  if (!latest || !binding) return { handled: false, accepted: false };
+  try {
+    const result = await teamsJobProgressCoordinator.publish(binding, await nativeProgressSnapshot(latest));
+    return { handled: true, accepted: Boolean(result.activityId && ['active', 'terminal'].includes(result.state)) };
+  } catch {
+    // A retained/reserved intent may already have reached Teams. Do not send
+    // an ordinary duplicate acknowledgment on a persistence/transport error.
+    console.warn('TEAMS_PROGRESS_PUBLICATION_UNVERIFIED');
+    return { handled: true, accepted: false };
+  }
+}
+
 const personalNotifications = new PersonalNotificationBroker(
   path.join(path.dirname(agentJobStorePath), 'personal-notifications.json'), botClientId,
   async (reference, payload) => {
@@ -2628,7 +2718,7 @@ const personalNotifications = new PersonalNotificationBroker(
     const displayMode = displaySelection.mode;
     if (displayMode !== 'summary' || genUiMode !== 'legacy') {
       const activity = createExecutionPresentationActivity(projectCoreOrchestrationJob(job), displayMode, {
-        ...coreOrchestrationCardOptions, richEnabled: Boolean(copilotUiArtifact), details: displaySelection.details,
+        ...coreOrchestrationCardOptions, richEnabled: Boolean(copilotUiArtifact), details: displaySelection.details, richSurface: displaySelection.richSurface,
       });
       const receipt = await sender('', undefined, activity);
       return { state: receipt.state === 'connector-accepted' ? 'accepted' as const
@@ -2666,6 +2756,8 @@ async function observePersonalNotificationActivity(activity: any): Promise<void>
 
 const notifyConversation = async (notification: AgentNotification): Promise<{ accepted: boolean }> => {
   const { conversationId, message } = notification;
+  const progress = await publishNativeCoreJob(notification.job);
+  if (progress.handled) return { accepted: progress.accepted };
   if (conversationId.startsWith('rest-')) {
     await personalNotifications.deliver(notification);
     const { tenantId, requesterId } = notification.job;
@@ -2676,7 +2768,7 @@ const notifyConversation = async (notification: AgentNotification): Promise<{ ac
     const displayMode = displaySelection.mode;
     if (displayMode !== 'summary' || genUiMode !== 'legacy') {
       const activity = createExecutionPresentationActivity(projectCoreOrchestrationJob(notification.job), displayMode, {
-        ...coreOrchestrationCardOptions, richEnabled: Boolean(copilotUiArtifact), details: displaySelection.details,
+        ...coreOrchestrationCardOptions, richEnabled: Boolean(copilotUiArtifact), details: displaySelection.details, richSurface: displaySelection.richSurface,
       });
       const receipt = await createConversationBotSender(conversationId)('', undefined, activity);
       return { accepted: receipt.state === 'connector-accepted' };
@@ -2709,6 +2801,7 @@ agentService = new AgentService(
   },
 );
 await agentService.initialize();
+await teamsJobProgressCoordinator.recover();
 await personalNotifications.recoverTerminalJobs(agentJobStore.listLocalOnly(4096));
 
 const coreProviderCapabilities = !azureQueueDispatch
@@ -2971,6 +3064,38 @@ const presentationAuth = createUserAuthMiddleware({
   allowUnauthenticated: skipAuth, validator: userAuthValidator,
   configuredTenantId: configuredTenantId || undefined, acceptedAudiences: acceptedUserAudiences,
 });
+const coreResultPublication = new CoreResultPublicationService({
+  state: {
+    read: async (id, principal) => agentJobStore.getForPrincipal(id, principal),
+    mutate: (id, principal, reducer) => agentJobStore.mutateResultPublication(id, principal, reducer),
+  },
+  sender: async (origin, payload) => {
+    if (!teamsApi || !teamsApp || skipAuth || skipOutbound) throw new Error('RESULT_PUBLICATION_UNAVAILABLE');
+    // origin is copied from the immutable authenticated Teams activity and
+    // the publication service has just revalidated owner and exact revision.
+    const destination = new teamsApi.Client(origin.serviceUrl, teamsApp.api.http.clone({ timeout: 10_000 }));
+    try {
+      const receipt = await destination.conversations.createActivity(origin.conversationId, {
+        type: 'message', text: payload.text, textFormat: 'plain', channelId: 'msteams',
+        from: { id: teamsApp.id, role: 'bot' }, replyToId: origin.originThreadId ?? origin.activityId,
+        conversation: { id: origin.conversationId, conversationType: origin.conversationType, tenantId: origin.tenantId },
+      });
+      if (!receipt || typeof receipt.id !== 'string' || !receipt.id.trim() || (receipt as any).error) throw new Error('RESULT_PUBLICATION_RECEIPT_UNVERIFIED');
+      return { state: 'connector-accepted', activityId: receipt.id };
+    } catch (error) {
+      const status = (error as any)?.response?.status;
+      if (typeof status === 'number' && status >= 400 && status < 500 && status !== 408
+        && typeof (error as any)?.response?.data?.error?.code === 'string') throw new CoreResultConnectorRejectedError(status);
+      throw error;
+    }
+  },
+});
+mountCoreResultRoutes(http, {
+  authenticate: presentationAuth,
+  resolvePrincipal: (q, s) => restPrincipal(q, s).principal,
+  readJob: (id, principal) => agentJobStore.getForPrincipal(id, principal),
+  service: coreResultPublication, canPublish: () => Boolean(teamsApp && !skipAuth && !skipOutbound),
+});
 mountExecutionPresentationRoutes(http, {
   store: executionPresentationStore, authenticate: presentationAuth,
   resolveScope: (q, s) => {
@@ -3131,6 +3256,7 @@ const handleSignal = (signal: NodeJS.Signals): void => {
         [...a2aAgentServices.values()].map((service) => service.close({ closeAdmission: false })),
       );
       await agentService.close();
+      await teamsJobProgressCoordinator.close();
       await mcpRouter?.close();
     } finally {
       await storeProcessLease?.release();
@@ -3263,11 +3389,13 @@ http.post('/api/agent-jobs/:id/approve', async (request: any, response: any) => 
       response.status(404).json({ error: 'approval target not found' });
       return;
     }
-    const job = await agentService.approve(request.params.id, {
-      requesterId: owned.requesterId,
-      tenantId: owned.tenantId,
-      conversationId: owned.conversationId,
-    });
+    const body = asRecord(request.body);
+    if (!body || Object.keys(body).some(key => !['approvalId', 'revision'].includes(key))) throw new CoreApprovalRecoveryError('invalid');
+    assertApprovalIdentity(body);
+    const result = await agentService.decideApproval(request.params.id, {
+      requesterId: owned.requesterId, tenantId: owned.tenantId, conversationId: owned.conversationId,
+    }, body, 'accept');
+    const job = result?.job;
     if (!job) {
       response.status(404).json({ error: 'approval target not found' });
       return;
@@ -3283,6 +3411,7 @@ http.post('/api/agent-jobs/:id/approve', async (request: any, response: any) => 
       response.status(409).json({ error: error.message, job: error.job });
       return;
     }
+    if (error instanceof CoreApprovalRecoveryError) { response.status(409).json({ error: { code: error.code, retryable: false } }); return; }
     console.error('Agent approval failed', error);
     response.status(500).json({ error: 'approval could not be processed' });
   }
@@ -3931,9 +4060,11 @@ const CORE_ORCHESTRATION_CARD_ACTIONS = new Set([
   'orchestration.page',
   'orchestration.confirm-cancel',
   'orchestration.confirm-approve',
+  'orchestration.confirm-deny',
   'orchestration.dismiss-confirmation',
   'orchestration.cancel',
   'orchestration.approve',
+  'orchestration.deny',
   'orchestration.retry',
   'orchestration.provide-input',
   'orchestration.select-model',
@@ -3944,9 +4075,11 @@ type CoreOrchestrationCardSubmission = Readonly<{
   action:
     | 'orchestration.confirm-cancel'
     | 'orchestration.confirm-approve'
+    | 'orchestration.confirm-deny'
     | 'orchestration.dismiss-confirmation'
     | 'orchestration.cancel'
     | 'orchestration.approve'
+    | 'orchestration.deny'
     | 'orchestration.retry'
     | 'orchestration.provide-input'
     | 'orchestration.select-model'
@@ -3954,6 +4087,8 @@ type CoreOrchestrationCardSubmission = Readonly<{
   jobId?: string;
   input?: string;
   confirmationToken?: string;
+  approvalId?: string;
+  revision?: string;
   correlationId?: string;
   prompt?: string;
   mode?: 'read-only' | 'workspace-write';
@@ -4000,14 +4135,19 @@ function isCoreOrchestrationCardSubmission(activity: any): activity is { value: 
   if (typeof value.jobId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(value.jobId)) return false;
   const allowed = value.action === 'orchestration.provide-input'
     ? new Set(['schemaVersion', 'action', 'jobId', 'input'])
-    : value.action === 'orchestration.approve' || value.action === 'orchestration.cancel'
+    : ['orchestration.approve', 'orchestration.deny', 'orchestration.confirm-approve', 'orchestration.confirm-deny'].includes(value.action)
+      ? new Set(['schemaVersion', 'action', 'jobId', 'approvalId', 'revision'])
+    : value.action === 'orchestration.cancel'
       ? new Set(['schemaVersion', 'action', 'jobId', 'confirmationToken', 'correlationId'])
     : new Set(['schemaVersion', 'action', 'jobId']);
   if (Object.keys(value).some((key) => !allowed.has(key))) return false;
   if (value.action === 'orchestration.provide-input') {
     return typeof value.input === 'string' && value.input.trim().length > 0 && value.input.length <= 2_000;
   }
-  if (value.action === 'orchestration.approve' || value.action === 'orchestration.cancel') {
+  if (['orchestration.approve', 'orchestration.deny', 'orchestration.confirm-approve', 'orchestration.confirm-deny'].includes(value.action)) {
+    try { assertApprovalIdentity(value); return true; } catch { return false; }
+  }
+  if (value.action === 'orchestration.cancel') {
     return Boolean(
       nonEmptyString(value.confirmationToken, 512)
         && nonEmptyString(value.correlationId, MAX_AGENT_SCOPE_VALUE_LENGTH),
@@ -4043,17 +4183,48 @@ function coreOrchestrationErrorActivity(
 
 async function sendCoreOrchestrationActivity(
   send: BotSend,
-  activity: PresentedCoreActivity,
+  activity: PresentedCoreActivity | undefined,
 ): Promise<void> {
+  if (!activity) return;
   await send('', undefined, activity);
 }
 
 async function preferredCoreJobActivity(job: CoreOrchestrationJob, scope: AgentJobScope): Promise<PresentedCoreActivity> {
   const selection = scope.tenantId && scope.requesterId
-    ? await executionPresentationStore.getSelection({ tenantId: scope.tenantId, requesterId: scope.requesterId }) : { mode: 'summary' as const, details: undefined };
-  return createExecutionPresentationActivity(job, selection.mode, {
-    ...coreOrchestrationCardOptions, richEnabled: Boolean(copilotUiArtifact), details: selection.details,
+    ? await executionPresentationStore.getSelection({ tenantId: scope.tenantId, requesterId: scope.requesterId }) : { mode: 'summary' as const, details: undefined, richSurface: 'tab' as const };
+  const activity = createExecutionPresentationActivity(job, selection.mode, {
+    ...coreOrchestrationCardOptions, richEnabled: Boolean(copilotUiArtifact), details: selection.details, richSurface: selection.richSurface,
   });
+  if (!channelsNativeRenderer || !scope.tenantId || !activity.attachments?.length) return activity;
+  const identity = { jobId: job.id, ...(job.approval ? { approvalId: job.approval.approvalId } : {}) };
+  const displayScope = { tenantId: scope.tenantId, requesterId: scope.requesterId, conversationId: scope.conversationId };
+  const attachments = activity.attachments.map(attachment => {
+    if (attachment.contentType !== 'application/vnd.microsoft.card.adaptive') return attachment;
+    const card = attachment.content as Parameters<typeof channelsNativeRenderer.render>[0]['card'];
+    // These are display allowlists taken solely from our server-created card;
+    // callback execution still performs its durable owner/approval checks.
+    const actionGrants: Parameters<typeof channelsNativeRenderer.render>[0]['actionGrants'][number][] = [];
+    const inspect = (value: unknown): void => {
+      if (Array.isArray(value)) { value.forEach(inspect); return; }
+      if (!value || typeof value !== 'object') return;
+      const entry = value as Record<string, unknown>;
+      if (entry.type === 'Action.Submit' && entry.data && typeof entry.data === 'object' && !Array.isArray(entry.data)) {
+        actionGrants.push({ identity, scope: displayScope, data: entry.data as Record<string, unknown> });
+      }
+      for (const key of ['body', 'actions', 'items', 'columns', 'card']) inspect(entry[key]);
+    };
+    inspect(card);
+    const rendered = channelsNativeRenderer.render({ card, identity, scope: displayScope, actionGrants,
+      kind: job.status === 'awaiting_approval' ? 'approval' : job.status === 'failed' ? 'error' : 'result' });
+    return rendered.status === 'faithful' ? { ...attachment, content: rendered.card } : attachment;
+  });
+  return { ...activity, attachments };
+}
+
+async function mutationCoreJobActivity(job: CoreOrchestrationJob, scope: AgentJobScope): Promise<PresentedCoreActivity | undefined> {
+  const stored = agentJobStore.getForPrincipal(job.id, scope);
+  if (stored && (await publishNativeCoreJob(stored)).handled) return undefined;
+  return preferredCoreJobActivity(job, scope);
 }
 
 function coreOrchestrationActivityIdempotencyKey(activity: any, scope: AgentJobScope): string {
@@ -4067,6 +4238,15 @@ function coreOrchestrationActivityIdempotencyKey(activity: any, scope: AgentJobS
 
 // Only a positively identified personal conversation may expose owner jobs across surfaces.
 // This visibility restriction does not grant another group participant any job access.
+function trustedCoreResultOrigin(activity: any, scope: AgentJobScope) {
+  if (skipAuth || skipOutbound) return undefined;
+  // A compose-extension invoke ID is not evidence of a channel message's
+  // original thread. Keep private submission available without publication.
+  if (activity?.type === 'invoke' && activity?.conversation?.conversationType === 'channel'
+    && !nonEmptyString(activity?.replyToId, 200)) return undefined;
+  return captureCoreResultOrigin(createServerDerivedCoreScope(scope), activity);
+}
+
 function coreOrchestrationBotScope(activity: any, scope: AgentJobScope) {
   return createServerDerivedCoreScope(scope,
     activity?.conversation?.conversationType === 'personal' ? 'principal' : 'conversation');
@@ -4076,7 +4256,7 @@ async function resolveCoreOrchestrationCommand(
   activity: any,
   scope: AgentJobScope,
   command: CoreOrchestrationChatCommand,
-): Promise<PresentedCoreActivity> {
+): Promise<PresentedCoreActivity | undefined> {
   const serverScope = coreOrchestrationBotScope(activity, scope);
   if (command.kind === 'select-submit') {
     const catalog = await coreOrchestrationService.listCodexModelCatalog();
@@ -4094,8 +4274,8 @@ async function resolveCoreOrchestrationCommand(
       idempotencyKey: coreOrchestrationActivityIdempotencyKey(activity, scope),
       prompt: command.prompt,
       mode: command.kind === 'new' ? 'read-only' : command.mode,
-    });
-    return await preferredCoreJobActivity(result.job, scope);
+    }, { resultOrigin: trustedCoreResultOrigin(activity, scope) });
+    return await mutationCoreJobActivity(result.job, scope);
   }
   if (command.kind === 'continue') {
     const job = await coreOrchestrationService.continue(serverScope, {
@@ -4103,7 +4283,7 @@ async function resolveCoreOrchestrationCommand(
       prompt: command.prompt,
     });
     return job
-      ? await preferredCoreJobActivity(job, scope)
+      ? await mutationCoreJobActivity(job, scope)
       : coreOrchestrationErrorActivity('선택한 작업을 이어갈 수 없습니다. 작업 ID와 durable Codex thread를 확인하세요.');
   }
   if (command.kind === 'list') {
@@ -4134,11 +4314,11 @@ async function resolveCoreOrchestrationCommand(
     if (result.status === 'unsupported') {
       return coreOrchestrationErrorActivity('이 작업은 현재 추가 입력 재개를 지원하지 않습니다.');
     }
-    return await preferredCoreJobActivity(result.job, scope);
+    return await mutationCoreJobActivity(result.job, scope);
   }
   const job = await coreOrchestrationService[command.kind](serverScope, request);
   return job
-    ? await preferredCoreJobActivity(job, scope)
+    ? await mutationCoreJobActivity(job, scope)
     : coreOrchestrationErrorActivity('요청한 작업을 찾을 수 없습니다.');
 }
 
@@ -4153,9 +4333,15 @@ function coreOrchestrationMutationAllowed(
 
 async function issueCoreOrchestrationConfirmation(
   job: CoreOrchestrationJob,
-  action: 'approve' | 'cancel',
+  action: 'approve' | 'cancel' | 'deny',
   scope: AgentJobScope,
 ): Promise<CoreOrchestrationTeamsActivity> {
+  if (action !== 'cancel') {
+    const approval = job.approval;
+    if (!approval || approval.state !== 'pending' || Date.parse(approval.deadline) <= Date.now()) throw new CoreApprovalRecoveryError('unsupported');
+    return createCoreOrchestrationConfirmationActivity(job, action, { ...coreOrchestrationCardOptions,
+      confirmation: { action, approvalId: approval.approvalId, revision: approval.revision } });
+  }
   const correlationId = crypto.randomUUID();
   const token = await genUiActionStore.issue({
     action,
@@ -4246,8 +4432,8 @@ async function handleCoreOrchestrationCardSubmission(activity: any, send: BotSen
         model: String(value.model),
         reasoningEffort: String(value.reasoningEffort) as CoreCodexReasoningEffort,
         catalogRevision: String(value.catalogRevision),
-      });
-      await sendCoreOrchestrationActivity(send, await preferredCoreJobActivity(result.job, scope));
+      }, { resultOrigin: trustedCoreResultOrigin(activity, scope) });
+      await sendCoreOrchestrationActivity(send, await mutationCoreJobActivity(result.job, scope));
     } catch (error) {
       const message = error instanceof CoreOrchestrationValidationError
         ? '선택한 모델 또는 추론 수준이 현재 Codex worker와 일치하지 않습니다. 다시 선택하세요.'
@@ -4257,6 +4443,7 @@ async function handleCoreOrchestrationCardSubmission(activity: any, send: BotSen
     return;
   }
   if (value.action === 'orchestration.confirm-approve'
+    || value.action === 'orchestration.confirm-deny'
     || value.action === 'orchestration.confirm-cancel'
     || value.action === 'orchestration.dismiss-confirmation') {
     const scope = activityScope(activity);
@@ -4274,8 +4461,10 @@ async function handleCoreOrchestrationCardSubmission(activity: any, send: BotSen
         await sendCoreOrchestrationActivity(send, await preferredCoreJobActivity(job, scope));
         return;
       }
-      const action = value.action === 'orchestration.confirm-approve' ? 'approve' : 'cancel';
-      const allowed = action === 'approve'
+      const action = value.action === 'orchestration.confirm-approve' ? 'approve'
+        : value.action === 'orchestration.confirm-deny' ? 'deny' : 'cancel';
+      if (action !== 'cancel' && (!job.approval || job.approval.approvalId !== value.approvalId || job.approval.revision !== value.revision)) throw new CoreApprovalRecoveryError('mismatch');
+      const allowed = action === 'approve' || action === 'deny'
         ? job.status === 'awaiting_approval'
         : job.status === 'queued' || job.status === 'running' || job.status === 'awaiting_approval';
       if (!allowed) {
@@ -4298,13 +4487,29 @@ async function handleCoreOrchestrationCardSubmission(activity: any, send: BotSen
       return;
     }
   }
-  if (value.action === 'orchestration.cancel' || value.action === 'orchestration.approve') {
+  if (value.action === 'orchestration.approve' || value.action === 'orchestration.deny') {
+    const scope = activityScope(activity);
+    if (!scope) { await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity('인증된 Teams 범위가 필요합니다.')); return; }
+    try {
+      assertApprovalIdentity(value);
+      const result = await coreOrchestrationService.decideApproval(coreOrchestrationBotScope(activity, scope),
+        { jobId: String(value.jobId), approvalId: value.approvalId, revision: value.revision },
+        value.action === 'orchestration.approve' ? 'accept' : 'deny');
+      await sendCoreOrchestrationActivity(send, result ? await mutationCoreJobActivity(result.job, scope)
+        : coreOrchestrationErrorActivity('승인 작업을 찾을 수 없습니다.'));
+    } catch (error) {
+      await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity(error instanceof CoreApprovalRecoveryError
+        ? '승인 ID·revision·기한 또는 결정 상태가 일치하지 않습니다. 최신 작업을 확인하세요.' : '승인을 처리하지 못했습니다.'));
+    }
+    return;
+  }
+  if (value.action === 'orchestration.cancel') {
     const scope = activityScope(activity);
     if (!scope) {
       await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity('인증된 Teams 사용자·대화·테넌트 정보가 필요합니다.'));
       return;
     }
-    const action = value.action === 'orchestration.approve' ? 'approve' : 'cancel';
+    const action = 'cancel' as const;
     const confirmationToken = nonEmptyString(value.confirmationToken, 512);
     const correlationId = nonEmptyString(value.correlationId, MAX_AGENT_SCOPE_VALUE_LENGTH);
     if (!confirmationToken || !correlationId) {
@@ -4342,7 +4547,7 @@ async function handleCoreOrchestrationCardSubmission(activity: any, send: BotSen
       await sendCoreOrchestrationActivity(
         send,
         updated
-          ? await preferredCoreJobActivity(updated, scope)
+          ? await mutationCoreJobActivity(updated, scope)
           : coreOrchestrationErrorActivity('요청한 작업을 찾을 수 없습니다.'),
       );
     } catch (error) {
@@ -4371,7 +4576,7 @@ async function handleCoreMessageExtension(activity: any) {
   try {
     return activity.name === 'composeExtension/fetchTask'
       ? await coreMessageExtension.open(scope, activity.value)
-      : await coreMessageExtension.submit(scope, activity.value);
+      : await coreMessageExtension.submit(scope, activity.value, { resultOrigin: trustedCoreResultOrigin(activity, scope) });
   } catch { return coreMessageExtensionError(); }
 }
 
@@ -4438,9 +4643,12 @@ async function handleBotResponseEngine(
       itemStore,
       agentService,
       deferAgentCompletion: true,
+      resultOrigin: trustedCoreResultOrigin(activity, scope),
       approvalEnvelope: (job) => genUi.approval(job),
     });
-    await send(output.text, genUi.withTabAction(output.envelope));
+    const job = agentService.get(output.envelope.id, scope);
+    if (job) await sendCoreOrchestrationActivity(send, await mutationCoreJobActivity(projectCoreOrchestrationJob(job), scope));
+    else await send(output.text, genUi.withTabAction(output.envelope));
   } catch (error) {
     if (error instanceof ResponseEngineNotConfiguredError) {
       const availability = publicResponseModeAvailability();
@@ -4573,17 +4781,10 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
           prompt: promptResult.value!,
           mode,
           scope,
+          resultOrigin: trustedCoreResultOrigin(activity, scope),
         });
 
-        if (mode === 'workspace-write') {
-          const responseText = `쓰기 작업 ${job.id}이 승인 대기 중입니다.\napprove ${job.id} 또는 cancel ${job.id}`;
-          const envelope = await genUi.approval(job);
-          await send(responseText, envelope);
-        } else {
-          const responseText = `읽기 전용 ${agentLabel} 작업 ${job.id}을 시작했습니다.\nstatus ${job.id}로 진행 상태를 확인할 수 있습니다.`;
-          const envelope = genUi.started(job);
-          await send(responseText, envelope);
-        }
+        await sendCoreOrchestrationActivity(send, await mutationCoreJobActivity(projectCoreOrchestrationJob(job), scope));
       } catch (error) {
         if (error instanceof AgentCapacityError) {
           await send(agentCapacityText(error), agentCapacityEnvelope(error, `${mode}-capacity`));
@@ -4781,8 +4982,26 @@ http.get('/tabs/home', (request: any, response: any, next: any) => {
   next();
 });
 
+async function handleCoreJobDetailDialog(activity: any) {
+  const scope = activityScope(activity);
+  const data = asRecord(activity?.value?.data) ?? asRecord(activity?.value);
+  const job = scope && typeof data?.jobId === 'string'
+    ? coreOrchestrationService.get(coreOrchestrationBotScope(activity, scope), { jobId: data.jobId }) : undefined;
+  return coreJobDialogResponse(data, job, `https://${process.env.TAB_DOMAIN ?? ''}`, Boolean(copilotUiArtifact));
+}
+
 if (teamsApp) {
   teamsApp.tab('home', clientDist);
+  teamsApp.on('dialog.open.core-job-detail', async ({ activity }: any) => handleCoreJobDetailDialog(activity));
+  teamsApp.on('dialog.submit', async ({ activity }: any) => {
+    const scope = activityScope(activity);
+    const data = asRecord(activity?.value?.data);
+    if (!scope || typeof data?.jobId !== 'string'
+      || !coreOrchestrationService.get(coreOrchestrationBotScope(activity, scope), { jobId: data.jobId })) {
+      return { task: { type: 'message', value: '이 작업의 접근 권한을 확인하지 못했습니다.' } };
+    }
+    return { status: 200 };
+  });
   teamsApp.on('message.ext.open', async ({ activity }: any) => handleCoreMessageExtension(activity));
   teamsApp.on('message.ext.submit', async ({ activity }: any) => handleCoreMessageExtension(activity));
   teamsApp.on('install.add', async ({ activity, send }: any) => {

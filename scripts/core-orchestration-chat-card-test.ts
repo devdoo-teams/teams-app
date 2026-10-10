@@ -14,6 +14,7 @@ import {
   type CoreOrchestrationTeamsActivity,
 } from '../src/server/genui-response.js';
 import { parseCodexModelCatalogPayload } from '../src/server/codex-model-catalog.js';
+import { pendingOperationRevision } from '../src/server/personal-approval-projection.js';
 import type {
   CoreCodexModelCatalog,
   CoreOrchestrationJob,
@@ -24,7 +25,7 @@ const job = (status: CoreOrchestrationJob['status']): CoreOrchestrationJob => ({
   id: 'job-durable-42',
   idempotencyKey: 'teams-activity-v1:activity-42',
   prompt: '저장소 상태를 점검해줘',
-  mode: 'read-only',
+  mode: status === 'awaiting_approval' ? 'workspace-write' : 'read-only',
   provider: 'codex',
   status,
   progress: ['작업을 접수했습니다.'],
@@ -131,7 +132,7 @@ const tabUrl = 'https://teams.microsoft.com/l/entity/00000000-0000-4000-8000-000
 for (const [status, expectedActions] of [
   ['queued', ['orchestration.confirm-cancel']],
   ['running', ['orchestration.confirm-cancel']],
-  ['awaiting_approval', ['orchestration.confirm-approve', 'orchestration.confirm-cancel']],
+  ['awaiting_approval', ['orchestration.confirm-cancel']],
   ['failed', ['orchestration.retry']],
   ['completed', []],
   ['cancelled', []],
@@ -152,6 +153,25 @@ for (const [status, expectedActions] of [
   const detailUrl = new URL(String(card.actions?.at(-1)?.url));
   assert.deepEqual(JSON.parse(detailUrl.searchParams.get('context')!), { subEntityId: 'job-durable-42' });
   assert.equal(new URL(detailUrl.searchParams.get('webUrl')!).searchParams.get('jobId'), 'job-durable-42');
+}
+const legacyAwaitingJob = job('awaiting_approval');
+const durableAwaitingJob: CoreOrchestrationJob = { ...legacyAwaitingJob, approval: {
+  schemaVersion: '1', approvalId: 'approval-12345678-1234-1234-1234-123456789abc',
+  revision: pendingOperationRevision(legacyAwaitingJob), approverId: 'synthetic-owner', tenantId: 'synthetic-tenant',
+  deadline: '2099-10-11T12:00:00.000Z', state: 'pending',
+} };
+const approvalIdentity = { approvalId: durableAwaitingJob.approval!.approvalId, revision: durableAwaitingJob.approval!.revision };
+const approvalCard = cardFrom(createCoreOrchestrationJobActivity(durableAwaitingJob));
+assert.deepEqual(actionPayloads(approvalCard).filter(payload => typeof payload.action === 'string'), [
+  { schemaVersion: '1', action: 'orchestration.confirm-approve', jobId: durableAwaitingJob.id, ...approvalIdentity },
+  { schemaVersion: '1', action: 'orchestration.confirm-deny', jobId: durableAwaitingJob.id, ...approvalIdentity },
+], 'durable approval exposes explicit approval/denial confirmation with the exact identity');
+for (const terminalStatus of ['completed', 'cancelled'] as const) {
+  const terminal = { ...durableAwaitingJob, status: terminalStatus,
+    approval: { ...durableAwaitingJob.approval!, state: terminalStatus === 'completed' ? 'accepted' as const : 'denied' as const,
+      decidedAt: '2026-10-11T00:00:00.000Z', settledAt: '2026-10-11T00:00:01.000Z', settledStatus: terminalStatus } };
+  assert.deepEqual(actionPayloads(cardFrom(createCoreOrchestrationJobActivity(terminal))).filter(payload => typeof payload.action === 'string'), [],
+    'settled approval/denial leaves no executable lifecycle action');
 }
 
 const inputCard = cardFrom(createCoreOrchestrationJobActivity(job('input_required'), { openTabUrl: tabUrl }));
@@ -209,17 +229,22 @@ for (const element of longCard.body ?? []) {
   }
 }
 
-const confirmationCard = cardFrom(createCoreOrchestrationConfirmationActivity(job('awaiting_approval'), 'approve', {
+const confirmationCard = cardFrom(createCoreOrchestrationConfirmationActivity(durableAwaitingJob, 'approve', {
   openTabUrl: tabUrl,
   confirmation: {
     action: 'approve',
-    token: 'chat-card-confirmation-token',
-    correlationId: 'chat-card-confirmation-correlation',
+    ...approvalIdentity,
   },
 }));
-assert.equal(confirmationCard.actions?.[0]?.data?.action, 'orchestration.approve');
-assert.equal(confirmationCard.actions?.[0]?.data?.confirmationToken, 'chat-card-confirmation-token');
-assert.equal(confirmationCard.actions?.[0]?.data?.correlationId, 'chat-card-confirmation-correlation');
+assert.deepEqual(confirmationCard.actions?.[0]?.data, {
+  schemaVersion: '1', action: 'orchestration.approve', jobId: durableAwaitingJob.id, ...approvalIdentity,
+});
+const denialConfirmationCard = cardFrom(createCoreOrchestrationConfirmationActivity(durableAwaitingJob, 'deny', {
+  confirmation: { action: 'deny', ...approvalIdentity },
+}));
+assert.deepEqual(denialConfirmationCard.actions?.[0]?.data, {
+  schemaVersion: '1', action: 'orchestration.deny', jobId: durableAwaitingJob.id, ...approvalIdentity,
+});
 assert.equal(confirmationCard.actions?.at(-1)?.type, 'Action.OpenUrl');
 assert.equal(confirmationCard.actions?.at(-1)?.url, tabUrl);
 

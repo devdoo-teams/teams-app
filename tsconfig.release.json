@@ -11,6 +11,7 @@
       "@copilotkit/runtime/v2/express": ["types/release-stubs/copilotkit-runtime-v2-express.d.ts"],
       "@copilotkit/channels-ui": ["types/release-stubs/copilotkit-channels-ui.d.ts"],
       "@copilotkit/channels-teams": ["types/release-stubs/copilotkit-channels-teams.d.ts"],
+      "@copilotkit/channels-teams/render": ["types/release-stubs/copilotkit-channels-teams-render.d.ts"],
       "@microsoft/teams.apps": ["types/release-stubs/microsoft-teams-apps.d.ts"]
     }
   },

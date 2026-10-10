@@ -293,7 +293,7 @@ export function CopilotJobView({ jobId, autoLoad = false, onJobChange }: {
   const changeJob = useCallback((id: string) => { setRevision(''); setActiveJobId(id); onJobChange?.(id); }, [onJobChange]);
   const observeState = useCallback((state: CoreConversationState) => {
     const job = state.job;
-    setAuthorized(Boolean(job && ['ready', 'sending'].includes(state.phase)));
+    setAuthorized(Boolean(job && ['ready', 'sending', 'stopping'].includes(state.phase)));
     setRevision(job ? `${job.id}:${job.updatedAt ?? job.createdAt}:${job.status}:${job.progress.length}` : '');
   }, []);
   if (!ExecutionPresentationJobIdSchema.safeParse(jobId).success) return <p role="alert">작업 ID를 확인하지 못했습니다.</p>;
@@ -302,14 +302,14 @@ export function CopilotJobView({ jobId, autoLoad = false, onJobChange }: {
       {connectionError ? <section role="alert"><p>{connectionError}</p>
         <button className="secondary" type="button" onClick={() => { setConnectionError(''); setConnectionAttempt(attempt => attempt + 1); }}>연결 다시 시도</button>
       </section> : null}
-      <CopilotKit key={`${activeJobId}-${connectionAttempt}`} runtimeUrl={COPILOT_PROJECTION_RUNTIME_PATH}
+      <CopilotKit key={activeJobId} runtimeUrl={COPILOT_PROJECTION_RUNTIME_PATH}
         agent={COPILOT_PROJECTION_AGENT_ID} headers={getCachedAuthHeaders} credentials="same-origin"
         useSingleEndpoint={false} showDevConsole={false} enableInspector={false}
         onError={() => { setAuthorized(false); setRevision(''); setConnectionError(unavailableMessage); }}>
-        {connectionError ? null : <>
+        <>
           <ConnectedCoreConversation jobId={activeJobId} onJobChange={changeJob} onStateChange={observeState} />
-          <ConnectedProjectionView jobId={activeJobId} autoLoad={autoLoad} revision={revision} authorized={authorized} />
-        </>}
+          <ConnectedProjectionView jobId={activeJobId} autoLoad={autoLoad} revision={`${revision}:${connectionAttempt}`} authorized={authorized && !connectionError} />
+        </>
       </CopilotKit>
     </div>
   );

@@ -4,6 +4,7 @@ import http from 'node:http';
 import express from 'express';
 
 import { AgentProviderUnavailableError } from '../src/server/agent-service.js';
+import { CoreApprovalRecoveryError } from '../src/server/core-approval-recovery.js';
 import {
   createCoreOrchestrationRouter,
   type CoreOrchestrationRouteService,
@@ -30,6 +31,8 @@ const jobs = new Map<string, CoreOrchestrationJob>();
 const idempotency = new Map<string, { hash: string; job: CoreOrchestrationJob }>();
 let nextId = 1;
 let observedNotify: boolean | undefined;
+let observedApproval: unknown;
+const approvalIdentity = { approvalId: 'approval-00000000-0000-0000-0000-000000000001', revision: 'a'.repeat(64) };
 
 function scopeKey(scope: ServerDerivedCoreScope): string {
   return `${scope.tenantId}/${scope.requesterId}/${scope.conversationId}`;
@@ -116,6 +119,17 @@ const service: CoreOrchestrationRouteService = {
   },
   async approve(scope, request) {
     return update(scope, request.jobId, { status: 'queued' });
+  },
+  async decideApproval(scope, request, decision) {
+    observedApproval = request;
+    if (request.approvalId !== approvalIdentity.approvalId || request.revision !== approvalIdentity.revision) {
+      throw new CoreApprovalRecoveryError('mismatch');
+    }
+    const prior = jobs.get(jobKey(scope, request.jobId));
+    if (!prior) return undefined;
+    if (decision === 'deny' && prior.status === 'queued') throw new CoreApprovalRecoveryError('conflict');
+    const replayed = decision === 'accept' ? prior.status === 'queued' : prior.status === 'cancelled';
+    return { job: update(scope, request.jobId, { status: decision === 'accept' ? 'queued' : 'cancelled' })!, replayed };
   },
   async retry(scope, request) {
     const prior = jobs.get(jobKey(scope, request.jobId));
@@ -276,12 +290,29 @@ try {
     idempotencyKey: 'route-write-1', prompt: 'approved change', mode: 'workspace-write',
   }, auth);
   const writeId = JSON.parse(write.body).job.id as string;
-  assert.equal((await request('POST', `/jobs/${writeId}/approve`, {}, auth)).status, 200);
+  assert.equal((await request('POST', `/jobs/${writeId}/approve`, {}, auth)).status, 400, 'job ID alone is no approval callback');
+  const approved = await request('POST', `/jobs/${writeId}/approve`, approvalIdentity, auth);
+  assert.equal(approved.status, 200);
+  assert.equal(JSON.parse(approved.body).replayed, false);
+  assert.deepEqual(observedApproval, { jobId: writeId, ...approvalIdentity });
+  const duplicateApproval = await request('POST', `/jobs/${writeId}/approve`, approvalIdentity, auth);
+  assert.equal(duplicateApproval.status, 200);
+  assert.equal(JSON.parse(duplicateApproval.body).replayed, true);
+  assert.equal((await request('POST', `/jobs/${writeId}/deny`, approvalIdentity, auth)).status, 409);
+  assert.equal((await request('POST', `/jobs/${writeId}/approve`, { ...approvalIdentity, revision: 'b'.repeat(64) }, auth)).status, 409);
+  for (const forged of ['tenantId', 'approverId', 'deadline', 'decision', 'scope']) {
+    assert.equal((await request('POST', `/jobs/${writeId}/approve`, { ...approvalIdentity, [forged]: 'client-forged' }, auth)).status, 400);
+  }
   assert.equal((await request('POST', `/jobs/${writeId}/cancel`, {}, auth)).status, 200);
   const retried = await request('POST', `/jobs/${writeId}/retry`, {}, auth);
   assert.equal(retried.status, 200);
   assert.equal(JSON.parse(retried.body).job.parentJobId, writeId);
   assert.equal((await request('POST', `/jobs/${writeId}/approve`, { extra: true }, auth)).status, 400);
+  const denial = await request('POST', '/jobs', { idempotencyKey: 'route-deny', prompt: 'denial fixture', mode: 'workspace-write' }, auth);
+  const denialId = JSON.parse(denial.body).job.id;
+  assert.equal((await request('POST', `/jobs/${denialId}/deny`, approvalIdentity, auth)).status, 200);
+  assert.equal((await request('POST', `/jobs/${denialId}/deny`, {}, auth)).status, 400);
+  assert.equal((await request('POST', `/jobs/${denialId}/deny`, approvalIdentity, { ...auth, 'x-test-requester': 'other' })).status, 404);
   assert.equal((await request('POST', '/jobs/missing/cancel', {}, auth)).status, 404);
 
   const input = await request('POST', `/jobs/${first.job.id}/input`, { input: { answer: 'yes' } }, auth);

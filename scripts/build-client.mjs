@@ -1,4 +1,3 @@
-import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -6,6 +5,7 @@ import path from 'node:path';
 import { build } from 'esbuild';
 
 import { buildClientAtomically } from './build-client-atomic.mjs';
+import { createClientBuildStamp, finalizeClientBuildIdentity } from './client-build-identity.mjs';
 import { buildWithBoundedRetry } from './esbuild-bounded.mjs';
 import { ensureFileProviderRuntimeDependencies } from './fileprovider-runtime-deps.mjs';
 import { filterClientSourceFiles } from './fileprovider-client-source.mjs';
@@ -28,6 +28,12 @@ const sourceVerification = assertCleanTrackedWorktreeForFileProvider(root, {
 if (sourceVerification.commitOid !== sourceCommit) {
   throw new Error('Client build source verification changed the pinned Git OID');
 }
+const sourceManifest = JSON.parse(execFileSync('git', ['show', `${sourceCommit}:appPackage/manifest.json`], {
+  cwd: root, encoding: 'utf8', env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' }, timeout: 10_000, killSignal: 'SIGKILL',
+}));
+const clientBuildStamp = createClientBuildStamp({
+  version: sourceManifest.version, sourceCommit, mode: coreBuild ? 'core' : 'optional',
+});
 const runtimeNodeModules = reuseFileProviderSources
   ? await ensureFileProviderRuntimeDependencies(root)
   : path.join(root, 'node_modules');
@@ -107,7 +113,10 @@ try {
       // debugging build when the toolchain is known to support it.
       sourcemap: false,
       loader: { '.css': 'css', '.woff': 'file', '.woff2': 'file', '.ttf': 'file' },
-      define: { __TEAMS_OPTIONAL_RUNTIME__: coreBuild ? 'false' : 'true' },
+      define: {
+        __TEAMS_OPTIONAL_RUNTIME__: coreBuild ? 'false' : 'true',
+        __TEAMS_CLIENT_BUILD_IDENTITY__: JSON.stringify(clientBuildStamp),
+      },
       // The core tab never renders the optional CopilotKit runtime. Keep its
       // lazy import external so esbuild does not emit an optional component or
       // stylesheet into the API-free Teams artifact; optional builds bundle it
@@ -120,12 +129,14 @@ try {
 
       const sourceHtml = await fs.readFile(path.join(sourceRoot, 'index.html'), 'utf8');
       const clientBundle = await fs.readFile(path.join(assetsDir, 'main.js'));
-      const assetVersion = crypto.createHash('sha256').update(clientBundle).digest('hex').slice(0, 12);
+      const clientBuildIdentity = finalizeClientBuildIdentity(clientBuildStamp, clientBundle);
+      const assetVersion = clientBuildIdentity.clientBundleSha256.slice(0, 12);
       const html = sourceHtml
         .replace('<meta name="theme-color" content="#6264a7" />', '<meta name="theme-color" content="#6264a7" />\n    <link rel="stylesheet" href="./assets/main.css" />')
         .replace('<script type="module" src="/main.tsx"></script>', `<script type="module" src="./assets/main.js?v=${assetVersion}"></script>`);
 
       await fs.writeFile(path.join(temporaryDir, 'index.html'), html, 'utf8');
+      await fs.writeFile(path.join(temporaryDir, 'build-identity.json'), `${JSON.stringify(clientBuildIdentity)}\n`, 'utf8');
     },
   });
 } finally {

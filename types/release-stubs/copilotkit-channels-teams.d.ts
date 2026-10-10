@@ -1,7 +1,9 @@
 export type AdaptiveCard = {
-  body: unknown[];
-  actions?: unknown[];
-  [key: string]: unknown;
+  type: 'AdaptiveCard';
+  $schema: string;
+  version: string;
+  body: Record<string, unknown>[];
+  actions?: Record<string, unknown>[];
 };
 
 export function collectPlainText(value: unknown): string;

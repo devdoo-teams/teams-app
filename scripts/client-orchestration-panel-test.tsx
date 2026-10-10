@@ -2,6 +2,8 @@ import { strict as assert } from 'node:assert';
 import React from 'react';
 import { teamsCliTestCatalog } from './fixtures/teams-cli-agent-policy-fixture.js';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { ApiAuthError } from '../src/client/auth.js';
+import type { VisibleJobConversation } from '../src/shared/job-conversation.js';
 
 import {
   CoreOrchestrationClientError,
@@ -9,8 +11,12 @@ import {
 } from '../src/client/core-orchestration-client.js';
 import {
   createOrchestrationBusyController,
+  decideSelectedOrchestrationApproval,
+  getOrchestrationApprovalIdentity,
   orchestrationMutationNotice,
+  OrchestrationPanel,
   OrchestrationPanelView,
+  type OrchestrationPanelViewProps,
   validateOrchestrationSubmission,
 } from '../src/client/OrchestrationPanel.js';
 import * as orchestrationPanelModule from '../src/client/OrchestrationPanel.js';
@@ -198,12 +204,18 @@ assert.deepEqual(requests.at(-1), {
   body: {},
 });
 
-await client.approveJob('task-1');
-assert.deepEqual(requests.at(-1), {
-  path: `${apiBasePath}/jobs/task-1/approve`,
-  method: 'POST',
-  body: {},
-});
+const approvalIdentity = { approvalId: 'approval-12345678-1234-1234-1234-123456789abc', revision: 'b'.repeat(64) };
+const beforeLegacyApproval = requests.length;
+await assert.rejects(() => client.approveJob('task-1'),
+  (caught: unknown) => caught instanceof CoreOrchestrationClientError && caught.code === 'ApprovalIdentityRequired');
+assert.equal(requests.length, beforeLegacyApproval, 'legacy approval fails before HTTP rather than posting an empty payload');
+for (const decision of ['accept', 'deny'] as const) {
+  await client.decideApproval!('task-1', approvalIdentity, decision);
+  assert.deepEqual(requests.at(-1), {
+    path: `${apiBasePath}/jobs/task-1/${decision === 'accept' ? 'approve' : 'deny'}`,
+    method: 'POST', body: approvalIdentity,
+  }, 'both approval decisions send the exact observed identity without client scope');
+}
 
 const provided = await client.provideInput('task-1', 'Use canary.');
 assert.equal(provided.status, 'accepted', 'provide-input consumes the shared result DTO directly');
@@ -354,6 +366,8 @@ const baseProps = {
   onSelectTask: asyncNoop,
   onCancel: asyncNoop,
   onApprove: asyncNoop,
+  onDeny: asyncNoop,
+  approvalDecisionSupported: true,
   onProvideInput: asyncNoop,
   onRetryTask: asyncNoop,
   onReload: asyncNoop,
@@ -401,12 +415,18 @@ for (const phase of ['ready', 'loading'] as const) {
 }
 assert.doesNotMatch(empty, /type="checkbox"/, 'notification option is absent without its callback');
 
+const pendingApprovalJob = task('awaiting_approval', { mode: 'workspace-write',
+  pendingOperation: { kind: 'job-approval', jobId: 'task-1', ...approvalIdentity,
+    approverId: 'synthetic-owner', tenantId: 'synthetic-tenant', deadline: '2099-10-11T12:00:00.000Z' },
+  approval: { schemaVersion: '1', ...approvalIdentity, approverId: 'synthetic-owner', tenantId: 'synthetic-tenant',
+    deadline: '2099-10-11T12:00:00.000Z', state: 'pending' },
+});
 const approval = renderToStaticMarkup(<OrchestrationPanelView
   {...baseProps}
   phase="ready"
-  jobs={[task('awaiting_approval', { mode: 'workspace-write', pendingOperation: { kind: 'job-approval', jobId: 'task-1', revision: 'b'.repeat(64) } })]}
-  pendingJobs={[task('awaiting_approval', { mode: 'workspace-write', pendingOperation: { kind: 'job-approval', jobId: 'task-1', revision: 'b'.repeat(64) } })]}
-  selectedJob={task('awaiting_approval', { mode: 'workspace-write', pendingOperation: { kind: 'job-approval', jobId: 'task-1', revision: 'b'.repeat(64) } })}
+  jobs={[pendingApprovalJob]}
+  pendingJobs={[pendingApprovalJob]}
+  selectedJob={pendingApprovalJob}
   error=""
   mobile={false}
 />);
@@ -414,7 +434,108 @@ assert.match(approval, /승인 필요/);
 assert.match(approval, /개인 승인 대기 목록/);
 assert.equal(approval.split('b'.repeat(64)).length - 1, 2, 'inbox and selected detail show the same server revision');
 assert.match(approval, />승인<\/button>/);
+assert.match(approval, />거절<\/button>/);
+assert.match(approval, /승인자:<\/dt><dd>synthetic-owner/);
+assert.match(approval, /승인 기한:<\/dt><dd><time dateTime="2099-10-11T12:00:00.000Z"/);
+assert.match(approval, /승인 상태:<\/dt><dd>승인 대기/);
 assert.match(approval, /계속하려면 승인이 필요합니다/);
+
+const invalidApprovals = [
+  { name: 'legacy', job: { ...pendingApprovalJob, approval: undefined,
+    pendingOperation: { kind: 'job-approval' as const, jobId: 'task-1', revision: approvalIdentity.revision } } },
+  { name: 'missing identity', job: { ...pendingApprovalJob,
+    pendingOperation: { ...pendingApprovalJob.pendingOperation!, approvalId: undefined } } },
+  { name: 'expired', job: { ...pendingApprovalJob,
+    approval: { ...pendingApprovalJob.approval!, deadline: '2000-01-01T00:00:00.000Z' },
+    pendingOperation: { ...pendingApprovalJob.pendingOperation!, deadline: '2000-01-01T00:00:00.000Z' } } },
+  { name: 'settled', job: { ...pendingApprovalJob, approval: { ...pendingApprovalJob.approval!, state: 'accepted' as const } } },
+  { name: 'changed revision', job: { ...pendingApprovalJob,
+    pendingOperation: { ...pendingApprovalJob.pendingOperation!, revision: 'c'.repeat(64) } } },
+  { name: 'foreign job', job: { ...pendingApprovalJob,
+    pendingOperation: { ...pendingApprovalJob.pendingOperation!, jobId: 'other-job' } } },
+];
+for (const { name, job } of invalidApprovals) {
+  assert.equal(getOrchestrationApprovalIdentity(job), undefined, `${name} cannot supply executable identity`);
+  const markup = renderToStaticMarkup(<OrchestrationPanelView {...baseProps} phase="ready" jobs={[job]}
+    selectedJob={job} error="" mobile={false} />);
+  assert.match(markup, /<button[^>]*disabled=""[^>]*>승인<\/button>/, `${name} disables approval`);
+  assert.match(markup, /<button[^>]*disabled=""[^>]*>거절<\/button>/, `${name} disables denial`);
+  assert.match(markup, /role="note"/, `${name} explains why the decision is unavailable`);
+  const before = requests.length;
+  for (const decision of ['accept', 'deny'] as const) {
+    await assert.rejects(() => decideSelectedOrchestrationApproval(client, job,
+      { kind: decision === 'accept' ? 'approve' : 'deny', jobId: job.id, approvalIdentity }, decision));
+  }
+  assert.equal(requests.length, before, `${name} never reaches HTTP through the actual panel decision helper`);
+}
+
+assert.deepEqual(getOrchestrationApprovalIdentity(pendingApprovalJob), approvalIdentity);
+const expiresAt = Date.parse(pendingApprovalJob.approval!.deadline);
+assert.equal(getOrchestrationApprovalIdentity(pendingApprovalJob, expiresAt), undefined, 'the deadline boundary is already expired');
+assert.deepEqual(getOrchestrationApprovalIdentity(pendingApprovalJob, expiresAt - 1), approvalIdentity);
+const beforeStaleConfirmation = requests.length;
+const staleConfirmation = { kind: 'approve' as const, jobId: 'task-1', approvalIdentity: { ...approvalIdentity, revision: 'c'.repeat(64) } };
+await assert.rejects(() => decideSelectedOrchestrationApproval(client, pendingApprovalJob, staleConfirmation, 'accept'));
+assert.equal(requests.length, beforeStaleConfirmation, 'a stale first-click revision cannot silently approve the new operation');
+const staleMarkup = renderToStaticMarkup(<OrchestrationPanelView {...baseProps} phase="ready" jobs={[pendingApprovalJob]}
+  selectedJob={pendingApprovalJob} pendingConfirmation={staleConfirmation} error="" mobile={false} />);
+assert.match(staleMarkup, /<button[^>]*disabled=""[^>]*>승인 확인<\/button>/);
+assert.match(staleMarkup, /승인 정보가 변경되었습니다/);
+
+function findButton(node: React.ReactNode, label: string): React.ReactElement<any> | undefined {
+  if (!React.isValidElement(node)) return undefined;
+  const element = node as React.ReactElement<any>;
+  if (element.type === 'button' && element.props.children === label) return element;
+  for (const child of React.Children.toArray(element.props.children)) {
+    const found = findButton(child, label); if (found) return found;
+  }
+  return undefined;
+}
+for (const decision of ['accept', 'deny'] as const) {
+  let confirmation: any;
+  let submittedDecision: Promise<unknown> | undefined;
+  const before = requests.length;
+  const initial = OrchestrationPanelView({ ...baseProps, phase: 'ready', jobs: [pendingApprovalJob], selectedJob: pendingApprovalJob,
+    error: '', mobile: false, onRequestConfirmation: (kind, jobId) => { confirmation = { kind, jobId, approvalIdentity }; } });
+  const firstButton = findButton(initial, decision === 'accept' ? '승인' : '거절'); assert.ok(firstButton);
+  assert.equal(firstButton.props.disabled, false); firstButton.props.onClick();
+  assert.equal(requests.length, before, 'the first actual view click only opens in-app confirmation');
+  const confirmed = OrchestrationPanelView({ ...baseProps, phase: 'ready', jobs: [pendingApprovalJob], selectedJob: pendingApprovalJob,
+    error: '', mobile: false, pendingConfirmation: confirmation,
+    onApprove: () => { submittedDecision = decideSelectedOrchestrationApproval(client, pendingApprovalJob, confirmation, 'accept'); },
+    onDeny: () => { submittedDecision = decideSelectedOrchestrationApproval(client, pendingApprovalJob, confirmation, 'deny'); } });
+  const confirmedButton = findButton(confirmed, decision === 'accept' ? '승인 확인' : '거절 확인'); assert.ok(confirmedButton);
+  assert.equal(confirmedButton.props.disabled, false); confirmedButton.props.onClick(); await submittedDecision;
+  assert.equal(requests.length, before + 1, 'the second actual view click calls the strict client once');
+  assert.deepEqual(requests.at(-1)?.body, approvalIdentity);
+  assert.equal(requests.at(-1)?.path, `${apiBasePath}/jobs/task-1/${decision === 'accept' ? 'approve' : 'deny'}`);
+}
+const unsupportedApproval = renderToStaticMarkup(<OrchestrationPanelView {...baseProps} phase="ready" jobs={[pendingApprovalJob]}
+  selectedJob={pendingApprovalJob} approvalDecisionSupported={false} error="" mobile={false} />);
+assert.match(unsupportedApproval, /<button[^>]*disabled=""[^>]*>승인<\/button>/);
+assert.match(unsupportedApproval, /승인 결정을 지원하지 않습니다/);
+const unavailableApproval = renderToStaticMarkup(<OrchestrationPanelView {...baseProps} phase="ready" jobs={[pendingApprovalJob]}
+  selectedJob={pendingApprovalJob} providers={[{ ...provider, availability: 'unavailable' }]} error="" mobile={false} />);
+assert.match(unavailableApproval, /<button[^>]*disabled=""[^>]*>승인<\/button>/);
+assert.match(unavailableApproval, /<button class="secondary" type="button">거절<\/button>/,
+  'denial remains available when provider execution is unavailable because it never dispatches');
+const beforeUnsupportedApproval = requests.length;
+await assert.rejects(() => decideSelectedOrchestrationApproval({ ...client, decideApproval: undefined }, pendingApprovalJob,
+  { kind: 'approve', jobId: 'task-1', approvalIdentity }, 'accept'));
+await assert.rejects(() => decideSelectedOrchestrationApproval(client, pendingApprovalJob,
+  { kind: 'approve', jobId: 'task-1', approvalIdentity }, 'accept', expiresAt));
+assert.equal(requests.length, beforeUnsupportedApproval, 'missing capability and confirmation-time expiry fail before HTTP');
+{
+  const decisionBusy = createOrchestrationBusyController();
+  const before = requests.length;
+  const accepted = decisionBusy.run('approval:task-1', () => decideSelectedOrchestrationApproval(client, pendingApprovalJob,
+    { kind: 'approve', jobId: 'task-1', approvalIdentity }, 'accept'));
+  const competingDenial = await decisionBusy.run('approval:task-1', () => decideSelectedOrchestrationApproval(client, pendingApprovalJob,
+    { kind: 'deny', jobId: 'task-1', approvalIdentity }, 'deny'));
+  assert.equal(competingDenial, undefined, 'approval and denial share one pending mutation slot');
+  await accepted;
+  assert.equal(requests.length, before + 1, 'rapid conflicting second clicks send one owner decision');
+}
 
 const inputRequired = renderToStaticMarkup(<OrchestrationPanelView
   {...baseProps}
@@ -540,5 +661,153 @@ const mutationError = renderToStaticMarkup(<OrchestrationPanelView
 assert.match(mutationError, /role="alert"[^>]*>합성 요청을 처리하지 못했습니다\./, 'a failed mutation is visible while the already-loaded panel remains ready');
 assert.match(mutationError, /Existing result\.|완료/, 'mutation failure preserves the loaded job list');
 assert.equal((error.match(/작업 목록을 불러오지 못했습니다/g) ?? []).length, 1, 'list-load errors are displayed once');
+
+// Exercise production hook handlers and the actual latest-detail controller.
+// Host effects are held by this fixture so no Teams host, polling timer, or DOM is used.
+function panelHookHost() {
+  type Cell = { value: unknown; dependencies?: readonly unknown[] };
+  const cells: Cell[] = [];
+  let cursor = 0;
+  function memo(factory: () => unknown, dependencies: readonly unknown[]): unknown {
+    const index = cursor++;
+    const cell = cells[index];
+    if (!cell || cell.dependencies?.length !== dependencies.length
+      || dependencies.some((value, n) => !Object.is(value, cell.dependencies?.[n]))) {
+      cells[index] = { value: factory(), dependencies };
+    }
+    return cells[index]!.value;
+  }
+  const dispatcher = {
+    useState(initial: unknown) {
+      const index = cursor++;
+      if (!cells[index]) cells[index] = { value: typeof initial === 'function' ? initial() : initial };
+      return [cells[index]!.value, (value: unknown) => {
+        cells[index]!.value = typeof value === 'function' ? value(cells[index]!.value) : value;
+      }];
+    },
+    useRef(initial: unknown) {
+      const index = cursor++;
+      if (!cells[index]) cells[index] = { value: { current: initial } };
+      return cells[index]!.value;
+    },
+    useMemo: memo,
+    useCallback: (callback: unknown, dependencies: readonly unknown[]) => memo(() => callback, dependencies),
+    useEffect: () => { cursor++; },
+  };
+  return {
+    render(panelClient: Parameters<typeof OrchestrationPanel>[0]['client']) {
+      cursor = 0;
+      const internals = (React as unknown as {
+        __CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE: { H: unknown };
+      }).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
+      const previous = internals.H; internals.H = dispatcher;
+      try {
+        return (OrchestrationPanel({ client: panelClient, mobile: false }) as React.ReactElement<OrchestrationPanelViewProps>).props;
+      } finally { internals.H = previous; }
+    },
+  };
+}
+
+function privateConversation(job: CoreOrchestrationJob): VisibleJobConversation {
+  return { selectedJobId: job.id, complete: true, turns: [{ jobId: job.id, request: job.prompt,
+    response: job.result, status: job.status, createdAt: job.createdAt, progress: [], tools: [], truncated: false }] };
+}
+
+for (const denial of [401, 403, 404, 'auth-expired', 'forbidden'] as const) {
+  const privateResult = task('completed', { id: `private-${denial}`, result: `SYNTHETIC_PRIVATE_RESULT_${denial}` });
+  const lateResult = { ...privateResult, id: `late-${denial}`, result: `SYNTHETIC_LATE_PRIVATE_RESULT_${denial}` };
+  let failure: typeof denial | undefined;
+  let reads = 0;
+  const protectedClient = createCoreOrchestrationClient(async (input) => {
+    reads++;
+    const list = String(input) === `${apiBasePath}/jobs`;
+    if (failure && (failure !== 404 || !list)) {
+      if (typeof failure === 'string') throw new ApiAuthError(failure);
+      return Response.json({ error: 'SYNTHETIC_ACCESS_DENIED' }, { status: failure });
+    }
+    return Response.json(list ? { jobs: [privateResult, pendingApprovalJob], pendingJobs: [pendingApprovalJob],
+      pendingHasMore: true, providers: [provider], modelCatalog: teamsCliTestCatalog } : { job: privateResult });
+  });
+  let releaseLate!: (detail: { job: CoreOrchestrationJob; conversation: VisibleJobConversation }) => void;
+  let lateSignal: AbortSignal | undefined;
+  protectedClient.getJobConversation = async (id, signal) => {
+    if (id === lateResult.id) {
+      lateSignal = signal;
+      // Deliberately ignore abort to prove stale-success invalidation independently of transport cooperation.
+      return new Promise(resolve => { releaseLate = resolve; });
+    }
+    const job = id === pendingApprovalJob.id ? pendingApprovalJob : privateResult;
+    return { job, conversation: privateConversation(job) };
+  };
+  const host = panelHookHost();
+  let props = host.render(protectedClient);
+  const reload = (silent = false) => (props.onReload as (options?: { silent?: boolean }) => Promise<void>)({ silent });
+  await reload(); props = host.render(protectedClient);
+  await props.onSelectTask(pendingApprovalJob.id); props = host.render(protectedClient);
+  props.onRequestConfirmation?.('approve', pendingApprovalJob.id); props = host.render(protectedClient);
+  assert.equal(props.pendingConfirmation?.kind, 'approve');
+  await props.onSelectTask(privateResult.id); props = host.render(protectedClient);
+  assert.equal(props.selectedJob?.result, privateResult.result);
+  assert.equal(props.conversation?.turns[0]?.response, privateResult.result);
+  assert.match(renderToStaticMarkup(<OrchestrationPanelView {...props} />), new RegExp(privateResult.result!));
+
+  function assertPrivateStateHidden(): void {
+    assert.equal(props.selectedJob, null, `${denial} clears the retained selected private result`);
+    assert.equal(props.conversation, undefined, `${denial} clears retained private conversation`);
+    assert.deepEqual(props.jobs, [], `${denial} clears the private job list`);
+    assert.deepEqual(props.pendingJobs, [], `${denial} clears the approval inbox`);
+    assert.equal(props.pendingHasMore, false);
+    assert.equal(props.pendingConfirmation, null, `${denial} clears retained approval confirmation`);
+    assert.equal(props.phase, 'error', `${denial} exposes deliberate access recovery even after silent polling`);
+    const hidden = renderToStaticMarkup(<OrchestrationPanelView {...props} />);
+    assert.doesNotMatch(hidden, /SYNTHETIC_(?:LATE_)?PRIVATE_RESULT|작업 승인 확인|orchestration-job-detail/);
+  }
+  failure = denial;
+  await reload(denial !== 404); props = host.render(protectedClient);
+  assertPrivateStateHidden();
+
+  failure = undefined;
+  const beforeAutomatic = reads;
+  await reload(true); props = host.render(protectedClient);
+  assert.equal(reads, beforeAutomatic, 'automatic polling cannot unlock denied private state');
+  assertPrivateStateHidden();
+  await reload(); props = host.render(protectedClient);
+  assert.equal(props.phase, 'ready', 'an explicit successful fresh load recovers after reauthentication');
+  assert.equal(props.selectedJob, null, 'fresh list does not resurrect the old selected response');
+  await props.onSelectTask(privateResult.id); props = host.render(protectedClient);
+  const late = props.onSelectTask(lateResult.id);
+  props = host.render(protectedClient);
+  failure = denial;
+  await reload(true); props = host.render(protectedClient);
+  assertPrivateStateHidden();
+  assert.equal(lateSignal?.aborted, true, 'access denial invalidates the current detail request');
+  releaseLate({ job: lateResult, conversation: privateConversation(lateResult) });
+  await late; props = host.render(protectedClient);
+  assertPrivateStateHidden();
+  failure = undefined;
+  await reload(); props = host.render(protectedClient);
+  await props.onSelectTask(privateResult.id); props = host.render(protectedClient);
+  assert.equal(props.selectedJob?.result, privateResult.result, 'deliberate fresh authorized selection remains available');
+}
+
+{
+  const cached = task('completed', { result: 'SYNTHETIC_NON_ACCESS_FAILURE_CACHE' });
+  let offline = false;
+  const existingClient = createCoreOrchestrationClient(async () => offline
+    ? Response.json({}, { status: 503 })
+    : Response.json({ jobs: [cached], providers: [provider] }));
+  existingClient.getJobConversation = async () => ({ job: cached, conversation: privateConversation(cached) });
+  const host = panelHookHost();
+  let props = host.render(existingClient);
+  await props.onReload(); props = host.render(existingClient);
+  await props.onSelectTask(cached.id); props = host.render(existingClient);
+  offline = true;
+  await (props.onReload as (options: { silent: boolean }) => Promise<void>)({ silent: true });
+  props = host.render(existingClient);
+  assert.equal(props.selectedJob?.result, cached.result, 'a generic temporary service error preserves existing cached-result behavior');
+  assert.equal(props.conversation?.turns[0]?.response, cached.result);
+  assert.equal(props.phase, 'ready');
+  assert.match(props.notice, /자동 업데이트 실패/);
+}
 
 console.log('Client orchestration panel tests passed');

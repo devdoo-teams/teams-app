@@ -4,6 +4,7 @@ import type { ItemStore } from './item-store.js';
 import type { RunAgentInput } from '@ag-ui/core';
 import type { GenUiEnvelopeV1 } from '../shared/genui.js';
 import type { ResponseMode } from '../shared/response-mode.js';
+import type { CoreResultOrigin } from './core-result-publication.js';
 
 export type OpenAIMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -67,6 +68,8 @@ export type ResponseEngineInput = {
   prompt: string;
   request: RunAgentInput;
   scope: AgentJobScope;
+  /** Captured by the authenticated SDK host, never accepted from a request body. */
+  resultOrigin?: CoreResultOrigin;
   itemStore: ItemStore;
   agentService: AgentService;
   onText?: (text: string) => void;

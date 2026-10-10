@@ -7,6 +7,7 @@ import { assertCoreCodexModelSelection } from './codex-model-catalog.js';
 import { deriveServerOwnedRestConversationId } from './rest-scope.js';
 import { withTeamsJobDeepLink } from './teams-tab-link.js';
 import type { CoreCodexReasoningEffort } from '../shared/core-orchestration.js';
+import type { CoreResultOrigin } from './core-result-publication.js';
 
 export const CORE_MESSAGE_COMMAND_ID = 'delegateMessage';
 const SUBMISSION_FIELDS = new Set(['draftId', 'correlationId', 'reviewToken', 'catalogRevision', 'prompt', 'mode', 'model', 'reasoningEffort']);
@@ -75,7 +76,7 @@ export class CoreMessageExtension {
     ], actions: [{ type: 'Action.Submit', title: '확인하고 개인 작업 제출', data: { draftId, correlationId, reviewToken, catalogRevision: catalog.revision } }] });
   }
 
-  async submit(scope: AgentJobScope, value: unknown) {
+  async submit(scope: AgentJobScope, value: unknown, serverOptions?: { resultOrigin?: CoreResultOrigin }) {
     const action = this.validate(scope, value), data = record(action.data);
     if (Object.keys(data).some(key => !SUBMISSION_FIELDS.has(key))) throw new Error('유효하지 않은 확인 요청입니다.');
     const prompt = text(data.prompt, MAX_AGENT_PROMPT_LENGTH);
@@ -92,7 +93,7 @@ export class CoreMessageExtension {
     const result = await this.options.core.submit(privateScope, {
       idempotencyKey: `teams-message-review:${consumed.grant.entityId}`, prompt, provider: 'codex', mode: data.mode,
       model, reasoningEffort, catalogRevision,
-    }, { notify: false });
+    }, { notify: false, resultOrigin: serverOptions?.resultOrigin });
     const url = withTeamsJobDeepLink(this.options.personalTabUrl, result.job.id);
     // Returning another dialog prevents inserting private source/result into the original chat compose box.
     return dialog({ type: 'AdaptiveCard', version: '1.6', body: [

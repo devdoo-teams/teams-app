@@ -83,9 +83,11 @@ export type CoreOrchestrationTeamsActivity = Readonly<{
 export type CoreOrchestrationCardOptions = Readonly<{
   openTabUrl?: string;
   confirmation?: Readonly<{
-    action: 'approve' | 'cancel';
-    token: string;
-    correlationId: string;
+    action: 'approve' | 'cancel' | 'deny';
+    token?: string;
+    correlationId?: string;
+    approvalId?: string;
+    revision?: string;
   }>;
 }>;
 
@@ -100,10 +102,10 @@ function orchestrationPayload(
     schemaVersion: '1',
     action,
     jobId,
-    ...(confirmation ? {
-      confirmationToken: confirmation.token,
-      correlationId: confirmation.correlationId,
-    } : {}),
+    ...(confirmation?.token ? { confirmationToken: confirmation.token } : {}),
+    ...(confirmation?.correlationId ? { correlationId: confirmation.correlationId } : {}),
+    ...(confirmation?.approvalId && confirmation.revision
+      ? { approvalId: confirmation.approvalId, revision: confirmation.revision } : {}),
   };
 }
 
@@ -186,10 +188,13 @@ function orchestrationActions(
   if (job.status === 'queued' || job.status === 'running') {
     actions = [orchestrationAction('orchestration.confirm-cancel', '취소', job.id)];
   } else if (job.status === 'awaiting_approval') {
-    actions = [
-      orchestrationAction('orchestration.confirm-approve', '승인', job.id),
-      orchestrationAction('orchestration.confirm-cancel', '취소', job.id),
-    ];
+    const approval = job.approval;
+    actions = approval?.state === 'pending' && Date.parse(approval.deadline) > Date.now()
+      ? [orchestrationAction('orchestration.confirm-approve', '승인', job.id,
+          { action: 'approve', approvalId: approval.approvalId, revision: approval.revision }),
+        orchestrationAction('orchestration.confirm-deny', '거절', job.id,
+          { action: 'deny', approvalId: approval.approvalId, revision: approval.revision })]
+      : [orchestrationAction('orchestration.confirm-cancel', '취소', job.id)];
   } else if (job.status === 'failed') {
     actions = [orchestrationAction('orchestration.retry', '다시 시도', job.id)];
   } else if (job.status === 'input_required') {
@@ -252,6 +257,12 @@ export function createCoreOrchestrationJobActivity(
         facts: [
           { title: '작업 ID', value: identifierText(job.id, 200, 'unknown-job') },
           ...(pendingOperation ? [{ title: '승인 대상 revision', value: pendingOperation.revision }] : []),
+          ...(job.approval ? [
+            { title: '승인 상태', value: job.approval.state },
+            { title: '승인 기한', value: job.approval.deadline },
+            { title: '승인자', value: job.approval.approverId },
+            ...(job.approval.settledStatus ? [{ title: '승인 후 최종 상태', value: job.approval.settledStatus }] : []),
+          ] : []),
           { title: '상태', value: identifierText(job.status, 40, 'unknown') },
           { title: '상태 표시', value: CORE_JOB_STATUS_LABELS[job.status] },
           { title: '제출 실행경계', value: identifierText(job.executionEnvironment, 40, '확인되지 않음') },
@@ -275,10 +286,11 @@ export function createCoreOrchestrationJobActivity(
  */
 export function createCoreOrchestrationConfirmationActivity(
   job: CoreOrchestrationJob,
-  action: 'approve' | 'cancel',
+  action: 'approve' | 'cancel' | 'deny',
   options?: CoreOrchestrationCardOptions,
 ): CoreOrchestrationTeamsActivity {
   const isApproval = action === 'approve';
+  const isDenial = action === 'deny';
   const pendingOperation = projectPendingOperation(job);
   return orchestrationActivity({
     type: 'AdaptiveCard',
@@ -286,21 +298,24 @@ export function createCoreOrchestrationConfirmationActivity(
     version: '1.6',
     msteams: { width: 'Full' },
     body: [
-      { type: 'TextBlock', text: isApproval ? '작업 승인 확인' : '작업 취소 확인', size: 'Large', weight: 'Bolder', wrap: true },
+      { type: 'TextBlock', text: isApproval ? '작업 승인 확인' : isDenial ? '작업 거절 확인' : '작업 취소 확인', size: 'Large', weight: 'Bolder', wrap: true },
       {
         type: 'TextBlock',
         text: isApproval
           ? '이 작업을 승인해 계속 실행할까요?'
-          : '이 작업에 취소 요청을 보낼까요?',
+          : isDenial ? '이 쓰기 요청을 거절할까요?' : '이 작업에 취소 요청을 보낼까요?',
         wrap: true,
       },
+      { type: 'TextBlock', text: displayText(job.prompt, CORE_CARD_TEXT_LIMIT), wrap: true },
       { type: 'FactSet', facts: [{ title: '작업 ID', value: identifierText(job.id, 200, 'unknown-job') },
-        ...(pendingOperation ? [{ title: '승인 대상 revision', value: pendingOperation.revision }] : [])] },
+        ...(pendingOperation ? [{ title: '승인 대상 revision', value: pendingOperation.revision }] : []),
+        ...(job.approval ? [{ title: '승인 기한', value: job.approval.deadline },
+          { title: '승인자', value: job.approval.approverId }, { title: '승인 상태', value: job.approval.state }] : [])] },
     ],
     actions: withTabAction([
       orchestrationAction(
-        isApproval ? 'orchestration.approve' : 'orchestration.cancel',
-        isApproval ? '승인 확인' : '취소 확인',
+        isApproval ? 'orchestration.approve' : isDenial ? 'orchestration.deny' : 'orchestration.cancel',
+        isApproval ? '승인 확인' : isDenial ? '거절 확인' : '취소 확인',
         job.id,
         options?.confirmation?.action === action ? options.confirmation : undefined,
       ),

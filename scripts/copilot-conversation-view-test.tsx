@@ -31,6 +31,28 @@ try {
   const blocked=render(<CopilotConversationTranscript state={{jobId:job.id,phase:'blocked',uncertain:false,error:'SYNTHETIC_FORBIDDEN'}} input="" setInput={()=>{}} send={()=>{sends++;}} />);
   assert.match(blocked,/SYNTHETIC_FORBIDDEN/);assert.doesNotMatch(blocked,/SYNTHETIC_USER_REQUEST|SYNTHETIC_ASSISTANT_RESPONSE/);
   assert.match(blocked,/<textarea[^>]+disabled/);
+  for (const status of ['queued', 'running', 'awaiting_approval', 'failed', 'cancelled'] as const) {
+    const statusHtml=render(<CopilotConversationTranscript state={{...state,job:{...job,status}}} input="" setInput={()=>{}} send={()=>{sends++;}} />);
+    assert.match(statusHtml,/role="status"/,`the current ${status} state has an accessible status`);
+    if(status==='queued'||status==='running') assert.match(statusHtml,/aria-label="작업 중지"/,'installed SDK exposes Stop for an active Core job');
+    if(status==='awaiting_approval') assert.match(statusHtml,/승인/);
+  }
+  const staleHtml=render(<CopilotConversationTranscript state={{...state,phase:'blocked',stale:true,recovery:'network',error:'Synthetic offline'}} input="" setInput={()=>{}} send={()=>{sends++;}} />);
+  assert.match(staleHtml,/마지막으로 확인한/,'saved transcript is explicitly stale during an outage');
+  assert.match(staleHtml,/SYNTHETIC_ASSISTANT_RESPONSE/);
+  const unknownHtml=render(<CopilotConversationTranscript state={{...state,uncertain:true,submittedPrompt:'Synthetic unknown delivery'}} input="" setInput={()=>{}} send={()=>{sends++;}} />);
+  assert.match(unknownHtml,/다시 보내지/,'GET replay keeps uncertain-delivery warning visible');
+  const confirmHtml=render(<CopilotConversationTranscript state={{...state,job:{...job,status:'running'}}} input="" setInput={()=>{}}
+    send={()=>{sends++;}} stop={()=>{}} confirmingStop={true} confirmStop={()=>{}} dismissStop={()=>{}} />);
+  assert.match(confirmHtml,/중지 확인/);assert.match(confirmHtml,/계속 실행/,'Stop is confirmed inside the WebView');
+  const pageHtml=render(<CopilotConversationTranscript state={{...state,conversation:{...conversation,complete:false,
+    unavailableReason:'turn-limit',earlierBeforeJobId:job.id}}} input="" setInput={()=>{}} send={()=>{sends++;}} loadEarlier={()=>{}} />);
+  assert.match(pageHtml,/이전 대화 더 보기/,'actual SDK surface exposes deliberate earlier-page reads');
+  const longHtml=render(<CopilotConversationTranscript state={{...state,conversation:{...conversation,turns:Array.from({length:125},(_,i)=>({
+    ...conversation.turns[0],jobId:`synthetic-long-sdk-${i}`,request:`Synthetic older request ${i}`,response:`Synthetic older response ${i}`,
+  }))}}} input="" setInput={()=>{}} send={()=>{sends++;}} />);
+  assert.match(longHtml,/role="log"[^>]+aria-label="대화 이력"/,'100+ transcript uses accessible chronological SDK message layout');
+  assert.equal((longHtml.match(/data-message-id="synthetic-long-sdk-/g)??[]).length,250,'every explicitly loaded SDK turn stays represented once');
   assert.deepEqual(projectCopilotConversationMessages().length,0);
   const workspace=renderToStaticMarkup(<CopilotConversationWorkspace />);
   assert.match(workspace,/기존 대화 선택/);assert.doesNotMatch(workspace,/작업 ID가 없습니다/);

@@ -12,6 +12,7 @@ import {
   createCoreOrchestrationJobActivity,
 } from '../src/server/genui-response.js';
 import type { CoreOrchestrationJob, CoreProviderFact } from '../src/shared/core-orchestration.js';
+import { pendingOperationRevision, projectPendingOperation } from '../src/server/personal-approval-projection.js';
 
 const request = {
   prompt: '배포 상태를 점검해줘',
@@ -71,12 +72,21 @@ const job = (status: CoreOrchestrationJob['status']): CoreOrchestrationJob => ({
   createdAt: '2026-09-03T00:00:00.000Z',
 });
 const noop = () => undefined;
+const durablePendingJob: CoreOrchestrationJob = { ...job('awaiting_approval'), approval: {
+  schemaVersion: '1', approvalId: 'approval-12345678-1234-1234-1234-123456789abc',
+  revision: pendingOperationRevision(job('awaiting_approval')), approverId: 'synthetic-owner', tenantId: 'synthetic-tenant',
+  deadline: '2099-10-11T12:00:00.000Z', state: 'pending',
+} };
+const pendingJob = { ...durablePendingJob, pendingOperation: projectPendingOperation(durablePendingJob) };
+const approvalIdentity = { approvalId: pendingJob.approval!.approvalId, revision: pendingJob.approval!.revision };
 const baseProps = {
   phase: 'ready' as const,
   providers: [provider],
   prompt: '',
   providerId: 'codex',
   mode: 'read-only' as const,
+  modelId: '',
+  reasoningEffort: '' as const,
   inputValue: '',
   busyAction: '',
   error: '',
@@ -86,11 +96,15 @@ const baseProps = {
   onPromptChange: noop,
   onProviderChange: noop,
   onModeChange: noop,
+  onModelChange: noop,
+  onReasoningEffortChange: noop,
   onInputChange: noop,
   onSubmit: noop,
   onSelectTask: noop,
   onCancel: noop,
   onApprove: noop,
+  onDeny: noop,
+  approvalDecisionSupported: true,
   onProvideInput: noop,
   onRetryTask: noop,
   onReload: noop,
@@ -107,6 +121,15 @@ const approvalConfirmation = renderToStaticMarkup(<OrchestrationPanelView
 assert.match(approvalConfirmation, /승인 확인/);
 assert.match(approvalConfirmation, /돌아가기/);
 assert.match(approvalConfirmation, /실행하기 전에 승인 여부를 다시 확인합니다/);
+assert.match(approvalConfirmation, /<button[^>]*disabled=""[^>]*>승인 확인<\/button>/,
+  'legacy awaiting jobs remain visible but cannot issue execution approval');
+for (const kind of ['approve', 'deny'] as const) {
+  const durableConfirmation = renderToStaticMarkup(<OrchestrationPanelView {...baseProps} jobs={[pendingJob]} selectedJob={pendingJob}
+    pendingConfirmation={{ kind, jobId: pendingJob.id, approvalIdentity }} />);
+  assert.match(durableConfirmation, /승인 기한:<\/dt>/);
+  assert.match(durableConfirmation, new RegExp(`>${kind === 'approve' ? '승인 확인' : '거절 확인'}</button>`));
+  assert.doesNotMatch(durableConfirmation, new RegExp(`<button[^>]*disabled=""[^>]*>${kind === 'approve' ? '승인 확인' : '거절 확인'}</button>`));
+}
 
 const cancellationConfirmation = renderToStaticMarkup(<OrchestrationPanelView
   {...baseProps}
@@ -125,20 +148,22 @@ const payloadActions = (activity: Card) => (activity.attachments?.[0]?.content.a
 assert.deepEqual(
   payloadActions(createCoreOrchestrationJobActivity(job('awaiting_approval'))),
   [
-    { schemaVersion: '1', action: 'orchestration.confirm-approve', jobId: 'job-confirm-1' },
     { schemaVersion: '1', action: 'orchestration.confirm-cancel', jobId: 'job-confirm-1' },
   ],
-  'the first chat click emits only confirmation requests, never mutations',
+  'a legacy awaiting job never exposes an executable approval action',
 );
+assert.deepEqual(payloadActions(createCoreOrchestrationJobActivity(pendingJob)), [
+  { schemaVersion: '1', action: 'orchestration.confirm-approve', jobId: pendingJob.id, ...approvalIdentity },
+  { schemaVersion: '1', action: 'orchestration.confirm-deny', jobId: pendingJob.id, ...approvalIdentity },
+], 'durable first clicks carry the exact immutable approval identity without mutating');
 
 const confirmation = {
   confirmation: {
     action: 'approve' as const,
-    token: 'opaque-confirmation-token',
-    correlationId: 'confirmation-correlation-1',
+    ...approvalIdentity,
   },
 };
-const approveCard = createCoreOrchestrationConfirmationActivity(job('awaiting_approval'), 'approve', confirmation);
+const approveCard = createCoreOrchestrationConfirmationActivity(pendingJob, 'approve', confirmation);
 assert.equal('text' in approveCard, false, 'confirmation remains attachment-only');
 assert.equal(approveCard.attachments[0].content.version, '1.6');
 assert.deepEqual(payloadActions(approveCard), [
@@ -146,11 +171,22 @@ assert.deepEqual(payloadActions(approveCard), [
     schemaVersion: '1',
     action: 'orchestration.approve',
     jobId: 'job-confirm-1',
-    confirmationToken: 'opaque-confirmation-token',
-    correlationId: 'confirmation-correlation-1',
+    ...approvalIdentity,
   },
   { schemaVersion: '1', action: 'orchestration.dismiss-confirmation', jobId: 'job-confirm-1' },
 ]);
+const denyCard = createCoreOrchestrationConfirmationActivity(pendingJob, 'deny', {
+  confirmation: { action: 'deny', ...approvalIdentity },
+});
+assert.deepEqual(payloadActions(denyCard), [
+  { schemaVersion: '1', action: 'orchestration.deny', jobId: pendingJob.id, ...approvalIdentity },
+  { schemaVersion: '1', action: 'orchestration.dismiss-confirmation', jobId: pendingJob.id },
+], 'durable denial uses identity rather than a one-use cancellation grant');
+const acceptedFinal = { ...pendingJob, status: 'completed' as const, pendingOperation: undefined,
+  approval: { ...pendingJob.approval!, state: 'accepted' as const, decidedAt: '2026-10-11T00:00:00.000Z',
+    settledStatus: 'completed' as const, settledAt: '2026-10-11T00:00:01.000Z' } };
+assert.deepEqual(payloadActions(createCoreOrchestrationJobActivity(acceptedFinal)), [],
+  'an accepted terminal job exposes no further execution decisions');
 
 const cancelCard = createCoreOrchestrationConfirmationActivity(job('running'), 'cancel', {
   confirmation: {

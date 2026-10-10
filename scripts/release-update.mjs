@@ -18,6 +18,7 @@ import {
 } from './release-loop.mjs';
 import { verifyTeamsRegistration } from './teams-registration.mjs';
 import { validateReleaseObservations } from './release-observations.mjs';
+import { assessIndependentReleaseIdentity } from '../src/shared/independent-release-identity.js';
 export { validateReleaseObservations, canContinueTunnelNotice } from './release-observations.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -432,6 +433,25 @@ export function validateBrowserAttestation(input, state, surface, now = new Date
   if (surface === 'installed') {
     normalized.installedVersion = assertAttestationText(input.installedVersion, 'installedVersion');
     if (normalized.installedVersion !== state.version) throw new Error('observed installed version does not match the release run');
+    // Opt-in strict evidence preserves historical attestation compatibility.
+    // One installedVersion cannot replace independent About/loaded-byte/runtime observations.
+    if (input.independentIdentity !== undefined) {
+      const clientIdentity = state.public?.health?.clientBuildIdentity;
+      const result = assessIndependentReleaseIdentity({
+        version: state.version, sourceCommit: state.commit, packageSha256: state.package?.sha256,
+        clientBundleSha256: state.public?.asset?.sha256,
+        serverBundleSha256: state.public?.health?.serverBundleSha256,
+        clientBuildFingerprint: clientIdentity?.buildFingerprint, clientBuildMode: clientIdentity?.mode,
+      }, input.independentIdentity);
+      if (result.status !== 'PASS') {
+        const error = new Error(`INDEPENDENT_IDENTITY_${result.status}: ${[...result.mismatches, ...result.missing].join(', ')}`);
+        error.code = result.status === 'FAIL' ? 'EIDENTITYMISMATCH' : 'EIDENTITYUNVERIFIED';
+        error.identityResult = result;
+        throw error;
+      }
+      normalized.independentIdentity = structuredClone(input.independentIdentity);
+      normalized.independentIdentityResult = result;
+    }
   }
   return normalized;
 }

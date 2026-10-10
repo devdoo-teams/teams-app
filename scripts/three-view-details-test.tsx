@@ -16,7 +16,7 @@ assert.ok(!hidden.includes('SYNTHETIC_SELECTED_MODEL'),'unchecked diagnostic det
 assert.ok(!hidden.includes('SYNTHETIC_STEP'),'unchecked step details must be omitted');
 const selected=renderToStaticMarkup(<ExecutionPresentationCard presentation={presentation} details={['tool']} />);
 assert.ok(selected.includes('SYNTHETIC_TOOL'));assert.ok(!selected.includes('SYNTHETIC_SELECTED_MODEL'));
-for(const mode of ['text','summary'] as const){
+for(const mode of ['summary'] as const){
  const card=createExecutionPresentationActivity(job,mode,{richEnabled:true,details:['tool']}).attachments?.[0]?.content as any;
  assert.ok(card,'Teams progressive disclosure requires a supported Adaptive Card');
  assert.equal(card.version,'1.6');

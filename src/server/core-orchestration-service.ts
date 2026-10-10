@@ -1,5 +1,10 @@
 import crypto from 'node:crypto';
+import { projectCoreResultResources, type CoreResultOrigin } from './core-result-publication.js';
 import { projectPendingOperation } from './personal-approval-projection.js';
+import {
+  assertApprovalIdentity, CoreApprovalRecoveryError, readDurableApproval, transitionDurableApproval,
+  type CoreApprovalIdentity, type CoreApprovalDecision, type CoreApprovalDecisionResult,
+} from './core-approval-recovery.js';
 
 import type { AgentJob, AgentJobMode, AgentJobScope } from './agent-job-store.js';
 import {
@@ -70,6 +75,7 @@ export interface CoreAgentServicePort {
     provider?: 'codex' | 'copilot';
     mode: AgentJobMode;
     scope: AgentJobScope;
+    resultOrigin?: CoreResultOrigin;
     idempotencyKey?: string;
     requestHash?: string;
     model?: string;
@@ -95,6 +101,7 @@ export interface CoreAgentServicePort {
   ): AgentJob[];
   cancelStrict(id: string, scope: AgentJobScope): Promise<AgentJob | undefined>;
   approve(id: string, scope: AgentJobScope): Promise<AgentJob | undefined>;
+  decideApproval?(id: string, scope: AgentJobScope, request: CoreApprovalIdentity, decision: CoreApprovalDecision): Promise<CoreApprovalDecisionResult | undefined>;
   retry(id: string, scope: AgentJobScope): Promise<AgentJob | undefined>;
 }
 
@@ -145,7 +152,7 @@ export type CoreOrchestrationServiceOptions = Readonly<{
 export class CoreOrchestrationService {
   constructor(private readonly options: CoreOrchestrationServiceOptions) {}
 
-  async submit(scope: ServerDerivedCoreScope, request: CoreSubmitRequest, options: { notify?: boolean } = {}): Promise<CoreSubmitResult> {
+  async submit(scope: ServerDerivedCoreScope, request: CoreSubmitRequest, options: { notify?: boolean; resultOrigin?: CoreResultOrigin } = {}): Promise<CoreSubmitResult> {
     assertServerScope(scope);
     assertNoClientScope(request);
     const normalized = normalizeSubmitRequest(request);
@@ -167,6 +174,7 @@ export class CoreOrchestrationService {
           ...submission,
           provider,
           scope,
+          ...(options.resultOrigin ? { resultOrigin: options.resultOrigin } : {}),
           idempotencyKey: request.idempotencyKey,
           requestHash,
           ...(notify !== undefined ? { notify } : {}),
@@ -238,12 +246,41 @@ export class CoreOrchestrationService {
     return this.mutate(scope, request, (job, storedScope) => this.options.agentService.cancelStrict(job.id, storedScope));
   }
 
-  async approve(scope: ServerDerivedCoreScope, request: CoreJobRequest): Promise<CoreOrchestrationJob | undefined> {
-    return this.mutate(scope, request, async (job, storedScope) => {
+  async approve(scope: ServerDerivedCoreScope, request: CoreJobRequest & Partial<CoreApprovalIdentity>): Promise<CoreOrchestrationJob | undefined> {
+    return (await this.decideApproval(scope, request, 'accept'))?.job;
+  }
+
+  async deny(scope: ServerDerivedCoreScope, request: CoreJobRequest & Partial<CoreApprovalIdentity>): Promise<CoreOrchestrationJob | undefined> {
+    return (await this.decideApproval(scope, request, 'deny'))?.job;
+  }
+
+  async decideApproval(
+    scope: ServerDerivedCoreScope,
+    request: CoreJobRequest & Partial<CoreApprovalIdentity>,
+    decision: 'accept' | 'deny',
+  ): Promise<{ job: CoreOrchestrationJob; replayed: boolean } | undefined> {
+    assertServerScope(scope);
+    assertNoClientScope(request);
+    if (Object.keys(request).some(key => !['jobId', 'approvalId', 'revision'].includes(key))) {
+      throw new CoreApprovalRecoveryError('invalid');
+    }
+    assertApprovalIdentity(request);
+    const job = this.resolveJob(scope, normalizeJobId(request.jobId));
+    if (!job) return undefined;
+    const storedScope = storedScopeForPrincipal(job, scope);
+    if (!storedScope) return undefined;
+    if (!this.options.agentService.decideApproval) throw new CoreApprovalRecoveryError('unsupported');
+    // A preview rejects stale/foreign callbacks before a provider probe. The
+    // durable store repeats this check inside its atomic mutation boundary.
+    const preview = transitionDurableApproval(job, storedScope, request, decision);
+    if (preview.dispatch) {
       assertHistoricalCliPolicy(job);
       await this.assertProviderCapability(storedScope, this.providerForJob(job), 'approve');
-      return this.options.agentService.approve(job.id, storedScope);
-    });
+    }
+    const result = await this.options.agentService.decideApproval(job.id, storedScope, request, decision);
+    if (!result) return undefined;
+    assertSameDurableIdentity(job, result.job, storedScope);
+    return { job: toCoreJob(result.job), replayed: result.replayed };
   }
 
   async retry(scope: ServerDerivedCoreScope, request: CoreJobRequest): Promise<CoreOrchestrationJob | undefined> {
@@ -558,7 +595,7 @@ function assertNoClientScope(request: object): void {
   if (!request || typeof request !== 'object') {
     throw new CoreOrchestrationValidationError('Request must be an object.');
   }
-  for (const field of ['scope', 'tenantId', 'requesterId', 'conversationId']) {
+  for (const field of ['scope', 'tenantId', 'requesterId', 'conversationId', 'resultOrigin', 'resultPublication']) {
     if (field in request) {
       throw new CoreOrchestrationValidationError(`${field} must be derived by the server, not supplied in the request.`);
     }
@@ -569,7 +606,11 @@ export { toCoreJob as projectCoreOrchestrationJob };
 
 function toCoreJob(job: AgentJob): CoreOrchestrationJob {
   const pendingOperation = projectPendingOperation(job);
+  const resources = projectCoreResultResources(job);
+  const approval = readDurableApproval((job as AgentJob & { durableApproval?: unknown }).durableApproval, job);
   return {
+    ...(resources ? { resources } : {}),
+    ...(approval ? { approval } : {}),
     ...(pendingOperation ? { pendingOperation } : {}),
     id: job.id,
     ...(job.executionEnvironment ? { executionEnvironment: job.executionEnvironment } : {}),

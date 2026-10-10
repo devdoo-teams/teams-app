@@ -99,9 +99,9 @@ assert.deepEqual((actions[0]?.data as Record<string, unknown>).value, {
   entityId: 'entity-1',
   correlationId: 'correlation-1',
   actionToken: 'token-0',
-  style: 'positive',
 });
-assert.equal(actions[1]?.style, 'destructive');
+assert.equal(actions[0]?.style, undefined, 'Teams does not support positive action styling');
+assert.equal(actions[1]?.style, undefined, 'Teams does not support destructive action styling');
 assert.equal(actions[4]?.type, 'Action.OpenUrl');
 assert.equal((actions[4] as Record<string, unknown>).url, 'https://example.com/workspace');
 assert.ok(!JSON.stringify(actions[4]).includes('token-4'));

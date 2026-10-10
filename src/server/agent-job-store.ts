@@ -1,4 +1,10 @@
 import crypto from 'node:crypto';
+import { createDurableApproval, readDurableApproval, settleDurableApproval, transitionDurableApproval,
+  type CoreDurableApproval, type CoreApprovalIdentity, type CoreApprovalDecision, type CoreApprovalDecisionResult,
+} from './core-approval-recovery.js';
+import { readCoreResultOrigin, readCoreResultPublication, type CoreResultOrigin,
+  type CoreResultPublication, type CoreResultPublicationJob, type CoreResultPublicationPrincipal,
+} from './core-result-publication.js';
 import { readCommandExecution } from './agent-tool-execution.js';
 import { readExecutionReceipt, sameExecutionReceipt } from './agent-execution-receipt.js';
 import { readCliInvocationReceipt, sameCliInvocationReceipt } from './agent-cli-invocation-receipt.js';
@@ -77,6 +83,9 @@ export interface AgentJob {
   status: AgentJobStatus;
   /** Server-owned delivery intent and acknowledgements for external workers. */
   durableNotifications?: DurableAgentNotifications;
+  durableApproval?: CoreDurableApproval;
+  resultOrigin?: CoreResultOrigin;
+  resultPublication?: CoreResultPublication;
   conversationId: string;
   requesterId: string;
   /** Missing only on legacy records; scoped access deliberately rejects them. */
@@ -223,6 +232,7 @@ export class AgentJobStore {
     provider: CliAgentProvider;
     mode: AgentJobMode;
     scope: AgentJobScope;
+    resultOrigin?: CoreResultOrigin;
     executionEnvironment?: CoreExecutionEnvironment;
     durableNotifications?: DurableAgentNotifications;
     parentJobId?: string;
@@ -256,6 +266,8 @@ export class AgentJobStore {
       createdAt,
       updatedAt: createdAt,
     };
+    if (job.mode === 'workspace-write') job.durableApproval = createDurableApproval(job);
+    if (input.resultOrigin) job.resultOrigin = readCoreResultOrigin(input.resultOrigin, input.scope);
 
     return this.enqueueMutation(() => {
       if (input.idempotencyKey) {
@@ -346,6 +358,33 @@ export class AgentJobStore {
     return job ? cloneAgentJob(job) : undefined;
   }
 
+  async decideApproval(id: string, scope: AgentJobScope, request: CoreApprovalIdentity,
+    decision: CoreApprovalDecision): Promise<CoreApprovalDecisionResult | undefined> {
+    return this.enqueueMutation(() => {
+      const index = this.jobs.findIndex(job => job.id === id && matchesScope(job, scope));
+      if (index === -1) return undefined;
+      const transition = transitionDurableApproval(this.jobs[index], scope, request, decision);
+      const updated = { ...this.jobs[index], ...transition.patch,
+        ...(!transition.replayed ? { updatedAt: new Date().toISOString() } : {}) };
+      updated.durableApproval = readDurableApproval(updated.durableApproval, updated);
+      this.jobs = this.jobs.map((job, i) => i === index ? updated : job);
+      return { job: cloneAgentJob(updated), dispatch: transition.dispatch, replayed: transition.replayed };
+    });
+  }
+
+  async mutateResultPublication<T>(id: string, principal: CoreResultPublicationPrincipal,
+    reducer: (job: CoreResultPublicationJob) => { publication: CoreResultPublication; value: T }): Promise<T | undefined> {
+    return this.enqueueMutation(() => {
+      const index = this.jobs.findIndex(job => job.id === id && matchesPrincipal(job, principal));
+      if (index === -1) return undefined;
+      const change = reducer(cloneAgentJob(this.jobs[index]));
+      const updated = { ...this.jobs[index], resultPublication: change.publication };
+      updated.resultPublication = readCoreResultPublication(updated.resultPublication, updated);
+      this.jobs = this.jobs.map((job, i) => i === index ? updated : job);
+      return change.value;
+    });
+  }
+
   async update(
     id: string,
     scope: AgentJobScope,
@@ -360,6 +399,9 @@ export class AgentJobStore {
         ...patch,
         updatedAt: new Date().toISOString(),
       } as AgentJob;
+      if ('durableApproval' in patch) throw new Error('approval authority must use decideApproval');
+      if ('resultOrigin' in patch || 'resultPublication' in patch) throw new Error('result authority must use its immutable origin and atomic publication boundary');
+      if (updated.durableApproval) updated.durableApproval = settleDurableApproval(updated);
       if ('durableNotifications' in patch) {
         updated.durableNotifications = readDurableNotifications(updated, index);
         const intent = this.jobs[index].durableNotifications?.enabled;
@@ -467,17 +509,18 @@ export class AgentJobStore {
   async recoverInterruptedJobs(): Promise<void> {
     await this.enqueueMutation(() => {
       const finishedAt = new Date().toISOString();
-      this.jobs = this.jobs.map((job) =>
-        job.status === 'queued' || job.status === 'running'
-          ? {
+      this.jobs = this.jobs.map((job) => {
+        if (job.status !== 'queued' && job.status !== 'running') return job;
+        const recovered: AgentJob = {
               ...job,
               status: 'failed',
               error: '서버가 재시작되어 작업이 중단되었습니다.',
               finishedAt,
               updatedAt: finishedAt,
-            }
-          : job,
-      );
+            };
+        if (recovered.durableApproval) recovered.durableApproval = settleDurableApproval(recovered);
+        return recovered;
+      });
     });
   }
 
@@ -546,6 +589,9 @@ function matchesPrincipal(
 function cloneAgentJob(job: AgentJob): AgentJob {
   return {
     ...job,
+    ...(job.durableApproval ? { durableApproval: { ...job.durableApproval } } : {}),
+    ...(job.resultOrigin ? { resultOrigin: { ...job.resultOrigin } } : {}),
+    ...(job.resultPublication ? { resultPublication: { ...job.resultPublication, origin: { ...job.resultPublication.origin } } } : {}),
     progress: [...job.progress],
     ...(job.durableNotifications ? { durableNotifications: {
       enabled: job.durableNotifications.enabled, delivered: [...job.durableNotifications.delivered],
@@ -775,6 +821,13 @@ function loadJob(
     ...(startedAt.value ? { startedAt: startedAt.value } : {}),
     ...(finishedAt.value ? { finishedAt: finishedAt.value } : {}),
   };
+
+  if (value.durableApproval !== undefined) job.durableApproval = readDurableApproval(value.durableApproval, job);
+  if (value.resultOrigin !== undefined) {
+    if (!job.tenantId) throw invalidJob(index, 'result origin requires scoped tenant');
+    job.resultOrigin = readCoreResultOrigin(value.resultOrigin, { ...job, tenantId: job.tenantId });
+  }
+  if (value.resultPublication !== undefined) job.resultPublication = readCoreResultPublication(value.resultPublication, job);
 
   return { job, migrated };
 }

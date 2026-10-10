@@ -75,10 +75,30 @@ export type CoreAgentToolUsage = Readonly<{
   execution?: CoreAgentToolExecution;
 }>;
 
-/** Display identity only. Expiry/consumption belong to existing confirmation grants. */
-export type CorePendingOperation = Readonly<{ kind: 'job-approval'; jobId: string; revision: string }>;
+export type CoreDurableApproval = Readonly<{
+  schemaVersion: '1';
+  approvalId: string;
+  revision: string;
+  approverId: string;
+  tenantId: string;
+  deadline: string;
+  state: 'pending' | 'accepted' | 'denied' | 'expired';
+  decidedAt?: string;
+  settledStatus?: 'completed' | 'failed' | 'cancelled';
+  settledAt?: string;
+}>;
+/** Legacy rows remain visible; only a durable approval has executable identity. */
+export type CorePendingOperation = Readonly<{
+  kind: 'job-approval'; jobId: string; revision: string;
+  approvalId?: string; approverId?: string; tenantId?: string; deadline?: string;
+}>;
 export type CoreOrchestrationJob = Readonly<{
   pendingOperation?: CorePendingOperation;
+  approval?: CoreDurableApproval;
+  resources?: Readonly<{
+    sources: readonly Readonly<{ url: string; host: string; evidence: 'result-text'; retrieval: 'unverified'; action: 'explicit-open' }>[];
+    file: Readonly<{ name: 'result.txt'; state: 'unsupported'; reason: 'manifest-supports-files-false'; alternative: 'authenticated-result-download' }>;
+  }>;
   id: string;
   /** Server-owned execution boundary; legacy jobs have no observed environment. */
   executionEnvironment?: CoreExecutionEnvironment;
@@ -122,6 +142,7 @@ export type CoreSubmitRequest = Readonly<{
 }>;
 
 export type CoreJobRequest = Readonly<{ jobId: string }>;
+export type CoreApprovalRequest = Readonly<{ jobId: string; approvalId: string; revision: string }>;
 export type CoreContinueRequest = Readonly<{ jobId: string; prompt: string }>;
 export type CoreListRequest = Readonly<{ limit?: number }>;
 export type CoreProvideInputRequest = Readonly<{ jobId: string; input: unknown }>;

@@ -15,8 +15,12 @@ import {
 import {
   collectPlainText,
   renderAdaptiveCard,
-  type AdaptiveCard,
-} from '@copilotkit/channels-teams';
+} from '@copilotkit/channels-teams/render';
+import type { AdaptiveCard } from '@copilotkit/channels-teams';
+
+export { renderChannelsNativeCard, CHANNELS_NATIVE_RENDERER_CONTRACT } from './channels-native-card-renderer.js';
+export type { ChannelsNativeCardInput, ChannelsNativeCardResult, ChannelsCoreActionGrant,
+  ChannelsCoreIdentity, ChannelsCoreScope } from './channels-native-card-renderer.js';
 
 import {
   GENUI_SCHEMA_VERSION,
@@ -62,7 +66,6 @@ interface ShadowActionValue {
   correlationId: string;
   actionToken: string;
   id?: string;
-  style?: GenUiAction['style'];
 }
 
 const KIND_LABELS: Record<GenUiEnvelopeV1['kind'], string> = {
@@ -180,7 +183,6 @@ function shadowActionValue(action: GenUiAction): ShadowActionValue {
     entityId: action.entityId,
     correlationId: action.correlationId,
     actionToken: action.actionToken,
-    style: action.style,
   };
 }
 
@@ -194,8 +196,6 @@ function shadowButton(action: GenUiAction, index: number, envelope: GenUiEnvelop
     value,
     onClick,
     ...(url ? { url } : {}),
-    ...(action.style === 'positive' ? { style: 'primary' as const } : {}),
-    ...(action.style === 'destructive' ? { style: 'danger' as const } : {}),
   });
 }
 

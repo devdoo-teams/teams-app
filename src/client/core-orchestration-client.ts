@@ -6,6 +6,7 @@ import type {
   CoreProvideInputResult,
   CoreSubmitRequest,
   CoreSubmitResult,
+  CoreApprovalRequest,
 } from '../shared/core-orchestration.js';
 import type { VisibleJobConversation } from '../shared/job-conversation.js';
 import { loadJobConversation } from './job-conversation.js';
@@ -21,6 +22,16 @@ export type CoreOrchestrationJobList = {
 export type CoreOrchestrationJobResult = {
   job: CoreOrchestrationJob;
 };
+export type CoreApprovalIdentity = Pick<CoreApprovalRequest, 'approvalId' | 'revision'>;
+export type CoreApprovalDecisionResult = CoreOrchestrationJobResult & { replayed: boolean };
+
+export function isCoreApprovalIdentity(value: unknown): value is CoreApprovalIdentity {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const identity = value as Partial<CoreApprovalIdentity>;
+  return Object.keys(identity).every(key => ['approvalId', 'revision'].includes(key))
+    && typeof identity.approvalId === 'string' && /^approval-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u.test(identity.approvalId)
+    && typeof identity.revision === 'string' && /^[a-f0-9]{64}$/u.test(identity.revision);
+}
 
 export const CORE_ORCHESTRATION_API_BASE_PATH = '/api/core-orchestration' as const;
 
@@ -54,6 +65,7 @@ export type CoreOrchestrationClient = {
   submitJob: (input: CoreSubmitRequest, signal?: AbortSignal) => Promise<CoreSubmitResult>;
   cancelJob: (jobId: string, signal?: AbortSignal) => Promise<CoreOrchestrationJobResult>;
   approveJob: (jobId: string, signal?: AbortSignal) => Promise<CoreOrchestrationJobResult>;
+  decideApproval?: (jobId: string, identity: CoreApprovalIdentity, decision: 'accept' | 'deny', signal?: AbortSignal) => Promise<CoreApprovalDecisionResult>;
   provideInput: (jobId: string, input: unknown, signal?: AbortSignal) => Promise<CoreProvideInputResult>;
   retryJob: (jobId: string, signal?: AbortSignal) => Promise<CoreOrchestrationJobResult>;
 };
@@ -158,8 +170,19 @@ export function createCoreOrchestrationClient(
     cancelJob(jobId, signal) {
       return expectResponse<CoreOrchestrationJobResult>(request, jobPath(jobId, 'cancel'), jsonPost({}, signal));
     },
-    approveJob(jobId, signal) {
-      return expectResponse<CoreOrchestrationJobResult>(request, jobPath(jobId, 'approve'), jsonPost({}, signal));
+    approveJob() {
+      return Promise.reject(new CoreOrchestrationClientError('서버에서 확인한 승인 ID와 revision이 필요합니다. 작업을 다시 조회하세요.', {
+        code: 'ApprovalIdentityRequired', status: 400, retryable: false,
+      }));
+    },
+    decideApproval(jobId, identity, decision, signal) {
+      if (!isCoreApprovalIdentity(identity) || !['accept', 'deny'].includes(decision)) {
+        return Promise.reject(new CoreOrchestrationClientError('서버에서 확인한 승인 ID와 revision이 필요합니다. 작업을 다시 조회하세요.', {
+          code: 'ApprovalIdentityRequired', status: 400, retryable: false,
+        }));
+      }
+      return expectResponse<CoreApprovalDecisionResult>(request, jobPath(jobId, decision === 'accept' ? 'approve' : 'deny'),
+        jsonPost({ approvalId: identity.approvalId, revision: identity.revision }, signal));
     },
     provideInput(jobId, input, signal) {
       return expectProvideInputResponse(request, jobPath(jobId, 'input'), jsonPost({ input }, signal));

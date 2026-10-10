@@ -18,5 +18,7 @@ export type VisibleJobConversation = Readonly<{
   selectedJobId: string;
   turns: readonly VisibleJobTurn[];
   complete: boolean;
+  /** Visible boundary only. Earlier IDs and native thread identifiers are never exposed as a cursor. */
+  earlierBeforeJobId?: string;
   unavailableReason?: 'previous-turn-unavailable' | 'invalid-chain' | 'turn-limit';
 }>;

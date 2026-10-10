@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import * as teamsSdk from '@microsoft/teams-js';
 import { apiFetch } from './auth.js';
 import {
-  EXECUTION_PRESENTATION_DETAILS, ExecutionPresentationModeSchema, ExecutionPresentationSelectionSchema,
+  EXECUTION_PRESENTATION_DETAILS, ExecutionPresentationJobIdSchema, ExecutionPresentationModeSchema, ExecutionPresentationSelectionSchema,
   executionPresentationPreferences, type ExecutionPresentationDetail, type ExecutionPresentationPreferences,
 } from '../shared/execution-presentation.js';
 
@@ -17,15 +17,48 @@ const Context = createContext<Settings>({ selection: defaults, available: ['text
   error: '', select: async () => {}, openRich: () => {} });
 export const useExecutionPresentation = () => useContext(Context);
 
-export function openCopilotConversation(surface: 'tab' | 'dialog', jobId?: string): void {
+type ConversationDialogLauncher = Pick<typeof teamsSdk.dialog.url, 'isSupported' | 'open'>;
+export function restorePersonalJobFocus(jobId: string,
+  root: Pick<Document, 'querySelector' | 'getElementById'> | undefined = typeof document === 'undefined' ? undefined : document): boolean {
+  if (!root || !ExecutionPresentationJobIdSchema.safeParse(jobId).success) return false;
+  const selected = root.querySelector('[aria-label="표시할 개인 작업"]');
+  if (!selected || !('value' in selected) || selected.value !== jobId) return false;
+  const detail = root.getElementById('orchestration-job-detail');
+  if (!detail) return false;
+  detail.focus({ preventScroll: true });
+  return true;
+}
+
+export function openCopilotConversation(surface: 'tab' | 'dialog', jobId?: string,
+  onReturnToPersonal?: (jobId: string) => void, launcher: ConversationDialogLauncher = teamsSdk.dialog.url): void {
+  if (jobId !== undefined && !ExecutionPresentationJobIdSchema.safeParse(jobId).success) throw new Error('올바른 개인 작업을 선택하세요.');
   const url = new URL('/tabs/copilot-ui/', window.location.origin);
   if (jobId) url.searchParams.set('jobId', jobId);
   if (surface === 'tab') { window.location.assign(url.toString()); return; }
-  if (!teamsSdk.dialog.url.isSupported()) throw new Error('현재 호스트는 Dialog를 지원하지 않습니다. 상세 위치를 Tab으로 선택하세요.');
-  teamsSdk.dialog.url.open({ title: '업무 허브 · CopilotKit 대화', url: url.toString(), size: { width: 800, height: 650 } });
+  if (!launcher.isSupported()) throw new Error('현재 호스트는 Dialog를 지원하지 않습니다. 상세 위치를 Tab으로 선택하세요.');
+  let settled = false;
+  launcher.open({ title: '업무 허브 · CopilotKit 대화', url: url.toString(), size: { width: 800, height: 650 } }, response => {
+    if (settled) return;
+    settled = true;
+    if (!jobId || !response || typeof response !== 'object' || Array.isArray(response)
+      || Object.keys(response).some(key => key !== 'err' && key !== 'result')
+      || (response.err != null && response.err !== '')) return;
+    let result: unknown = response.result;
+    if (typeof result === 'string') {
+      if (result.length > 512) return;
+      try { result = JSON.parse(result); } catch { return; }
+    }
+    if (!result || typeof result !== 'object' || Array.isArray(result)
+      || Object.keys(result).length !== 1 || !Object.hasOwn(result, 'jobId')) return;
+    const returnedJobId = (result as { jobId: unknown }).jobId;
+    if (returnedJobId !== jobId || !ExecutionPresentationJobIdSchema.safeParse(returnedJobId).success) return;
+    if (onReturnToPersonal) onReturnToPersonal(jobId);
+    else restorePersonalJobFocus(jobId);
+  });
 }
 
-export function ExecutionPresentationProvider({ children }: { children: ReactNode }) {
+export function ExecutionPresentationProvider({ children, onReturnToPersonal }:
+  { children: ReactNode; onReturnToPersonal?: (jobId: string) => void }) {
   const [selection, setSelection] = useState(defaults);
   const [available, setAvailable] = useState<string[]>(['text', 'summary']);
   const [loaded, setLoaded] = useState(false);
@@ -34,6 +67,7 @@ export function ExecutionPresentationProvider({ children }: { children: ReactNod
   const operation = useRef<'load' | 'save' | null>(null);
   const active = useRef<AbortController | null>(null);
   const loadAttempt = useRef(0);
+  const dialogAttempt = useRef(0);
   const load = async (signal?: AbortSignal) => {
     if (operation.current) return;
     operation.current = 'load';
@@ -57,7 +91,7 @@ export function ExecutionPresentationProvider({ children }: { children: ReactNod
     }
   };
   useEffect(() => { const controller = new AbortController(); void load(controller.signal); return () => {
-    controller.abort(); active.current?.abort(); loadAttempt.current++; operation.current = null;
+    controller.abort(); active.current?.abort(); loadAttempt.current++; dialogAttempt.current++; operation.current = null;
   }; }, []);
   const select = async (next: ExecutionPresentationPreferences) => {
     if (!loaded || operation.current || !available.includes(next.mode)) return;
@@ -81,7 +115,12 @@ export function ExecutionPresentationProvider({ children }: { children: ReactNod
     }
   };
   const openRich = (jobId?: string) => {
-    try { openCopilotConversation(selection.richSurface, jobId); }
+    const attempt = ++dialogAttempt.current;
+    try { openCopilotConversation(selection.richSurface, jobId, returnedJobId => {
+      if (attempt !== dialogAttempt.current) return;
+      if (onReturnToPersonal) onReturnToPersonal(returnedJobId);
+      else restorePersonalJobFocus(returnedJobId);
+    }); }
     catch (value) { setError(value instanceof Error ? value.message : 'CopilotKit 대화를 열지 못했습니다.'); }
   };
   return <Context.Provider value={{ selection, available, loaded, busy, error, select, openRich }}>

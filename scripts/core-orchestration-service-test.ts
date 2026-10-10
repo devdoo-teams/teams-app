@@ -7,6 +7,7 @@ import { observeTeamsCliTestCatalog, teamsCliTestCatalog, teamsCliTestSelection 
 import { AgentJobStore, type AgentJob, type AgentJobScope } from '../src/server/agent-job-store.js';
 import { AgentService, type AgentExecutionDispatcher } from '../src/server/agent-service.js';
 import { GitService } from '../src/server/git-service.js';
+import type { CoreResultOrigin } from '../src/server/core-result-publication.js';
 import {
   canonicalRequestHash,
   CoreOrchestrationService,
@@ -47,6 +48,7 @@ const agentService = {
     reasoningEffort?: CoreCodexReasoningEffort;
     catalogRevision?: string;
     notify?: boolean;
+    resultOrigin?: CoreResultOrigin;
   }): Promise<AgentJob> => {
     submitCalls += 1;
     observedNotify = input.notify;
@@ -55,6 +57,7 @@ const agentService = {
       provider: input.provider ?? 'codex',
       mode: input.mode,
       scope: input.scope,
+      resultOrigin: input.resultOrigin,
       idempotencyKey: input.idempotencyKey,
       requestHash: input.requestHash,
       ...(input.model ? {
@@ -87,6 +90,7 @@ const agentService = {
     finishedAt: new Date().toISOString(),
   }),
   approve: async (id: string, scoped: AgentJobScope) => store.update(id, scoped, { status: 'queued' }),
+  decideApproval: store.decideApproval.bind(store),
   retry: async (id: string, scoped: AgentJobScope) => {
     const previous = store.get(id, scoped);
     if (!previous) return undefined;
@@ -137,6 +141,21 @@ assert.equal(replay.replayed, true);
 assert.equal(replay.job.id, first.job.id);
 assert.equal(submitCalls, 1, 'an active replay is resolved before AgentService admission or dispatch');
 assert.equal(executionLaunches, 1, 'an idempotent replay does not launch duplicate execution');
+
+const origin: CoreResultOrigin = { schemaVersion: '1', source: 'authenticated-teams-activity',
+  tenantId: scope.tenantId, requesterId: scope.requesterId, conversationId: 'original-private-chat',
+  conversationType: 'personal', serviceUrl: 'https://smba.trafficmanager.net/amer/', activityId: 'origin-message' };
+const privateRequest = { ...request, idempotencyKey: 'server-origin-private-review' };
+const privateReview = await service.submit(scope, privateRequest, { notify: false, resultOrigin: origin });
+assert.deepEqual(store.get(privateReview.job.id, scope)?.resultOrigin, origin,
+  'server-provided original conversation is persisted with the private job');
+assert.equal(observedNotify, false, 'private review retains the no-automatic-publication intent');
+const privateReplay = await service.submit(scope, privateRequest, { resultOrigin: { ...origin, activityId: 'other-message' } });
+assert.equal(privateReplay.job.id, privateReview.job.id);
+assert.deepEqual(store.get(privateReview.job.id, scope)?.resultOrigin, origin,
+  'a replay cannot replace the persisted publication destination');
+await assert.rejects(service.submit(scope, { ...privateRequest, idempotencyKey: 'client-origin-injection', resultOrigin: origin } as any),
+  'client payloads cannot set result origin authority');
 
 const threaded = await store.create({
   ...teamsCliTestSelection,
@@ -257,7 +276,8 @@ const workspaceJob = await service.submit(scope, {
   mode: 'workspace-write',
 });
 assert.equal(workspaceJob.job.status, 'awaiting_approval');
-assert.equal((await service.approve(scope, { jobId: workspaceJob.job.id }))?.status, 'queued');
+assert.equal((await service.approve(scope, { jobId: workspaceJob.job.id,
+  approvalId: workspaceJob.job.pendingOperation!.approvalId!, revision: workspaceJob.job.pendingOperation!.revision }))?.status, 'queued');
 assert.equal((await service.cancel(scope, { jobId: workspaceJob.job.id }))?.status, 'cancelled');
 
 const failed = await service.submit(scope, {

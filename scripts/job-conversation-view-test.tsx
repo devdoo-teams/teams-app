@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { OrchestrationPanelView, type OrchestrationPanelViewProps } from '../src/client/OrchestrationPanel.js';
+import { JobConversationView } from '../src/client/JobConversationView.js';
 const job = { id:'task-visible',prompt:'현재 요청',status:'completed',mode:'read-only',progress:[],result:'현재 응답',createdAt:'2026-10-06T00:00:00Z' };
 const props = { phase:'ready',jobs:[job],providers:[],selectedJob:job,prompt:'',providerId:'',mode:'read-only',modelId:'',reasoningEffort:'',inputValue:'',busyAction:'',error:'',notice:'',validationError:'',lastUpdatedAt:'',mobile:true,
   conversation:{ selectedJobId:job.id,complete:false,unavailableReason:'previous-turn-unavailable',turns:[{jobId:job.id,request:'<script>request</script>',response:'<img src=x onerror=alert(1)>',status:'completed',progress:[],tools:[],createdAt:job.createdAt,truncated:false}] }
@@ -17,4 +18,13 @@ const deliveryMarkup = renderToStaticMarkup(<OrchestrationPanelView {...props} n
 assert.match(deliveryMarkup, /내 업무 허브 개인 채팅으로 진행·결과 알림 받기/);
 assert.match(deliveryMarkup, /Teams가 전송을 수락함/);
 assert.match(deliveryMarkup, /실제 수신 여부는 채팅에서 확인/);
+const pagedMarkup = renderToStaticMarkup(<JobConversationView conversation={{ ...props.conversation!, unavailableReason: 'turn-limit', earlierBeforeJobId: job.id,
+  turns: [{ ...props.conversation!.turns[0], response: '긴한글'.repeat(300) + '\n![분석 결과](/assets/result.png)\n<script>literal</script>' }] }} />);
+assert.match(pagedMarkup, /이전 대화 불러오기/, 'the first bounded page must offer keyboard-operable paging');
+assert.doesNotMatch(pagedMarkup, /최근 20개 대화만 표시합니다/);
+assert.match(pagedMarkup, /role="region"[^>]*aria-label="대화 기록 읽기"[^>]*tabindex="0"/, 'history must be a named keyboard-scrollable region');
+assert.match(pagedMarkup, /data-conversation-turn="task-visible"/, 'stable turn identity anchors the reader during prepend/resume');
+assert.match(pagedMarkup, /<img[^>]*alt="분석 결과"/, 'shared safe result images retain meaningful alternative text');
+assert.match(pagedMarkup, /&lt;script&gt;literal&lt;\/script&gt;/);
+assert.doesNotMatch(pagedMarkup, /role="log"/, 'refreshing 100+ entries must not announce the whole transcript again');
 console.log('PASS: real selected detail renders bounded visible conversation, missing-history notice and escaped content');

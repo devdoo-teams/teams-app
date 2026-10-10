@@ -13,6 +13,7 @@ import type { CoreOrchestrationJob } from '../src/shared/core-orchestration.js';
 const job: CoreOrchestrationJob = { id: 'task-synthetic', prompt: 'synthetic write request', mode: 'workspace-write', status: 'awaiting_approval', progress: [], createdAt: new Date().toISOString() };
 const first = projectPendingOperation(job); assert.ok(first);
 assert.deepEqual(projectPendingOperation({ ...job, progress: ['observed'], updatedAt: new Date().toISOString() }), first);
+assert.deepEqual(projectPendingOperation({ ...job, threadId: 'later-runtime-thread' }), first, 'runtime thread observation cannot change approved arguments');
 assert.notEqual(projectPendingOperation({ ...job, prompt: 'changed request' })?.revision, first.revision);
 assert.equal(projectPendingOperation({ ...job, prompt: '' }), undefined);
 assert.equal(projectPendingOperation({ ...job, status: 'cancelled' }), undefined);
@@ -28,10 +29,14 @@ try {
     listForPrincipal: store.listForPrincipal.bind(store), getForPrincipal: store.getForPrincipal.bind(store),
     submit: async () => { throw new Error('no launch'); }, continue: async () => undefined,
     approve: async () => { throw new Error('no launch'); }, retry: async () => undefined,
-    cancelStrict: async (id, owner) => store.update(id, owner, { status: 'cancelled' }),
+    cancelStrict: async (id, owner) => store.update(id, owner, { status: 'cancelled', finishedAt: new Date().toISOString() }),
   } });
   const detail = service.get(scope, { jobId: stored.id })!;
   assert.ok(detail.pendingOperation);
+  assert.ok(detail.pendingOperation.approvalId);
+  assert.equal(detail.pendingOperation.approverId, scope.requesterId);
+  assert.equal(detail.pendingOperation.tenantId, scope.tenantId);
+  assert.equal(projectPendingOperation(detail)?.approvalId, detail.pendingOperation.approvalId, 'wire read-back retains durable callback identity');
   assert.deepEqual(service.list(scope)[0].pendingOperation, detail.pendingOperation);
   const loaded = await loadJobConversation(stored.id, async id => service.get(scope, { jobId: id })!);
   assert.deepEqual(loaded.conversation.turns[0].pendingOperation, detail.pendingOperation);

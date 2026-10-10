@@ -6,6 +6,12 @@ import { ExecutionPresentationProvider, ExecutionPresentationToolbar } from './E
 import * as teamsSdk from '@microsoft/teams-js';
 const teamsApp = teamsSdk.app;
 import { parseRequestedCopilotJobId } from './job-deep-link.js';
+import { assessClientRuntimeIdentity, parseClientBuildStamp, type ClientBuildIdentity, type ClientBuildStamp } from '../shared/independent-release-identity.js';
+
+declare const __TEAMS_CLIENT_BUILD_IDENTITY__: unknown;
+// This constant belongs to the loaded JS bundle. Health never supplies it.
+const compiledClientStamp = parseClientBuildStamp(typeof __TEAMS_CLIENT_BUILD_IDENTITY__ === 'undefined'
+  ? undefined : __TEAMS_CLIENT_BUILD_IDENTITY__);
 
 export type HealthResponse = {
   ok: boolean;
@@ -13,6 +19,7 @@ export type HealthResponse = {
   version: string;
   sourceCommit?: string;
   serverBundleSha256?: string;
+  clientBuildIdentity?: ClientBuildIdentity;
   environment: string;
   auth: 'local-bypass' | 'teams-authenticated' | 'not-configured';
   userAuth: 'local-bypass' | 'entra-sso' | 'not-configured';
@@ -73,6 +80,20 @@ export function releaseIdentityLabel(
     ? sourceCommit.slice(0, 7)
     : '소스 확인 필요';
   return `${version} · ${shortCommit}`;
+}
+
+export function ClientBuildIdentityPanel({ stamp, health }: { stamp?: ClientBuildStamp; health?: unknown }) {
+  const assessment = assessClientRuntimeIdentity(stamp, health);
+  return <>
+    <div><span>로드된 화면 빌드</span><strong data-client-build-version={stamp?.version}
+      data-client-build-commit={stamp?.sourceCommit} data-client-build-mode={stamp?.mode}
+      data-client-build-fingerprint={stamp?.buildFingerprint}>
+      {stamp ? `${stamp.version} · ${stamp.sourceCommit.slice(0, 7)} · ${stamp.mode} · ${stamp.buildFingerprint.slice(0, 12)}` : '확인되지 않음 (컴파일 identity 없음)'}
+    </strong></div>
+    <div><span>화면·서버 빌드 대조</span><strong data-client-runtime-identity={assessment.status}>
+      {assessment.status === 'PASS' ? '일치 (설치·About 검증은 별도)' : assessment.status === 'FAIL' ? '불일치 — 릴리스 확인 필요' : '확인되지 않음'}
+    </strong></div>
+  </>;
 }
 
 export function agentExecutionLabel(value: HealthResponse['a2aExecution'] | undefined): string {
@@ -180,6 +201,7 @@ export function App() {
           </button>
         </div>
         <div><span>릴리스</span><strong data-release-identity>{releaseIdentityLabel(health)}</strong></div>
+        <ClientBuildIdentityPanel stamp={compiledClientStamp} health={health} />
         <div><span>Bot</span><strong>{healthBotLabel(health?.bot)}</strong></div>
         <div><span>사용자 인증</span><strong>{healthUserAuthLabel(health?.userAuth)}</strong></div>
         <div><span>에이전트</span><strong>{agentExecutionLabel(health?.a2aExecution)}</strong></div>

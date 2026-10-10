@@ -2,6 +2,7 @@ import express, { type NextFunction, type Request, type RequestHandler, type Res
 
 import { AgentCapacityError } from './agent-admission-controller.js';
 import { AgentExecutionUnavailableError } from './agent-execution-policy.js';
+import { assertApprovalIdentity, CoreApprovalRecoveryError, type CoreApprovalIdentity } from './core-approval-recovery.js';
 import {
   AgentJobConflictError,
   AgentMutationAuthorizationError,
@@ -37,7 +38,7 @@ export type CoreOrchestrationRouteService = Pick<CoreOrchestrationService,
   | 'provideInput'
   | 'listProviderFacts'
   | 'listCodexModelCatalog'
-> & Partial<Pick<CoreOrchestrationService, 'listPending'>>;
+> & Partial<Pick<CoreOrchestrationService, 'listPending' | 'deny' | 'decideApproval'>>;
 
 export type CoreOrchestrationRouteOptions = Readonly<{
   service: CoreOrchestrationRouteService;
@@ -120,7 +121,7 @@ export function createCoreOrchestrationRouter(options: CoreOrchestrationRouteOpt
     response.set('Cache-Control', 'no-store').status(200).json({ job: requireJob(job) });
   }));
 
-  for (const action of ['cancel', 'approve', 'retry'] as const) {
+  for (const action of ['cancel', 'retry'] as const) {
     router.post(`/jobs/:jobId/${action}`, asyncHandler(async (request, response) => {
       emptyBody(request.body);
       assertNoQuery(request);
@@ -128,6 +129,18 @@ export function createCoreOrchestrationRouter(options: CoreOrchestrationRouteOpt
       const input = jobRequest(request);
       const job = await options.service[action](scope, input);
       response.set('Cache-Control', 'no-store').status(200).json({ job: requireJob(job) });
+    }));
+  }
+
+  for (const action of ['approve', 'deny'] as const) {
+    router.post(`/jobs/:jobId/${action}`, asyncHandler(async (request, response) => {
+      assertNoQuery(request);
+      const scope = scopeFor(options, request, response);
+      const input = approvalRequest(request, request.body);
+      if (!options.service.decideApproval) throw new CoreApprovalRecoveryError('unsupported');
+      const result = await options.service.decideApproval(scope, input, action === 'approve' ? 'accept' : 'deny');
+      if (!result) throw new CoreOrchestrationNotFoundError();
+      response.set('Cache-Control', 'no-store').status(200).json({ ...result, job: decorateJob(result.job, scope) });
     }));
   }
 
@@ -212,6 +225,12 @@ function jobRequest(request: Request): CoreJobRequest {
   return { jobId: singleParam(request.params.jobId) };
 }
 
+function approvalRequest(request: Request, value: unknown): CoreJobRequest & CoreApprovalIdentity {
+  const body = strictObject(value, ['approvalId', 'revision']);
+  assertApprovalIdentity(body);
+  return { ...jobRequest(request), approvalId: body.approvalId, revision: body.revision };
+}
+
 function continueRequest(request: Request, value: unknown): CoreContinueRequest {
   const body = strictObject(value, ['prompt']);
   if (typeof body.prompt !== 'string' || !body.prompt.trim()) throw invalidRequest();
@@ -254,6 +273,11 @@ function invalidRequest(): CoreOrchestrationValidationError {
 }
 
 function sendError(response: Response, error: unknown): void {
+  if (error instanceof CoreApprovalRecoveryError) {
+    const status = error.reason === 'unsupported' ? 501 : error.reason === 'invalid' ? 400 : 409;
+    sendPublicError(response, status, error.code, false);
+    return;
+  }
   if (error instanceof CoreOrchestrationUnauthorizedError) {
     sendPublicError(response, 401, error.code, false);
     return;

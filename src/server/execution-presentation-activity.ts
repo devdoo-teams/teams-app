@@ -12,18 +12,21 @@ const clip = (value: string, bytes = 600): string => {
 const text = (value: string, bytes = 600) => ({ type: 'TextBlock', text: clip(value, bytes), wrap: true });
 
 export function createExecutionPresentationActivity(job: CoreOrchestrationJob, mode: ExecutionPresentationMode,
-  options: { openTabUrl?: string; richEnabled: boolean; details?: readonly ExecutionPresentationDetail[] }): PresentedCoreActivity {
+  options: { openTabUrl?: string; richEnabled: boolean; details?: readonly ExecutionPresentationDetail[]; richSurface?: 'tab' | 'dialog' }): PresentedCoreActivity {
   const presentation = createExecutionPresentation(job);
   const base = createCoreOrchestrationJobActivity(job, options);
   const baseCard = base.attachments?.[0]?.content as any;
   const link = options.richEnabled ? withTeamsCopilotJobDeepLink(options.openTabUrl, job.id) : undefined;
+  if (mode === 'text') return { type: 'message', text: `${presentation.statusLabel} (${job.status})\n${clip(presentation.result || presentation.summary, 12000)}${presentation.error ? `\n${clip(presentation.error, 1000)}` : ''}\n작업 ID: ${job.id}${link ? `\n같은 작업의 상세: ${link}` : ''}${job.status === 'awaiting_approval' ? '\n승인이 필요합니다. 같은 작업의 개인 작업 화면에서 승인 또는 거부할 수 있습니다.' : ''}` };
   if (mode === 'rich') {
     if (!link) return { type: 'message', text: `${presentation.statusLabel}\n${clip(presentation.result || presentation.summary, 2000)}${presentation.error ? `\n${clip(presentation.error, 1000)}` : ''}\n작업 ID: ${job.id}\nCopilotKit 대화를 현재 사용할 수 없습니다.` };
     return { type: 'message', attachmentLayout: 'list', attachments: [{ contentType: 'application/vnd.microsoft.card.adaptive', content: {
       type: 'AdaptiveCard', $schema: 'http://adaptivecards.io/schemas/adaptive-card.json', version: '1.6', msteams: { width: 'Full' },
       body: [text('업무 허브 · 채팅 + 별도 상세'), text(presentation.statusLabel), text(presentation.result || presentation.summary, 2000),
         ...(presentation.error ? [text(presentation.error, 1000)] : []), text(`작업 ID: ${job.id}`)],
-      actions: [{ type: 'Action.OpenUrl', title: '같은 작업의 대화·상세 열기', url: link },
+      actions: [options.richSurface === 'dialog'
+        ? { type: 'Action.Submit', title: '같은 작업의 대화·상세 열기', data: { dialog_id: 'core-job-detail', jobId: job.id, msteams: { type: 'task/fetch' } } }
+        : { type: 'Action.OpenUrl', title: '같은 작업의 대화·상세 열기', url: link },
         ...(baseCard?.actions ?? []).filter((action: {type:string}) => action.type !== 'Action.OpenUrl')],
     } }] };
   }

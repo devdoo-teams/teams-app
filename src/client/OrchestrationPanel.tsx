@@ -5,7 +5,9 @@ import { CORE_AGENT_PROMPT_MAX_LENGTH, CORE_JOB_STATUS_LABELS } from '../shared/
 import { TEAMS_CLI_AGENT_POLICY } from '../shared/teams-cli-agent-policy.js';
 import type { VisibleJobConversation } from '../shared/job-conversation.js';
 import { ExecutionPresentationPanel } from './ExecutionPresentationPanel.js';
-import { loadJobConversation, refreshVisibleJobConversation } from './job-conversation.js';
+import { CoreResultReview } from './CoreResultReview.js';
+import { isConversationHistoryAccessFailure, loadJobConversation, refreshVisibleJobConversation } from './job-conversation.js';
+import { isApiAuthError } from './auth.js';
 import { createLatestDetailRequestController } from './latest-detail-request.js';
 export { createLatestDetailRequestController } from './latest-detail-request.js';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
@@ -13,6 +15,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import {
   CoreOrchestrationClientError,
   createCoreOrchestrationClient,
+  isCoreApprovalIdentity,
+  type CoreApprovalIdentity,
   type CoreOrchestrationClient,
 } from './core-orchestration-client.js';
 import type {
@@ -27,6 +31,65 @@ import type {
 type PanelPhase = 'loading' | 'ready' | 'error';
 
 type PanelNotice = Readonly<{ kind: 'refresh-error' | 'mutation'; message: string }> | null;
+export type OrchestrationConfirmation = Readonly<{
+  kind: 'approve' | 'deny' | 'cancel'; jobId: string; approvalIdentity?: CoreApprovalIdentity;
+}>;
+
+/** The server-issued pending operation and durable record must still match.
+ * Owner/tenant authorization remains the Core API's responsibility. */
+export function getOrchestrationApprovalIdentity(job: CoreOrchestrationJob | null, now = Date.now()): CoreApprovalIdentity | undefined {
+  const pending = job?.pendingOperation;
+  const approval = job?.approval;
+  if (!job || job.status !== 'awaiting_approval' || job.mode !== 'workspace-write'
+    || !pending || pending.kind !== 'job-approval' || pending.jobId !== job.id
+    || !approval || approval.schemaVersion !== '1' || approval.state !== 'pending' || approval.settledStatus
+    || !approval.approverId?.trim() || pending.approverId !== approval.approverId || pending.deadline !== approval.deadline
+    || !Number.isFinite(now) || !Number.isFinite(Date.parse(approval.deadline)) || Date.parse(approval.deadline) <= now
+    || pending.approvalId !== approval.approvalId || pending.revision !== approval.revision) return undefined;
+  const identity = { approvalId: pending.approvalId, revision: pending.revision };
+  return isCoreApprovalIdentity(identity) ? identity : undefined;
+}
+
+function sameApprovalIdentity(first?: CoreApprovalIdentity, second?: CoreApprovalIdentity): boolean {
+  return Boolean(first && second && first.approvalId === second.approvalId && first.revision === second.revision);
+}
+
+export function decideSelectedOrchestrationApproval(client: CoreOrchestrationClient, job: CoreOrchestrationJob | null,
+  confirmation: OrchestrationConfirmation | null, decision: 'accept' | 'deny', now = Date.now(), signal?: AbortSignal) {
+  const identity = getOrchestrationApprovalIdentity(job, now);
+  if (!client.decideApproval || !job || !identity || !confirmation || confirmation.jobId !== job.id
+    || confirmation.kind !== (decision === 'accept' ? 'approve' : 'deny')
+    || !sameApprovalIdentity(identity, confirmation.approvalIdentity)) {
+    return Promise.reject(new CoreOrchestrationClientError('실행 가능한 승인 정보가 변경되었거나 만료되었습니다. 새로고침하고 다시 검토하세요.', {
+      code: 'ApprovalIdentityRequired', status: 409, retryable: false,
+    }));
+  }
+  return client.decideApproval(job.id, identity, decision, signal);
+}
+
+function approvalUnavailableMessage(job: CoreOrchestrationJob, supported: boolean): string {
+  if (!supported) return '현재 클라이언트는 승인 결정을 지원하지 않습니다. 새로고침하고 최신 앱을 확인하세요.';
+  if (job.approval?.state === 'expired' || (job.approval?.deadline && Date.parse(job.approval.deadline) <= Date.now())) {
+    return '승인 기한이 지났습니다. 새로고침해 최신 상태를 확인하세요.';
+  }
+  if (job.approval && job.approval.state !== 'pending') return '이 승인은 이미 처리되었습니다. 새로고침해 최신 상태를 확인하세요.';
+  return '실행 가능한 승인 정보가 없습니다. 새로고침해 승인 ID와 기한을 확인하세요.';
+}
+
+function ApprovalDetails({ job }: { job: CoreOrchestrationJob }) {
+  if (!job.approval && !job.pendingOperation) return null;
+  const approval = job.approval;
+  const deadline = approval?.deadline ?? job.pendingOperation?.deadline;
+  const expired = Boolean(deadline && Number.isFinite(Date.parse(deadline)) && Date.parse(deadline) <= Date.now());
+  const state = approval ? ({ pending: expired ? '기한 만료' : '승인 대기', accepted: '승인됨', denied: '거절됨', expired: '기한 만료' })[approval.state]
+    : '실행 불가 · 이전 형식';
+  return <dl aria-label="승인 정보">
+    <dt>승인자:</dt><dd>{approval?.approverId ?? job.pendingOperation?.approverId ?? '확인되지 않음'}</dd>
+    <dt>승인 기한:</dt><dd>{deadline && Number.isFinite(Date.parse(deadline))
+      ? <time dateTime={deadline}>{new Date(deadline).toLocaleString('ko-KR', { timeZoneName: 'short' })}</time> : '확인되지 않음'}</dd>
+    <dt>승인 상태:</dt><dd>{state}</dd>
+  </dl>;
+}
 
 export function settleOrchestrationRefreshNotice(
   current: PanelNotice,
@@ -235,7 +298,8 @@ export type OrchestrationPanelViewProps = {
   validationError: string;
   lastUpdatedAt?: string;
   mobile: boolean;
-  pendingConfirmation?: Readonly<{ kind: 'approve' | 'cancel'; jobId: string }> | null;
+  pendingConfirmation?: OrchestrationConfirmation | null;
+  approvalDecisionSupported?: boolean;
   onPromptChange: (value: string) => void;
   onProviderChange: (value: string) => void;
   onModeChange: (value: CoreOrchestrationMode) => void;
@@ -246,7 +310,8 @@ export type OrchestrationPanelViewProps = {
   onSelectTask: (jobId: string) => void | Promise<void>;
   onCancel: (jobId: string) => void | Promise<void>;
   onApprove: (jobId: string) => void | Promise<void>;
-  onRequestConfirmation?: (kind: 'approve' | 'cancel', jobId: string) => void;
+  onDeny?: (jobId: string) => void | Promise<void>;
+  onRequestConfirmation?: (kind: OrchestrationConfirmation['kind'], jobId: string) => void;
   onDismissConfirmation?: () => void;
   onProvideInput: (jobId: string) => void | Promise<void>;
   onRetryTask: (jobId: string) => void | Promise<void>;
@@ -286,6 +351,12 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
   const pendingConfirmation = props.selectedJob && props.pendingConfirmation?.jobId === props.selectedJob.id
     ? props.pendingConfirmation
     : null;
+  const approvalIdentity = getOrchestrationApprovalIdentity(props.selectedJob);
+  const approvalSupported = props.approvalDecisionSupported === true;
+  const canDecideApproval = Boolean(approvalSupported && approvalIdentity);
+  const canApprove = canDecideApproval && supports(selectedProvider, 'approve');
+  const decisionConfirmation = pendingConfirmation && ['approve', 'deny'].includes(pendingConfirmation.kind) ? pendingConfirmation : null;
+  const confirmedIdentity = !decisionConfirmation || sameApprovalIdentity(approvalIdentity, decisionConfirmation.approvalIdentity);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -330,7 +401,9 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
         <article aria-labelledby="orchestration-detail-heading" className="work-item-detail" id="orchestration-job-detail" tabIndex={-1}>
           <h3 id="orchestration-detail-heading">선택한 대화</h3>
           <ExecutionPresentationPanel job={props.selectedJob} conversation={props.conversation} />
+          <CoreResultReview key={props.selectedJob.id} job={props.selectedJob} />
           {props.selectedJob.pendingOperation ? <p>승인 대상: {props.selectedJob.pendingOperation.jobId} · revision: {props.selectedJob.pendingOperation.revision}</p> : null}
+          <ApprovalDetails job={props.selectedJob} />
           <p><strong>상태:</strong> {statusLabels[props.selectedJob.status]}</p>
           <p><strong>작업 ID:</strong> {props.selectedJob.id}</p>
           {props.selectedJob.notificationDelivery ? <p aria-label="개인 채팅 알림 상태">
@@ -344,30 +417,39 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
           {props.selectedJob.status === 'awaiting_approval' ? (
             <div>
               <p>이 작업을 계속하려면 승인이 필요합니다.</p>
-              {pendingConfirmation?.kind === 'approve' ? (
+              {!approvalSupported || !approvalIdentity ? <p role="note">{approvalUnavailableMessage(props.selectedJob, approvalSupported)}</p> : null}
+              {canDecideApproval && !canApprove ? <p role="note">현재 제공자로 작업을 승인해 실행할 수 없습니다. 실행을 거절하거나 최신 상태를 확인하세요.</p> : null}
+              {!confirmedIdentity ? <p role="note">승인 정보가 변경되었습니다. 돌아간 뒤 다시 검토하고 승인하거나 거절하세요.</p> : null}
+              {decisionConfirmation ? (
                 <div aria-label="작업 승인 확인" className="delete-confirmation" role="group">
-                  <span>실행하기 전에 승인 여부를 다시 확인합니다.</span>
+                  <span>{decisionConfirmation.kind === 'approve' ? '실행하기 전에 승인 여부를 다시 확인합니다.' : '이 작업의 실행을 거절할까요?'}</span>
                   <button
                     className="primary"
-                    disabled={selectedBusy || !supports(selectedProvider, 'approve')}
-                    onClick={() => void props.onApprove(props.selectedJob!.id)}
+                    disabled={selectedBusy || props.phase !== 'ready' || !canDecideApproval || !confirmedIdentity
+                      || (decisionConfirmation.kind === 'approve' && !canApprove)
+                      || (decisionConfirmation.kind === 'deny' && !props.onDeny)}
+                    onClick={() => { if (decisionConfirmation.kind === 'approve') void props.onApprove(props.selectedJob!.id);
+                      else void props.onDeny?.(props.selectedJob!.id); }}
                     type="button"
                   >
-                    {actionLabel('승인 확인', '승인 중…', props.busyAction === `approval:${props.selectedJob.id}`)}
+                    {actionLabel(decisionConfirmation.kind === 'approve' ? '승인 확인' : '거절 확인',
+                      decisionConfirmation.kind === 'approve' ? '승인 중…' : '거절 중…', props.busyAction === `approval:${props.selectedJob.id}`)}
                   </button>
                   <button className="secondary" disabled={selectedBusy} onClick={() => props.onDismissConfirmation?.()} type="button">
                     돌아가기
                   </button>
                 </div>
               ) : (
-                <button
+                <><button
                   className="primary"
-                  disabled={selectedBusy || !supports(selectedProvider, 'approve')}
+                  disabled={selectedBusy || props.phase !== 'ready' || !canApprove}
                   onClick={() => props.onRequestConfirmation?.('approve', props.selectedJob!.id)}
                   type="button"
                 >
                   승인
                 </button>
+                <button className="secondary" disabled={selectedBusy || props.phase !== 'ready' || !canDecideApproval || !props.onDeny}
+                  onClick={() => props.onRequestConfirmation?.('deny', props.selectedJob!.id)} type="button">거절</button></>
               )}
             </div>
           ) : null}
@@ -553,13 +635,15 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
 
       {props.phase === 'ready' ? <section aria-label="개인 승인 대기 목록">
         <h3>승인 대기</h3>
-        <p>승인 대상 확인 후 기존 작업 상세에서 승인하거나 취소하세요. 확인 카드가 만료돼도 작업은 자동 승인되지 않습니다.</p>
+        <p>승인 대상 확인 후 기존 작업 상세에서 승인하거나 거절하세요. 확인 카드가 만료돼도 작업은 자동 승인되지 않습니다.</p>
         {props.pendingHasMore ? <p role="status">승인 대기 작업 중 최근 100개를 표시합니다. 나머지는 작업 ID로 조회하세요.</p> : null}
         {props.pendingJobs == null ? <p role="status">전체 승인함 조회가 확인되지 않았습니다. 아래는 최근 작업에 포함된 승인 대기 항목입니다.</p> : null}
         {(props.pendingJobs ?? props.jobs).some(job => job.pendingOperation) ? (props.pendingJobs ?? props.jobs).filter(job => job.pendingOperation).map(job => (
           <article key={job.id} className="work-item-card">
             <button type="button" onClick={() => void props.onSelectTask(job.id)}>{job.prompt}</button>
             <p>승인 대상: {job.pendingOperation!.jobId} · revision: {job.pendingOperation!.revision}</p>
+            <ApprovalDetails job={job} />
+            {!getOrchestrationApprovalIdentity(job) ? <p role="note">{approvalUnavailableMessage(job, approvalSupported)}</p> : null}
           </article>
         )) : <p role="status">{props.pendingJobs == null ? '최근 작업에 승인 대기 항목이 없습니다.' : '승인 대기 작업이 없습니다.'}</p>}
       </section> : null}
@@ -630,10 +714,32 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
   const [notice, setNotice] = useState<PanelNotice>(null);
   const [validationError, setValidationError] = useState('');
   const [lastUpdatedAt, setLastUpdatedAt] = useState('');
-  const [pendingConfirmation, setPendingConfirmation] = useState<Readonly<{ kind: 'approve' | 'cancel'; jobId: string }> | null>(null);
+  const [pendingConfirmation, setPendingConfirmation] = useState<OrchestrationConfirmation | null>(null);
   const busy = useMemo(() => createOrchestrationBusyController(), []);
   const submissionKeys = useRef(createSubmissionIdempotencyController());
   const loadController = useRef<AbortController | null>(null);
+  const privateAccessBlocked = useRef(false);
+
+  const clearPrivateState = useCallback(() => {
+    privateAccessBlocked.current = true;
+    detailRequests.current.dispose();
+    setJobs([]);
+    setPendingJobs([]);
+    setPendingHasMore(false);
+    setSelectedJob(null);
+    setConversation(undefined);
+    setPendingConfirmation(null);
+    setRequestedJobId(undefined);
+    setInputValue('');
+    setBusyAction('');
+    setProviders([]);
+    setModelCatalog(undefined);
+    setProviderId('');
+    setModelId('');
+    setReasoningEffort('');
+    setLastUpdatedAt('');
+    setNotice(null);
+  }, []);
 
   const updateJob = useCallback((nextJob: CoreOrchestrationJob) => {
     setJobs((current) => current.some((job) => job.id === nextJob.id)
@@ -643,6 +749,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
   }, []);
 
   const load = useCallback(async (options: { silent?: boolean } = {}) => {
+    if (options.silent && privateAccessBlocked.current) return;
     loadController.current?.abort();
     const controller = new AbortController();
     loadController.current = controller;
@@ -655,6 +762,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
       const selected = selectedJob ? await client.getJob(selectedJob.id, controller.signal) : undefined;
       const requestedJob = requestedJobId ? await loadRequestedJob(requestedJobId, client, controller.signal) : undefined;
       if (controller.signal.aborted) return;
+      privateAccessBlocked.current = false;
       setJobs([...includeRequestedJob(result.jobs, requestedJob)]);
       setPendingJobs(result.pendingJobs);
       setPendingHasMore(result.pendingHasMore === true);
@@ -671,17 +779,21 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
       setNotice(current => settleOrchestrationRefreshNotice(current, { status: 'succeeded' }));
     } catch (caught) {
       if (controller.signal.aborted) return;
-      if (options.silent) {
+      if (isApiAuthError(caught) || isConversationHistoryAccessFailure(caught)) {
+        clearPrivateState();
+        setError(errorMessage(caught));
+        setPhase('error');
+      } else if (options.silent) {
         setNotice(current => settleOrchestrationRefreshNotice(current, { status: 'failed', message: errorMessage(caught) }));
       } else {
         setError(errorMessage(caught));
         setPhase('error');
       }
     }
-  }, [client, requestedJobId, selectedJob?.id]);
+  }, [clearPrivateState, client, requestedJobId, selectedJob?.id]);
 
   useEffect(() => {
-    void load();
+    if (!privateAccessBlocked.current) void load();
     const polling = createOrchestrationPollingController({
       intervalMs: ORCHESTRATION_POLL_INTERVAL_MS,
       refresh: () => load({ silent: true }),
@@ -801,10 +913,13 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     const outcome = await runMutation(`cancel:${jobId}`, () => client.cancelJob(jobId), '취소 요청을 보냈습니다.');
     if (outcome === 'success' || outcome === 'definitive-failure') setPendingConfirmation(null);
   }, [client, runMutation]);
-  const approve = useCallback(async (jobId: string) => {
-    const outcome = await runMutation(`approval:${jobId}`, () => client.approveJob(jobId), '작업을 승인했습니다.');
+  const decideApproval = useCallback(async (jobId: string, decision: 'accept' | 'deny') => {
+    const job = selectedJob?.id === jobId ? selectedJob : null;
+    const outcome = await runMutation(`approval:${jobId}`,
+      () => decideSelectedOrchestrationApproval(client, job, pendingConfirmation, decision),
+      decision === 'accept' ? '작업을 승인했습니다.' : '작업 실행을 거절했습니다.');
     if (outcome === 'success' || outcome === 'definitive-failure') setPendingConfirmation(null);
-  }, [client, runMutation]);
+  }, [client, pendingConfirmation, runMutation, selectedJob]);
   const provideInput = useCallback(async (jobId: string) => {
     if (!inputValue.trim()) {
       setValidationError('추가 입력을 작성하세요.');
@@ -832,7 +947,9 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     modelId={modelId}
     notice={notice?.message ?? ''}
     pendingConfirmation={pendingConfirmation}
-    onApprove={approve}
+    onApprove={jobId => decideApproval(jobId, 'accept')}
+    onDeny={jobId => decideApproval(jobId, 'deny')}
+    approvalDecisionSupported={Boolean(client.decideApproval)}
     onCancel={cancel}
     onInputChange={(value) => { setInputValue(value); setValidationError(''); }}
     onModeChange={(value) => { setMode(value); setValidationError(''); }}
@@ -846,7 +963,12 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     onProvideInput={provideInput}
     onProviderChange={(value) => { setProviderId(value); setValidationError(''); }}
     onReasoningEffortChange={(value) => { setReasoningEffort(value); setValidationError(''); }}
-    onRequestConfirmation={(kind, jobId) => setPendingConfirmation({ kind, jobId })}
+    onRequestConfirmation={(kind, jobId) => {
+      if (kind === 'cancel') { setPendingConfirmation({ kind, jobId }); return; }
+      const identity = selectedJob?.id === jobId ? getOrchestrationApprovalIdentity(selectedJob) : undefined;
+      if (!identity || !client.decideApproval) { setError('실행 가능한 승인 정보가 없습니다. 새로고침하고 다시 검토하세요.'); return; }
+      setPendingConfirmation({ kind, jobId, approvalIdentity: identity });
+    }}
     onDismissConfirmation={() => setPendingConfirmation(null)}
     onReload={load}
     onRetryTask={retryJob}

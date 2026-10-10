@@ -57,7 +57,9 @@ try {
   await waitForHealth(baseUrl, child);
   await assertMeasuredProvider(baseUrl);
 
-  const cancelJob = await createAwaitingJob(baseUrl, '취소 확인 흐름');
+  const { id: cancelJob, card: cancelJobCard } = await createAwaitingJob(baseUrl, '취소 확인 흐름');
+  const privateApprovalConfirmation = confirmationPayload(cancelJobCard, 'orchestration.confirm-approve');
+  const privateDenialConfirmation = confirmationPayload(cancelJobCard, 'orchestration.confirm-deny');
   const confirmCancel = { schemaVersion: '1', action: 'orchestration.confirm-cancel', jobId: cancelJob };
   const cancelConfirmationCard = assertConfirmationCard((await post(baseUrl, activity('', 'confirm-cancel', confirmCancel))).body, '작업 취소 확인');
   const cancelPayload = confirmationPayload(cancelConfirmationCard, 'orchestration.cancel');
@@ -72,6 +74,9 @@ try {
       shared(`agent status ${cancelJob}`), shared('agent list'),
       shared(`agent cancel ${cancelJob}`), shared(`agent approve ${cancelJob}`),
       shared('', confirmCancel),
+      shared('', privateApprovalConfirmation), shared('', privateDenialConfirmation),
+      shared('', { ...privateApprovalConfirmation, action: 'orchestration.approve' }),
+      shared('', { ...privateDenialConfirmation, action: 'orchestration.deny' }),
       shared('', { schemaVersion: '1', action: 'orchestration.dismiss-confirmation', jobId: cancelJob }),
       shared('', cancelPayload),
       shared('', { schemaVersion: '1', action: 'orchestration.retry', jobId: cancelJob }),
@@ -83,6 +88,7 @@ try {
       assert.equal(rendered.includes(cancelJob), false, 'shared response must not expose private job identity');
       assert.equal(rendered.includes('취소 확인 흐름'), false, 'shared response must not expose private prompt');
       assert.equal(rendered.includes('confirmationToken'), false, 'shared response must not issue a private job grant');
+      assert.equal(rendered.includes(privateApprovalConfirmation.approvalId), false, 'shared response must not expose private approval authority');
     }
   }
   for (const mismatch of [
@@ -119,29 +125,53 @@ try {
   const cancelReplay = await post(baseUrl, activity('', 'cancel-confirmed-replay', cancelPayload));
   assertCard(cancelReplay.body, '현재 상태\\(cancelled\\)');
 
-  const approveJob = await createAwaitingJob(baseUrl, '승인 확인 흐름');
+  const { id: approveJob, card: approveJobCard } = await createAwaitingJob(baseUrl, '승인 확인 흐름');
+  const confirmApprove = confirmationPayload(approveJobCard, 'orchestration.confirm-approve');
   const approveConfirmationCard = assertConfirmationCard(
-    (await post(baseUrl, activity('', 'confirm-approve', {
-      schemaVersion: '1', action: 'orchestration.confirm-approve', jobId: approveJob,
-    }))).body,
+    (await post(baseUrl, activity('', 'confirm-approve', confirmApprove))).body,
     '작업 승인 확인',
   );
   const approvePayload = confirmationPayload(approveConfirmationCard, 'orchestration.approve');
+  assert.deepEqual(approvePayload, { ...confirmApprove, action: 'orchestration.approve' },
+    'second-step approval preserves the exact identity read from the native first-step card');
   await assertStatus(baseUrl, approveJob, 'awaiting_approval', 'first approve click must not mutate');
-  const missingApproveToken = await post(baseUrl, activity('', 'approve-without-token', {
+  const missingApproveIdentity = await post(baseUrl, activity('', 'approve-without-identity', {
     schemaVersion: '1', action: 'orchestration.approve', jobId: approveJob,
   }));
-  assertCard(missingApproveToken.body, '유효하지 않은');
+  assertCard(missingApproveIdentity.body, '유효하지 않은');
   await assertStatus(baseUrl, approveJob, 'awaiting_approval', 'a forged approve payload must not mutate');
+  const legacyApproveToken = await post(baseUrl, activity('', 'approve-with-legacy-token', {
+    ...approvePayload, confirmationToken: 'obsolete-approval-grant', correlationId: 'obsolete-approval-correlation',
+  }));
+  assertCard(legacyApproveToken.body, '유효하지 않은');
+  await assertStatus(baseUrl, approveJob, 'awaiting_approval', 'legacy token fields cannot authorize a durable approval');
   const executionsBeforeApproval = await fixtureExecutionCount();
   assertCard((await post(baseUrl, activity('', 'approve-confirmed', approvePayload))).body, approveJob);
   await assertNotStatus(baseUrl, approveJob, 'awaiting_approval', 'confirmed approve must mutate');
   await assertCompletedFixtureJob(approveJob);
+  await assertDurableDecision(approveJob, approvePayload, 'accepted');
   assert.equal(await fixtureExecutionCount(), executionsBeforeApproval + 1, 'approval executes the fixture exactly once');
   const approveReplay = await post(baseUrl, activity('', 'approve-confirmed-replay', approvePayload));
-  assertCard(approveReplay.body, '현재 상태\\((?:queued|running|completed)\\)');
+  const acceptedFinalCard = assertCard(approveReplay.body, approveJob);
+  assertNoDecisionActions(acceptedFinalCard);
   await assertNotStatus(baseUrl, approveJob, 'awaiting_approval', 'replayed approve must not restart the mutation');
   assert.equal(await fixtureExecutionCount(), executionsBeforeApproval + 1, 'terminal approval replay must not execute the fixture again');
+
+  const { id: denyJob, card: denyJobCard } = await createAwaitingJob(baseUrl, '거절 확인 흐름');
+  const confirmDeny = confirmationPayload(denyJobCard, 'orchestration.confirm-deny');
+  const denialCard = assertConfirmationCard((await post(baseUrl, activity('', 'confirm-deny', confirmDeny))).body, '작업 거절 확인');
+  const denyPayload = confirmationPayload(denialCard, 'orchestration.deny');
+  assert.deepEqual(denyPayload, { ...confirmDeny, action: 'orchestration.deny' });
+  await assertStatus(baseUrl, denyJob, 'awaiting_approval', 'first denial click must not mutate');
+  const executionsBeforeDenial = await fixtureExecutionCount();
+  const denied = await post(baseUrl, activity('', 'deny-confirmed', denyPayload));
+  assertNoDecisionActions(assertCard(denied.body, 'cancelled'));
+  await assertDurableDecision(denyJob, denyPayload, 'denied');
+  assertNoDecisionActions(assertCard((await post(baseUrl, activity('', 'deny-replay', denyPayload))).body, 'cancelled'));
+  const oppositeDecision = await post(baseUrl, activity('', 'denied-cannot-approve', { ...denyPayload, action: 'orchestration.approve' }));
+  assertCard(oppositeDecision.body, '결정 상태가 일치하지 않습니다');
+  await assertStatus(baseUrl, denyJob, 'cancelled', 'a conflicting decision cannot restart a denied job');
+  assert.equal(await fixtureExecutionCount(), executionsBeforeDenial, 'denial, denial replay, and conflicting approval never execute the provider');
 
   const malformed = await post(baseUrl, activity('', 'malformed-confirm', {
     schemaVersion: '1', action: 'orchestration.confirm-cancel', jobId: approveJob, tenantId: 'attacker',
@@ -154,14 +184,14 @@ try {
   await fs.rm(runtimeRoot, { recursive: true, force: true });
 }
 
-async function createAwaitingJob(baseUrl: string, prompt: string): Promise<string> {
+async function createAwaitingJob(baseUrl: string, prompt: string): Promise<{ id: string; card: Record<string, any> }> {
   const response = await post(baseUrl, activity(`agent write ${prompt}`, `create-${prompt}`));
   const card = assertCard(response.body, 'awaiting_approval');
   const id = card.body?.flatMap((item: any) => item.type === 'Container' ? item.items ?? [] : [item])
     .find((item: any) => item.type === 'FactSet')?.facts
     ?.find((fact: any) => fact.title === '작업 ID')?.value;
   assert.equal(typeof id, 'string');
-  return id;
+  return { id, card };
 }
 
 async function fixtureExecutionCount(): Promise<number> {
@@ -181,6 +211,20 @@ async function assertCompletedFixtureJob(jobId: string): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.fail('fixture did not reach a terminal state before replay');
+}
+
+async function assertDurableDecision(jobId: string, payload: Record<string, string>, state: 'accepted' | 'denied'): Promise<void> {
+  const jobs = JSON.parse(await fs.readFile(path.join(runtimeRoot, 'agent-jobs.json'), 'utf8'));
+  const job = jobs.find((candidate: { id: string }) => candidate.id === jobId);
+  assert.equal(job?.durableApproval?.approvalId, payload.approvalId);
+  assert.equal(job?.durableApproval?.revision, payload.revision);
+  assert.equal(job?.durableApproval?.state, state);
+  assert.equal(job?.durableApproval?.settledStatus, state === 'accepted' ? 'completed' : 'cancelled');
+}
+
+function assertNoDecisionActions(card: Record<string, any>): void {
+  assert.equal((card.actions ?? []).some((action: any) => /orchestration\.(?:confirm-approve|confirm-deny|approve|deny)$/u.test(action.data?.action ?? '')), false,
+    'settled native cards expose no further approval or denial execution actions');
 }
 
 async function assertMeasuredProvider(baseUrl: string): Promise<void> {
@@ -240,8 +284,15 @@ function confirmationPayload(card: Record<string, any>, action: string): Record<
   const payload = card.actions?.find((candidate: any) => candidate.data?.action === action)?.data;
   assert.equal(payload?.schemaVersion, '1');
   assert.equal(payload?.action, action);
-  assert.equal(typeof payload?.confirmationToken, 'string');
-  assert.equal(typeof payload?.correlationId, 'string');
+  if (action === 'orchestration.cancel') {
+    assert.equal(typeof payload?.confirmationToken, 'string');
+    assert.equal(typeof payload?.correlationId, 'string');
+  } else {
+    assert.match(payload?.approvalId ?? '', /^approval-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u);
+    assert.match(payload?.revision ?? '', /^[a-f0-9]{64}$/u);
+    assert.deepEqual(Object.keys(payload).sort(), ['action', 'approvalId', 'jobId', 'revision', 'schemaVersion'],
+      'durable native callbacks have only the observed immutable identity; no cancellation grant or client scope');
+  }
   return payload;
 }
 

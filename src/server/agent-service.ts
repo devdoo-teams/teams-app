@@ -1,5 +1,8 @@
 import type { AgentJob, AgentJobMode, AgentJobScope } from './agent-job-store.js';
 import { AgentJobStore } from './agent-job-store.js';
+import { CoreApprovalRecoveryError, type CoreApprovalIdentity, type CoreApprovalDecision,
+  type CoreApprovalDecisionResult } from './core-approval-recovery.js';
+import type { CoreResultOrigin } from './core-result-publication.js';
 import {
   AgentExecutionUnavailableError,
   AgentExecutionPolicy,
@@ -58,6 +61,8 @@ export type { AgentExecutionDispatcher, AgentExecutionObservation } from './agen
 import type { AgentExecutionDispatcher } from './agent-execution-port.js';
 
 export const MAX_AGENT_PROMPT_LENGTH = 2_000;
+const MAX_APPROVAL_EXPIRY_TIMER_MS = 60_000;
+const APPROVAL_EXPIRY_RETRY_DELAY_MS = 1_000;
 
 export class AgentPromptValidationError extends Error {
   readonly code = 'INVALID_AGENT_PROMPT' as const;
@@ -200,6 +205,8 @@ export class AgentService {
   private closing = false;
   private durableObservationTimer?: ReturnType<typeof setTimeout>;
   private durableObservationInFlight?: Promise<void>;
+  private approvalExpiryTimer?: ReturnType<typeof setTimeout>;
+  private approvalExpiryInFlight?: Promise<void>;
   // A workspace-write job's changed-path proof is a before/after observation
   // of the shared checkout. Serialize the whole observation and runner
   // lifetime so another job cannot contaminate that proof or the commit step.
@@ -222,6 +229,8 @@ export class AgentService {
       await this.store.recoverInterruptedJobs();
       await this.reconstructAdmissionFromStore();
     }
+    await this.expirePendingApprovals();
+    this.scheduleApprovalExpiry();
   }
 
   private async reconstructAdmissionFromStore(): Promise<void> {
@@ -254,6 +263,7 @@ export class AgentService {
     provider?: CliAgentProvider;
     mode: AgentJobMode;
     scope: AgentJobScope;
+    resultOrigin?: CoreResultOrigin;
     parentJobId?: string;
     threadId?: string;
     notify?: boolean;
@@ -310,6 +320,7 @@ export class AgentService {
           this.launchExecution(job, input.notify !== false, input.onProgress);
         }
       }
+      if (job.status === 'awaiting_approval') this.scheduleApprovalExpiry();
       return job;
     } finally {
       this.finishPendingSubmission();
@@ -320,7 +331,7 @@ export class AgentService {
     id: string,
     prompt: string,
     scope: AgentJobScope,
-    options: { notify?: boolean; onProgress?: ProgressListener } = {},
+    options: { notify?: boolean; onProgress?: ProgressListener; resultOrigin?: CoreResultOrigin } = {},
   ): Promise<AgentJob | undefined> {
     const normalizedPrompt = normalizeAgentPrompt(prompt);
     const previous = this.store.get(id, scope);
@@ -338,6 +349,7 @@ export class AgentService {
       scope,
       provider,
       parentJobId: previous.id,
+      resultOrigin: options.resultOrigin ?? previous.resultOrigin,
       threadId: ephemeral ? undefined : previous.threadId,
       ...(jobSelection(previous) ?? {}),
       notify: previous.durableNotifications?.enabled === false ? false : options.notify ?? previous.durableNotifications?.enabled,
@@ -392,36 +404,96 @@ export class AgentService {
   }
 
   async approve(id: string, scope: AgentJobScope): Promise<AgentJob | undefined> {
-    const existing = this.store.get(id, scope);
-    if (existing?.mode === 'workspace-write') this.assertMutationAllowed(scope);
-    const queued = await this.withJobMutationLock(id, scope, async () => {
-      const job = this.store.get(id, scope);
-      if (!job) return undefined;
-      if (job.status !== 'awaiting_approval') {
-        throw new AgentJobConflictError('approve', snapshotAgentJob(job));
-      }
-      assertHistoricalCliPolicy(job);
-      await this.resolveModelSelection(this.providerForJob(job), job);
+    const job = this.store.get(id, scope);
+    if (!job) return undefined;
+    if (job.status !== 'awaiting_approval') throw new AgentJobConflictError('approve', snapshotAgentJob(job));
+    if (!job.durableApproval) throw new CoreApprovalRecoveryError('unsupported');
+    return (await this.decideApproval(id, scope, job.durableApproval, 'accept'))?.job;
+  }
 
-      const refreshed = await this.store.update(id, scope, { status: 'queued', error: undefined });
-      if (!refreshed) {
-        const latest = this.store.get(id, scope);
-        if (latest) throw new AgentJobConflictError('approve', snapshotAgentJob(latest));
-        return undefined;
+  async decideApproval(id: string, scope: AgentJobScope, request: CoreApprovalIdentity,
+    decision: CoreApprovalDecision): Promise<CoreApprovalDecisionResult | undefined> {
+    this.assertMutationAllowed(scope);
+    try {
+      const outcome = await this.withJobMutationLock(id, scope, async () => {
+        const job = this.store.get(id, scope);
+        if (!job) return undefined;
+        if (decision === 'accept' && job.durableApproval?.state === 'pending'
+          && Date.now() < Date.parse(job.durableApproval.deadline)) {
+          assertHistoricalCliPolicy(job);
+          await this.resolveModelSelection(this.providerForJob(job), job);
+        }
+        return this.store.decideApproval(id, scope, request, decision);
+      });
+      if (outcome?.dispatch) {
+        if (this.options.executionDispatcher) await this.dispatchExternally(outcome.job, scope);
+        else this.launchExecution(outcome.job, outcome.job.durableNotifications?.enabled !== false);
+      } else if (outcome?.job.status === 'cancelled') {
+        await this.finalizeApprovalCancellation(outcome, scope);
       }
-      return refreshed;
-    });
-
-    if (queued) {
-      if (this.options.executionDispatcher) await this.dispatchExternally(queued, scope);
-      else this.launchExecution(queued, queued.durableNotifications?.enabled !== false);
+      return outcome;
+    } finally {
+      this.scheduleApprovalExpiry();
     }
-    return queued;
+  }
+
+  private async finalizeApprovalCancellation(outcome: CoreApprovalDecisionResult, scope: AgentJobScope): Promise<void> {
+    await this.finalizeAdmission(outcome.job, scope);
+    if (!outcome.replayed && outcome.job.durableApproval?.state === 'expired') {
+      await this.notifyIfEnabled(outcome.job, {
+        kind: 'cancelled', phase: 'cancelled', message: `작업 ${outcome.job.id}의 승인 기한이 지나 취소되었습니다.`,
+      });
+    }
+  }
+
+  private pendingApprovalJobs(): AgentJob[] {
+    return this.store.listLocalOnly(Number.MAX_SAFE_INTEGER).filter(job => job.mode === 'workspace-write'
+      && job.status === 'awaiting_approval' && job.durableApproval?.state === 'pending' && scopeForJob(job));
+  }
+
+  /** Internal expiry can only settle elapsed, persisted authority; it never grants approval or dispatches work. */
+  private async expirePendingApprovals(): Promise<void> {
+    for (const candidate of this.pendingApprovalJobs()) {
+      if (this.closing) return;
+      if (Date.now() < Date.parse(candidate.durableApproval!.deadline)) continue;
+      const scope = scopeForJob(candidate)!;
+      const outcome = await this.withJobMutationLock(candidate.id, scope, async () => {
+        const current = this.store.get(candidate.id, scope);
+        if (!current || current.status !== 'awaiting_approval' || current.durableApproval?.state !== 'pending') return undefined;
+        return this.store.decideApproval(current.id, scope, current.durableApproval, 'expire');
+      });
+      if (outcome?.job.status === 'cancelled') await this.finalizeApprovalCancellation(outcome, scope);
+    }
+  }
+
+  private scheduleApprovalExpiry(minimumDelayMs = 1): void {
+    if (this.approvalExpiryTimer) clearTimeout(this.approvalExpiryTimer);
+    this.approvalExpiryTimer = undefined;
+    if (this.closing || this.approvalExpiryInFlight) return;
+    let deadline = Number.POSITIVE_INFINITY;
+    for (const job of this.pendingApprovalJobs()) deadline = Math.min(deadline, Date.parse(job.durableApproval!.deadline));
+    if (!Number.isFinite(deadline)) return;
+    const delay = Math.min(MAX_APPROVAL_EXPIRY_TIMER_MS, Math.max(minimumDelayMs, deadline - Date.now()));
+    this.approvalExpiryTimer = setTimeout(() => {
+      this.approvalExpiryTimer = undefined;
+      let nextMinimumDelayMs = 1;
+      this.approvalExpiryInFlight = this.expirePendingApprovals().catch(() => {
+        // Failed persistence leaves pending authority unchanged; retry has a bounded rate and cannot send or execute.
+        nextMinimumDelayMs = APPROVAL_EXPIRY_RETRY_DELAY_MS;
+      }).finally(() => {
+        this.approvalExpiryInFlight = undefined;
+        this.scheduleApprovalExpiry(nextMinimumDelayMs);
+      });
+    }, delay);
+    this.approvalExpiryTimer.unref();
   }
 
   async close(options: { closeAdmission?: boolean } = {}): Promise<void> {
     this.closing = true;
     if (this.durableObservationTimer) clearTimeout(this.durableObservationTimer);
+    if (this.approvalExpiryTimer) clearTimeout(this.approvalExpiryTimer);
+    this.approvalExpiryTimer = undefined;
+    await this.approvalExpiryInFlight;
     await this.durableObservationInFlight;
     if (options.closeAdmission !== false) await this.admissionController.close();
     await this.waitForPendingSubmissions();
@@ -506,6 +578,7 @@ export class AgentService {
         message: `작업 ${id}이 취소되었습니다.`,
       });
     }
+    this.scheduleApprovalExpiry();
     return cancelled;
   }
 
@@ -1111,6 +1184,12 @@ export class AgentService {
   private async finalizeAdmission(job: AgentJob, scope: AgentJobScope): Promise<void> {
     try {
       const lease = this.admissionLeases.get(job.id);
+      // Restored terminal jobs and decision replays have no local resources;
+      // releaseJob atomically releases any reconstructed reservation or is a no-op.
+      if (!lease && !this.executionWorkspaces.has(job.id)) {
+        await this.admissionController.releaseJob(job.id);
+        return;
+      }
       if (lease) await lease.markTerminalPending();
       else await this.admissionController.markTerminalPending(job.id);
       await this.releaseExecutionWorkspace(job.id);
@@ -1438,6 +1517,7 @@ function scopeForJob(job: AgentJob): AgentJobScope | undefined {
 function snapshotAgentJob(job: AgentJob): AgentJob {
   return {
     ...job,
+    ...(job.durableApproval ? { durableApproval: { ...job.durableApproval } } : {}),
     progress: [...job.progress],
     ...(job.changedPaths ? { changedPaths: [...job.changedPaths] } : {}),
   };

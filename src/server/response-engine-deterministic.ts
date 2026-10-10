@@ -271,7 +271,7 @@ export class DeterministicResponseEngine implements ResponseEngine {
 
     if (/^(write|파일|수정|변경|작성|생성)/i.test(normalized)) {
       const requestedPrompt = safeText(prompt.replace(/^(write|파일(?:을|이)?\s*(?:변경|수정)?|수정|변경|작성|생성)\s*/i, '').trim() || '요청한 변경 작업', 2_000);
-      const job = await input.agentService.submit({ prompt: requestedPrompt, mode: 'workspace-write', scope: input.scope });
+      const job = await input.agentService.submit({ prompt: requestedPrompt, mode: 'workspace-write', scope: input.scope, resultOrigin: input.resultOrigin });
       const args: ApprovalToolArgs = { jobId: job.id, prompt: requestedPrompt, action: 'approve' };
       const text = `쓰기 작업 ${job.id}이 승인 대기 중입니다.\n\nTeams Bot에서 “approve ${job.id}”를 보내거나 아래 승인 흐름을 사용하세요.`;
       const approvalEnvelope = input.approvalEnvelope ? await input.approvalEnvelope(job) : undefined;
@@ -307,8 +307,8 @@ export class DeterministicResponseEngine implements ResponseEngine {
       if (!cancelled()) input.onText?.(`⏳ ${message}`);
     };
     const job = previous
-      ? await input.agentService.continue(previous.id, prompt, input.scope, { notify: true, onProgress })
-      : await input.agentService.submit({ prompt, mode: 'read-only', scope: input.scope, notify: true, onProgress });
+      ? await input.agentService.continue(previous.id, prompt, input.scope, { notify: true, onProgress, resultOrigin: input.resultOrigin })
+      : await input.agentService.submit({ prompt, mode: 'read-only', scope: input.scope, notify: true, onProgress, resultOrigin: input.resultOrigin });
     if (!job) throw new Error('Codex 작업을 생성하지 못했습니다.');
     input.setActiveJobId?.(job.id);
     const text = previous
