@@ -13,7 +13,7 @@
     "build:client": "node scripts/build-client.mjs",
     "build:optional": "npm run build:client && npm run build:server && npm run build:mcp && npm run build:optional-providers",
     "build:copilot-ui": "node scripts/build-copilot-ui.mjs",
-    "test:copilot-ui": "node scripts/copilot-ui-public-types-test.mjs && node --import tsx/esm scripts/run-module-test.mjs scripts/copilot-job-projection-agent-test.ts && node --import tsx/esm scripts/run-module-test.mjs scripts/copilot-job-view-test.tsx && node --import tsx/esm scripts/run-module-test.mjs scripts/copilot-ui-bootstrap-test.tsx && node --import tsx/esm scripts/run-module-test.mjs scripts/copilot-ui-runtime-test.ts && node --import tsx/esm scripts/run-module-test.mjs scripts/copilot-ui-artifact-test.ts",
+    "test:copilot-ui": "node scripts/copilot-ui-public-types-test.mjs && node --import tsx/esm scripts/run-module-test.mjs scripts/copilot-job-projection-agent-test.ts && node --import tsx/esm scripts/run-module-test.mjs scripts/copilot-job-view-test.tsx && node --import tsx/esm scripts/run-module-test.mjs scripts/copilot-job-view-stale-transcript-test.tsx && node --import tsx/esm scripts/run-module-test.mjs scripts/copilot-ui-bootstrap-test.tsx && node --import tsx/esm scripts/run-module-test.mjs scripts/copilot-ui-runtime-test.ts && node --import tsx/esm scripts/run-module-test.mjs scripts/copilot-ui-artifact-test.ts",
     "build:optional-providers": "node scripts/build-optional-providers.mjs",
     "build:mcp": "node scripts/build-mcp-widget.mjs",
     "start": "node --env-file-if-exists=.env.runtime scripts/start-server.mjs",

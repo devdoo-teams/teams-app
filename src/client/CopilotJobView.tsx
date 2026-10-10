@@ -126,6 +126,10 @@ export function createCopilotProjectionController({ agent, jobId, origin, reques
       if (disposed || abort.signal.aborted) throw new ProjectionViewError('unavailable');
     };
     const run = async (): Promise<ExecutionPresentation> => {
+      // Revalidate the owner with an empty display. A failed lookup cannot
+      // retain a previously authorized result or SDK state.
+      agent.setMessages([]);
+      agent.setState({});
       const response = await request(`/api/core-orchestration/jobs/${encodeURIComponent(jobId)}`, {
         method: 'GET', signal: abort.signal, credentials: 'same-origin', redirect: 'error',
       });
@@ -135,10 +139,7 @@ export function createCopilotProjectionController({ agent, jobId, origin, reques
       assertCurrent();
       if (envelope.job?.id !== jobId) throw new ProjectionViewError('forbidden');
       createExecutionPresentation(envelope.job);
-      // Each SDK run starts with an empty view transcript. Old jobs, prompts,
-      // UI context and caller identities are never forwarded to the runtime.
-      agent.setMessages([]);
-      agent.setState({});
+      // Only the current authorized job ID reaches the read-only SDK run.
       await agent.runAgent({ forwardedProps: { jobId }, tools: [], context: [] });
       assertCurrent();
       return completedProjection(agent, jobId);
@@ -155,7 +156,12 @@ export function createCopilotProjectionController({ agent, jobId, origin, reques
       })]);
       return { status: 'succeeded', presentation };
     } catch (error) {
+      // Dispose already cleared this view. A late lookup must not clear a
+      // replacement controller's newly authorized transcript on the same agent.
       if (disposed) return { status: 'disposed' };
+      // A failed or partial stream is not a current authorized projection.
+      agent.setMessages([]);
+      agent.setState({});
       return { status: 'failed', message: error instanceof ProjectionViewError || isApiAuthError(error)
         ? error.message : unavailableMessage };
     } finally {
@@ -169,6 +175,8 @@ export function createCopilotProjectionController({ agent, jobId, origin, reques
     disposed = true;
     activeAbort?.abort();
     if (busy) HttpAgent.prototype.abortRun.call(agent);
+    agent.setMessages([]);
+    agent.setState({});
     if (agent.fetch === guardedFetch) agent.fetch = previousFetch;
   } };
 }
@@ -215,6 +223,7 @@ function ConnectedProjectionView({ jobId }: { jobId: string }): ReactElement {
   async function refresh(): Promise<void> {
     if (!controller || busy) return;
     setBusy(true);
+    setLoaded(false);
     setMessage('');
     const result = await controller.refresh();
     if (result.status === 'succeeded') setLoaded(true);
@@ -236,7 +245,10 @@ function ConnectedProjectionView({ jobId }: { jobId: string }): ReactElement {
       {isReady ? <div hidden={!loaded} className="copilot-projection-transcript">
         <CopilotChat agentId={COPILOT_PROJECTION_AGENT_ID} input={HiddenSdkSlot}
           suggestionView={HiddenSdkSlot} welcomeScreen={false} messageView={projectionMessageView}
-          autoScroll="none" onError={() => setMessage(unavailableMessage)} />
+          autoScroll="none" onError={() => {
+            agent.setMessages([]); agent.setState({});
+            setLoaded(false); setMessage(unavailableMessage);
+          }} />
       </div> : null}
     </section>
   );
@@ -256,7 +268,7 @@ export function CopilotJobView({ jobId }: { jobId: string }): ReactElement {
         agent={COPILOT_PROJECTION_AGENT_ID} headers={getCachedAuthHeaders} credentials="same-origin"
         useSingleEndpoint={false} showDevConsole={false} enableInspector={false}
         onError={() => setConnectionError(unavailableMessage)}>
-        <ConnectedProjectionView jobId={jobId} />
+        {connectionError ? null : <ConnectedProjectionView jobId={jobId} />}
       </CopilotKit>
     </div>
   );
