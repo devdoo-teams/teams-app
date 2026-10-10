@@ -24,7 +24,7 @@ export function ExecutionPresentationDetails({ presentation, details = [...EXECU
     {details.includes('steps') ? <section aria-label="진행 단계"><h4>진행 단계</h4>
       {presentation.progress.length ? <ol>{presentation.progress.map((progress, index) => <li key={index}>{progress}</li>)}</ol> : <p>기록된 진행 단계가 없습니다.</p>}</section> : null}
     {details.includes('diagnostics') ? <section aria-label="진단 정보"><h4>진단 정보</h4>
-      {[...presentation.facts, ...presentation.receiptFacts].map((fact, index) => <p key={index}><strong>{fact.label}:</strong> {fact.value}</p>)}
+      {presentation.facts.map((fact, index) => <p key={index}><strong>{fact.label}:</strong> {fact.value}</p>)}
       <details><summary>요청 보기</summary><pre>{presentation.prompt || '요청이 기록되지 않았습니다.'}</pre></details>
     </section> : null}
     {!details.length ? <p>선택된 상세 항목이 없습니다.</p> : null}

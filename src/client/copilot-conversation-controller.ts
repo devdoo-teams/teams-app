@@ -7,13 +7,29 @@ import { isApiAuthError } from './auth.js';
 
 export type CoreConversationState = Readonly<{
   jobId: string; phase: 'idle' | 'loading' | 'ready' | 'sending' | 'blocked';
-  job?: CoreOrchestrationJob; conversation?: VisibleJobConversation; error?: string; uncertain: boolean;
+  job?: CoreOrchestrationJob; conversation?: VisibleJobConversation; error?: string; uncertain: boolean; submittedPrompt?: string;
 }>;
 export function canContinueConversation(state: CoreConversationState): boolean {
   return state.phase === 'ready' && !state.uncertain && Boolean(state.job &&
     ['completed', 'failed', 'cancelled'].includes(state.job.status));
 }
 type Result = 'succeeded' | 'failed' | 'busy' | 'invalid' | 'disposed';
+
+export async function submitCoreConversation(controller: ReturnType<typeof createCoreConversationController>, prompt: string,
+  ui: { setInput: (value: string) => void; setValidation: (value: string) => void; isCurrent: () => boolean }): Promise<void> {
+  ui.setValidation('');
+  if (!prompt.trim() || prompt.length > CORE_AGENT_PROMPT_MAX_LENGTH) {
+    ui.setValidation(`요청은 1자 이상 ${CORE_AGENT_PROMPT_MAX_LENGTH}자 이하로 입력하세요.`);
+    // The SDK clears the controlled input immediately after invoking submit.
+    await Promise.resolve();
+    if (ui.isCurrent()) ui.setInput(prompt);
+    return;
+  }
+  const outcome = await controller.send(prompt);
+  if (!ui.isCurrent()) return;
+  if (outcome === 'invalid' || (outcome === 'failed' && !controller.getState().uncertain)) ui.setInput(prompt);
+  if (outcome === 'invalid') ui.setValidation('현재 작업의 실행 조건을 확인하고 대화를 새로고침하세요.');
+}
 
 /** Display reads and explicit user sends are different operations. No agent,
  * provider, owner, approval or execution policy is supplied by this controller. */
@@ -43,7 +59,7 @@ export function createCoreConversationController({ client, jobId, onChange, time
       const status = error && typeof error === 'object' && 'status' in error ? error.status : undefined;
       const sending = state.phase === 'sending';
       const uncertain = state.uncertain || (sending && (typeof status !== 'number' || status >= 500));
-      publish({ jobId: state.jobId, phase: 'blocked', uncertain,
+      publish({ jobId: state.jobId, phase: 'blocked', uncertain, submittedPrompt: sending || uncertain ? state.submittedPrompt : undefined,
         error: status === 403 ? '현재 계정에는 이 작업을 볼 권한이 없습니다.'
           : status === 401 || isApiAuthError(error) ? 'Teams 인증이 만료되었습니다. 개인 작업에서 다시 인증해 주세요.'
           : uncertain ? '전송 결과를 확인하지 못했습니다. 다시 보내지 말고 개인 작업 목록에서 새 작업을 확인하세요.'
@@ -55,13 +71,13 @@ export function createCoreConversationController({ client, jobId, onChange, time
   const assertCurrent = (signal: AbortSignal) => { signal.throwIfAborted(); if (disposed) throw new DOMException('Disposed', 'AbortError'); };
   const load = (): Promise<Result> => operation(async signal => {
     const id = state.jobId;
-    publish({ jobId: id, phase: 'loading', uncertain: state.uncertain });
+    publish({ jobId: id, phase: 'loading', uncertain: state.uncertain, submittedPrompt: state.uncertain ? state.submittedPrompt : undefined });
     const loaded = client.getJobConversation ? await client.getJobConversation(id, signal)
       : await loadJobConversation(id, client.getJob, signal);
     assertCurrent(signal);
     if (loaded.job.id !== id || loaded.conversation.selectedJobId !== id) throw new Error('Invalid owner-scoped conversation');
     createExecutionPresentation(loaded.job);
-    publish({ ...loaded, jobId: id, phase: 'ready', uncertain: state.uncertain });
+    publish({ ...loaded, jobId: id, phase: 'ready', uncertain: state.uncertain, submittedPrompt: state.uncertain ? state.submittedPrompt : undefined });
   });
   const send = (prompt: string): Promise<Result> => {
     if (disposed) return Promise.resolve('disposed');
@@ -69,7 +85,7 @@ export function createCoreConversationController({ client, jobId, onChange, time
     if (!canContinueConversation(state) || !prompt.trim() || prompt.length > CORE_AGENT_PROMPT_MAX_LENGTH) return Promise.resolve('invalid');
     const previous = state.job!;
     return operation(async signal => {
-      publish({ ...state, phase: 'sending', error: undefined });
+      publish({ ...state, phase: 'sending', error: undefined, submittedPrompt: prompt.trim() });
       const { job } = await client.continueJob(previous.id, prompt.trim(), signal);
       assertCurrent(signal);
       const ephemeral = (previous.provider ?? 'codex') === 'codex' && previous.mode === 'read-only';
@@ -80,5 +96,5 @@ export function createCoreConversationController({ client, jobId, onChange, time
       publish({ jobId: job.id, job, phase: 'ready', uncertain: false });
     });
   };
-  return { load, send, dispose() { if (disposed) return; disposed = true; active?.abort(); } };
+  return { load, send, getState: () => state, dispose() { if (disposed) return; disposed = true; active?.abort(); } };
 }

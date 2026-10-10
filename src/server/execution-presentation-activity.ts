@@ -37,7 +37,7 @@ export function createExecutionPresentationActivity(job: CoreOrchestrationJob, m
   if (details.includes('steps')) nested.push(text('진행 단계'), ...(presentation.progress.length ? presentation.progress.map(value => text(value, 180)) : [text('기록된 진행 단계가 없습니다.')]));
   if (details.includes('diagnostics')) {
     nested.push(text('진단 정보'));
-    const facts = [...presentation.facts, ...presentation.receiptFacts].map(fact => ({title:clip(fact.label,90),value:clip(fact.value,160)}));
+    const facts = presentation.facts.map(fact => ({title:clip(fact.label,90),value:clip(fact.value,160)}));
     for (let start=0;start<facts.length;start+=24) nested.push({type:'FactSet',facts:facts.slice(start,start+24)});
   }
   if (!details.length) nested.push(text('선택된 상세 항목이 없습니다.'));

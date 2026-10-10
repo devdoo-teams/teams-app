@@ -5,7 +5,7 @@ import { CORE_AGENT_PROMPT_MAX_LENGTH, CORE_JOB_STATUS_LABELS, type CoreOrchestr
 import type { VisibleJobConversation } from '../shared/job-conversation.js';
 import { EXECUTION_PRESENTATION_AGENT_ID as COPILOT_PROJECTION_AGENT_ID } from '../shared/execution-presentation.js';
 import { createCoreOrchestrationClient, type CoreOrchestrationClient } from './core-orchestration-client.js';
-import { canContinueConversation, createCoreConversationController, type CoreConversationState } from './copilot-conversation-controller.js';
+import { canContinueConversation, createCoreConversationController, submitCoreConversation, type CoreConversationState } from './copilot-conversation-controller.js';
 
 export function projectCopilotConversationMessages(conversation?: VisibleJobConversation): Message[] {
   return (conversation?.turns ?? []).flatMap(turn => [
@@ -28,6 +28,10 @@ export function CopilotConversationTranscript({ state, input, setInput, send }: 
     {state.error ? <p role="alert">{state.error}</p> : null}
     {state.phase === 'loading' ? <p role="status">기존 작업의 대화를 불러오고 있습니다.</p> : null}
     {state.phase === 'sending' ? <p role="status">후속 요청을 전송하고 있습니다. 다시 누르지 마세요.</p> : null}
+    {state.submittedPrompt && (state.phase === 'sending' || state.uncertain) ? <section aria-label="제출한 후속 요청">
+      <h4>{state.uncertain ? '전송 결과 확인이 필요한 요청' : '전송 중인 요청'}</h4>
+      <pre className="copilot-conversation-text">{state.submittedPrompt}</pre>
+    </section> : null}
     {!state.conversation?.complete && state.conversation ? <p role="note">이전 대화 일부가 없거나 최근 20개 대화만 표시됩니다.</p> : null}
     <CopilotChatConfigurationProvider agentId={COPILOT_PROJECTION_AGENT_ID} hasExplicitThreadId={true}>
       <CopilotChatView messages={projectCopilotConversationMessages(state.conversation)} welcomeScreen={false}
@@ -68,12 +72,8 @@ export function ConnectedCoreConversation({ jobId, onJobChange, onStateChange }:
     return () => clearTimeout(timer);
   }, [state]);
   const send = async (value: string) => {
-    setValidation('');
-    if (!value.trim() || value.length > CORE_AGENT_PROMPT_MAX_LENGTH) {
-      setValidation(`요청은 1자 이상 ${CORE_AGENT_PROMPT_MAX_LENGTH}자 이하로 입력하세요.`); return;
-    }
-    const outcome = await controller.current?.send(value);
-    if (outcome === 'invalid') setValidation('현재 작업의 실행 조건을 확인하고 대화를 새로고침하세요.');
+    const current = controller.current;
+    if (current) await submitCoreConversation(current, value, { setInput, setValidation, isCurrent: () => controller.current === current });
   };
   return <>
     <button type="button" disabled={state.phase === 'loading' || state.phase === 'sending'}
