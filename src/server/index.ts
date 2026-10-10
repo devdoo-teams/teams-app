@@ -4220,7 +4220,13 @@ async function preferredCoreJobActivity(job: CoreOrchestrationJob, scope: AgentJ
     inspect(card);
     const rendered = channelsNativeRenderer.render({ card, identity, scope: displayScope, actionGrants,
       kind: job.status === 'awaiting_approval' ? 'approval' : job.status === 'failed' ? 'error' : 'result' });
-    return rendered.status === 'faithful' ? { ...attachment, content: rendered.card } : attachment;
+    if (rendered.status !== 'faithful' || rendered.card.version !== '1.6'
+      || rendered.card.$schema !== 'http://adaptivecards.io/schemas/adaptive-card.json') return attachment;
+    const host = asRecord(rendered.card.msteams);
+    if (host?.width !== 'Full') return attachment;
+    return { ...attachment, content: { ...rendered.card, type: 'AdaptiveCard' as const,
+      version: '1.6' as const, $schema: 'http://adaptivecards.io/schemas/adaptive-card.json' as const,
+      msteams: { ...host, width: 'Full' as const } } };
   };
   const [firstAttachment, ...rest] = activity.attachments;
   const attachments = [renderAttachment(firstAttachment), ...rest.map(renderAttachment)] as const;
