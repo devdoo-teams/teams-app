@@ -34,7 +34,7 @@ export function CopilotConversationWorkspace({ initialJobId, client: suppliedCli
     <a href={`/tabs/home/?view=core${selected ? `&jobId=${encodeURIComponent(selected)}` : ''}`}>개인 작업으로 돌아가기</a>
     <ExecutionPresentationDetailControls />
     <section aria-label="CopilotKit 대화 작업 선택">
-      <button type="button" disabled={loading} onClick={() => { void loadJobs(); }}>개인 작업 목록 새로고침</button>
+      <button className="secondary" type="button" disabled={loading} onClick={() => { void loadJobs(); }}>개인 작업 목록 새로고침</button>
       {loading ? <p role="status">개인 작업을 불러오고 있습니다.</p> : null}
       {error ? <p role="alert">{error}</p> : null}
       {!loading && !error && !jobs.length ? <p>아직 개인 작업이 없습니다. 개인 작업 화면에서 첫 작업을 만든 뒤 여기서 대화를 이어갈 수 있습니다.</p> : null}

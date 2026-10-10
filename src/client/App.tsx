@@ -164,6 +164,7 @@ export function App() {
       </header>
 
       <ExecutionPresentationToolbar />
+      <details className="presentation-runtime-details"><summary>실행 환경 상세</summary>
       <section className="runtime-panel agent-runtime-panel" aria-label="에이전트 런타임 상태">
         <div className="runtime-panel-heading">
           <span>실행 상태</span>
@@ -184,6 +185,7 @@ export function App() {
         <div><span>에이전트</span><strong>{agentExecutionLabel(health?.a2aExecution)}</strong></div>
         <div><span>마지막 확인</span><strong>{health ? new Date(health.timestamp).toLocaleTimeString('ko-KR') : '-'}</strong></div>
       </section>
+      </details>
 
       {healthError ? <p className="error" role="alert">{healthError}</p> : null}
       {health?.a2aExecution?.state === 'unavailable' ? (

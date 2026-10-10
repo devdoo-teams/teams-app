@@ -57,6 +57,7 @@ const runtimeTests = [
 const tsTests = [
   'scripts/teams-cli-agent-policy-test.ts',
   'scripts/execution-presentation-test.ts',
+  'scripts/presentation-content-test.tsx',
   'scripts/execution-presentation-receipt-once-test.tsx',
   'scripts/execution-presentation-store-test.ts',
   'scripts/execution-presentation-route-test.ts',

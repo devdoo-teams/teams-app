@@ -44,3 +44,24 @@
 .badge[data-job-status="awaiting_approval"], .badge[data-job-status="input_required"] { background: #fff4ce; color: #805b00; }
 .badge[data-job-status="cancelled"] { background: #e5e5e5; color: #424242; }
 .badge[data-job-status="queued"], .badge[data-job-status="running"] { background: #e5efff; color: #174b85; }
+
+.presentation-content { min-width: 0; }
+.presentation-image-row { display: grid; justify-items: center; gap: 8px; margin: 12px 0; white-space: normal; }
+.presentation-image-row img { display: block; width: auto; height: auto; max-width: 100%; max-height: min(360px, 50vh); object-fit: contain; }
+.presentation-image-row figcaption { font-size: .875rem; line-height: 1.4; color: inherit; overflow-wrap: anywhere; text-align: center; }
+.presentation-image-row p { margin: 0; }
+.presentation-diagnostics > summary, .presentation-runtime-details > summary { cursor: pointer; min-height: 44px; padding: 10px 0; font-weight: 600; }
+.presentation-diagnostics p { margin: 8px 0; }
+.presentation-runtime-details > .runtime-panel { margin-top: 8px; }
+@media (max-width: 600px) {
+  .presentation-toolbar { gap: 12px; margin: 0; }
+  .presentation-toolbar fieldset, .presentation-detail-controls { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; gap: 8px; }
+  .presentation-toolbar select { width: 100%; }
+  .presentation-job-selector { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; }
+  .presentation-job-selector select { width: 100%; max-width: 100%; }
+  .presentation-chat { gap: 12px; }
+  .presentation-user { max-width: 100%; }
+  .presentation-user, .presentation-assistant, .presentation-workspace-entry { padding: 12px; border-radius: 12px; }
+  .presentation-workspace-entry .primary { width: 100%; }
+  .execution-presentation-card > section, .execution-presentation-card > details { margin-top: 12px; }
+}

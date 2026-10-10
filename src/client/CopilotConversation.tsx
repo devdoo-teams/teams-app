@@ -6,6 +6,7 @@ import type { VisibleJobConversation } from '../shared/job-conversation.js';
 import { EXECUTION_PRESENTATION_AGENT_ID as COPILOT_PROJECTION_AGENT_ID } from '../shared/execution-presentation.js';
 import { createCoreOrchestrationClient, type CoreOrchestrationClient } from './core-orchestration-client.js';
 import { canContinueConversation, createCoreConversationController, submitCoreConversation, type CoreConversationState } from './copilot-conversation-controller.js';
+import { PresentationContent } from './PresentationContent.js';
 
 export function projectCopilotConversationMessages(conversation?: VisibleJobConversation): Message[] {
   return (conversation?.turns ?? []).flatMap(turn => [
@@ -15,7 +16,7 @@ export function projectCopilotConversationMessages(conversation?: VisibleJobConv
   ]);
 }
 
-const ConversationText = ({ content }: { content: string }) => <div className="copilot-conversation-text">{content}</div>;
+const ConversationText = ({ content }: { content: string }) => <div className="copilot-conversation-text"><PresentationContent content={content} /></div>;
 const NoExecutionToolbar = () => null;
 
 /** Actual SDK transcript and composer; explicit submit uses the Core owner API,
@@ -34,13 +35,13 @@ export function CopilotConversationTranscript({ state, input, setInput, send }: 
     </section> : null}
     {!state.conversation?.complete && state.conversation ? <p role="note">이전 대화 일부가 없거나 최근 20개 대화만 표시됩니다.</p> : null}
     <CopilotChatConfigurationProvider agentId={COPILOT_PROJECTION_AGENT_ID} hasExplicitThreadId={true}>
-      <CopilotChatView messages={projectCopilotConversationMessages(state.conversation)} welcomeScreen={false}
+      <CopilotChatView className="presentation-sdk-chat" messages={projectCopilotConversationMessages(state.conversation)} welcomeScreen={false}
         messageView={{ assistantMessage: { markdownRenderer: ConversationText, toolbar: NoExecutionToolbar } }}
         autoScroll="none" isRunning={false} inputValue={input} onInputChange={setInput}
         onSubmitMessage={send} input={{ mode: 'input', isRunning: false,
           textArea: { disabled: !enabled, maxLength: CORE_AGENT_PROMPT_MAX_LENGTH, 'aria-label': '같은 대화의 후속 요청',
             placeholder: enabled ? '같은 대화에 요청을 이어서 보내세요.' : '작업이 끝난 뒤 요청을 이어서 보낼 수 있습니다.' },
-          sendButton: { disabled: !enabled || !input.trim(), 'aria-label': '후속 요청 보내기' } }} />
+          sendButton: { className: 'presentation-send-button', disabled: !enabled || !input.trim(), 'aria-label': '후속 요청 보내기' } }} />
     </CopilotChatConfigurationProvider>
     <p className="presentation-mandatory-note">최대 {CORE_AGENT_PROMPT_MAX_LENGTH}자. 전송하면 같은 대화의 후속 작업을 실행합니다. 표시 변경·새로고침은 작업을 실행하지 않습니다.</p>
   </section>;
@@ -76,7 +77,7 @@ export function ConnectedCoreConversation({ jobId, onJobChange, onStateChange }:
     if (current) await submitCoreConversation(current, value, { setInput, setValidation, isCurrent: () => controller.current === current });
   };
   return <>
-    <button type="button" disabled={state.phase === 'loading' || state.phase === 'sending'}
+    <button className="secondary" type="button" disabled={state.phase === 'loading' || state.phase === 'sending'}
       onClick={() => { setValidation(''); void controller.current?.load(); }}>대화 새로고침</button>
     {validation ? <p role="alert">{validation}</p> : null}
     <CopilotConversationTranscript state={state} input={input} setInput={setInput} send={value => { void send(value); }} />

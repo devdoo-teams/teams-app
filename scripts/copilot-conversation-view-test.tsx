@@ -24,6 +24,10 @@ try {
   assert.match(html,/<textarea[^>]+aria-label="같은 대화의 후속 요청"/);
   assert.match(html,/SYNTHETIC_DRAFT/);assert.match(html,/후속 요청 보내기/);
   assert.equal(sends,0,'rendering SDK conversation never submits a job');
+  const imageState={...state,conversation:{...conversation,turns:[{...conversation.turns[0],response:'합성 설명\n![SDK 합성 이미지](/assets/wide.png)\n결과'}]}};
+  const imageHtml=render(<CopilotConversationTranscript state={imageState} input="" setInput={()=>{}} send={()=>{sends++;}} />);
+  assert.match(imageHtml,/<img[^>]+src="\/assets\/wide.png"/,'installed SDK uses the shared safe image renderer');
+  assert.equal(sends,0,'image rendering never submits a job');
   const blocked=render(<CopilotConversationTranscript state={{jobId:job.id,phase:'blocked',uncertain:false,error:'SYNTHETIC_FORBIDDEN'}} input="" setInput={()=>{}} send={()=>{sends++;}} />);
   assert.match(blocked,/SYNTHETIC_FORBIDDEN/);assert.doesNotMatch(blocked,/SYNTHETIC_USER_REQUEST|SYNTHETIC_ASSISTANT_RESPONSE/);
   assert.match(blocked,/<textarea[^>]+disabled/);

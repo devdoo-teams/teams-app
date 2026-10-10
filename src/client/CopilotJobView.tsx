@@ -268,7 +268,7 @@ function ConnectedProjectionView({ jobId, autoLoad = false, revision = '', autho
       {!isReady ? <p role="status">풍부한 보기를 연결하고 있습니다.</p> : null}
       {unsupported ? <p role="alert">현재 SDK 전송 방식은 읽기 전용 표시를 지원하지 않습니다.</p> : null}
       {message ? <p role="alert">{message}</p> : null}
-      <button type="button" disabled={!authorized || !controller || unsupported || busy} onClick={() => { void refresh(); }}>
+      <button className="secondary" type="button" disabled={!authorized || !controller || unsupported || busy} onClick={() => { void refresh(); }}>
         {busy ? '불러오는 중…' : loaded ? '표시 새로고침' : '보기 불러오기'}
       </button>
       {isReady ? <div hidden={!authorized || !loaded} className="copilot-projection-transcript">
@@ -300,7 +300,7 @@ export function CopilotJobView({ jobId, autoLoad = false, onJobChange }: {
   return (
     <div className="copilot-job-shell">
       {connectionError ? <section role="alert"><p>{connectionError}</p>
-        <button type="button" onClick={() => { setConnectionError(''); setConnectionAttempt(attempt => attempt + 1); }}>연결 다시 시도</button>
+        <button className="secondary" type="button" onClick={() => { setConnectionError(''); setConnectionAttempt(attempt => attempt + 1); }}>연결 다시 시도</button>
       </section> : null}
       <CopilotKit key={`${activeJobId}-${connectionAttempt}`} runtimeUrl={COPILOT_PROJECTION_RUNTIME_PATH}
         agent={COPILOT_PROJECTION_AGENT_ID} headers={getCachedAuthHeaders} credentials="same-origin"

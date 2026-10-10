@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { PresentationContent, presentationTextPreview } from './PresentationContent.js';
 import { EXECUTION_PRESENTATION_DETAILS, type ExecutionPresentation, type ExecutionPresentationDetail } from '../shared/execution-presentation.js';
 
 const toolLabels = { cli: 'CLI', skill: '스킬', plugin: '플러그인', mcp: 'MCP', builtin: '기본 도구' } as const;
@@ -6,9 +7,9 @@ const toolLabels = { cli: 'CLI', skill: '스킬', plugin: '플러그인', mcp: '
 /** Keep the ordinary view compact without discarding the stored result. */
 export function ExecutionPresentationResult({ presentation }: { presentation: ExecutionPresentation }): ReactNode {
   const result = presentation.result || presentation.summary;
-  const compact = result.length > 480 ? `${result.slice(0, 480)}…` : result;
-  return <><pre className="execution-presentation-text">{compact}</pre>
-    {result.length > 480 ? <details><summary>전체 결과 보기</summary><pre className="execution-presentation-text">{result}</pre></details> : null}</>;
+  return <>{result.length > 480 ? <pre className="execution-presentation-text">{presentationTextPreview(result)}</pre>
+    : <PresentationContent content={result} />}
+    {result.length > 480 ? <details><summary>전체 결과 보기</summary><PresentationContent content={result} /></details> : null}</>;
 }
 
 /** Shared display only: this component never imports the optional SDK or sends requests. */
@@ -24,8 +25,10 @@ export function ExecutionPresentationDetails({ presentation, details = [...EXECU
     {details.includes('steps') ? <section aria-label="진행 단계"><h4>진행 단계</h4>
       {presentation.progress.length ? <ol>{presentation.progress.map((progress, index) => <li key={index}>{progress}</li>)}</ol> : <p>기록된 진행 단계가 없습니다.</p>}</section> : null}
     {details.includes('diagnostics') ? <section aria-label="진단 정보"><h4>진단 정보</h4>
-      {presentation.facts.map((fact, index) => <p key={index}><strong>{fact.label}:</strong> {fact.value}</p>)}
-      <details><summary>요청 보기</summary><pre>{presentation.prompt || '요청이 기록되지 않았습니다.'}</pre></details>
+      <details className="presentation-diagnostics"><summary>진단 정보 펼치기 / 접기</summary>
+        {presentation.facts.map((fact, index) => <p key={index}><strong>{fact.label}:</strong> {fact.value}</p>)}
+        <details><summary>요청 보기</summary><pre>{presentation.prompt || '요청이 기록되지 않았습니다.'}</pre></details>
+      </details>
     </section> : null}
     {!details.length ? <p>선택된 상세 항목이 없습니다.</p> : null}
   </div>;

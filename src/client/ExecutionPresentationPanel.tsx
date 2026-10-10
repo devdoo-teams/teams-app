@@ -25,7 +25,7 @@ export function ExecutionPresentationPanel({ job, conversation }: { job: CoreOrc
       : <section className="presentation-workspace-entry"><h4>채팅 + 별도 상세 화면</h4>
         <span className="badge" data-job-status={presentation.status}>{presentation.statusLabel}</span><ExecutionPresentationResult presentation={presentation} />
         {presentation.error ? <p role="alert" className="error">{presentation.error}</p> : null}
-        <button type="button" disabled={!available.includes('rich')} onClick={() => openRich(job.id)}>같은 작업의 CopilotKit 대화 열기</button>
+        <button className="primary" type="button" disabled={!available.includes('rich')} onClick={() => openRich(job.id)}>같은 작업의 CopilotKit 대화 열기</button>
       </section>}
     {conversation && selection.mode !== 'text' ? <details><summary>원본 대화 기록 보기</summary>
       <JobConversationView conversation={conversation} details={selection.details} /></details> : null}

@@ -8,6 +8,8 @@ okf_version: 0.2
 
 ## Concepts
 
+* [Mobile reference presentation](mobile-reference-presentation.md) - MP383 shared safe image rows, collapsed diagnostics, compact composer, mobile viewport and real host gates
+
 * [Three-view candidate and exact-commit CI](three-view-candidate-ci.md) - MP380/381 independent review corrections, SDK event fixtures, remote synchronization and separate visual/live gates
 
 * [Safe CLI launch metadata](cli-launch-metadata.md) - MP377 immutable prelaunch model/effort/version, provider observations kept separate, cancellation and privacy gates
