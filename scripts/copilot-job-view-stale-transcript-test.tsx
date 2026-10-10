@@ -186,10 +186,20 @@ try {
   failure = 'none'; job.result = 'SYNTHETIC_PENDING_FRESH'; releaseOwner(Response.json({ job })); await finishRefresh();
   assert.equal(transcript().props.hidden, false); assert.match(renderToStaticMarkup(tree), /SYNTHETIC_PENDING_FRESH/);
 
-  // Connection errors remove the view; normal unmount cleanup clears the agent.
+  // SDK connection errors preserve Core recovery while clearing its stale projection.
   find(shell, node => node.props.runtimeUrl === '/api/copilot-ui')!.props.onError();
   shell = outer.render(view.CopilotJobView, { jobId: job.id });
-  assert.equal(find(shell, node => typeof node.type === 'function' && node.type.name === 'ConnectedProjectionView'), undefined);
+  assert.ok(find(shell, node => typeof node.type === 'function' && node.type.name === 'ConnectedCoreConversation'),
+    'Core conversation remains available for recovery without a new job');
+  const blockedProjection = find(shell, node => typeof node.type === 'function' && node.type.name === 'ConnectedProjectionView');
+  assert.ok(blockedProjection); assert.equal(blockedProjection.props.authorized, false);
+  const beforeConnectionBlock = requests.length;
+  tree = state.render(blockedProjection.type as Function, blockedProjection.props); state.flush();
+  tree = state.render(blockedProjection.type as Function, blockedProjection.props);
+  assert.equal(transcript().props.hidden, true);
+  assert.equal(find(tree, node => node.type === 'button')!.props.disabled, true);
+  assert.deepEqual(agent.messages, []); assert.deepEqual(agent.state, {});
+  assert.equal(requests.length, beforeConnectionBlock, 'connection block never executes or projects another job');
   state.dispose(); assert.deepEqual(agent.messages, []); assert.deepEqual(agent.state, {});
   find(shell, node => node.type === 'button')!.props.onClick(); shell = outer.render(view.CopilotJobView, { jobId: job.id });
   observeConversation({ jobId: job.id, phase: 'ready', job, uncertain: false });
