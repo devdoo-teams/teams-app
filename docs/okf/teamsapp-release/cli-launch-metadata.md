@@ -36,6 +36,8 @@ MP-377 (`teams-core:task:cli-launch-metadata`) follows the saved133 observation 
 
 `scripts/agent-cli-invocation-test.ts:1` uses a controlled subprocess and real durable store to require persistence before launch. It separately checks restart/immutability/foreign ownership, prompt-delimiter spoofing, malformed/private fields, selected-versus-argument-versus-provider values, durable-write failure and preparing cancellation. Adapter and worker tests preserve source/time and provider facts independently. These are fixtures, not live provider or Teams UI proof.
 
+MP-378 (`teams-core:bug:launch-receipt-factset-bound`) records the full-Core failure when token-bearing jobs plus launch fields exceed the existing24 facts per GenUI section. `src/server/genui-response.ts:1192` splits job facts into bounded sections without changing the public schema or discarding/reordering facts. `scripts/receipt-presentation-test.tsx:1` reproduces the original24-limit RED and checks every job envelope variant retains every fact under that same bound after the fix.
+
 ## LIVE RESULT AND INFERENCE
 
 New committed package, remote CI, actual CLI, catalog/personal installation, public runtime and native/mobile UI evidence must each be read back for their own identity. The existing133 public process and tunnel stay running during this work. Mac foreground is reserved for the user's iPhone. No new auth, persistent sessions, grants or deployment targets are introduced. Native isolation's default preflight includes an additional authenticated model canary; it must not be silently skipped to meet a one-call synthetic budget.

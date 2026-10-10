@@ -4,7 +4,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { OrchestrationPanelView, type OrchestrationPanelViewProps } from '../src/client/OrchestrationPanel.js';
 import { JobConversationView } from '../src/client/JobConversationView.js';
 import { loadJobConversation, refreshVisibleJobConversation } from '../src/client/job-conversation.js';
-import { createCoreOrchestrationJobActivity } from '../src/server/genui-response.js';
+import { createCoreOrchestrationJobActivity, GenUiResponseFactory } from '../src/server/genui-response.js';
+import { GenUiActionStore } from '../src/server/genui-action-store.js';
 import type { CoreOrchestrationJob } from '../src/shared/core-orchestration.js';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -68,6 +69,15 @@ assert.equal(badUsage.facts.find((fact: any) => fact.title === '사용 토큰')?
 const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'receipt-page-summary-')));
 try {
   const scope = { tenantId: 'synthetic', requesterId: 'synthetic', conversationId: 'synthetic' };
+  const actionStore = new GenUiActionStore(path.join(root, 'actions.json')); await actionStore.initialize();
+  const factory = new GenUiResponseFactory(actionStore);
+  const durableJob = { ...job, ...scope, requesterId: scope.requesterId, conversationId: scope.conversationId, tenantId: scope.tenantId, tools: [] };
+  for (const envelope of [await factory.jobStatus(durableJob), await factory.approval(durableJob), factory.approvalAccepted(durableJob), factory.cancelled(durableJob), factory.continued(durableJob), factory.naturalLanguageStarted(durableJob), factory.commitResult(durableJob), factory.started(durableJob), factory.notification({ job: durableJob, kind: 'result', message: 'fixture' } as any)]) {
+    const factSections = envelope.sections.filter(section => section.type === 'facts');
+    assert.ok(factSections.every(section => (section.facts?.length ?? 0) <= 24), 'each section retains the existing bound');
+    const allFacts = factSections.flatMap(section => section.facts ?? []);
+    for (const [label, value] of expected) assert.equal(allFacts.find(fact => fact.label === label)?.value, value, `every job envelope retains ${label}`);
+  }
   const pages = new CoreJobCardPages(path.join(root, 'pages.json'), {
     getJob: () => job, update: async () => { throw new Error('no outbound during local fixture'); },
   });

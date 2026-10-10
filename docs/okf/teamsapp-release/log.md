@@ -4,6 +4,7 @@
 
 * **Official contract**: current Codex non-interactive documentation, installed0.162.0-alpha.2 help and pinned exec event schema; see [launch metadata concept](cli-launch-metadata.md).
 * **RED/GREEN**: controlled CLI execution first fails because the durable launch receipt is absent before spawn. Whitelisted final argument/version observation, immutable reload, ownership, prompt separation, adapter/worker preservation and preparation cancellation are independently checked. Provider model/effort remain distinct and are never filled from arguments.
+* **MP378**: full Core exposed token-bearing GenUI facts exceeding24. A focused all-job-envelope RED/GREEN retains that existing schema bound by splitting facts in order; no fields are dropped and no bound is raised. Source-check registration also retains its established first-file fixture order.
 * **Boundary**: current133 process/tunnel and historical receipts remain intact. New candidate, remote checks, live CLI and all Teams/native/mobile gates require their own matching evidence. The Mac foreground remains released; no auth or permission expansion and no Jira Done or Teams completion.
 
 ## 2026-10-09 — MP364 command terminal observation

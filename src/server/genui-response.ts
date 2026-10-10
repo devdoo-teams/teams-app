@@ -970,7 +970,7 @@ export class GenUiResponseFactory {
       summary: text,
       prompt: safeJobPrompt(job),
       sections: [
-        { type: 'facts', title: '작업 실행 정보', facts: jobExecutionFacts(job) },
+        ...jobExecutionFactSections(job),
         { type: 'status', status: jobStatus, description: [error, result, progress.at(-1)].filter(Boolean).join('\n').slice(0, 2_000) },
         ...(tokenUsage ? [{ type: 'facts' as const, title: '토큰 사용량', facts: tokenUsageFacts(tokenUsage) }] : []),
         { type: 'list', title: '최근 진행 기록', items: progress.map((message, index) => ({ id: `${jobId}-${index}`.slice(0, 120), label: message })) },
@@ -1013,7 +1013,7 @@ export class GenUiResponseFactory {
         title: '쓰기 작업 승인 필요',
         summary: text,
         prompt,
-        sections: [{ type: 'status', title: '승인 경계', status: 'awaiting_approval', description: prompt }, { type: 'facts', title: '작업 실행 정보', facts: jobExecutionFacts(job) }],
+        sections: [{ type: 'status', title: '승인 경계', status: 'awaiting_approval', description: prompt }, ...jobExecutionFactSections(job)],
         fallbackText: `${text}\napprove ${jobId} 또는 cancel ${jobId}`,
         actions,
         metadata: { source: 'teams-bot', deterministic: true },
@@ -1033,7 +1033,7 @@ export class GenUiResponseFactory {
       title: '쓰기 작업 승인 처리',
       summary: text,
       prompt: safeJobPrompt(job),
-      sections: [{ type: 'status', title: '승인 결과', status: jobStatus, description: safeJobPrompt(job) }, { type: 'facts', title: '작업 실행 정보', facts: jobExecutionFacts(job) }],
+      sections: [{ type: 'status', title: '승인 결과', status: jobStatus, description: safeJobPrompt(job) }, ...jobExecutionFactSections(job)],
       fallbackText: text,
       metadata: { source: 'teams-bot', deterministic: true },
     });
@@ -1050,7 +1050,7 @@ export class GenUiResponseFactory {
       title: '작업 취소 결과',
       summary: text,
       prompt: safeJobPrompt(job),
-      sections: [{ type: 'status', title: '취소 결과', status: jobStatus, description: safeJobPrompt(job) }, { type: 'facts', title: '작업 실행 정보', facts: jobExecutionFacts(job) }],
+      sections: [{ type: 'status', title: '취소 결과', status: jobStatus, description: safeJobPrompt(job) }, ...jobExecutionFactSections(job)],
       fallbackText: text,
       metadata: { source: 'teams-bot', deterministic: true },
     });
@@ -1066,7 +1066,7 @@ export class GenUiResponseFactory {
       title: `${this.agentLabel} 대화 이어서 실행`,
       summary: text,
       prompt: safeJobPrompt(job),
-      sections: [{ type: 'status', title: '재개 결과', status: safeJobStatus(job), description: safeJobPrompt(job) }, { type: 'facts', title: '작업 실행 정보', facts: jobExecutionFacts(job) }],
+      sections: [{ type: 'status', title: '재개 결과', status: safeJobStatus(job), description: safeJobPrompt(job) }, ...jobExecutionFactSections(job)],
       fallbackText: text,
       metadata: { source: 'teams-bot', deterministic: true },
     });
@@ -1082,7 +1082,7 @@ export class GenUiResponseFactory {
       title: `자연어 ${this.agentLabel} 작업 시작`,
       summary: text,
       prompt: safeJobPrompt(job),
-      sections: [{ type: 'status', title: '작업 요청', status: safeJobStatus(job), description: safeJobPrompt(job) }, { type: 'facts', title: '작업 실행 정보', facts: jobExecutionFacts(job) }],
+      sections: [{ type: 'status', title: '작업 요청', status: safeJobStatus(job), description: safeJobPrompt(job) }, ...jobExecutionFactSections(job)],
       fallbackText: text,
       metadata: { source: 'teams-bot', deterministic: true },
     });
@@ -1104,7 +1104,7 @@ export class GenUiResponseFactory {
       title: missing ? '커밋 대기 중' : committed ? '커밋 결과' : '커밋 실패',
       summary: text,
       prompt: safeJobPrompt(job),
-      sections: [{ type: 'status', title: 'Git 결과', status: jobStatus, description: text }, { type: 'facts', title: '작업 실행 정보', facts: jobExecutionFacts(job) }],
+      sections: [{ type: 'status', title: 'Git 결과', status: jobStatus, description: text }, ...jobExecutionFactSections(job)],
       fallbackText: text,
       metadata: { source: 'teams-bot', deterministic: true },
     });
@@ -1120,7 +1120,7 @@ export class GenUiResponseFactory {
     return this.create({
       kind: 'job-status', id: jobId, status: 'loading', title: `${this.agentLabel} 작업 시작`, summary: text,
       prompt: safeJobPrompt(job),
-      sections: [{ type: 'status', status: safeJobStatus(job), description: safeJobPrompt(job) }, { type: 'facts', title: '작업 실행 정보', facts: jobExecutionFacts(job) }], fallbackText: text,
+      sections: [{ type: 'status', status: safeJobStatus(job), description: safeJobPrompt(job) }, ...jobExecutionFactSections(job)], fallbackText: text,
       metadata: { source: 'teams-bot', deterministic: true },
     });
   }
@@ -1160,7 +1160,7 @@ export class GenUiResponseFactory {
       title,
       summary,
       sections: [{ type: 'status', title: '작업 상태', status: sectionStatus, description: summary },
-        { type: 'facts', title: '작업 실행 정보', facts: jobExecutionFacts(notification.job) }],
+        ...jobExecutionFactSections(notification.job)],
       fallbackText,
       prompt: safeJobPrompt(notification.job),
       metadata: { source: 'agent-service', event: displayText(notification.phase, 64, 'unknown'), deterministic: true },
@@ -1185,6 +1185,16 @@ function compactNotification(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value;
   const suffix = '\n\n(알림이 길어 일부 생략되었습니다.)';
   return `${value.slice(0, Math.max(1, maxLength - suffix.length))}${suffix}`;
+}
+
+function jobExecutionFactSections(job: AgentJob): Array<{ type: 'facts'; title: string; facts: Array<{ label: string; value: string }> }> {
+  const facts = jobExecutionFacts(job);
+  const sections = [];
+  // Keep the public GenUI limit intact and retain every receipt fact in order.
+  for (let offset = 0; offset < facts.length; offset += 24) {
+    sections.push({ type: 'facts' as const, title: offset === 0 ? '작업 실행 정보' : '실행 영수증 (계속)', facts: facts.slice(offset, offset + 24) });
+  }
+  return sections;
 }
 
 function jobExecutionFacts(job: AgentJob): Array<{ label: string; value: string }> {
