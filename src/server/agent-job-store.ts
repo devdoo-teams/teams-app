@@ -379,7 +379,9 @@ export class AgentJobStore {
       if (index === -1) return undefined;
       const change = reducer(cloneAgentJob(this.jobs[index]));
       const updated = { ...this.jobs[index], resultPublication: change.publication };
-      updated.resultPublication = readCoreResultPublication(updated.resultPublication, updated);
+      const publication = readCoreResultPublication(updated.resultPublication, updated);
+      if (!publication) throw new Error('result publication mutation requires persisted authority');
+      updated.resultPublication = publication;
       this.jobs = this.jobs.map((job, i) => i === index ? updated : job);
       return change.value;
     });

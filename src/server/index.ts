@@ -2640,7 +2640,8 @@ const teamsJobProgressStore = new TeamsJobProgressJsonStore(teamsJobProgressStor
 await teamsJobProgressStore.initialize();
 const teamsApi = teamsApp && !skipAuth && !skipOutbound ? await import('@microsoft/teams.api') : undefined;
 function nativeProgressBinding(job: AgentJob): TeamsJobProgressBinding | undefined {
-  const origin = readCoreResultOrigin(job.resultOrigin, job);
+  if (!job.tenantId) return undefined;
+  const origin = readCoreResultOrigin(job.resultOrigin, { ...job, tenantId: job.tenantId });
   // Private message-menu review retains its original conversation for an
   // explicit publication. It must never auto-notify that shared conversation.
   if (!origin || origin.conversationId !== job.conversationId) return undefined;
@@ -2656,7 +2657,8 @@ function authoritativeProgressJob(binding: TeamsJobProgressBinding): AgentJob | 
   return expected && JSON.stringify(expected) === JSON.stringify(binding) ? job : undefined;
 }
 async function nativeProgressSnapshot(job: AgentJob): Promise<Omit<TeamsJobProgressSnapshot, 'revision'>> {
-  const message = await preferredCoreJobActivity(projectCoreOrchestrationJob(job), job);
+  if (!job.tenantId) throw new Error('TEAMS_PROGRESS_AUTHORITY_BLOCKED');
+  const message = await preferredCoreJobActivity(projectCoreOrchestrationJob(job), { ...job, tenantId: job.tenantId });
   const labels = { queued: '대기', awaiting_approval: '승인 필요', running: '실행 중', completed: '완료', failed: '실패', cancelled: '중지됨' };
   // The runner does not expose response token deltas. This is native
   // informative progress followed by the canonical final presentation.
@@ -2681,13 +2683,14 @@ const teamsJobProgressCoordinator = new TeamsJobProgressCoordinator(teamsJobProg
     const job = authoritativeProgressJob(binding);
     if (!teamsApp || skipAuth || skipOutbound || !job) throw new Error('TEAMS_PROGRESS_STOP_AUTHORITY_BLOCKED');
     if (['queued', 'awaiting_approval', 'running'].includes(job.status)) {
-      await agentService.cancel(job.id, job, { notify: true });
+      await agentService.cancel(job.id, binding, { notify: true });
     }
   },
 });
 async function publishNativeCoreJob(job: AgentJob): Promise<{ handled: boolean; accepted: boolean }> {
   if (!teamsApp || skipAuth || skipOutbound) return { handled: false, accepted: false };
-  const latest = agentJobStore.getForPrincipal(job.id, job);
+  if (!job.tenantId) return { handled: false, accepted: false };
+  const latest = agentJobStore.getForPrincipal(job.id, { ...job, tenantId: job.tenantId });
   const binding = latest && nativeProgressBinding(latest);
   if (!latest || !binding) return { handled: false, accepted: false };
   try {
@@ -3075,11 +3078,12 @@ const coreResultPublication = new CoreResultPublicationService({
     // the publication service has just revalidated owner and exact revision.
     const destination = new teamsApi.Client(origin.serviceUrl, teamsApp.api.http.clone({ timeout: 10_000 }));
     try {
-      const receipt = await destination.conversations.createActivity(origin.conversationId, {
+      const activity: IMessageActivityInput & Pick<IMessageActivity, 'from' | 'conversation' | 'channelId'> = {
         type: 'message', text: payload.text, textFormat: 'plain', channelId: 'msteams',
         from: { id: teamsApp.id, role: 'bot' }, replyToId: origin.originThreadId ?? origin.activityId,
         conversation: { id: origin.conversationId, conversationType: origin.conversationType, tenantId: origin.tenantId },
-      });
+      };
+      const receipt = await destination.conversations.createActivity(origin.conversationId, activity);
       if (!receipt || typeof receipt.id !== 'string' || !receipt.id.trim() || (receipt as any).error) throw new Error('RESULT_PUBLICATION_RECEIPT_UNVERIFIED');
       return { state: 'connector-accepted', activityId: receipt.id };
     } catch (error) {
@@ -4195,7 +4199,7 @@ async function preferredCoreJobActivity(job: CoreOrchestrationJob, scope: AgentJ
   const activity = createExecutionPresentationActivity(job, selection.mode, {
     ...coreOrchestrationCardOptions, richEnabled: Boolean(copilotUiArtifact), details: selection.details, richSurface: selection.richSurface,
   });
-  if (!channelsNativeRenderer || !scope.tenantId || !activity.attachments?.length) return activity;
+  if (!channelsNativeRenderer || !scope.tenantId || !('attachments' in activity) || !activity.attachments?.length) return activity;
   const identity = { jobId: job.id, ...(job.approval ? { approvalId: job.approval.approvalId } : {}) };
   const displayScope = { tenantId: scope.tenantId, requesterId: scope.requesterId, conversationId: scope.conversationId };
   const attachments = activity.attachments.map(attachment => {
@@ -4491,10 +4495,11 @@ async function handleCoreOrchestrationCardSubmission(activity: any, send: BotSen
     const scope = activityScope(activity);
     if (!scope) { await sendCoreOrchestrationActivity(send, coreOrchestrationErrorActivity('인증된 Teams 범위가 필요합니다.')); return; }
     try {
+      const jobId = String(value.jobId), action = value.action;
       assertApprovalIdentity(value);
       const result = await coreOrchestrationService.decideApproval(coreOrchestrationBotScope(activity, scope),
-        { jobId: String(value.jobId), approvalId: value.approvalId, revision: value.revision },
-        value.action === 'orchestration.approve' ? 'accept' : 'deny');
+        { jobId, approvalId: value.approvalId, revision: value.revision },
+        action === 'orchestration.approve' ? 'accept' : 'deny');
       await sendCoreOrchestrationActivity(send, result ? await mutationCoreJobActivity(result.job, scope)
         : coreOrchestrationErrorActivity('승인 작업을 찾을 수 없습니다.'));
     } catch (error) {

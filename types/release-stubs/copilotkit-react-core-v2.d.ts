@@ -14,12 +14,20 @@ export type RenderToolProps<S extends StandardSchemaV1> = {
 
 type Slot<Props> = ComponentType<Props> | string | Partial<Props>;
 type HiddenCompatibleSlot = Slot<HTMLAttributes<HTMLDivElement>>;
-type AssistantMessageProps = {
+type AssistantMessageProps = HTMLAttributes<HTMLDivElement> & {
+  message: Extract<Message, { role: 'assistant' }>; messages?: Message[]; isRunning?: boolean;
   markdownRenderer?: Slot<{content:string}>; toolbar?: HiddenCompatibleSlot;
 };
-type MessageViewProps = {
+type UserMessageProps = HTMLAttributes<HTMLDivElement> & {
+  message: Message & { role: 'user' }; toolbar?: HiddenCompatibleSlot;
+};
+export const CopilotChatUserMessage: ComponentType<UserMessageProps>;
+export const CopilotChatAssistantMessage: ComponentType<AssistantMessageProps>;
+type MessageViewProps = Omit<HTMLAttributes<HTMLDivElement>, 'children'> & {
   assistantMessage?: Slot<AssistantMessageProps>;
-  userMessage?: HiddenCompatibleSlot; reasoningMessage?: HiddenCompatibleSlot;
+  userMessage?: Slot<UserMessageProps>; reasoningMessage?: HiddenCompatibleSlot;
+  children?: (props: { isRunning: boolean; messages: Message[]; messageElements: ReactElement[];
+    interruptElement: ReactElement | null }) => ReactElement;
 };
 type SdkErrorEvent = { error: Error; code?: string; context?: Record<string, unknown> };
 export type CopilotKitProps = {
@@ -53,6 +61,7 @@ export type CopilotChatViewProps = HTMLAttributes<HTMLDivElement> & {
   messages?: Message[]; autoScroll?: boolean | 'pin-to-bottom' | 'pin-to-send' | 'none';
   isRunning?: boolean; welcomeScreen?: boolean;
   input?: Slot<CopilotChatInputProps>; messageView?: Slot<MessageViewProps>;
+  scrollView?: HiddenCompatibleSlot;
   inputValue?: string; onInputChange?: (value: string) => void;
   onSubmitMessage?: (value: string) => void; onStop?: () => void;
 };

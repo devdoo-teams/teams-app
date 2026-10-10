@@ -12,7 +12,7 @@ try {
   const fixture = path.join(temporary, 'contract.tsx');
   fs.writeFileSync(fixture, `
 import { HttpAgent, AbstractAgent } from '${root}/types/release-stubs/ag-ui-client.js';
-import { CopilotKit, CopilotChat, CopilotChatView, CopilotChatConfigurationProvider, useAgent, useRenderTool, useRenderToolCall } from '${root}/types/release-stubs/copilotkit-react-core-v2.js';
+import { CopilotKit, CopilotChat, CopilotChatView, CopilotChatConfigurationProvider, CopilotChatUserMessage, CopilotChatAssistantMessage, useAgent, useRenderTool, useRenderToolCall } from '${root}/types/release-stubs/copilotkit-react-core-v2.js';
 import { z } from 'zod';
 const agent = new HttpAgent({ agentId: 'execution-projection', url: 'https://synthetic.invalid/api/copilot-ui/agent/execution-projection/run' });
 agent.fetch = async () => Response.json({});
@@ -57,6 +57,17 @@ useRenderToolCall()({toolCall:{id:'tool',type:'function',function:{name:'showPro
 // @ts-expect-error A controlled composer supplies a string, never a caller-selected owner object.
 const invalidSubmit = <CopilotChatView onSubmitMessage={(value:{owner:string})=>{}} />;
 void visible; void invalidSubmit;
+const chronological = <CopilotChatView messageView={{
+  userMessage: CopilotChatUserMessage, assistantMessage: CopilotChatAssistantMessage,
+  children: ({messageElements}) => <div>{messageElements}</div>
+}} scrollView={{className:'history',onScroll:()=>{}}} />;
+const user = <CopilotChatUserMessage message={{id:'user',role:'user',content:'text'}} />;
+const assistant = <CopilotChatAssistantMessage message={{id:'assistant',role:'assistant',content:'text'}} markdownRenderer={Hidden} toolbar={Hidden} />;
+// @ts-expect-error User message slots cannot receive an assistant message.
+const wrongRole = <CopilotChatUserMessage message={{id:'bad',role:'assistant',content:'text'}} />;
+// @ts-expect-error The message-view render prop receives SDK elements, not caller authority.
+const wrongRender = <CopilotChatView messageView={{children:({owner}:{owner:string})=><div>{owner}</div>}} />;
+void chronological; void user; void assistant; void wrongRole; void wrongRender;
 `);
   const program = ts.createProgram([fixture], {
     strict: true, skipLibCheck: true, noEmit: true, jsx: ts.JsxEmit.ReactJSX,

@@ -115,7 +115,7 @@ export function CopilotConversationWorkspace({ initialJobId, client: suppliedCli
         {jobs.map(job => <option value={job.id} key={job.id}>{job.id} · {CORE_JOB_STATUS_LABELS[job.status]}</option>)}
       </select></label>
       {!loading && !error && selected ? <CopilotJobView key={selected} jobId={selected} autoLoad={true} onJobChange={setSelected} /> : null}
-      {!loading && !error && confirmedJob?.id === selected ? <CoreResultReview key={selected} job={confirmedJob} /> : null}
+      {!loading && !error && confirmedJob && confirmedJob.id === selected ? <CoreResultReview key={selected} job={confirmedJob} /> : null}
       {resultError ? <p role="alert">{resultError}</p> : null}
     </section>
   </ExecutionPresentationProvider>;

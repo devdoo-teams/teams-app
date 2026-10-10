@@ -46,7 +46,7 @@ export function createExecutionPresentationActivity(job: CoreOrchestrationJob, m
   if (!details.length) nested.push(text('선택된 상세 항목이 없습니다.'));
   const actions = [{type:'Action.ShowCard',title:'선택한 상세 펼치기 / 접기',card:{type:'AdaptiveCard',version:'1.6',body:nested}}, ...(baseCard?.actions ?? [])];
   const card: any = {type:'AdaptiveCard',$schema:'http://adaptivecards.io/schemas/adaptive-card.json',version:'1.6',msteams:{width:'Full'},
-    body:[text(mode==='text'?'업무 허브 · 채팅 중심':'Core 에이전트 작업 · 요약'),text(presentation.statusLabel),
+    body:[text('Core 에이전트 작업 · 요약'),text(presentation.statusLabel),
       text(presentation.result || presentation.summary,2000),...(presentation.error?[text(presentation.error,1000)]:[]),
       {type:'FactSet',facts:[{title:'작업 ID',value:job.id},{title:'상태',value:job.status}]}],actions};
   if(Buffer.byteLength(JSON.stringify(card))>26000) {
