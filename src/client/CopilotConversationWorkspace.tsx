@@ -33,7 +33,7 @@ export function CopilotConversationWorkspace({ initialJobId, client: suppliedCli
   return <ExecutionPresentationProvider>
     <a href={`/tabs/home/?view=core${selected ? `&jobId=${encodeURIComponent(selected)}` : ''}`}>개인 작업으로 돌아가기</a>
     <ExecutionPresentationDetailControls />
-    <section aria-label="CopilotKit 대화 작업 선택">
+    <section className="presentation-workspace-selector" aria-label="CopilotKit 대화 작업 선택">
       <button className="secondary" type="button" disabled={loading} onClick={() => { void loadJobs(); }}>개인 작업 목록 새로고침</button>
       {loading ? <p role="status">개인 작업을 불러오고 있습니다.</p> : null}
       {error ? <p role="alert">{error}</p> : null}

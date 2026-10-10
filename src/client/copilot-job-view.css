@@ -32,6 +32,8 @@
 .presentation-detail-controls { display:flex; flex-wrap:wrap; align-items:center; gap:12px; }
 .presentation-job-selector { display:grid; gap:6px; margin-bottom:16px; }
 @media (max-width: 600px) {
+  .presentation-workspace-selector > label { display: grid; gap: 6px; margin: 8px 0; }
+  .presentation-workspace-selector > label select { width: 100%; }
   .presentation-detail-controls { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; gap: 8px; }
   .presentation-detail-controls fieldset { display: grid; gap: 8px; border: 0; margin: 0; padding: 0; }
   .presentation-detail-controls fieldset label { display: flex; align-items: center; gap: 8px; }

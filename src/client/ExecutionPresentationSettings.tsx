@@ -87,7 +87,7 @@ export function ExecutionPresentationProvider({ children }: { children: ReactNod
   return <Context.Provider value={{ selection, available, loaded, busy, error, select, openRich }}>
     {children}
     {error ? <div className="presentation-settings-error" role="alert"><p>{error}</p>
-      <button type="button" disabled={busy} onClick={() => void load()}>설정 다시 불러오기</button></div> : null}
+      <button className="secondary" type="button" disabled={busy} onClick={() => void load()}>설정 다시 불러오기</button></div> : null}
   </Context.Provider>;
 }
 
@@ -121,7 +121,7 @@ export function ExecutionPresentationToolbar() {
         onClick={() => void state.select({ ...state.selection, mode })}>{presentationLabels[mode]}</button>)}
     </div>
     <ExecutionPresentationDetailControls />
-    <button type="button" disabled={disabled || !state.available.includes('rich')} onClick={() => state.openRich()}>CopilotKit 대화 열기</button>
+    <button className="secondary" type="button" disabled={disabled || !state.available.includes('rich')} onClick={() => state.openRich()}>CopilotKit 대화 열기</button>
     {!state.loaded ? <p role="status">표시 설정을 불러오는 중입니다.</p> : !state.available.includes('rich') ? <p>현재 CopilotKit 대화는 준비되지 않았습니다. 채팅·요약 카드는 사용할 수 있습니다.</p> : null}
     <p className="presentation-mandatory-note">실패·승인 필요·취소 상태는 상세를 꺼도 표시합니다.</p>
   </section>;
