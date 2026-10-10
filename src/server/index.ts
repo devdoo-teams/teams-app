@@ -4202,7 +4202,7 @@ async function preferredCoreJobActivity(job: CoreOrchestrationJob, scope: AgentJ
   if (!channelsNativeRenderer || !scope.tenantId || !('attachments' in activity) || !activity.attachments?.length) return activity;
   const identity = { jobId: job.id, ...(job.approval ? { approvalId: job.approval.approvalId } : {}) };
   const displayScope = { tenantId: scope.tenantId, requesterId: scope.requesterId, conversationId: scope.conversationId };
-  const attachments = activity.attachments.map(attachment => {
+  const renderAttachment = (attachment: CoreOrchestrationTeamsActivity['attachments'][number]) => {
     if (attachment.contentType !== 'application/vnd.microsoft.card.adaptive') return attachment;
     const card = attachment.content as Parameters<typeof channelsNativeRenderer.render>[0]['card'];
     // These are display allowlists taken solely from our server-created card;
@@ -4221,7 +4221,9 @@ async function preferredCoreJobActivity(job: CoreOrchestrationJob, scope: AgentJ
     const rendered = channelsNativeRenderer.render({ card, identity, scope: displayScope, actionGrants,
       kind: job.status === 'awaiting_approval' ? 'approval' : job.status === 'failed' ? 'error' : 'result' });
     return rendered.status === 'faithful' ? { ...attachment, content: rendered.card } : attachment;
-  });
+  };
+  const [firstAttachment, ...rest] = activity.attachments;
+  const attachments = [renderAttachment(firstAttachment), ...rest.map(renderAttachment)] as const;
   return { ...activity, attachments };
 }
 

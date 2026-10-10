@@ -1,0 +1,13 @@
+.job-conversation-history { min-width: 0; overflow-wrap: anywhere; }
+.job-conversation-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+.job-conversation-controls button, .job-conversation-history summary { min-height: 44px; }
+.job-conversation-reader { max-height: min(70vh, 720px); overflow-y: auto; overflow-anchor: none; overscroll-behavior-y: contain; min-width: 0; scrollbar-gutter: stable; }
+.job-conversation-reader:focus-visible { outline: 3px solid #5b5fc7; outline-offset: 2px; }
+.job-conversation-reader .work-item-list { margin: 0; }
+.job-conversation-reader .work-item-card, .job-conversation-reader .work-item-meta { min-width: 0; overflow-wrap: anywhere; }
+.job-conversation-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+.job-conversation-reader .presentation-image-row img { width: auto; height: auto; max-width: 100%; object-fit: contain; }
+@media (max-width: 600px) {
+  .job-conversation-controls { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .job-conversation-controls button { width: 100%; }
+}
