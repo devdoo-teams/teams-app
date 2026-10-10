@@ -250,6 +250,15 @@ for (const platform of ['darwin', 'linux', 'win32'] as const) {
   const throughBoth = await new ProviderNeutralAgentRunner({ runner: receiptCli }).run(receiptOptions);
   assert.deepEqual(throughBoth.executionReceipt, receipt, 'platform-only receipt survives both adapters');
 }
+const invocation = { source: 'worker-cli-invocation' as const, observedAt: '2026-10-10T00:00:00.000Z', modelArgument: 'argument-model', reasoningEffortArgument: 'xhigh' as const, cliVersionStatus: 'observed' as const, cliVersion: 'codex-cli 99.0.0-fixture' };
+const providerObserved = { source: 'worker-observation' as const, observedAt: '2026-10-10T00:00:01.000Z', model: 'provider-model', reasoningEffort: 'high' as const };
+injectedResult = { finalMessage: 'synthetic result', eventCount: 0, cliInvocationReceipt: invocation, executionReceipt: providerObserved };
+const launchThroughBoth = await new ProviderNeutralAgentRunner({ runner: receiptCli }).run(receiptOptions);
+assert.deepEqual(launchThroughBoth.cliInvocationReceipt, invocation, 'both adapters preserve launch metadata independently');
+assert.notEqual(launchThroughBoth.cliInvocationReceipt, invocation, 'launch metadata is detached');
+assert.deepEqual(launchThroughBoth.executionReceipt, providerObserved, 'provider observations remain separate from requested/launch models');
+injectedResult = { finalMessage: 'synthetic result', eventCount: 0, cliInvocationReceipt: { ...invocation, secret: 'never-disclose' } as any };
+await assert.rejects(new ProviderNeutralAgentRunner({ runner: receiptCli }).run(receiptOptions), /CLI invocation receipt is invalid/);
 for (const invalid of [
   null, { source: 'selected-config', observedAt: '2026-10-09T03:18:05.035Z', platform: 'darwin' },
   { source: 'worker-observation', observedAt: 'invalid', platform: 'darwin' },

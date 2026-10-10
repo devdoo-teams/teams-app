@@ -25,6 +25,7 @@ import { redactSensitiveText, redactSensitiveValue } from './sensitive-text.js';
 import { isAgentTokenUsage, parseCodexTokenUsage, type AgentTokenUsage } from './agent-token-usage.js';
 import { assertSafeCodexModelSelection } from './codex-model-catalog.js';
 import { maskAgentToolOutput } from './agent-tool-execution.js';
+import { cliInvocationReceiptFromArguments, observeCodexCliVersion } from './agent-cli-invocation-receipt.js';
 import type { CoreCodexModelSelection } from '../shared/core-orchestration.js';
 import { assertTeamsCliAgentEnvironment, assertTeamsCliAgentPrefix, assertTeamsCliAgentSelection, TEAMS_CLI_AGENT_MODEL_ARGS } from '../shared/teams-cli-agent-policy.js';
 
@@ -52,6 +53,7 @@ export interface CodexRunEvent {
 }
 
 export interface CodexRunResult {
+  cliInvocationReceipt?: import('../shared/core-orchestration.js').CoreCliInvocationReceipt;
   executionReceipt?: import('../shared/core-orchestration.js').CoreExecutionReceipt;
   threadId?: string;
   finalMessage: string;
@@ -257,6 +259,7 @@ type ProtocolState = 'thread' | 'turn' | 'items' | 'message' | 'completed';
 
 export class CodexRunner {
   private readonly processes = new Map<string, RunningCodexProcess>();
+  private readonly preparations = new Map<string, AbortController>();
 
   constructor(private readonly runnerOptions: CodexRunnerOptions = {}) {}
 
@@ -272,8 +275,21 @@ export class CodexRunner {
     timeoutMs?: number;
     signal?: AbortSignal;
     onEvent?: (event: CodexRunEvent) => Promise<void> | void;
+    onInvocationReceipt?: (receipt: import('../shared/core-orchestration.js').CoreCliInvocationReceipt) => Promise<void> | void;
     selection?: CoreCodexModelSelection;
   }): Promise<CodexRunResult> {
+    if (this.preparations.has(options.jobId) || this.processes.has(options.jobId)) throw new Error('Codex job is already running.');
+    const preparation = new AbortController();
+    this.preparations.set(options.jobId, preparation);
+    const signal = options.signal ? AbortSignal.any([options.signal, preparation.signal]) : preparation.signal;
+    try {
+      return await this.runPrepared({ ...options, signal });
+    } finally {
+      if (this.preparations.get(options.jobId) === preparation) this.preparations.delete(options.jobId);
+    }
+  }
+
+  private async runPrepared(options: Parameters<CodexRunner['run']>[0] & { signal: AbortSignal }): Promise<CodexRunResult> {
     assertTeamsCliAgentEnvironment(process.env);
     assertTeamsCliAgentEnvironment(options.environmentOverrides);
     assertTeamsCliAgentSelection(options.selection);
@@ -327,6 +343,12 @@ export class CodexRunner {
       detached: platform === 'posix',
       stdio: ['ignore', 'pipe', 'pipe'],
     };
+
+    const cliVersion = await observeCodexCliVersion(command, prefixArgs, { cwd: options.workspace, env: environment, signal: options.signal });
+    const cliInvocationReceipt = cliInvocationReceiptFromArguments(args, cliVersion);
+    if (options.signal.aborted) throw new Error('Codex 작업이 취소되었습니다.');
+    await options.onInvocationReceipt?.({ ...cliInvocationReceipt });
+    if (options.signal.aborted) throw new Error('Codex 작업이 취소되었습니다.');
 
     let child: ChildProcess;
     if (options.mode === 'read-only') {
@@ -657,6 +679,7 @@ export class CodexRunner {
         finalMessage,
         eventCount,
         // The actual process host is observed; CLI selection is not actual model evidence.
+        cliInvocationReceipt,
         ...(['darwin', 'linux', 'win32'].includes(process.platform) ? { executionReceipt: {
           source: 'worker-observation' as const,
           observedAt: new Date().toISOString(),
@@ -681,12 +704,18 @@ export class CodexRunner {
 
   cancel(jobId: string): boolean {
     const runningProcess = this.processes.get(jobId);
-    if (!runningProcess) return false;
+    if (!runningProcess) {
+      const preparing = this.preparations.get(jobId);
+      if (!preparing) return false;
+      preparing.abort();
+      return true;
+    }
     runningProcess.terminate(new Error('Codex 작업이 취소되었습니다.'));
     return true;
   }
 
   close(): void {
+    for (const preparation of this.preparations.values()) preparation.abort();
     for (const runningProcess of this.processes.values()) {
       runningProcess.terminate(new Error('Codex 서버가 종료 중입니다.'));
     }

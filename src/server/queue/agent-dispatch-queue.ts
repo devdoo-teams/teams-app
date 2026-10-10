@@ -65,6 +65,7 @@ export type AgentDispatchTaskReference = Readonly<
 >;
 
 export type AgentDispatchCheckpoint = Readonly<{
+  cliInvocationReceipt?: import('../../shared/core-orchestration.js').CoreCliInvocationReceipt;
   sequence: number;
   message: string;
   recordedAt?: string;
@@ -73,6 +74,7 @@ export type AgentDispatchCheckpoint = Readonly<{
 }>;
 
 export type AgentDispatchCompletionReceipt = Readonly<{
+  cliInvocationReceipt?: import('../../shared/core-orchestration.js').CoreCliInvocationReceipt;
   result: string;
   providerExecutionId: string;
   completedAt?: string;

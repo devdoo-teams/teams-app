@@ -271,6 +271,7 @@ function createQueueExecutionDispatcher(
           providerExecutionId: record.receipt?.providerExecutionId,
           ...(record.receipt?.tokenUsage ? { tokenUsage: record.receipt.tokenUsage } : {}),
           ...(record.receipt?.executionReceipt ? { executionReceipt: record.receipt.executionReceipt } : {}),
+          ...(record.receipt?.cliInvocationReceipt || record.checkpoint?.cliInvocationReceipt ? { cliInvocationReceipt: record.receipt?.cliInvocationReceipt ?? record.checkpoint?.cliInvocationReceipt } : {}),
           ...(tools?.length ? { tools } : {}),
         };
       }

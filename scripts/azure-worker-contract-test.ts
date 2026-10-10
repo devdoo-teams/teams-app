@@ -28,14 +28,20 @@ import {
   type AzureQueueClientPort,
 } from '../src/server/azure-agent-dispatch-queue.js';
 import type { AgentDispatchTaskReference } from '../src/server/queue/agent-dispatch-queue.js';
+import type { CoreCliInvocationReceipt } from '../src/shared/core-orchestration.js';
 
 async function testWorkerCompletionDuplicateAndError(): Promise<void> {
   const fixture = createFixture();
   await fixture.queue.enqueue(task('task-success'));
   let executions = 0;
   const worker = new AzureCodexWorker(fixture.queue, {
-    start: async () => {
+    start: async (_task, context) => {
       executions += 1;
+      const invocation: CoreCliInvocationReceipt = { source: 'worker-cli-invocation', observedAt: '2026-10-10T00:00:00.000Z', modelArgument: 'fixture-argument-model', reasoningEffortArgument: 'xhigh', cliVersionStatus: 'observed', cliVersion: 'codex-cli 99.0.0-fixture' };
+      await context.checkpoint('CLI invocation prepared', [], invocation);
+      assert.deepEqual((await fixture.queue.observe(reference(task('task-success'))))?.checkpoint?.cliInvocationReceipt, invocation, 'launch metadata is durable before worker execution');
+      await context.checkpoint('next event');
+      assert.deepEqual((await fixture.queue.observe(reference(task('task-success'))))?.checkpoint?.cliInvocationReceipt, invocation, 'ordinary heartbeats preserve immutable launch metadata');
       return handle(Promise.resolve({
         result: 'worker result',
         providerExecutionId: 'exec-success',
@@ -53,6 +59,7 @@ async function testWorkerCompletionDuplicateAndError(): Promise<void> {
   const completed = await fixture.queue.observe(reference(task('task-success')));
   assert.equal(completed?.receipt?.result, 'worker result');
   assert.equal(completed?.receipt?.tokenUsage?.inputTokens, 5, 'worker completion persists measured usage');
+  assert.equal(completed?.receipt?.cliInvocationReceipt?.modelArgument, 'fixture-argument-model', 'completion retains checkpoint launch metadata');
 
   fixture.client.inject(fixture.client.sent[0]);
   assert.equal(await worker.runOnce(), 'duplicate');
@@ -236,6 +243,7 @@ async function testWorkerCompositionPreservesModeAndPrivateCodexHome(): Promise<
     await fs.mkdir(agentCodexHome, { mode: 0o700 });
     await fs.writeFile(executable, [
       '#!/bin/sh',
+      'if [ "$1" = "--version" ]; then printf "%s\\n" "codex-cli 99.0.0-fixture"; exit 0; fi',
       "printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"11111111-1111-4111-8111-111111111111\"}'",
       "printf '%s\\n' '{\"type\":\"turn.started\"}'",
       "printf '%s\\n' '{\"type\":\"item.started\",\"item\":{\"type\":\"command_execution\",\"command\":\"/usr/bin/git status --token must-not-persist\"}}'",

@@ -2,7 +2,7 @@ import type { CoreOrchestrationJob } from './core-orchestration.js';
 import { isAgentTokenUsage } from './token-usage-validation.js';
 
 export type ReceiptFact = Readonly<{ label: string; value: string }>;
-type ReceiptInput = Pick<CoreOrchestrationJob, 'provider' | 'model' | 'reasoningEffort' | 'executionReceipt' | 'tokenUsage'>;
+type ReceiptInput = Pick<CoreOrchestrationJob, 'provider' | 'model' | 'reasoningEffort' | 'executionReceipt' | 'cliInvocationReceipt' | 'tokenUsage'>;
 const count = (value: number): string => String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 const unknownObservation = '확인되지 않음 (worker 관측 없음)';
 
@@ -16,6 +16,10 @@ export function projectReceiptFacts(job: ReceiptInput): readonly ReceiptFact[] {
     { label: '실제 모델', value: receipt?.model ?? unknownObservation },
     { label: '선택 추론 수준', value: job.reasoningEffort ?? 'CLI 기본값' },
     { label: '실제 추론 수준', value: receipt?.reasoningEffort ?? unknownObservation },
+    { label: '실행 인자 모델', value: job.cliInvocationReceipt?.modelArgument ?? '수집되지 않음' },
+    { label: '실행 인자 추론 수준', value: job.cliInvocationReceipt?.reasoningEffortArgument ?? '수집되지 않음' },
+    { label: 'CLI 버전', value: job.cliInvocationReceipt?.cliVersion ?? '확인되지 않음' },
+    { label: '실행 인자 관측 시각', value: job.cliInvocationReceipt?.observedAt ?? '수집되지 않음' },
     { label: '전송 모델', value: '수집되지 않음' },
     { label: '전송 추론 수준', value: '수집되지 않음' },
     { label: '응답 ID', value: '수집되지 않음' },

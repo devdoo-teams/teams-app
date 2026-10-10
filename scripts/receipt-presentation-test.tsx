@@ -14,6 +14,7 @@ import { CoreJobCardPages } from '../src/server/core-job-card-pages.js';
 const job: CoreOrchestrationJob = {
   id: 'synthetic-receipt', provider: 'codex', prompt: 'synthetic request', mode: 'read-only', status: 'completed',
   progress: [], result: 'synthetic result', createdAt: '2026-10-06T00:00:00.000Z', model: 'selected-A', reasoningEffort: 'high',
+  cliInvocationReceipt: { source: 'worker-cli-invocation', observedAt: '2026-10-10T00:00:00.000Z', modelArgument: 'argument-B', reasoningEffortArgument: 'xhigh', cliVersionStatus: 'observed', cliVersion: 'codex-cli 99.0.0-fixture' },
   executionReceipt: { source: 'worker-observation', observedAt: '2026-10-06T00:01:00.000Z', model: 'observed-C', platform: 'darwin' },
   tokenUsage: { source: 'codex.exec.jsonl.turn.completed.usage', inputTokens: 0, cachedInputTokens: 0, outputTokens: 24, reasoningOutputTokens: 24 },
 };
@@ -32,6 +33,7 @@ async function surfaces(current: CoreOrchestrationJob) {
 const rendered = await surfaces(job);
 const expected = [
   ['선택 모델', 'selected-A'], ['실제 모델', 'observed-C'], ['선택 추론 수준', 'high'],
+  ['실행 인자 모델', 'argument-B'], ['실행 인자 추론 수준', 'xhigh'], ['CLI 버전', 'codex-cli 99.0.0-fixture'], ['실행 인자 관측 시각', '2026-10-10T00:00:00.000Z'],
   ['실제 추론 수준', '확인되지 않음 (worker 관측 없음)'], ['전송 모델', '수집되지 않음'],
   ['전송 추론 수준', '수집되지 않음'], ['응답 ID', '수집되지 않음'], ['관측 출처', 'worker-observation'],
   ['관측 시각', '2026-10-06T00:01:00.000Z'], ['사용량 출처', 'codex.exec.jsonl.turn.completed.usage'],
@@ -44,7 +46,7 @@ for (const [label, value] of expected) {
     assert.ok(html.includes(`<strong>${label}:</strong> ${value}`), `same job associates ${label}=${value} on both React surfaces`);
   }
 }
-const missing = { ...job, executionReceipt: undefined, tokenUsage: undefined };
+const missing = { ...job, executionReceipt: undefined, cliInvocationReceipt: undefined, tokenUsage: undefined };
 const unavailable = await surfaces(missing);
 for (const html of [unavailable.tab, unavailable.conversation]) {
   assert.ok(html.includes('확인되지 않음 (worker 관측 없음)'));

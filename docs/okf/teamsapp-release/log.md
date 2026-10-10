@@ -1,5 +1,11 @@
 # TeamsApp release knowledge update log
 
+## 2026-10-10 — MP377 safe CLI launch metadata
+
+* **Official contract**: current Codex non-interactive documentation, installed0.162.0-alpha.2 help and pinned exec event schema; see [launch metadata concept](cli-launch-metadata.md).
+* **RED/GREEN**: controlled CLI execution first fails because the durable launch receipt is absent before spawn. Whitelisted final argument/version observation, immutable reload, ownership, prompt separation, adapter/worker preservation and preparation cancellation are independently checked. Provider model/effort remain distinct and are never filled from arguments.
+* **Boundary**: current133 process/tunnel and historical receipts remain intact. New candidate, remote checks, live CLI and all Teams/native/mobile gates require their own matching evidence. The Mac foreground remains released; no auth or permission expansion and no Jira Done or Teams completion.
+
 ## 2026-10-09 — MP364 command terminal observation
 
 * Actual signed/pinned CLI raw item_1 completed/exit0/output17,25,42 was lost in sanitizer, production adapters and same-length tool persistence. See [command terminal concept](codex-command-terminal-observation.md).

@@ -63,6 +63,7 @@ export function createWorkerExecutor(options: {
           jobId: task.taskId,
         },
         selection,
+        onInvocationReceipt: (receipt) => context.checkpoint('CLI invocation prepared', [], receipt),
         onEvent: async (event) => {
           if (event.type) await context.checkpoint(event.type, observeCodexToolUsage(event));
         },
@@ -73,6 +74,7 @@ export function createWorkerExecutor(options: {
           providerExecutionId: outcome.threadId,
           ...(outcome.tokenUsage ? { tokenUsage: outcome.tokenUsage } : {}),
           ...(outcome.executionReceipt ? { executionReceipt: outcome.executionReceipt } : {}),
+          ...(outcome.cliInvocationReceipt ? { cliInvocationReceipt: outcome.cliInvocationReceipt } : {}),
         };
       }).finally(() => context.signal.removeEventListener('abort', propagateAbort));
       return {

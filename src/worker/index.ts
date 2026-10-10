@@ -22,6 +22,7 @@ import {
 } from '../server/azure-agent-dispatch-queue.js';
 
 export type WorkerExecutionResult = Readonly<{
+  cliInvocationReceipt?: import('../shared/core-orchestration.js').CoreCliInvocationReceipt;
   result: string;
   providerExecutionId: string;
   tokenUsage?: CoreAgentTokenUsage;
@@ -37,7 +38,7 @@ export type WorkerExecutionHandle = Readonly<{
 export interface WorkerExecutionPort {
   start(task: AgentDispatchTask, context: {
     signal: AbortSignal;
-    checkpoint(message: string, tools?: readonly CoreAgentToolUsage[]): Promise<void>;
+    checkpoint(message: string, tools?: readonly CoreAgentToolUsage[], cliInvocationReceipt?: import('../shared/core-orchestration.js').CoreCliInvocationReceipt): Promise<void>;
   }): Promise<WorkerExecutionHandle>;
 }
 
@@ -86,13 +87,13 @@ export class AzureCodexWorker {
     const cancellation = new Promise<'cancelled' | 'lease-lost'>((resolve) => {
       wake = () => resolve(wakeReason);
     });
-    const renew = (message: string, tools: readonly CoreAgentToolUsage[] = []): Promise<void> => {
+    const renew = (message: string, tools: readonly CoreAgentToolUsage[] = [], cliInvocationReceipt?: import('../shared/core-orchestration.js').CoreCliInvocationReceipt): Promise<void> => {
       const operation = renewalChain.then(async () => {
         sequence += 1;
         observedTools = mergeObservedToolUsage(observedTools, tools);
         lease = await this.queue.heartbeat(
           lease,
-          { sequence, message, ...(observedTools.length > 0 ? { tools: observedTools } : {}) },
+          { sequence, message, ...(observedTools.length > 0 ? { tools: observedTools } : {}), ...(cliInvocationReceipt ? { cliInvocationReceipt } : {}) },
           this.visibilityTimeoutSeconds,
         );
       });

@@ -45,6 +45,7 @@ class TestIsolationProvider extends AgentIsolationProvider {
 }
 
 const fakeSource = `#!${process.execPath}
+if (process.argv.at(-1) === '--version') { console.log('codex-cli 99.0.0-fixture'); process.exit(0); }
 const caseName = process.argv.at(-1)?.match(/CASE:([a-z0-9-]+)/i)?.[1] ?? 'success';
 const emit = (event) => console.log(JSON.stringify(event));
 if (caseName === 'stderr') {

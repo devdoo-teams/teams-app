@@ -412,7 +412,7 @@ try {
     timeoutMs: 1_000,
     onEvent: (event) => { codexEvents.push(event); },
   });
-  const { executionReceipt, ...codexResultWithoutReceipt } = codexResult;
+  const { executionReceipt, cliInvocationReceipt, ...codexResultWithoutReceipt } = codexResult;
   assert.deepEqual(codexResultWithoutReceipt, {
     provider: 'codex',
     sessionId,
@@ -424,6 +424,8 @@ try {
   assert.ok(executionReceipt?.observedAt && new Date(executionReceipt.observedAt).toISOString() === executionReceipt.observedAt);
   assert.equal(executionReceipt?.model, undefined, 'CLI model selection is not an observed model');
   assert.equal(executionReceipt?.reasoningEffort, undefined, 'CLI effort selection is not observed effort');
+  assert.equal(cliInvocationReceipt?.modelArgument, 'gpt-6-luna');
+  assert.equal(cliInvocationReceipt?.reasoningEffortArgument, 'xhigh');
   assert.deepEqual(codexEvents.map((event) => event.type), [
     'session.started',
     'turn.started',

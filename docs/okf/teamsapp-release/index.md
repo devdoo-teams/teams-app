@@ -8,6 +8,8 @@ okf_version: 0.2
 
 ## Concepts
 
+* [Safe CLI launch metadata](cli-launch-metadata.md) - MP377 immutable prelaunch model/effort/version, provider observations kept separate, cancellation and privacy gates
+
 * [Fixed Luna CLI and saved execution views](luna-and-execution-presentation.md) - MP368/369 fixed Teams-only launcher policy, real optional OSS SDK and independent live gates
 
 * [Worker receipt adapter propagation](worker-receipt-adapter-propagation.md) - MP366 source/time/platform transport, shape versus authenticity and hash-bound RED/GREEN

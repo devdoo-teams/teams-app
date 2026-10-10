@@ -23,6 +23,7 @@ import { isAgentTokenUsage, parseCodexTokenUsage, type AgentTokenUsage } from '.
 import type { CoreCodexModelSelection, CoreAgentToolExecution, CoreExecutionReceipt } from '../shared/core-orchestration.js';
 import { observeCodexToolUsage } from './agent-tool-observation.js';
 import { readExecutionReceipt } from './agent-execution-receipt.js';
+import { readCliInvocationReceipt } from './agent-cli-invocation-receipt.js';
 import { assertTeamsCliAgentProvider } from '../shared/teams-cli-agent-policy.js';
 import {
   ghcpCliCommandFromEnvironment,
@@ -47,6 +48,7 @@ export type CliAgentLifecycleEvent = Readonly<{
 }>;
 
 export type CliAgentRunResult = Readonly<{
+  cliInvocationReceipt?: import('../shared/core-orchestration.js').CoreCliInvocationReceipt;
   provider: CliAgentProvider;
   sessionId?: string;
   finalResult: string;
@@ -74,6 +76,7 @@ export type CliAgentRunOptions = Readonly<{
   environmentOverrides?: Record<string, string>;
   selection?: CoreCodexModelSelection;
   onEvent?: (event: CliAgentLifecycleEvent) => Promise<void> | void;
+  onInvocationReceipt?: (receipt: import('../shared/core-orchestration.js').CoreCliInvocationReceipt) => Promise<void> | void;
 }>;
 
 export type CliAgentRunnerOptions = Readonly<{
@@ -350,12 +353,14 @@ export class CliAgentRunner {
         selection: runOptions.selection,
         timeoutMs: normalizedTimeout(runOptions.timeoutMs),
         signal: runOptions.signal,
+        onInvocationReceipt: runOptions.onInvocationReceipt,
         onEvent: async (event) => {
           const normalized = normalizeCodexEvent(event);
           if (normalized) await runOptions.onEvent?.(normalized);
         },
       });
       const executionReceipt = readExecutionReceipt(result.executionReceipt);
+      const cliInvocationReceipt = readCliInvocationReceipt(result.cliInvocationReceipt);
       return {
         provider: 'codex',
         sessionId: result.threadId,
@@ -363,6 +368,7 @@ export class CliAgentRunner {
         eventCount: result.eventCount,
         ...(result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
         ...(executionReceipt ? { executionReceipt } : {}),
+        ...(cliInvocationReceipt ? { cliInvocationReceipt } : {}),
       };
     }
     if (runOptions.sessionId && !SESSION_ID_PATTERN.test(runOptions.sessionId)) {

@@ -625,6 +625,7 @@ export class AgentService {
     const status = observation.status === 'quarantined' ? 'failed' : observation.status;
     if (isTerminalJob(job) && !isTerminalStatus(status)) return job;
     const update: Partial<AgentJob> = { status };
+    if (observation.cliInvocationReceipt) update.cliInvocationReceipt = observation.cliInvocationReceipt;
     // Legacy jobs have no reliable notify intent; only newly persisted intent enables cards.
     if (observation.tools?.length) {
       update.tools = mergeObservedToolUsage(job.tools ?? [], observation.tools);
@@ -926,9 +927,8 @@ export class AgentService {
           throw new Error(`${this.agentLabel} 서버가 종료 중이어서 작업 실행을 시작하지 않았습니다.`);
         }
 
-        // Start the runner while the mutation lock is held. CodexRunner registers
-        // the child process synchronously, so a concurrent cancel can reliably
-        // signal it after this lock is released.
+        // Register the runner's cancellable preparation while holding the lock.
+        // Persist launch metadata after releasing it and before spawning the CLI.
         const runner = this.runnerFor(this.providerForJob(started));
         runPromise = runner.run({
           jobId: started.id,
@@ -946,6 +946,11 @@ export class AgentService {
           environmentOverrides: executionWorkspace?.environmentOverrides,
           ...(jobSelection(started) ? { selection: jobSelection(started) } : {}),
           onEvent: (event) => this.handleEvent(started, progressState!.generation, event),
+          onInvocationReceipt: (receipt) => this.withJobMutationLock(started.id, scope, async () => {
+            const current = this.store.get(started.id, scope);
+            if (this.closing || !current || current.status !== 'running') throw new Error('CLI launch was cancelled before invocation.');
+            await this.store.update(started.id, scope, { cliInvocationReceipt: receipt });
+          }),
         });
         // A cancellation can reject the runner before this execute loop reaches
         // the await below (for example while the initial Teams notification is
@@ -990,6 +995,7 @@ export class AgentService {
               result: retainBlockedAgentReport(result.finalMessage, [this.workspace, process.env.HOME, process.env.USERPROFILE]),
               ...(result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
               ...(result.executionReceipt ? { executionReceipt: result.executionReceipt } : {}),
+              ...(result.cliInvocationReceipt ? { cliInvocationReceipt: result.cliInvocationReceipt } : {}),
               ...(changedPaths ? { changedPaths } : {}),
               finishedAt: new Date().toISOString(),
             })
@@ -999,6 +1005,7 @@ export class AgentService {
               result: result.finalMessage,
               ...(result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
               ...(result.executionReceipt ? { executionReceipt: result.executionReceipt } : {}),
+              ...(result.cliInvocationReceipt ? { cliInvocationReceipt: result.cliInvocationReceipt } : {}),
               ...(changedPaths ? { changedPaths } : {}),
               finishedAt: new Date().toISOString(),
             });

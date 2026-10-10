@@ -1,6 +1,16 @@
 export const CORE_AGENT_PROMPT_MAX_LENGTH = 2_000;
 
 export type CoreExecutionEnvironment = 'local-macos' | 'local-linux' | 'local-windows' | 'external-worker';
+/** Local launch facts; these do not establish the provider's effective model. */
+export type CoreCliInvocationReceipt = Readonly<{
+  source: 'worker-cli-invocation';
+  observedAt: string;
+  modelArgument: string;
+  reasoningEffortArgument: CoreCodexReasoningEffort;
+  cliVersionStatus: 'observed' | 'unavailable';
+  cliVersion?: string;
+}>;
+
 /** Trusted worker observations, independent of immutable submission selections. */
 export type CoreExecutionReceipt = Readonly<{
   source: 'worker-observation';
@@ -73,6 +83,7 @@ export type CoreOrchestrationJob = Readonly<{
   /** Server-owned execution boundary; legacy jobs have no observed environment. */
   executionEnvironment?: CoreExecutionEnvironment;
   executionReceipt?: CoreExecutionReceipt;
+  cliInvocationReceipt?: CoreCliInvocationReceipt;
   idempotencyKey?: string;
   prompt: string;
   provider?: CoreOrchestrationProvider;

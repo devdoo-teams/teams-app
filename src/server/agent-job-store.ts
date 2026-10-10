@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { readCommandExecution } from './agent-tool-execution.js';
 import { readExecutionReceipt, sameExecutionReceipt } from './agent-execution-receipt.js';
+import { readCliInvocationReceipt, sameCliInvocationReceipt } from './agent-cli-invocation-receipt.js';
 import type { CoreExecutionReceipt } from '../shared/core-orchestration.js';
 import { CORE_AGENT_PROMPT_MAX_LENGTH } from '../shared/core-orchestration.js';
 
@@ -65,6 +66,7 @@ export type DurableAgentNotifications = {
 };
 
 export interface AgentJob {
+  cliInvocationReceipt?: import('../shared/core-orchestration.js').CoreCliInvocationReceipt;
   executionReceipt?: CoreExecutionReceipt;
   executionEnvironment?: CoreExecutionEnvironment;
   id: string;
@@ -373,6 +375,12 @@ export class AgentJobStore {
           throw new Error(field === 'executionEnvironment' ? 'agent job execution environment is immutable' : 'agent job Codex model selection is immutable');
         }
       }
+      if ('cliInvocationReceipt' in patch) {
+        const receipt = readCliInvocationReceipt(patch.cliInvocationReceipt);
+        const previous = this.jobs[index].cliInvocationReceipt;
+        if (previous && !sameCliInvocationReceipt(previous, receipt)) throw new Error('CLI invocation receipt is immutable');
+        updated.cliInvocationReceipt = receipt;
+      }
       if ('executionReceipt' in patch) {
         const receipt = readExecutionReceipt(patch.executionReceipt);
         const previous = this.jobs[index].executionReceipt;
@@ -546,6 +554,7 @@ function cloneAgentJob(job: AgentJob): AgentJob {
     ...(job.changedPaths ? { changedPaths: [...job.changedPaths] } : {}),
     ...(job.tokenUsage ? { tokenUsage: { ...job.tokenUsage } } : {}),
     ...(job.executionReceipt ? { executionReceipt: { ...job.executionReceipt } } : {}),
+    ...(job.cliInvocationReceipt ? { cliInvocationReceipt: { ...job.cliInvocationReceipt } } : {}),
   };
 }
 
@@ -751,6 +760,7 @@ function loadJob(
     ...(result.value ? { result: result.value } : {}),
     ...(tokenUsage ? { tokenUsage } : {}),
     ...(value.executionReceipt !== undefined ? { executionReceipt: readExecutionReceipt(value.executionReceipt) } : {}),
+    ...(value.cliInvocationReceipt !== undefined ? { cliInvocationReceipt: readCliInvocationReceipt(value.cliInvocationReceipt) } : {}),
     ...(commitHash.value ? { commitHash: commitHash.value } : {}),
     ...(commitMessage.value ? { commitMessage: commitMessage.value } : {}),
     ...(changedPaths.value ? { changedPaths: changedPaths.value } : {}),

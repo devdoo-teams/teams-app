@@ -1,5 +1,6 @@
 import { readCommandExecution } from './agent-tool-execution.js';
 import { readExecutionReceipt } from './agent-execution-receipt.js';
+import { readCliInvocationReceipt } from './agent-cli-invocation-receipt.js';
 import {
   CliAgentRunner,
   type CliAgentLifecycleEvent,
@@ -108,12 +109,14 @@ export class ProviderNeutralAgentRunner extends CodexRunner {
       throw new Error(`${this.provider} agent runner did not return a non-empty final result.`);
     }
     const executionReceipt = readExecutionReceipt(result.executionReceipt);
+    const cliInvocationReceipt = readCliInvocationReceipt(result.cliInvocationReceipt);
     return {
       threadId: result.sessionId ?? threadId,
       finalMessage: result.finalResult,
       eventCount: result.eventCount,
       ...(isAgentTokenUsage(result.tokenUsage) ? { tokenUsage: { ...result.tokenUsage } } : {}),
       ...(executionReceipt ? { executionReceipt } : {}),
+      ...(cliInvocationReceipt ? { cliInvocationReceipt } : {}),
     };
   }
 

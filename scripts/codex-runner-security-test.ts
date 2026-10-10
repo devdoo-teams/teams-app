@@ -44,6 +44,7 @@ class TestIsolationProvider extends AgentIsolationProvider {
 
 const provider = new TestIsolationProvider();
 const fakeSource = `#!${process.execPath}
+if (process.argv.at(-1) === '--version') { console.log('codex-cli 99.0.0-fixture'); process.exit(0); }
 const caseName = process.argv.at(-1)?.match(/CASE:([a-z0-9-]+)/i)?.[1] ?? 'success';
 const threadId = ${JSON.stringify(threadId)};
 const thread = () => console.log(JSON.stringify({ type: 'thread.started', thread_id: threadId }));

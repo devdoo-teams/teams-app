@@ -10,6 +10,7 @@ export type AgentExecutionObservation = Readonly<{
   tools?: readonly CoreAgentToolUsage[];
   tokenUsage?: CoreAgentTokenUsage;
   executionReceipt?: CoreExecutionReceipt;
+  cliInvocationReceipt?: import('../shared/core-orchestration.js').CoreCliInvocationReceipt;
 }>;
 
 /**

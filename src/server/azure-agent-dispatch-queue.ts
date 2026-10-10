@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { readExecutionReceipt } from './agent-execution-receipt.js';
+import { readCliInvocationReceipt, sameCliInvocationReceipt } from './agent-cli-invocation-receipt.js';
 import { isDeepStrictEqual } from 'node:util';
 
 import {
@@ -405,6 +406,7 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
     if (!Number.isInteger(checkpoint.sequence) || checkpoint.sequence < 0) throw new TypeError('checkpoint sequence is invalid');
     const message = sanitizeDiagnostic(checkpoint.message, 'checkpoint message', DIAGNOSTIC_FIELD_LIMITS.checkpoint);
     const tools = mergeObservedToolUsage([], checkpoint.tools ?? []);
+    const cliInvocationReceipt = readCliInvocationReceipt(checkpoint.cliInvocationReceipt);
     if (tools.length !== (checkpoint.tools?.length ?? 0)) {
       throw new TypeError('checkpoint tools must be unique bounded provider observations');
     }
@@ -412,6 +414,8 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
     const persisted = await this.compareAndSwap(canonicalTaskReference(lease.task), leaseIdentity(lease), (record) => {
       assertOwned(record, lease);
       if (isTerminalDispatchStatus(record.status)) throw new DispatchLeaseConflictError(lease.task.taskId);
+      const previousInvocation = record.checkpoint?.cliInvocationReceipt;
+      if (previousInvocation && cliInvocationReceipt && !sameCliInvocationReceipt(previousInvocation, cliInvocationReceipt)) throw new Error('CLI invocation receipt is immutable');
       return {
         ...record,
         checkpoint: {
@@ -419,6 +423,7 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
           message,
           recordedAt: this.now(),
           ...(tools.length > 0 ? { tools } : {}),
+          ...(cliInvocationReceipt || previousInvocation ? { cliInvocationReceipt: cliInvocationReceipt ?? previousInvocation } : {}),
         },
         leaseExpiresAt: new Date(this.clock.now().getTime() + visibilityTimeoutSeconds * 1_000).toISOString(),
         updatedAt: this.now(),
@@ -440,8 +445,11 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
     }
     const tokenUsage = receipt.tokenUsage ? Object.freeze({ ...receipt.tokenUsage }) : undefined;
     const executionReceipt = readExecutionReceipt(receipt.executionReceipt);
+    const cliInvocationReceipt = readCliInvocationReceipt(receipt.cliInvocationReceipt);
     await this.terminalUpdate(lease, (record) => {
       if (record.cancellationRequested) throw new Error('cancelled dispatch cannot be completed');
+      const invocation = cliInvocationReceipt ?? record.checkpoint?.cliInvocationReceipt;
+      if (record.checkpoint?.cliInvocationReceipt && !sameCliInvocationReceipt(record.checkpoint.cliInvocationReceipt, invocation)) throw new Error('CLI invocation receipt is immutable');
       return {
         ...record,
         status: 'completed',
@@ -451,6 +459,7 @@ export class AzureAgentDispatchQueue implements AgentDispatchQueue {
           completedAt: this.now(),
           ...(tokenUsage ? { tokenUsage } : {}),
           ...(executionReceipt ? { executionReceipt } : {}),
+          ...(invocation ? { cliInvocationReceipt: invocation } : {}),
         },
         error: undefined,
       };
@@ -982,6 +991,7 @@ function sanitizeRecordForResponse(value: AgentDispatchRecord): AgentDispatchRec
           DIAGNOSTIC_FIELD_LIMITS.checkpoint,
         ),
         recordedAt: value.checkpoint.recordedAt,
+        ...(value.checkpoint.cliInvocationReceipt !== undefined ? { cliInvocationReceipt: readCliInvocationReceipt(value.checkpoint.cliInvocationReceipt) } : {}),
         ...(mergeObservedToolUsage([], value.checkpoint.tools ?? []).length > 0
           ? { tools: mergeObservedToolUsage([], value.checkpoint.tools ?? []) }
           : {}),
@@ -1002,6 +1012,7 @@ function sanitizeRecordForResponse(value: AgentDispatchRecord): AgentDispatchRec
         completedAt: value.receipt.completedAt,
         ...(value.receipt.tokenUsage ? { tokenUsage: { ...value.receipt.tokenUsage } } : {}),
         ...(value.receipt.executionReceipt !== undefined ? { executionReceipt: readExecutionReceipt(value.receipt.executionReceipt) } : {}),
+        ...(value.receipt.cliInvocationReceipt !== undefined ? { cliInvocationReceipt: readCliInvocationReceipt(value.receipt.cliInvocationReceipt) } : {}),
       },
     } : {}),
     ...(value.error ? {
