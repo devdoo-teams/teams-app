@@ -231,13 +231,32 @@ try {
       method: 'POST',
       body: JSON.stringify(activity(command, emptyAllowlistMutations.baseUrl, suffix, 'runtime-user', 'runtime-tenant', conversationId)),
     });
-    assert.equal(blocked.response.status, 200, `${suffix} returns a safe bot response`);
+    assert.equal(blocked.response.status, 200, `${suffix} returns a safe bot response; body=${JSON.stringify(blocked.body)}; server=${emptyAllowlistMutations.output().slice(-4000)}`);
     assert.match(JSON.stringify(blocked.body), /운영자|권한|허용/, `${suffix} explains the operator restriction`);
     assert.equal(adaptiveCardFromActivity(blocked.body.activities?.[0])?.type, 'AdaptiveCard', `${suffix} returns an error card`);
   }
 } finally {
   await stopServer(emptyAllowlistMutations);
 }
+
+const legacyApproval = await startServer({ TEAMS_OPERATOR_REQUESTER_ALLOWLIST: 'runtime-tenant/runtime-user' }, {
+  initialAgentJobs: [{ id: 'task-legacy-approval', prompt: 'synthetic legacy approval', mode: 'workspace-write',
+    status: 'awaiting_approval', conversationId: 'runtime-legacy-approval', requesterId: 'runtime-user',
+    tenantId: 'runtime-tenant', progress: [], createdAt: '2026-08-09T00:00:00.000Z' }],
+});
+try {
+  const blocked = await request(legacyApproval.baseUrl, legacyApproval.token, '/api/messages', {
+    method: 'POST', body: JSON.stringify(activity('approve task-legacy-approval', legacyApproval.baseUrl,
+      'legacy-approve', 'runtime-user', 'runtime-tenant', 'runtime-legacy-approval')),
+  });
+  assert.equal(blocked.response.status, 200, `legacy approval is a safe message: ${JSON.stringify(blocked.body)}`);
+  assert.match(JSON.stringify(blocked.body), /이전 승인|최신 승인/);
+  assert.equal(adaptiveCardFromActivity(blocked.body.activities?.[0])?.type, 'AdaptiveCard');
+  const readBack = await request(legacyApproval.baseUrl, legacyApproval.token, '/api/debug/agent-jobs');
+  const job = readBack.body.jobs.find(candidate => candidate.id === 'task-legacy-approval');
+  assert.equal(job.status, 'awaiting_approval', 'legacy approval has no invented decision authority or execution');
+  assert.equal(job.durableApproval, undefined);
+} finally { await stopServer(legacyApproval); }
 
 const operatorScoped = await startServer({
   TEAMS_OPERATOR_REQUESTER_ALLOWLIST: 'runtime-tenant/allowed-user',

@@ -3727,6 +3727,9 @@ async function resolveGenUiAction(activity: any): Promise<GenUiEnvelopeV1> {
     if (error instanceof AgentJobConflictError) {
       return mutationConflictEnvelope(error);
     }
+    if (error instanceof CoreApprovalRecoveryError) {
+      return genUi.error('이전 승인 정보로는 실행할 수 없습니다. 개인 작업에서 최신 승인 상태를 확인하세요.', `action-${payload.entityId}-approval-unavailable`);
+    }
     console.error('GenUI action failed', error);
     return genUi.error('카드 액션을 처리하지 못했습니다. 잠시 후 다시 시도하세요.');
   } finally {
@@ -4835,6 +4838,11 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
     } catch (error) {
       if (error instanceof AgentMutationAuthorizationError) {
         await send(error.message, genUi.error(error.message, `approve-${approveMatch[1]}-forbidden`));
+        return;
+      }
+      if (error instanceof CoreApprovalRecoveryError) {
+        const message = '이전 승인 정보로는 실행할 수 없습니다. 개인 작업에서 최신 승인 상태를 확인하세요.';
+        await send(message, genUi.error(message, `approve-${approveMatch[1]}-approval-unavailable`));
         return;
       }
       if (!(error instanceof AgentJobConflictError)) throw error;

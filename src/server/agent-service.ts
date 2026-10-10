@@ -404,6 +404,7 @@ export class AgentService {
   }
 
   async approve(id: string, scope: AgentJobScope): Promise<AgentJob | undefined> {
+    this.assertMutationAllowed(scope);
     const job = this.store.get(id, scope);
     if (!job) return undefined;
     if (job.status !== 'awaiting_approval') throw new AgentJobConflictError('approve', snapshotAgentJob(job));
