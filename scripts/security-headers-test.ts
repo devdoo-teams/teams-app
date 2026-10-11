@@ -13,5 +13,6 @@ assert.match(headers['Content-Security-Policy'], /https:\/\/\*\.teams\.microsoft
 assert.match(headers['Content-Security-Policy'], /https:\/\/\*\.cloud\.microsoft/);
 assert.match(headers['Content-Security-Policy'], /object-src 'none'/);
 assert.match(headers['Content-Security-Policy'], /script-src 'self'/);
+assert.match(headers['Content-Security-Policy'], /connect-src 'self' https: wss: blob:/);
 
 console.log('PASS: Teams-compatible security headers preserve iframe embedding and disable fingerprinting');

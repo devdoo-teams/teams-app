@@ -54,6 +54,25 @@ function getSessionStorage(): Storage | undefined {
   }
 }
 
+function isLocalBrowserPreviewOrigin(value: string | URL): boolean {
+  try {
+    const url = new URL(value.toString());
+    return (url.protocol === 'http:' || url.protocol === 'https:')
+      && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function removeLocalAccessTokenFragment(): void {
+  if (typeof window === 'undefined') return;
+  window.history.replaceState(
+    window.history.state,
+    document.title,
+    `${window.location.pathname}${window.location.search}`,
+  );
+}
+
 export function captureLocalAccessTokenFromFragment(): void {
   if (typeof window === 'undefined') return;
 
@@ -64,6 +83,10 @@ export function captureLocalAccessTokenFromFragment(): void {
 
   const token = new URLSearchParams(fragment).get(LOCAL_ACCESS_TOKEN_FRAGMENT_KEY)?.trim();
   if (!token) return;
+  if (!isLocalBrowserPreviewOrigin(window.location.href)) {
+    removeLocalAccessTokenFragment();
+    return;
+  }
   localAccessTokenCache = token;
 
   try {
@@ -75,11 +98,7 @@ export function captureLocalAccessTokenFromFragment(): void {
 
   // A fragment is not sent in HTTP requests, but remove it immediately so
   // screenshots, copied URLs, and browser history do not retain the secret.
-  window.history.replaceState(
-    window.history.state,
-    document.title,
-    `${window.location.pathname}${window.location.search}`,
-  );
+  removeLocalAccessTokenFragment();
 }
 
 captureLocalAccessTokenFromFragment();
@@ -96,7 +115,7 @@ function localAccessTokenForSameOrigin(input: RequestInfo | URL = '/api/health')
   } catch {
     return undefined;
   }
-  if (target.origin !== window.location.origin) return undefined;
+  if (!isLocalBrowserPreviewOrigin(window.location.href) || target.origin !== window.location.origin) return undefined;
 
   const token = getSessionStorage()?.getItem(LOCAL_ACCESS_TOKEN_STORAGE_KEY)?.trim();
   return token || localAccessTokenCache || undefined;
@@ -122,9 +141,7 @@ export function enableLocalBrowserPreviewAuth(): boolean {
   }
 
   const explicitlyRequested = ['1', 'true'].includes(previewUrl.searchParams.get('preview') ?? '');
-  const isLoopback = ['localhost', '127.0.0.1', '[::1]'].includes(previewUrl.hostname);
-  const isHttp = previewUrl.protocol === 'http:' || previewUrl.protocol === 'https:';
-  if (!explicitlyRequested || !isLoopback || !isHttp) return false;
+  if (!explicitlyRequested || !isLocalBrowserPreviewOrigin(previewUrl)) return false;
 
   let localToken: string | undefined;
   try {

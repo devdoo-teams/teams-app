@@ -8,6 +8,8 @@ okf_version: 0.2
 
 ## Concepts
 
+* [Local preview CSP and auth boundary](local-preview-csp.md) - 1.0.142 local UI failure, same-origin CSP cause, loopback-only preview token handling, and pending installed/runtime gates
+
 * [Existing-service 1.0.139 update](teams-139-existing-service-update.md) - verified candidate identity, existing public process and private stores, same-service staging/rollback gates, and separate catalog/install/UI read-back
 
 * [Mobile reference presentation](mobile-reference-presentation.md) - MP383 shared safe image rows, collapsed diagnostics, compact composer, mobile viewport and real host gates

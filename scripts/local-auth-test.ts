@@ -97,4 +97,21 @@ await assert.rejects(
 );
 assert.equal(requests.length, requestsBeforePreviewChecks + 2, 'public preview cannot reach fetch without Teams SSO');
 
+values.delete(auth.LOCAL_ACCESS_TOKEN_STORAGE_KEY);
+location.hash = `#${auth.LOCAL_ACCESS_TOKEN_FRAGMENT_KEY}=${encodeURIComponent(token)}`;
+auth.captureLocalAccessTokenFromFragment();
+assert.equal(values.has(auth.LOCAL_ACCESS_TOKEN_STORAGE_KEY), false, 'a public page never captures a local preview credential');
+assert.equal(location.hash, '', 'a public page removes a local-token fragment without storing it');
+
+// Simulate a stale token left in same-origin sessionStorage and a ready Teams host.
+// A public API request must carry only its Teams SSO credential.
+values.set(auth.LOCAL_ACCESS_TOKEN_STORAGE_KEY, token);
+auth.resetAuthStateForTest();
+auth.setAuthTokenProviderForTest(async () => 'synthetic-teams-sso-token');
+auth.markTeamsHostReady();
+await auth.apiFetch('/api/health');
+const publicRequest = requests.at(-1)!;
+assert.equal(publicRequest.headers.has(auth.LOCAL_ACCESS_TOKEN_HEADER), false, 'public origin never sends a local preview credential');
+assert.equal(publicRequest.headers.get('Authorization'), 'Bearer synthetic-teams-sso-token', 'public origin continues to send the Teams SSO credential');
+
 console.log('Local auth client verification passed');
