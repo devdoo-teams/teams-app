@@ -431,6 +431,36 @@ assert.match(workHubMarkup, /aria-label="상태별 작업 필터"/, 'the hub pre
 assert.match(workHubMarkup, /aria-label="작업 목록 열기 또는 닫기"/, 'the master pane has an accessible drawer control');
 assert.match(workHubMarkup, /aria-controls="work-hub-master-pane"/, 'the drawer control points to the task master pane');
 
+function findElement(node: React.ReactNode, predicate: (element: React.ReactElement<any>) => boolean): React.ReactElement<any> | undefined {
+  for (const child of React.Children.toArray(node)) {
+    if (!React.isValidElement(child)) continue;
+    const element = child as React.ReactElement<any>;
+    if (predicate(element)) return element;
+    const nested = findElement(element.props.children, predicate);
+    if (nested) return nested;
+  }
+  return undefined;
+}
+
+{
+  let selectedStatus: string | undefined;
+  const extraStatusFilter = findElement(OrchestrationPanelView({
+    ...baseProps,
+    phase: 'ready',
+    jobs: [task('input_required')],
+    pendingJobs: [],
+    selectedJob: task('input_required'),
+    error: '',
+    mobile: false,
+    listStatus: 'input_required',
+    onListStatusChange: status => { selectedStatus = status; },
+  }), element => element.type === 'select' && element.props['aria-label'] === '추가 상태 필터');
+  assert.ok(extraStatusFilter, 'the additional status filter is rendered');
+  assert.equal(extraStatusFilter.props.value, 'input_required');
+  extraStatusFilter.props.onChange({ currentTarget: { value: '' } });
+  assert.equal(selectedStatus, 'all', 'choosing the placeholder clears the additional status filter');
+}
+
 const selectedWorkHubMarkup = renderToStaticMarkup(<OrchestrationPanelView {...baseProps} phase="ready"
   jobs={[task('running', { id: 'task-selected', prompt: 'Refresh the approved work hub design.', tokenUsage: {
     source: 'codex.exec.jsonl.turn.completed.usage', inputTokens: 1_200, cachedInputTokens: 1_000,

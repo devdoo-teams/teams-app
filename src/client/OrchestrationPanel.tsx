@@ -498,7 +498,8 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
                 ))}
                 <label className="work-hub-extra-status">추가 상태
                   <select aria-label="추가 상태 필터" onChange={event => {
-                    if (event.currentTarget.value) props.onListStatusChange?.(event.currentTarget.value as CoreOrchestrationJobStatus);
+                    const value = event.currentTarget.value;
+                    props.onListStatusChange?.(value ? value as CoreOrchestrationJobStatus : 'all');
                   }} value={['queued', 'awaiting_approval', 'input_required', 'cancelled'].includes(props.listStatus ?? '') ? props.listStatus : ''}>
                     <option value="">선택</option>
                     {(['queued', 'awaiting_approval', 'input_required', 'cancelled'] as const).map(status =>
