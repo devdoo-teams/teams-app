@@ -546,7 +546,7 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
             {props.selectedJob ? <>
               <UsageCostDisclosure job={props.selectedJob} />
       <label className="presentation-job-selector">표시할 개인 작업
-        <select aria-label="표시할 개인 작업" disabled={props.phase === 'loading' || selectedBusy} value={props.selectedJob?.id ?? ''}
+        <select aria-label="표시할 개인 작업" disabled={selectedBusy} value={props.selectedJob?.id ?? ''}
           onChange={event => { if (event.currentTarget.value) selectTask(event.currentTarget.value); }}>
           <option value="">기존 작업을 선택하세요.</option>
           {includeRequestedJob(props.jobs, props.selectedJob ?? undefined).map(job => <option value={job.id} key={job.id}>{job.id} · {statusLabels[job.status]}</option>)}
