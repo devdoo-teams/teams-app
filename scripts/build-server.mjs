@@ -139,6 +139,12 @@ if (!reusedBundle && !materializedSource) {
 
 try {
   if (!reusedBundle || materializedSource) {
+    const bundledNodeModulesPath = materializedSource
+      ? path.join(materializedSource.sourceRoot, 'node_modules')
+      : null;
+    if (!reuseFileProviderBundle) {
+      await fs.symlink(path.join(root, 'node_modules'), bundledNodeModulesPath, 'junction');
+    }
     if (reuseFileProviderBundle && materializedSource && !fileProviderRuntimeNodeModules) {
       fileProviderRuntimeNodeModules = await ensureFileProviderRuntimeDependencies(root);
     }
@@ -150,7 +156,10 @@ try {
       bundle: true,
       format: 'esm',
       platform: 'node',
-      nodePaths: [fileProviderRuntimeNodeModules ?? path.join(root, 'node_modules')],
+      nodePaths: [reuseFileProviderBundle
+        ? fileProviderRuntimeNodeModules ?? path.join(root, 'node_modules')
+        : bundledNodeModulesPath],
+      preserveSymlinks: !reuseFileProviderBundle,
       // Bundle the Teams SDK and its transitive runtime dependencies in the
       // normal local build. A FileProvider materialized fallback uses the
       // local runtime dependency cache as external imports because resolving
