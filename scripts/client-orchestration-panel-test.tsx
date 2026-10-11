@@ -823,6 +823,11 @@ function privateConversation(job: CoreOrchestrationJob): VisibleJobConversation 
   await props.onLoadMore?.();
   assert.match(paths.at(-1)!, /cursor=cursor-two/u, 'load-more carries the opaque server cursor');
   props = host.render(pagedClient);
+  assert.deepEqual(props.jobs.map(job => job.id), ['page-one', 'page-two'], 'loading the next page appends older history');
+  await (props.onReload as (options?: { silent?: boolean }) => Promise<void>)({ silent: true });
+  props = host.render(pagedClient);
+  assert.deepEqual(props.jobs.map(job => job.id), ['page-one', 'page-two'], 'automatic polling preserves already loaded history pages');
+  assert.equal(props.listHasMore, false, 'automatic polling preserves the continuation state at the loaded-history boundary');
   props.onListNavigate?.('pinned');
   props = host.render(pagedClient);
   await (props.onReload as (options?: { silent?: boolean }) => Promise<void>)();

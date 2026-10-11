@@ -968,9 +968,20 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
       const requestedJob = requestedJobId ? await loadRequestedJob(requestedJobId, client, controller.signal) : undefined;
       if (controller.signal.aborted) return;
       privateAccessBlocked.current = false;
-      setJobs([...includeRequestedJob(result.jobs, requestedJob)]);
-      setListHasMore(result.hasMore === true);
-      setListNextCursor(result.nextCursor);
+      const refreshedJobs = includeRequestedJob(result.jobs, requestedJob);
+      setJobs(current => {
+        if (!options.silent) return [...refreshedJobs];
+        const refreshedById = new Map(refreshedJobs.map(job => [job.id, job]));
+        const currentIds = new Set(current.map(job => job.id));
+        return [
+          ...refreshedJobs.filter(job => !currentIds.has(job.id)),
+          ...current.map(job => refreshedById.get(job.id) ?? job),
+        ];
+      });
+      if (!options.silent) {
+        setListHasMore(result.hasMore === true);
+        setListNextCursor(result.nextCursor);
+      }
       setPendingJobs(result.pendingJobs);
       setPendingHasMore(result.pendingHasMore === true);
       setProviders(result.providers);
