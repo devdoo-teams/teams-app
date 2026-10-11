@@ -113,7 +113,8 @@ try {
   assert.equal(automatic.notifications.length, 0, 'expiry timer never settles before the persisted deadline');
   await waitForExpiry(automatic.store, timed.id, scope);
   const notificationDeadline = Date.now() + 4_000;
-  while (automatic.notifications.length === 0 && Date.now() < notificationDeadline) await pause(10);
+  while ((automatic.notifications.length === 0 || automatic.durableAtNotification.length === 0)
+    && Date.now() < notificationDeadline) await pause(10);
   assert.equal(automatic.notifications.length, 1);
   assert.deepEqual(automatic.durableAtNotification, [{ id: timed.id, status: 'cancelled', approval: 'expired' }]);
   await assertCapacityReleased(automatic.admission, scope);
