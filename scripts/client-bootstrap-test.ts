@@ -13,7 +13,7 @@ export const authentication = { getAuthToken: async () => 'test-token' };
 `;
 
 const appTestModule = 'export function App() { return null; }';
-const authTestModule = 'export function markTeamsHostReady() {}';
+const authTestModule = 'export function enableLocalBrowserPreviewAuth() {} export function markTeamsHostReady() {}';
 
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {

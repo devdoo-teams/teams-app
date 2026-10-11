@@ -7,10 +7,10 @@ let replaceStateCalls = 0;
 
 const location = {
   origin: 'http://127.0.0.1:3979',
-  href: 'http://127.0.0.1:3979/tabs/home/?token-ignored=1',
+  href: 'http://127.0.0.1:3979/tabs/home/?preview=1',
   hash: '',
   pathname: '/tabs/home/',
-  search: '?token-ignored=1',
+  search: '?preview=1',
 };
 
 const sessionStorage = {
@@ -43,13 +43,21 @@ globalThis.fetch = testFetch;
 const auth = await import('../src/client/auth.ts');
 assert.equal(globalThis.fetch, testFetch, 'auth module does not monkey-patch global fetch');
 
-// This fixture models the explicitly selected local preview path. Teams SSO
-// remains the default for production; local mode must opt out before its
-// first API call so the dedicated fragment token can be exercised.
-auth.setAuthRequired(false);
-await auth.apiFetch('/api/health');
-assert.equal(values.get(auth.LOCAL_ACCESS_TOKEN_STORAGE_KEY), undefined, 'query parameters are not accepted as local access tokens');
-assert.equal(requests[0]?.headers.has(auth.LOCAL_ACCESS_TOKEN_HEADER), false, 'query token is not attached to same-origin requests');
+const enableLocalBrowserPreviewAuth = (auth as typeof auth & {
+  enableLocalBrowserPreviewAuth?: () => boolean;
+}).enableLocalBrowserPreviewAuth;
+assert.equal(typeof enableLocalBrowserPreviewAuth, 'function', 'explicit local preview exposes a guarded auth opt-out');
+const requestsBeforePreviewChecks = requests.length;
+
+// Preview mode without a fragment token stays authenticated and fails closed.
+auth.resetAuthStateForTest();
+assert.equal(enableLocalBrowserPreviewAuth?.(), false, 'localhost preview without its dedicated token cannot disable Teams auth');
+await assert.rejects(
+  auth.apiFetch('/api/health'),
+  (error: unknown) => error instanceof auth.ApiAuthError && error.kind === 'auth-expired',
+  'the first API call cannot run before a local preview token is present',
+);
+assert.equal(requests.length, requestsBeforePreviewChecks, 'unauthenticated local preview does not reach fetch');
 
 location.hash = `#${auth.LOCAL_ACCESS_TOKEN_FRAGMENT_KEY}=${encodeURIComponent(token)}`;
 auth.captureLocalAccessTokenFromFragment();
@@ -57,6 +65,8 @@ assert.equal(values.get(auth.LOCAL_ACCESS_TOKEN_STORAGE_KEY), token, 'fragment t
 assert.equal(location.hash, '', 'fragment is removed from the visible URL');
 assert.equal(replaceStateCalls, 1, 'history is replaced immediately after capture');
 
+auth.resetAuthStateForTest();
+assert.equal(enableLocalBrowserPreviewAuth?.(), true, 'explicit loopback preview with a fragment token may use the protected local token path');
 await auth.apiFetch('/api/items');
 const localRequest = requests.at(-1)!;
 assert.equal(localRequest.headers.get(auth.LOCAL_ACCESS_TOKEN_HEADER), token, 'same-origin API request carries the dedicated local token header');
@@ -64,5 +74,27 @@ assert.equal(localRequest.headers.get(auth.LOCAL_ACCESS_TOKEN_HEADER), token, 's
 await auth.apiFetch('https://external.example.test/api');
 const crossOriginRequest = requests.at(-1)!;
 assert.equal(crossOriginRequest.headers.has(auth.LOCAL_ACCESS_TOKEN_HEADER), false, 'cross-origin request never carries the local token header');
+
+auth.resetAuthStateForTest();
+location.href = 'http://127.0.0.1:3979/tabs/home/?token-ignored=1';
+location.search = '?token-ignored=1';
+assert.equal(enableLocalBrowserPreviewAuth?.(), false, 'a local token without the explicit preview switch cannot disable Teams authentication');
+await assert.rejects(
+  auth.apiFetch('/api/health'),
+  (error: unknown) => error instanceof auth.ApiAuthError && error.kind === 'auth-expired',
+  'local API requests remain Teams-authenticated unless preview is explicitly selected',
+);
+
+auth.resetAuthStateForTest();
+location.origin = 'https://example.com';
+location.href = 'https://example.com/tabs/home/?preview=1';
+location.search = '?preview=1';
+assert.equal(enableLocalBrowserPreviewAuth?.(), false, 'public ?preview=1 cannot disable Teams authentication even with a captured local token');
+await assert.rejects(
+  auth.apiFetch('/api/health'),
+  (error: unknown) => error instanceof auth.ApiAuthError && error.kind === 'auth-expired',
+  'a public origin still requires the Teams host before making an API call',
+);
+assert.equal(requests.length, requestsBeforePreviewChecks + 2, 'public preview cannot reach fetch without Teams SSO');
 
 console.log('Local auth client verification passed');

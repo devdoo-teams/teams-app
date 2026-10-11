@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { app } from '@microsoft/teams-js';
 
 import { App } from './App.js';
-import { markTeamsHostReady } from './auth.js';
+import { enableLocalBrowserPreviewAuth, markTeamsHostReady } from './auth.js';
 import './styles.css';
 
 type BootstrapResult = 'ready' | 'preview' | 'recovery' | 'stale';
@@ -409,9 +409,12 @@ if (typeof document !== 'undefined') {
   const root = document.getElementById('root');
   if (!root) throw new Error('Teams app root element is missing');
 
+  const browserPreview = isExplicitBrowserPreview();
+  if (browserPreview) enableLocalBrowserPreviewAuth();
+
   const controller = mountTeamsApplication({
     root,
-    mode: isExplicitBrowserPreview() ? 'preview' : 'teams',
+    mode: browserPreview ? 'preview' : 'teams',
     teamsApp: app,
     markHostReady: markTeamsHostReady,
     setHost: () => {

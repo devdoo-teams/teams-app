@@ -106,6 +106,38 @@ export function markTeamsHostReady(): void {
   teamsHostReady = true;
 }
 
+/**
+ * Allows the local API-token flow only for an explicitly requested preview on
+ * a loopback origin. The server still validates the token on every protected
+ * request; public origins continue to require the Teams host and SSO.
+ */
+export function enableLocalBrowserPreviewAuth(): boolean {
+  if (typeof window === 'undefined') return false;
+
+  let previewUrl: URL;
+  try {
+    previewUrl = new URL(window.location.href);
+  } catch {
+    return false;
+  }
+
+  const explicitlyRequested = ['1', 'true'].includes(previewUrl.searchParams.get('preview') ?? '');
+  const isLoopback = ['localhost', '127.0.0.1', '[::1]'].includes(previewUrl.hostname);
+  const isHttp = previewUrl.protocol === 'http:' || previewUrl.protocol === 'https:';
+  if (!explicitlyRequested || !isLoopback || !isHttp) return false;
+
+  let localToken: string | undefined;
+  try {
+    localToken = localAccessTokenForSameOrigin('/api/health');
+  } catch {
+    return false;
+  }
+  if (!localToken) return false;
+
+  setAuthRequired(false);
+  return true;
+}
+
 export function getLastAuthError(): string {
   return lastAuthError;
 }
