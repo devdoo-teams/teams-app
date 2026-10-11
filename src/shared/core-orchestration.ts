@@ -144,7 +144,20 @@ export type CoreSubmitRequest = Readonly<{
 export type CoreJobRequest = Readonly<{ jobId: string }>;
 export type CoreApprovalRequest = Readonly<{ jobId: string; approvalId: string; revision: string }>;
 export type CoreContinueRequest = Readonly<{ jobId: string; prompt: string }>;
-export type CoreListRequest = Readonly<{ limit?: number }>;
+export type CoreListRequest = Readonly<{
+  limit?: number;
+  /** Opaque, authenticated-principal-scoped newest-first page boundary. */
+  cursor?: string;
+  search?: string;
+  status?: CoreOrchestrationJobStatus;
+  /** Local pin/project selectors are still filtered by the authenticated server principal. */
+  jobIds?: readonly string[];
+}>;
+export type CoreOrchestrationJobPage = Readonly<{
+  jobs: readonly CoreOrchestrationJob[];
+  hasMore: boolean;
+  nextCursor?: string;
+}>;
 export type CoreProvideInputRequest = Readonly<{ jobId: string; input: unknown }>;
 
 export type CoreSubmitResult = Readonly<{

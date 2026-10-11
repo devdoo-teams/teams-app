@@ -32,6 +32,19 @@ export type AgentJobStatus =
   | 'failed'
   | 'cancelled';
 
+export type AgentJobListPageRequest = Readonly<{
+  limit?: number;
+  cursor?: string;
+  search?: string;
+  status?: AgentJobStatus | 'input_required';
+  jobIds?: readonly string[];
+}>;
+export type AgentJobListPage = Readonly<{
+  jobs: readonly AgentJob[];
+  hasMore: boolean;
+  nextCursor?: string;
+}>;
+
 export const MAX_AGENT_JOB_ID_LENGTH = 200;
 export const MAX_AGENT_SCOPE_VALUE_LENGTH = 256;
 export const MAX_AGENT_PROMPT_LENGTH = CORE_AGENT_PROMPT_MAX_LENGTH;
@@ -59,6 +72,28 @@ const AGENT_TOOL_CATEGORIES: readonly CoreAgentToolCategory[] = ['skill', 'plugi
 // Preserve the whitespace characters used by normal multi-line Codex output
 // while rejecting the remaining C0/C1 control range in persisted records.
 const CONTROL_CHARACTERS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
+
+function encodeAgentJobListCursor(afterJobId: string): string {
+  return Buffer.from(JSON.stringify({ version: 1, afterJobId }), 'utf8').toString('base64url');
+}
+
+function decodeAgentJobListCursor(value: string): string {
+  if (typeof value !== 'string' || value.length > 512 || !/^[A-Za-z0-9_-]+$/u.test(value)) {
+    throw new TypeError('cursor is invalid.');
+  }
+  try {
+    const decoded: unknown = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
+    if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) throw new Error('invalid');
+    const cursor = decoded as Record<string, unknown>;
+    if (Object.keys(cursor).length !== 2 || cursor.version !== 1
+      || typeof cursor.afterJobId !== 'string' || !cursor.afterJobId.trim()
+      || cursor.afterJobId.length > MAX_AGENT_JOB_ID_LENGTH
+      || /[\u0000-\u001f\u007f-\u009f]/u.test(cursor.afterJobId)) throw new Error('invalid');
+    return cursor.afterJobId;
+  } catch {
+    throw new TypeError('cursor is invalid.');
+  }
+}
 
 export interface AgentJobScope {
   requesterId: string;
@@ -320,6 +355,48 @@ export class AgentJobStore {
       .filter((job) => matchesPrincipal(job, principal))
       .slice(0, limit)
       .map(cloneAgentJob);
+  }
+
+  /**
+   * Principal-scoped keyset paging for the Work Hub. The opaque cursor anchors
+   * the last job ID in the stable newest-first store order, so newly inserted
+   * jobs do not shift later pages or duplicate already-read rows.
+   */
+  listPageForPrincipal(
+    principal: Pick<AgentJobScope, 'tenantId' | 'requesterId'>,
+    request: AgentJobListPageRequest = {},
+  ): AgentJobListPage {
+    const limit = request.limit ?? 30;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new TypeError('limit must be an integer from 1 to 100.');
+    }
+    const search = request.search?.trim().toLocaleLowerCase('en-US');
+    if (search !== undefined && search.length > 200) throw new TypeError('search must be at most 200 characters.');
+    if (request.status !== undefined && !['queued', 'awaiting_approval', 'input_required', 'running', 'completed', 'failed', 'cancelled'].includes(request.status)) {
+      throw new TypeError('status is invalid.');
+    }
+    if (request.jobIds && (request.jobIds.length > 50 || request.jobIds.some(id => typeof id !== 'string'
+      || !id.trim() || id.length > MAX_AGENT_JOB_ID_LENGTH || /[\u0000-\u001f\u007f-\u009f]/u.test(id)))) {
+      throw new TypeError('jobIds must contain at most 50 valid job IDs.');
+    }
+    const afterJobId = request.cursor === undefined ? undefined : decodeAgentJobListCursor(request.cursor);
+    const principalJobs = this.jobs.filter(job => matchesPrincipal(job, principal));
+    const cursorIndex = afterJobId === undefined ? -1 : principalJobs.findIndex(job => job.id === afterJobId);
+    if (afterJobId !== undefined && cursorIndex < 0) throw new TypeError('cursor is not valid for this principal.');
+    const allowedIds = request.jobIds ? new Set(request.jobIds) : undefined;
+    const matchesQuery = (job: AgentJob) => (!search || job.prompt.toLocaleLowerCase('en-US').includes(search))
+      && (!request.status || job.status === request.status)
+      && (!allowedIds || allowedIds.has(job.id));
+    const candidates = principalJobs.slice(cursorIndex + 1).filter(matchesQuery);
+    const pagePlusOne = candidates.slice(0, limit + 1);
+    const hasMore = pagePlusOne.length > limit;
+    const jobs = pagePlusOne.slice(0, limit);
+    const last = jobs.at(-1);
+    return {
+      jobs: jobs.map(cloneAgentJob),
+      hasMore,
+      ...(hasMore && last ? { nextCursor: encodeAgentJobListCursor(last.id) } : {}),
+    };
   }
 
   listPendingForPrincipal(principal: Pick<AgentJobScope, 'tenantId' | 'requesterId'>, limit = 101): AgentJob[] {

@@ -6,7 +6,7 @@ import {
   type CoreApprovalIdentity, type CoreApprovalDecision, type CoreApprovalDecisionResult,
 } from './core-approval-recovery.js';
 
-import type { AgentJob, AgentJobMode, AgentJobScope } from './agent-job-store.js';
+import type { AgentJob, AgentJobMode, AgentJobScope, AgentJobListPage, AgentJobListPageRequest } from './agent-job-store.js';
 import {
   AgentJobIdempotencyConflictError,
   AgentJobIdempotentReplayError,
@@ -19,6 +19,7 @@ import type {
   CoreContinueRequest,
   CoreListRequest,
   CoreOrchestrationJob,
+  CoreOrchestrationJobPage,
   CoreOrchestrationProvider,
   CoreProviderFact,
   CoreProviderReadiness,
@@ -30,6 +31,7 @@ import type {
   CoreCodexModelSelection,
 } from '../shared/core-orchestration.js';
 import {
+  CORE_JOB_STATUS_LABELS,
   CoreOrchestrationIdempotencyConflictError,
   CoreOrchestrationProviderCapabilityError,
   CoreOrchestrationProviderUnavailableError,
@@ -99,6 +101,10 @@ export interface CoreAgentServicePort {
     principal: Pick<AgentJobScope, 'tenantId' | 'requesterId'>,
     limit?: number,
   ): AgentJob[];
+  listPageForPrincipal?(
+    principal: Pick<AgentJobScope, 'tenantId' | 'requesterId'>,
+    request: AgentJobListPageRequest,
+  ): AgentJobListPage;
   cancelStrict(id: string, scope: AgentJobScope): Promise<AgentJob | undefined>;
   approve(id: string, scope: AgentJobScope): Promise<AgentJob | undefined>;
   decideApproval?(id: string, scope: AgentJobScope, request: CoreApprovalIdentity, decision: CoreApprovalDecision): Promise<CoreApprovalDecisionResult | undefined>;
@@ -120,6 +126,10 @@ export interface CoreAgentJobStorePort {
     principal: Pick<AgentJobScope, 'tenantId' | 'requesterId'>,
     limit?: number,
   ): AgentJob[];
+  listPageForPrincipal?(
+    principal: Pick<AgentJobScope, 'tenantId' | 'requesterId'>,
+    request: AgentJobListPageRequest,
+  ): AgentJobListPage;
 }
 
 export type CoreInputResumeObservation = Readonly<{
@@ -231,6 +241,63 @@ export class CoreOrchestrationService {
     return jobs
       .filter((job) => Boolean(storedScopeForPrincipal(job, scope)))
       .map(toCoreJob);
+  }
+
+  listPage(scope: ServerDerivedCoreScope, request: CoreListRequest = {}): CoreOrchestrationJobPage {
+    assertServerScope(scope);
+    assertNoClientScope(request);
+    const limit = request.limit ?? 30;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIST_LIMIT) {
+      throw new CoreOrchestrationValidationError(`limit must be an integer from 1 to ${MAX_LIST_LIMIT}.`);
+    }
+    if (request.search !== undefined && (typeof request.search !== 'string' || request.search.length > 200)) {
+      throw new CoreOrchestrationValidationError('search must be at most 200 characters.');
+    }
+    if (request.status !== undefined && !Object.hasOwn(CORE_JOB_STATUS_LABELS, request.status)) {
+      throw new CoreOrchestrationValidationError('status is invalid.');
+    }
+    if (request.cursor !== undefined && (typeof request.cursor !== 'string' || request.cursor.length > 512)) {
+      throw new CoreOrchestrationValidationError('cursor is invalid.');
+    }
+    if (request.jobIds !== undefined && (!Array.isArray(request.jobIds) || request.jobIds.length > 50)) {
+      throw new CoreOrchestrationValidationError('jobIds must contain at most 50 job IDs.');
+    }
+    const principal = { tenantId: scope.tenantId, requesterId: scope.requesterId };
+    const pageRequest: AgentJobListPageRequest = {
+      limit,
+      ...(request.cursor ? { cursor: request.cursor } : {}),
+      ...(request.search !== undefined ? { search: request.search } : {}),
+      ...(request.status ? { status: request.status } : {}),
+      ...(request.jobIds ? { jobIds: request.jobIds } : {}),
+    };
+    if (scope[CONVERSATION_ONLY]) {
+      // Legacy conversation-only ports cannot expose cross-page records. Their
+      // existing bounded list stays in force and is never widened by the UI.
+      const jobs = this.options.agentService.list(scope, limit).filter(job =>
+        (!request.search || job.prompt.toLocaleLowerCase('en-US').includes(request.search.trim().toLocaleLowerCase('en-US')))
+        && (!request.status || job.status === request.status)
+        && (!request.jobIds || request.jobIds.includes(job.id))).map(toCoreJob);
+      return { jobs, hasMore: false };
+    }
+    let page: AgentJobListPage | undefined;
+    try {
+      page = this.options.agentService.listPageForPrincipal?.(principal, pageRequest)
+        ?? this.options.jobStore.listPageForPrincipal?.(principal, pageRequest);
+    } catch (error) {
+      if (error instanceof TypeError) throw new CoreOrchestrationValidationError(error.message);
+      throw error;
+    }
+    if (!page) {
+      return { jobs: this.list(scope, { limit }).filter(job =>
+        (!request.search || job.prompt.toLocaleLowerCase('en-US').includes(request.search.trim().toLocaleLowerCase('en-US')))
+        && (!request.status || job.status === request.status)
+        && (!request.jobIds || request.jobIds.includes(job.id))), hasMore: false };
+    }
+    return {
+      jobs: page.jobs.filter(job => Boolean(storedScopeForPrincipal(job, scope))).map(toCoreJob),
+      hasMore: page.hasMore,
+      ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+    };
   }
 
   listPending(scope: ServerDerivedCoreScope): { jobs: CoreOrchestrationJob[]; hasMore: boolean } | undefined {

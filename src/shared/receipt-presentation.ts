@@ -33,7 +33,9 @@ export function projectReceiptFacts(job: ReceiptInput): readonly ReceiptFact[] {
       ...(usage.cacheWriteInputTokens !== undefined ? [{ label: '캐시 쓰기', value: count(usage.cacheWriteInputTokens) }] : []),
       { label: '출력 토큰', value: count(usage.outputTokens) },
       { label: '추론 출력', value: count(usage.reasoningOutputTokens) },
+      { label: '토큰 계산 참고', value: '추론 출력은 출력 토큰에 포함되며 사용 토큰 합계에 다시 더하지 않습니다.' },
     ] : [{ label: '토큰 사용량', value: '제공되지 않음' }]),
-    { label: '계정 잔여량', value: 'Codex CLI에서 제공되지 않음' },
+    { label: '비용 추정', value: '미연결 (검증된 요금표와 환율이 제공되지 않음)' },
+    { label: '계정 잔여량', value: '미연결 (Codex CLI에서 계정 한도가 관측되지 않음)' },
   ];
 }

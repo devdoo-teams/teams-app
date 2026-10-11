@@ -583,7 +583,9 @@ function tokenUsageFacts(usage: AgentTokenUsage): Array<{ label: string; value: 
     },
     { label: '출력 토큰', value: formatTokenCount(usage.outputTokens) },
     { label: '추론 출력', value: formatTokenCount(usage.reasoningOutputTokens) },
-    { label: '계정 잔여량', value: '제공되지 않음' },
+    { label: '토큰 계산 참고', value: '추론 출력은 출력 토큰에 포함되며 사용 토큰 합계에 다시 더하지 않습니다.' },
+    { label: '비용 추정', value: '미연결 (검증된 요금표와 환율이 제공되지 않음)' },
+    { label: '계정 잔여량', value: '미연결 (Codex CLI에서 계정 한도가 관측되지 않음)' },
   ];
 }
 
@@ -611,7 +613,9 @@ function jobFallback(job: AgentJob, agentLabel = 'Codex'): string {
     lines.push(`입력 토큰: ${formatTokenCount(tokenUsage.inputTokens)} (캐시 ${formatTokenCount(tokenUsage.cachedInputTokens)} 포함)`);
     lines.push(`출력 토큰: ${formatTokenCount(tokenUsage.outputTokens)}`);
     lines.push(`추론 출력: ${formatTokenCount(tokenUsage.reasoningOutputTokens)}`);
-    lines.push('계정 잔여량: 제공되지 않음');
+    lines.push('토큰 계산 참고: 추론 출력은 출력 토큰에 포함되며 합계에 다시 더하지 않습니다.');
+    lines.push('비용 추정: 미연결 (검증된 요금표와 환율이 제공되지 않음)');
+    lines.push('계정 잔여량: 미연결 (Codex CLI에서 계정 한도가 관측되지 않음)');
   }
   return compactNotification(lines.join('\n'), 4_000);
 }

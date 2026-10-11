@@ -1,4 +1,4 @@
-import type { AgentJob, AgentJobMode, AgentJobScope } from './agent-job-store.js';
+import type { AgentJob, AgentJobMode, AgentJobScope, AgentJobListPageRequest, AgentJobListPage } from './agent-job-store.js';
 import { AgentJobStore } from './agent-job-store.js';
 import { CoreApprovalRecoveryError, type CoreApprovalIdentity, type CoreApprovalDecision,
   type CoreApprovalDecisionResult } from './core-approval-recovery.js';
@@ -790,6 +790,13 @@ export class AgentService {
     limit = 8,
   ): AgentJob[] {
     return this.store.listForPrincipal(principal, limit);
+  }
+
+  listPageForPrincipal(
+    principal: Pick<AgentJobScope, 'tenantId' | 'requesterId'>,
+    request: AgentJobListPageRequest,
+  ): AgentJobListPage {
+    return this.store.listPageForPrincipal(principal, request);
   }
 
   latestCompletedForConversation(scope: AgentJobScope): AgentJob | undefined {

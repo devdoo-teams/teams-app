@@ -247,6 +247,16 @@ for (const isolatedScope of [otherConversation, otherRequester, otherTenant]) {
     assert.equal(service.list(isolatedScope).some((job) => job.id === first.job.id), false);
   }
 }
+const firstTaskPage = service.listPage(scope, { limit: 1 });
+assert.equal(firstTaskPage.jobs.length, 1);
+assert.equal(firstTaskPage.hasMore, true, 'Work Hub history exposes another server page when scoped tasks remain');
+assert.ok(firstTaskPage.nextCursor);
+const secondTaskPage = service.listPage(scope, { limit: 1, cursor: firstTaskPage.nextCursor });
+assert.equal(secondTaskPage.jobs.length, 1);
+assert.notEqual(secondTaskPage.jobs[0]?.id, firstTaskPage.jobs[0]?.id, 'page cursor does not repeat the prior task');
+assert.deepEqual(service.listPage(scope, { jobIds: [] }).jobs, [], 'empty local pin/project selection returns no tasks');
+assert.equal(service.listPage(otherRequester, { limit: 100 }).jobs.some(job => job.id === first.job.id), false,
+  'server pagination cannot cross the authenticated principal boundary');
 
 await assert.rejects(
   service.submit(scope, { ...request, tenantId: 'attacker-selected' } as typeof request),

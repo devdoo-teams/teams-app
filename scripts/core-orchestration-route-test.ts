@@ -112,6 +112,9 @@ const service: CoreOrchestrationRouteService = {
     return [...jobs.entries()]
       .filter(([key]) => key.startsWith(`${scopeKey(scope)}/`))
       .map(([, job]) => job)
+      .filter(job => (!request.search || job.prompt.toLowerCase().includes(request.search.trim().toLowerCase()))
+        && (!request.status || job.status === request.status)
+        && (!request.jobIds || request.jobIds.includes(job.id)))
       .slice(0, request.limit ?? 20);
   },
   async cancel(scope, request) {
@@ -269,6 +272,9 @@ try {
     provider: 'codex', availability: 'unknown', capabilities: ['submit'], observedAt: now, source: 'runtime-probe',
   }, 'the list wire DTO includes the same measured provider facts as the provider endpoint');
   assert.deepEqual(JSON.parse(listed.body).modelCatalog, modelCatalog);
+  const emptyPinnedList = await request('GET', '/jobs?jobIds=', undefined, auth);
+  assert.equal(emptyPinnedList.status, 200);
+  assert.deepEqual(JSON.parse(emptyPinnedList.body).jobs, [], 'empty pinned/project selection cannot fall through to the full principal list');
   assert.equal((await request('GET', '/jobs?limit=0', undefined, auth)).status, 400);
   assert.equal((await request('GET', '/jobs?limit=2&scope=attacker', undefined, auth)).status, 400);
 

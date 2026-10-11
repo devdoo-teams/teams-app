@@ -1,6 +1,7 @@
 import { apiFetch, type ApiOperationRequest } from './auth.js';
 import type {
   CoreOrchestrationJob,
+  CoreListRequest,
   CoreCodexModelCatalog,
   CoreProviderFact,
   CoreProvideInputResult,
@@ -12,6 +13,8 @@ import type { VisibleJobConversation } from '../shared/job-conversation.js';
 import { loadJobConversation } from './job-conversation.js';
 
 export type CoreOrchestrationJobList = {
+  hasMore?: boolean;
+  nextCursor?: string;
   pendingJobs?: CoreOrchestrationJob[] | null;
   pendingHasMore?: boolean;
   jobs: CoreOrchestrationJob[];
@@ -58,7 +61,7 @@ export class CoreOrchestrationClientError extends Error {
 }
 
 export type CoreOrchestrationClient = {
-  listJobs: (signal?: AbortSignal) => Promise<CoreOrchestrationJobList>;
+  listJobs: (signal?: AbortSignal, query?: CoreListRequest) => Promise<CoreOrchestrationJobList>;
   getJob: (jobId: string, signal?: AbortSignal) => Promise<CoreOrchestrationJob>;
   getJobConversation?: (jobId: string, signal?: AbortSignal) => Promise<{ job: CoreOrchestrationJob; conversation: VisibleJobConversation }>;
   continueJob: (jobId: string, prompt: string, signal?: AbortSignal) => Promise<CoreOrchestrationJobResult>;
@@ -129,6 +132,20 @@ function jobPath(jobId: string, action = ''): string {
   return action ? `${base}/${action}` : base;
 }
 
+function jobListPath(query?: CoreListRequest): string {
+  const parameters = new URLSearchParams();
+  if (query?.limit !== undefined) parameters.set('limit', String(query.limit));
+  if (query?.cursor) parameters.set('cursor', query.cursor);
+  if (query?.search !== undefined) parameters.set('search', query.search);
+  if (query?.status) parameters.set('status', query.status);
+  if (query?.jobIds !== undefined) {
+    if (query.jobIds.length === 0) parameters.append('jobIds', '');
+    else for (const jobId of query.jobIds) parameters.append('jobIds', jobId);
+  }
+  const suffix = parameters.toString();
+  return `${CORE_ORCHESTRATION_API_BASE_PATH}/jobs${suffix ? `?${suffix}` : ''}`;
+}
+
 export function createCoreOrchestrationClient(
   request: ApiOperationRequest = apiFetch,
 ): CoreOrchestrationClient {
@@ -137,8 +154,8 @@ export function createCoreOrchestrationClient(
     return response.job;
   };
   return {
-    listJobs(signal) {
-      return expectResponse<CoreOrchestrationJobList>(request, `${CORE_ORCHESTRATION_API_BASE_PATH}/jobs`, { signal });
+    listJobs(signal, query) {
+      return expectResponse<CoreOrchestrationJobList>(request, jobListPath(query), { signal });
     },
     getJob,
     getJobConversation(jobId, signal) { return loadJobConversation(jobId, getJob, signal); },

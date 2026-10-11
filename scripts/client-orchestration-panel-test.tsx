@@ -120,7 +120,8 @@ const request = async (input: RequestInfo | URL, init: RequestInit = {}): Promis
     method: init.method ?? 'GET',
     body: typeof init.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : undefined,
   });
-  const json = path === `${apiBasePath}/jobs` && !init.method
+  const routePath = new URL(path, 'http://core.test').pathname;
+  const json = routePath === `${apiBasePath}/jobs` && !init.method
     ? { jobs: [task('running')], providers: [provider], modelCatalog }
     : path === `${apiBasePath}/jobs/task-1` && !init.method
       ? { job: task('input_required') }
@@ -139,6 +140,16 @@ assert.equal(listed.jobs[0]?.id, 'task-1', 'list returns the durable task identi
 assert.equal(listed.providers[0]?.availability, 'available', 'list returns measured provider availability');
 assert.equal(listed.modelCatalog?.models[0]?.id, 'gpt-5.6-sol');
 assert.deepEqual(requests.at(-1), { path: `${apiBasePath}/jobs`, method: 'GET', body: undefined });
+const pageClient = client as typeof client & { listJobs(signal?: AbortSignal, query?: Record<string, unknown>): Promise<unknown> };
+await pageClient.listJobs(undefined, { limit: 30, search: 'design', status: 'failed', cursor: 'opaque_cursor-1', jobIds: ['task-1'] });
+assert.match(requests.at(-1)!.path, /^\/api\/core-orchestration\/jobs\?/u, 'page query stays on the authenticated Core route');
+assert.match(requests.at(-1)!.path, /limit=30/u);
+assert.match(requests.at(-1)!.path, /search=design/u);
+assert.match(requests.at(-1)!.path, /status=failed/u);
+assert.match(requests.at(-1)!.path, /cursor=opaque_cursor-1/u);
+assert.match(requests.at(-1)!.path, /jobIds=task-1/u, 'pinned/project lookup remains principal-scoped at the server');
+await pageClient.listJobs(undefined, { limit: 30, jobIds: [] });
+assert.match(requests.at(-1)!.path, /jobIds=$/u, 'an empty pin list is represented explicitly rather than falling back to every job');
 
 const detailed = await client.getJob('task-1');
 assert.equal(detailed.status, 'input_required', 'detail preserves the input-required state');
@@ -393,6 +404,8 @@ const empty = renderToStaticMarkup(<OrchestrationPanelView
   selectedJob={null}
   error=""
   mobile={false}
+  listHasMore={true}
+  onLoadMore={asyncNoop}
 />);
 assert.match(empty, /아직 실행한 작업이 없습니다/);
 assert.match(empty, /승인 대기 작업이 없습니다/);
@@ -401,6 +414,17 @@ assert.match(empty, /실행 제공자/);
 assert.match(empty, /Codex 모델/);
 assert.match(empty, /추론 수준/);
 assert.match(empty, /자동 새로고침 3초/, 'the hub tells the user that progress is refreshed automatically');
+assert.match(empty, /aria-label="업무 허브 탐색"/, 'the hub exposes Recent, Pinned, and project navigation');
+assert.match(empty, /placeholder="작업 검색"/, 'the hub can search across server-paged task history');
+assert.match(empty, /다음 작업 불러오기/, 'long histories expose an explicit server-page action');
+const summarizedJob = task('running', { id: 'task-summary', prompt: `Quarterly review\n${'Long request detail. '.repeat(20)}` });
+const workHubMarkup = renderToStaticMarkup(<OrchestrationPanelView {...baseProps} phase="ready" jobs={[summarizedJob]}
+  pendingJobs={[]} selectedJob={null} error="" mobile={false}
+  navigationPreferences={{ pinnedJobIds: [], projectNames: ['Quarterly'], projectByJobId: { 'task-summary': 'Quarterly' } }} />);
+assert.match(workHubMarkup, /Quarterly review/);
+assert.match(workHubMarkup, /Long request detail\./, 'a short preview retains useful context without making the full prompt the list title');
+assert.match(workHubMarkup, /aria-label="작업 고정"/);
+assert.match(workHubMarkup, /Quarterly review 프로젝트/);
 
 for (const phase of ['ready', 'loading'] as const) {
   const notification = renderToStaticMarkup(<OrchestrationPanelView
@@ -621,7 +645,8 @@ assert.match(promptAndTools, /MCP · jira\/search_issues/);
 assert.match(promptAndTools, /gpt-5.6-sol/);
 assert.match(promptAndTools, /high/);
 assert.match(promptAndTools, /입력 1,200/);
-assert.match(promptAndTools.replace(/<[^>]+>/g, ''), /계정 잔여량: Codex CLI에서 제공되지 않음/, 'quota uses the existing card disclaimer regardless of label markup');
+assert.match(promptAndTools.replace(/<[^>]+>/g, ''), /비용 추정: 미연결 \(검증된 요금표와 환율이 제공되지 않음\)/, 'the tab never invents cost without a verified price table');
+assert.match(promptAndTools.replace(/<[^>]+>/g, ''), /계정 잔여량: 미연결 \(Codex CLI에서 계정 한도가 관측되지 않음\)/, 'quota remains explicit rather than inferred');
 
 const copilotDetail = renderToStaticMarkup(<OrchestrationPanelView
   {...baseProps}
@@ -713,6 +738,47 @@ function privateConversation(job: CoreOrchestrationJob): VisibleJobConversation 
     response: job.result, status: job.status, createdAt: job.createdAt, progress: [], tools: [], truncated: false }] };
 }
 
+{
+  const paths: string[] = [];
+  const pagedClient = createCoreOrchestrationClient(async input => {
+    const path = String(input);
+    paths.push(path);
+    const url = new URL(path, 'http://core.test');
+    const hasCursor = url.searchParams.has('cursor');
+    const emptySelection = url.searchParams.has('jobIds') && url.searchParams.get('jobIds') === '';
+    return Response.json({
+      jobs: emptySelection ? [] : [task('running', { id: hasCursor ? 'page-two' : 'page-one' })],
+      hasMore: !hasCursor && !emptySelection,
+      ...(hasCursor || emptySelection ? {} : { nextCursor: 'cursor-two' }),
+      pendingJobs: [], pendingHasMore: false, providers: [provider], modelCatalog: teamsCliTestCatalog,
+    });
+  });
+  const host = panelHookHost();
+  let props = host.render(pagedClient);
+  await (props.onReload as (options?: { silent?: boolean }) => Promise<void>)();
+  props = host.render(pagedClient);
+  assert.equal(props.listHasMore, true, 'the first authenticated page exposes its server continuation state');
+  props.onListSearchDraftChange?.('quarterly review');
+  props = host.render(pagedClient);
+  props.onListSearchSubmit?.();
+  props = host.render(pagedClient);
+  await (props.onReload as (options?: { silent?: boolean }) => Promise<void>)();
+  props = host.render(pagedClient);
+  assert.match(paths.at(-1)!, /search=quarterly\+review/u, 'submitted search is sent to the principal-scoped list API');
+  props.onListStatusChange?.('failed');
+  props = host.render(pagedClient);
+  await (props.onReload as (options?: { silent?: boolean }) => Promise<void>)();
+  props = host.render(pagedClient);
+  assert.match(paths.at(-1)!, /status=failed/u, 'status filtering is sent to the list API');
+  await props.onLoadMore?.();
+  assert.match(paths.at(-1)!, /cursor=cursor-two/u, 'load-more carries the opaque server cursor');
+  props = host.render(pagedClient);
+  props.onListNavigate?.('pinned');
+  props = host.render(pagedClient);
+  await (props.onReload as (options?: { silent?: boolean }) => Promise<void>)();
+  assert.match(paths.at(-1)!, /jobIds=$/u, 'an empty Pinned view remains an empty server-filtered result');
+}
+
 for (const denial of [401, 403, 404, 'auth-expired', 'forbidden'] as const) {
   const privateResult = task('completed', { id: `private-${denial}`, result: `SYNTHETIC_PRIVATE_RESULT_${denial}` });
   const lateResult = { ...privateResult, id: `late-${denial}`, result: `SYNTHETIC_LATE_PRIVATE_RESULT_${denial}` };
@@ -720,7 +786,7 @@ for (const denial of [401, 403, 404, 'auth-expired', 'forbidden'] as const) {
   let reads = 0;
   const protectedClient = createCoreOrchestrationClient(async (input) => {
     reads++;
-    const list = String(input) === `${apiBasePath}/jobs`;
+    const list = new URL(String(input), 'http://core.test').pathname === `${apiBasePath}/jobs`;
     if (failure && (failure !== 404 || !list)) {
       if (typeof failure === 'string') throw new ApiAuthError(failure);
       return Response.json({ error: 'SYNTHETIC_ACCESS_DENIED' }, { status: failure });

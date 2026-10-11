@@ -256,7 +256,7 @@ process.exit(2);
       assert.equal(cardFact(completedCard, '상태'), 'completed');
       assert.equal(cardFact(completedCard, '사용 토큰'), '150 (입력 120 / 출력 30)');
       assert.equal(cardFact(completedCard, '추론 출력'), '10');
-      assert.equal(cardFact(completedCard, '계정 잔여량'), 'Codex CLI에서 제공되지 않음');
+      assert.equal(cardFact(completedCard, '계정 잔여량'), '미연결 (Codex CLI에서 계정 한도가 관측되지 않음)');
 
       const argv = JSON.parse(await fs.readFile(argvLog, 'utf8')) as string[];
       assert.deepEqual(argv.slice(argv.indexOf('--model'), argv.indexOf('--model') + 2), ['--model', 'gpt-6-luna']);

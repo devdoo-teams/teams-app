@@ -247,7 +247,8 @@ try {
   assert.match(usageCardJson, /출력 토큰/);
   assert.match(usageCardJson, /추론 출력/);
   assert.match(usageCardJson, /계정 잔여량/);
-  assert.match(usageCardJson, /제공되지 않음/, 'account remaining quota is explicit instead of inferred');
+  assert.match(usageCardJson, /비용 추정/);
+  assert.match(usageCardJson, /미연결/, 'account remaining quota and estimated cost are explicit instead of inferred');
 
   const incompleteJobStatusCard = await configuredFactory.jobStatus({
     id: 'task-missing-result',

@@ -88,6 +88,8 @@ const tsTests = [
   'scripts/copilot-conversation-controller-test.ts',
   'scripts/adaptive-card-text-fallback-test.ts',
   'scripts/core-orchestration-service-test.ts',
+  'scripts/agent-job-store-list-page-test.ts',
+  'scripts/work-hub-navigation-test.ts',
   'scripts/core-orchestration-cross-surface-test.ts',
   'scripts/core-message-extension-test.ts',
   'scripts/client-job-deep-link-test.ts',

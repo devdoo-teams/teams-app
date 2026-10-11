@@ -15,6 +15,7 @@ import {
 } from './core-orchestration-service.js';
 import type { AgentJobScope } from './agent-job-store.js';
 import {
+  CORE_JOB_STATUS_LABELS,
   CoreOrchestrationIdempotencyConflictError,
   CoreOrchestrationProviderCapabilityError,
   CoreOrchestrationProviderUnavailableError,
@@ -38,7 +39,7 @@ export type CoreOrchestrationRouteService = Pick<CoreOrchestrationService,
   | 'provideInput'
   | 'listProviderFacts'
   | 'listCodexModelCatalog'
-> & Partial<Pick<CoreOrchestrationService, 'listPending' | 'deny' | 'decideApproval'>>;
+> & Partial<Pick<CoreOrchestrationService, 'listPending' | 'listPage' | 'deny' | 'decideApproval'>>;
 
 export type CoreOrchestrationRouteOptions = Readonly<{
   service: CoreOrchestrationRouteService;
@@ -93,11 +94,15 @@ export function createCoreOrchestrationRouter(options: CoreOrchestrationRouteOpt
 
   router.get('/jobs', asyncHandler(async (request, response) => {
     const scope = scopeFor(options, request, response);
-    const jobs = options.service.list(scope, listRequest(request)).map(job => decorateJob(job, scope));
+    const query = listRequest(request);
+    const page = options.service.listPage?.(scope, query);
+    const jobs = (page?.jobs ?? options.service.list(scope, query)).map(job => decorateJob(job, scope));
     const pending = options.service.listPending?.(scope);
     const modelCatalog = await options.service.listCodexModelCatalog();
     response.set('Cache-Control', 'no-store').status(200).json({
       jobs,
+      hasMore: page?.hasMore ?? false,
+      ...(page?.nextCursor ? { nextCursor: page.nextCursor } : {}),
       pendingJobs: pending?.jobs ?? null,
       pendingHasMore: pending?.hasMore ?? false,
       providers: options.service.listProviderFacts(),
@@ -215,10 +220,40 @@ function submitRequest(value: unknown): CoreSubmitRequest {
 }
 
 function listRequest(request: Request): CoreListRequest {
-  const query = strictObject(request.query, ['limit']);
-  if (query.limit === undefined) return {};
-  if (typeof query.limit !== 'string' || !/^[1-9]\d{0,2}$/u.test(query.limit)) throw invalidRequest();
-  return { limit: Number(query.limit) };
+  const query = strictObject(request.query, ['limit', 'cursor', 'search', 'status', 'jobIds']);
+  const result: {
+    limit?: number;
+    cursor?: string;
+    search?: string;
+    status?: CoreListRequest['status'];
+    jobIds?: string[];
+  } = {};
+  if (query.limit !== undefined) {
+    if (typeof query.limit !== 'string' || !/^[1-9]\d{0,2}$/u.test(query.limit)) throw invalidRequest();
+    result.limit = Number(query.limit);
+  }
+  if (query.cursor !== undefined) {
+    if (typeof query.cursor !== 'string' || query.cursor.length > 512 || !/^[A-Za-z0-9_-]+$/u.test(query.cursor)) throw invalidRequest();
+    result.cursor = query.cursor;
+  }
+  if (query.search !== undefined) {
+    if (typeof query.search !== 'string' || query.search.length > 200) throw invalidRequest();
+    result.search = query.search;
+  }
+  if (query.status !== undefined) {
+    if (typeof query.status !== 'string' || !Object.hasOwn(CORE_JOB_STATUS_LABELS, query.status)) throw invalidRequest();
+    result.status = query.status as CoreListRequest['status'];
+  }
+  if (query.jobIds !== undefined) {
+    if (query.jobIds === '') result.jobIds = [];
+    else {
+      const values = Array.isArray(query.jobIds) ? query.jobIds : [query.jobIds];
+      if (values.length > 50 || values.some(value => typeof value !== 'string' || !value.trim()
+        || value.length > 200 || /[\u0000-\u001f\u007f-\u009f]/u.test(value))) throw invalidRequest();
+      result.jobIds = values as string[];
+    }
+  }
+  return result;
 }
 
 function jobRequest(request: Request): CoreJobRequest {

@@ -52,15 +52,18 @@ export function createExecutionPresentationActivity(job: CoreOrchestrationJob, m
   }
   if (details.includes('steps')) nested.push(text('진행 단계'), ...(presentation.progress.length ? presentation.progress.map(value => text(value, 180)) : [text('기록된 진행 단계가 없습니다.')]));
   if (details.includes('diagnostics')) {
-    nested.push(text('진단 정보'));
+    nested.push(text('실행 진단 및 사용량'), text('요청 보기'), text(presentation.prompt || '요청이 기록되지 않았습니다.', 2_100));
+    if (presentation.result?.trim()) nested.push(text('전체 결과 보기'), text(presentation.result, 4_100));
+    if (presentation.error?.trim()) nested.push(text('오류'), text(presentation.error, 2_100));
     const facts = presentation.facts.map(fact => ({title:clip(fact.label,90),value:clip(fact.value,160)}));
     for (let start=0;start<facts.length;start+=24) nested.push({type:'FactSet',facts:facts.slice(start,start+24)});
+    nested.push(text('추가 정보'), text('도구·진행·요청 데이터는 관측된 기록만 표시합니다. 실시간 stdout/stderr 스트림과 검증된 금액 추정은 연결되지 않았습니다.', 500));
   }
   if (!details.length) nested.push(text('선택된 상세 항목이 없습니다.'));
   const actions = [{type:'Action.ShowCard',title:'선택한 상세 펼치기 / 접기',card:{type:'AdaptiveCard',version:'1.6',body:nested}}, ...(baseCard?.actions ?? [])];
   const card: any = {type:'AdaptiveCard',$schema:'http://adaptivecards.io/schemas/adaptive-card.json',version:'1.6',msteams:{width:'Full'},
     body:[text('Core 에이전트 작업 · 요약'),text(presentation.statusLabel),
-      text(presentation.result || presentation.summary,2000),...(presentation.error?[text(presentation.error,1000)]:[]),
+      text(presentation.summary,700),...(presentation.error?[text(presentation.error,600)]:[]),
       {type:'FactSet',facts:[{title:'작업 ID',value:job.id},{title:'상태',value:job.status}]}],actions};
   if(Buffer.byteLength(JSON.stringify(card))>26000) {
     // Preserve all chosen sections/facts, but bound their values for Teams delivery.

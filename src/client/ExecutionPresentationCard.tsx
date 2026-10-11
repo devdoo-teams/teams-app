@@ -23,7 +23,8 @@ export function ExecutionPresentationDetails({ presentation, details = [...EXECU
         <pre>{tool.outcome || '종료 결과가 관측되지 않았습니다.'}</pre><time>{tool.observedAt}</time>
       </li>)}</ul> : <p>보고된 도구 없음</p>}</section> : null}
     {details.includes('steps') ? <section aria-label="진행 단계"><h4>진행 단계</h4>
-      {presentation.progress.length ? <ol>{presentation.progress.map((progress, index) => <li key={index}>{progress}</li>)}</ol> : <p>기록된 진행 단계가 없습니다.</p>}</section> : null}
+      {presentation.progress.length ? <ol>{presentation.progress.map((progress, index) => <li key={index}>{progress}</li>)}</ol> : <p>기록된 진행 단계가 없습니다.</p>}
+      <p className="panel-description" role="note">이 기록은 상태 이벤트를 표시합니다. stdout/stderr 실시간 스트림은 제공되지 않습니다.</p></section> : null}
     {details.includes('diagnostics') ? <section aria-label="진단 정보"><h4>진단 정보</h4>
       <details className="presentation-diagnostics"><summary>진단 정보 펼치기 / 접기</summary>
         {presentation.facts.map((fact, index) => <p key={index}><strong>{fact.label}:</strong> {fact.value}</p>)}

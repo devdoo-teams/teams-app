@@ -11,6 +11,18 @@ import { isApiAuthError } from './auth.js';
 import { createLatestDetailRequestController } from './latest-detail-request.js';
 export { createLatestDetailRequestController } from './latest-detail-request.js';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import {
+  addWorkHubProject,
+  assignJobToProject,
+  readWorkHubPreferences,
+  summarizeWorkHubPrompt,
+  togglePinnedJob,
+  workHubNavigationJobIds,
+  workHubStorageKey,
+  writeWorkHubPreferences,
+  type WorkHubNavigationSection,
+  type WorkHubPreferences,
+} from './work-hub-navigation.js';
 
 import {
   CoreOrchestrationClientError,
@@ -26,6 +38,7 @@ import type {
   CoreOrchestrationMode,
   CoreOrchestrationProvider,
   CoreProviderFact,
+  CoreOrchestrationJobStatus,
 } from '../shared/core-orchestration.js';
 
 type PanelPhase = 'loading' | 'ready' | 'error';
@@ -298,6 +311,27 @@ export type OrchestrationPanelViewProps = {
   validationError: string;
   lastUpdatedAt?: string;
   mobile: boolean;
+  listHasMore?: boolean;
+  listLoadingMore?: boolean;
+  listSearchDraft?: string;
+  listStatus?: CoreOrchestrationJobStatus | 'all';
+  listNavigation?: WorkHubNavigationSection;
+  selectedProject?: string;
+  listIsFiltered?: boolean;
+  navigationPreferences?: WorkHubPreferences;
+  navigationStorageAvailable?: boolean;
+  navigationDrawerOpen?: boolean;
+  projectDraft?: string;
+  onListSearchDraftChange?: (value: string) => void;
+  onListSearchSubmit?: () => void;
+  onListStatusChange?: (value: CoreOrchestrationJobStatus | 'all') => void;
+  onListNavigate?: (section: WorkHubNavigationSection, projectName?: string) => void;
+  onTogglePin?: (jobId: string) => void;
+  onCreateProject?: (name: string) => void;
+  onAssignProject?: (jobId: string, projectName: string) => void;
+  onNavigationDrawerOpenChange?: (open: boolean) => void;
+  onProjectDraftChange?: (value: string) => void;
+  onLoadMore?: () => void | Promise<void>;
   pendingConfirmation?: OrchestrationConfirmation | null;
   approvalDecisionSupported?: boolean;
   onPromptChange: (value: string) => void;
@@ -341,8 +375,11 @@ export function orchestrationMutationNotice(
 }
 
 export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
+  const drawerOpen = props.navigationDrawerOpen ?? true;
   const selectedProvider = props.providers.find((provider) => provider.provider === props.selectedJob?.provider);
   const selectedModel = props.modelCatalog?.models.find((model) => model.id === props.modelId);
+  const navigationPreferences = props.navigationPreferences ?? { pinnedJobIds: [], projectNames: [], projectByJobId: {} };
+  const currentSection = props.listNavigation ?? 'recent';
   const submitBusy = props.busyAction === 'submit';
   const selectedBusy = props.selectedJob ? props.busyAction.endsWith(`:${props.selectedJob.id}`) : false;
   const canCancel = props.selectedJob
@@ -365,6 +402,20 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
   const sendInput = (event: FormEvent) => {
     event.preventDefault();
     if (props.selectedJob) void props.onProvideInput(props.selectedJob.id);
+  };
+  const selectTask = (jobId: string) => {
+    props.onNavigationDrawerOpenChange?.(false);
+    void props.onSelectTask(jobId);
+  };
+  const submitSearch = (event: FormEvent) => {
+    event.preventDefault();
+    props.onListSearchSubmit?.();
+  };
+  const createProject = (event: FormEvent) => {
+    event.preventDefault();
+    const name = props.projectDraft?.trim() ?? '';
+    if (!name) return;
+    props.onCreateProject?.(name);
   };
 
   return (
@@ -629,10 +680,6 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
         </div>
       ) : null}
 
-      {props.phase === 'ready' && props.jobs.length === 0 ? (
-        <p aria-live="polite" className="empty" role="status">아직 실행한 작업이 없습니다.</p>
-      ) : null}
-
       {props.phase === 'ready' ? <section aria-label="개인 승인 대기 목록">
         <h3>승인 대기</h3>
         <p>승인 대상 확인 후 기존 작업 상세에서 승인하거나 거절하세요. 확인 카드가 만료돼도 작업은 자동 승인되지 않습니다.</p>
@@ -647,22 +694,81 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
           </article>
         )) : <p role="status">{props.pendingJobs == null ? '최근 작업에 승인 대기 항목이 없습니다.' : '승인 대기 작업이 없습니다.'}</p>}
       </section> : null}
-      {props.phase === 'ready' && props.jobs.length > 0 ? (
-        <div aria-label="오케스트레이션 작업 목록" className="work-item-list" role="list">
-          {props.jobs.map((job) => (
-            <article className={`work-item-card${props.selectedJob?.id === job.id ? ' selected' : ''}`} key={job.id} role="listitem">
-              <div className="work-item-card-heading">
-                <button className="work-item-title" onClick={() => void props.onSelectTask(job.id)} type="button">
-                  {job.prompt}
-                </button>
-                <span className="badge" data-job-status={job.status}>{statusLabels[job.status]}</span>
-              </div>
-              <p className="work-item-meta">작업 ID: {job.id} · 제공자: {job.provider ?? 'codex'} · 모드: {job.mode}</p>
-            </article>
-          ))}
+      {props.phase === 'ready' ? <section aria-label="업무 허브 작업 목록" className="work-hub-workspace">
+        <div className="work-hub-heading">
+          <div><h3>작업 라이브러리</h3><p className="panel-description">최근 작업을 찾고, 고정하거나 프로젝트별로 정리하세요.</p></div>
+          <button aria-expanded={drawerOpen} className="secondary" onClick={() => props.onNavigationDrawerOpenChange?.(!drawerOpen)} type="button">
+            {drawerOpen ? '탐색 접기' : '탐색 펼치기'}
+          </button>
         </div>
-      ) : null}
-
+        <div className={`work-hub-layout${drawerOpen ? '' : ' navigation-collapsed'}`}>
+          {drawerOpen ? <aside aria-label="업무 허브 탐색" className="work-hub-navigation">
+            <button aria-pressed={currentSection === 'recent'} className="work-hub-nav-item"
+              onClick={() => props.onListNavigate?.('recent')} type="button">최근 작업</button>
+            <button aria-pressed={currentSection === 'pinned'} className="work-hub-nav-item"
+              onClick={() => props.onListNavigate?.('pinned')} type="button">고정한 작업 <span>{navigationPreferences.pinnedJobIds.length}</span></button>
+            <div className="work-hub-projects">
+              <h4>프로젝트</h4>
+              {navigationPreferences.projectNames.map(name => <button aria-pressed={currentSection === 'project' && props.selectedProject === name}
+                className="work-hub-nav-item" key={name} onClick={() => props.onListNavigate?.('project', name)} type="button">{name}</button>)}
+              <p className="panel-description">프로젝트 배정은 이 기기에 저장되며 최대 50개 작업까지 유지됩니다.</p>
+            </div>
+            <form className="work-hub-project-form" onSubmit={createProject}>
+              <label htmlFor="work-hub-project-name">새 프로젝트</label>
+              <input id="work-hub-project-name" maxLength={64} onChange={event => props.onProjectDraftChange?.(event.currentTarget.value)}
+                placeholder="프로젝트 이름" value={props.projectDraft ?? ''} />
+              <button className="secondary" disabled={!(props.projectDraft ?? '').trim()} type="submit">프로젝트 추가</button>
+            </form>
+            {!props.navigationStorageAvailable ? <p className="panel-description" role="note">Teams 계정 식별 정보를 사용할 수 없어 고정·프로젝트 설정은 이 탭에서만 유지됩니다.</p> : null}
+          </aside> : null}
+          <div className="work-hub-results">
+            <form aria-label="작업 검색" className="work-hub-search" onSubmit={submitSearch}>
+              <label className="work-hub-search-input"><span className="sr-only">작업 검색</span>
+                <input maxLength={200} onChange={event => props.onListSearchDraftChange?.(event.currentTarget.value)}
+                  placeholder="작업 검색" value={props.listSearchDraft ?? ''} />
+              </label>
+              <label className="work-hub-status-filter">상태
+                <select aria-label="상태 필터" onChange={event => props.onListStatusChange?.(event.currentTarget.value as CoreOrchestrationJobStatus | 'all')}
+                  value={props.listStatus ?? 'all'}>
+                  <option value="all">모든 상태</option>
+                  {Object.entries(statusLabels).map(([status, label]) => <option key={status} value={status}>{label}</option>)}
+                </select>
+              </label>
+              <button className="primary" type="submit">검색</button>
+            </form>
+            <div aria-label="오케스트레이션 작업 목록" className="work-item-list" role="list">
+              {props.jobs.map(job => {
+                const summary = summarizeWorkHubPrompt(job.prompt);
+                const pinned = navigationPreferences.pinnedJobIds.includes(job.id);
+                return <article className={`work-item-card${props.selectedJob?.id === job.id ? ' selected' : ''}`} key={job.id} role="listitem">
+                  <div className="work-item-card-heading">
+                    <button className="work-item-title" onClick={() => selectTask(job.id)} type="button">{summary.title}</button>
+                    <span className="badge" data-job-status={job.status}>{statusLabels[job.status]}</span>
+                  </div>
+                  {summary.preview ? <p className="work-item-preview">{summary.preview}</p> : null}
+                  <p className="work-item-meta">작업 ID: {job.id} · 제공자: {job.provider ?? 'codex'} · 모드: {job.mode}</p>
+                  <div className="work-item-actions">
+                    <button aria-label={pinned ? '고정 해제' : '작업 고정'} aria-pressed={pinned} className="secondary"
+                      onClick={() => props.onTogglePin?.(job.id)} type="button">{pinned ? '고정됨' : '고정'}</button>
+                    {navigationPreferences.projectNames.length > 0 ? <label className="work-item-project-assignment">프로젝트
+                      <select aria-label={`${summary.title} 프로젝트`} value={navigationPreferences.projectByJobId[job.id] ?? ''}
+                        onChange={event => props.onAssignProject?.(job.id, event.currentTarget.value)}>
+                        <option value="">지정 안 함</option>
+                        {navigationPreferences.projectNames.map(name => <option key={name} value={name}>{name}</option>)}
+                      </select>
+                    </label> : null}
+                  </div>
+                </article>;
+              })}
+              {props.jobs.length === 0 ? <p aria-live="polite" className="empty" role="status">
+                {props.listIsFiltered || currentSection !== 'recent' ? '조건에 맞는 작업이 없습니다.' : '아직 실행한 작업이 없습니다.'}
+              </p> : null}
+            </div>
+            {props.listHasMore ? <button className="secondary work-hub-load-more" disabled={props.listLoadingMore}
+              onClick={() => void props.onLoadMore?.()} type="button">{props.listLoadingMore ? '불러오는 중…' : '다음 작업 불러오기'}</button> : null}
+          </div>
+        </div>
+      </section> : null}
 
     </section>
   );
@@ -685,6 +791,21 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     return () => { active = false; };
   }, []);
   const [jobs, setJobs] = useState<CoreOrchestrationJob[]>([]);
+  const [listHasMore, setListHasMore] = useState(false);
+  const [listNextCursor, setListNextCursor] = useState<string | undefined>();
+  const [listLoadingMore, setListLoadingMore] = useState(false);
+  const [listSearchDraft, setListSearchDraft] = useState('');
+  const [listSearch, setListSearch] = useState('');
+  const [listStatus, setListStatus] = useState<CoreOrchestrationJobStatus | 'all'>('all');
+  const [listNavigation, setListNavigation] = useState<WorkHubNavigationSection>('recent');
+  const [selectedProject, setSelectedProject] = useState('');
+  const [navigationDrawerOpen, setNavigationDrawerOpen] = useState(true);
+  const [projectDraft, setProjectDraft] = useState('');
+  const [navigationPreferences, setNavigationPreferences] = useState<WorkHubPreferences>({
+    pinnedJobIds: [], projectNames: [], projectByJobId: {},
+  });
+  const [navigationPreferencesKey, setNavigationPreferencesKey] = useState<string | undefined>();
+  const [navigationPreferencesHydrated, setNavigationPreferencesHydrated] = useState(false);
   const [pendingJobs, setPendingJobs] = useState<CoreOrchestrationJob[] | null | undefined>(undefined);
   const [pendingHasMore, setPendingHasMore] = useState(false);
   const [providers, setProviders] = useState<CoreProviderFact[]>([]);
@@ -718,12 +839,49 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
   const busy = useMemo(() => createOrchestrationBusyController(), []);
   const submissionKeys = useRef(createSubmissionIdempotencyController());
   const loadController = useRef<AbortController | null>(null);
+  const listPageController = useRef<AbortController | null>(null);
+  const listPageLock = useRef(false);
   const privateAccessBlocked = useRef(false);
+
+  useEffect(() => {
+    if (!teamsApp.isInitialized()) return;
+    let active = true;
+    void teamsApp.getContext().then(context => {
+      if (!active) return;
+      const key = workHubStorageKey(context.user?.tenant?.id, context.user?.id);
+      let storage: Storage | undefined;
+      try { storage = window.localStorage; } catch { /* Optional local preferences. */ }
+      setNavigationPreferencesKey(key);
+      setNavigationPreferences(readWorkHubPreferences(storage, key));
+      setNavigationPreferencesHydrated(true);
+    }).catch(() => { /* Navigation remains usable for this tab session. */ });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!navigationPreferencesHydrated || !navigationPreferencesKey || typeof window === 'undefined') return;
+    let storage: Storage | undefined;
+    try { storage = window.localStorage; } catch { /* Optional local preferences. */ }
+    writeWorkHubPreferences(storage, navigationPreferencesKey, navigationPreferences);
+  }, [navigationPreferences, navigationPreferencesHydrated, navigationPreferencesKey]);
+
+  const listJobIds = useMemo(() => workHubNavigationJobIds(
+    navigationPreferences, listNavigation, selectedProject,
+  ), [listNavigation, navigationPreferences, selectedProject]);
+  const listQuery = useMemo(() => ({
+    limit: 30,
+    ...(listSearch ? { search: listSearch } : {}),
+    ...(listStatus !== 'all' ? { status: listStatus } : {}),
+    ...(listJobIds !== undefined ? { jobIds: listJobIds } : {}),
+  }), [listJobIds, listSearch, listStatus]);
 
   const clearPrivateState = useCallback(() => {
     privateAccessBlocked.current = true;
     detailRequests.current.dispose();
     setJobs([]);
+    setListHasMore(false);
+    setListNextCursor(undefined);
+    setListLoadingMore(false);
     setPendingJobs([]);
     setPendingHasMore(false);
     setSelectedJob(null);
@@ -750,6 +908,11 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
 
   const load = useCallback(async (options: { silent?: boolean } = {}) => {
     if (options.silent && privateAccessBlocked.current) return;
+    if (options.silent && listPageLock.current) return;
+    listPageController.current?.abort();
+    listPageController.current = null;
+    listPageLock.current = false;
+    setListLoadingMore(false);
     loadController.current?.abort();
     const controller = new AbortController();
     loadController.current = controller;
@@ -758,12 +921,14 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
       setError('');
     }
     try {
-      const result = await client.listJobs(controller.signal);
+      const result = await client.listJobs(controller.signal, listQuery);
       const selected = selectedJob ? await client.getJob(selectedJob.id, controller.signal) : undefined;
       const requestedJob = requestedJobId ? await loadRequestedJob(requestedJobId, client, controller.signal) : undefined;
       if (controller.signal.aborted) return;
       privateAccessBlocked.current = false;
       setJobs([...includeRequestedJob(result.jobs, requestedJob)]);
+      setListHasMore(result.hasMore === true);
+      setListNextCursor(result.nextCursor);
       setPendingJobs(result.pendingJobs);
       setPendingHasMore(result.pendingHasMore === true);
       setProviders(result.providers);
@@ -790,7 +955,52 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
         setPhase('error');
       }
     }
-  }, [clearPrivateState, client, requestedJobId, selectedJob?.id]);
+  }, [clearPrivateState, client, listQuery, requestedJobId, selectedJob?.id]);
+
+  const loadMore = useCallback(async () => {
+    if (!listHasMore || !listNextCursor || listPageLock.current || privateAccessBlocked.current) return;
+    listPageLock.current = true;
+    setListLoadingMore(true);
+    const controller = new AbortController();
+    listPageController.current = controller;
+    try {
+      const result = await client.listJobs(controller.signal, { ...listQuery, cursor: listNextCursor });
+      if (controller.signal.aborted) return;
+      setJobs(current => {
+        const existing = new Set(current.map(job => job.id));
+        return [...current, ...result.jobs.filter(job => !existing.has(job.id))];
+      });
+      setListHasMore(result.hasMore === true);
+      setListNextCursor(result.nextCursor);
+    } catch (caught) {
+      if (!controller.signal.aborted) {
+        setNotice({ kind: 'refresh-error', message: `다음 작업을 불러오지 못했습니다: ${errorMessage(caught)}` });
+      }
+    } finally {
+      if (listPageController.current === controller) {
+        listPageController.current = null;
+        listPageLock.current = false;
+        setListLoadingMore(false);
+      }
+    }
+  }, [client, listHasMore, listNextCursor, listQuery]);
+
+  const navigateList = useCallback((section: WorkHubNavigationSection, projectName?: string) => {
+    setListNavigation(section);
+    setSelectedProject(section === 'project' ? projectName ?? '' : '');
+  }, []);
+  const togglePin = useCallback((jobId: string) => {
+    setNavigationPreferences(current => togglePinnedJob(current, jobId));
+  }, []);
+  const createProject = useCallback((name: string) => {
+    setNavigationPreferences(current => addWorkHubProject(current, name));
+    setListNavigation('project');
+    setSelectedProject(name.trim().replace(/\s+/gu, ' '));
+    setProjectDraft('');
+  }, []);
+  const assignProject = useCallback((jobId: string, projectName: string) => {
+    setNavigationPreferences(current => assignJobToProject(current, jobId, projectName));
+  }, []);
 
   useEffect(() => {
     if (!privateAccessBlocked.current) void load();
@@ -802,6 +1012,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     return () => {
       polling.stop();
       loadController.current?.abort();
+      listPageController.current?.abort();
     };
   }, [load]);
 
@@ -938,6 +1149,27 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     error={error}
     inputValue={inputValue}
     jobs={jobs}
+    listHasMore={listHasMore}
+    listLoadingMore={listLoadingMore}
+    listSearchDraft={listSearchDraft}
+    listStatus={listStatus}
+    listNavigation={listNavigation}
+    selectedProject={selectedProject}
+    listIsFiltered={Boolean(listSearch || listStatus !== 'all')}
+    navigationPreferences={navigationPreferences}
+    navigationStorageAvailable={Boolean(navigationPreferencesKey)}
+    navigationDrawerOpen={navigationDrawerOpen}
+    projectDraft={projectDraft}
+    onListSearchDraftChange={setListSearchDraft}
+    onListSearchSubmit={() => setListSearch(listSearchDraft.trim())}
+    onListStatusChange={setListStatus}
+    onListNavigate={navigateList}
+    onTogglePin={togglePin}
+    onCreateProject={createProject}
+    onAssignProject={assignProject}
+    onNavigationDrawerOpenChange={setNavigationDrawerOpen}
+    onProjectDraftChange={setProjectDraft}
+    onLoadMore={loadMore}
     pendingJobs={pendingJobs}
     pendingHasMore={pendingHasMore}
     lastUpdatedAt={lastUpdatedAt}
