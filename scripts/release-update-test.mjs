@@ -32,6 +32,7 @@ assert.deepEqual(
     surface: undefined,
     evidencePath: undefined,
     reason: undefined,
+    untrackedPath: undefined,
     statePath: undefined,
   },
   'release:update defaults to the resumable run command',
@@ -46,6 +47,7 @@ assert.deepEqual(
     surface: 'portal',
     evidencePath: '/tmp/portal.json',
     reason: undefined,
+    untrackedPath: undefined,
     statePath: undefined,
   },
   'browser evidence is an explicit phase and surface',
@@ -55,6 +57,24 @@ assert.equal(
   parseReleaseUpdateArgs(['reconcile', '--evidence', '/tmp/jira-reconciliation.json']).command,
   'reconcile',
   'Jira reconciliation is an explicit final gate',
+);
+assert.deepEqual(
+  parseReleaseUpdateArgs(['record-owned-output', '--path', '.teams-ui-qa-test/ui-qa-report.md', '--reason', 'Record a task-owned QA update']),
+  {
+    command: 'record-owned-output',
+    url: undefined,
+    packagePath: undefined,
+    surface: undefined,
+    evidencePath: undefined,
+    reason: 'Record a task-owned QA update',
+    untrackedPath: '.teams-ui-qa-test/ui-qa-report.md',
+    statePath: undefined,
+  },
+  'task-owned untracked output recording requires an explicit report path and audit reason',
+);
+assert.throws(
+  () => parseReleaseUpdateArgs(['record-owned-output', '--reason', 'A reason without a path']),
+  /requires --path/,
 );
 
 assert.deepEqual(RELEASE_UPDATE_PHASES, [
@@ -69,6 +89,8 @@ assert.deepEqual(RELEASE_UPDATE_PHASES, [
 ]);
 assert.equal(RELEASE_UPDATE_BLOCKER_CODES.has('ESTALERELEASE'), true);
 assert.equal(RELEASE_UPDATE_BLOCKER_CODES.has('EUNTRACKEDSTARTMUTATED'), true);
+assert.equal(RELEASE_UPDATE_BLOCKER_CODES.has('EUNTRACKEDOUTPUTNOTOWNED'), true);
+assert.equal(RELEASE_UPDATE_BLOCKER_CODES.has('EUNTRACKEDOUTPUTUNCHANGED'), true);
 assert.equal(RELEASE_UPDATE_BLOCKER_CODES.has('EVERSIONNOTBUMPED'), true);
 assert.equal(normalizeChildBlockerCode('EPACKAGEPATH', 'ELOOPPHASE'), 'EPACKAGEPATH');
 assert.equal(normalizeChildBlockerCode(20, 'ELOOPPHASE'), 'ELOOPPHASE');

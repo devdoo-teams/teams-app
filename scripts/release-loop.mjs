@@ -1907,6 +1907,9 @@ export function createGitSnapshot({
 
 const UNTRACKED_HASH_CHUNK_BYTES = 1024 * 1024;
 const UNTRACKED_BASELINE_FIELDS = ['type', 'device', 'inode', 'mode', 'size', 'sha256', 'target'];
+const TASK_OWNED_UNTRACKED_OUTPUT_PATTERN = /^\.teams-ui-qa-[A-Za-z0-9._-]+\/ui-qa-report\.md$/u;
+const TASK_OWNED_UNTRACKED_OUTPUT_STABLE_FIELDS = ['path', 'type', 'device', 'inode', 'mode', 'target'];
+const TASK_OWNED_UNTRACKED_OUTPUT_RECORDED_BY = 'release:update';
 
 function untrackedRelativePath(entry) {
   if (typeof entry !== 'string') throw new Error('release loop untracked path must be a string');
@@ -2067,6 +2070,162 @@ function untrackedMutationError(relativePath, reason, cause) {
   return blocker;
 }
 
+function untrackedBaselineUnavailable(message) {
+  const error = new Error(message);
+  error.code = 'EUNTRACKEDBASELINEUNAVAILABLE';
+  return error;
+}
+
+function sameUntrackedFingerprint(left, right, fields = UNTRACKED_BASELINE_FIELDS) {
+  return Boolean(left && right && fields.every((field) => left[field] === right[field]));
+}
+
+function taskOwnedOutputReason(value) {
+  if (typeof value !== 'string' || value.trim().length < 8 || value.length > 500) {
+    const error = new Error('record-owned-output requires --reason between 8 and 500 characters');
+    error.code = 'EUNTRACKEDOUTPUTNOTOWNED';
+    throw error;
+  }
+  if (/(?:bearer\s+\S+|sk-[A-Za-z0-9_-]{8,}|(?:client[_ -]?secret|password|api[_ -]?key)\s*[:=]\s*\S+)/i.test(value)) {
+    const error = new Error('record-owned-output reason must not contain credentials');
+    error.code = 'EUNTRACKEDOUTPUTNOTOWNED';
+    throw error;
+  }
+  return value.trim();
+}
+
+function validateTaskOwnedUntrackedOutputChanges(state, paths, baselineByPath) {
+  const changes = state?.taskOwnedUntrackedOutputChanges ?? [];
+  if (!Array.isArray(changes)) {
+    throw untrackedBaselineUnavailable('release loop task-owned untracked output audit is invalid');
+  }
+  const expectedByPath = new Map(baselineByPath);
+  for (const change of changes) {
+    let relativePath;
+    try {
+      relativePath = untrackedRelativePath(change?.path);
+    } catch (error) {
+      throw untrackedBaselineUnavailable(`release loop task-owned untracked output audit is invalid: ${error.message}`);
+    }
+    const original = baselineByPath.get(relativePath);
+    const previous = expectedByPath.get(relativePath);
+    const accepted = change?.acceptedFingerprint;
+    const reason = change?.reason;
+    if (!TASK_OWNED_UNTRACKED_OUTPUT_PATTERN.test(relativePath)
+      || !paths.includes(relativePath)
+      || !original
+      || original.type !== 'file'
+      || change?.recordedBy !== TASK_OWNED_UNTRACKED_OUTPUT_RECORDED_BY
+      || typeof reason !== 'string'
+      || reason.trim().length < 8
+      || reason.length > 500
+      || /(bearer\s+\S+|sk-[A-Za-z0-9_-]{8,}|(?:client[_ -]?secret|password|api[_ -]?key)\s*[:=]\s*\S+)/i.test(reason)
+      || typeof change?.recordedAt !== 'string'
+      || Number.isNaN(Date.parse(change.recordedAt))
+      || !sameUntrackedFingerprint(change?.originalFingerprint, original)
+      || !sameUntrackedFingerprint(change?.previousFingerprint, previous)
+      || accepted?.type !== 'file'
+      || accepted.path !== relativePath
+      || !Number.isSafeInteger(accepted.size)
+      || accepted.size < 0
+      || typeof accepted.sha256 !== 'string'
+      || !/^[a-f0-9]{64}$/u.test(accepted.sha256)
+      || !sameUntrackedFingerprint(accepted, original, TASK_OWNED_UNTRACKED_OUTPUT_STABLE_FIELDS)
+      || (accepted.size === previous.size && accepted.sha256 === previous.sha256)) {
+      throw untrackedBaselineUnavailable(`release loop task-owned untracked output audit is invalid for ${relativePath}`);
+    }
+    expectedByPath.set(relativePath, accepted);
+  }
+  return expectedByPath;
+}
+
+/**
+ * Record one explicit content update to this task's generated QA report. The
+ * original start fingerprint stays immutable; only size and SHA-256 may differ,
+ * and every subsequent content update requires a new audit event.
+ */
+export function recordTaskOwnedUntrackedOutputChange(
+  state,
+  relativePath,
+  reason,
+  {
+    rootDir = root,
+    lstat,
+    readlink,
+    hashFile,
+    realpath,
+    now = new Date(),
+  } = {},
+) {
+  const pathValue = untrackedRelativePath(relativePath);
+  if (!TASK_OWNED_UNTRACKED_OUTPUT_PATTERN.test(pathValue)) {
+    const error = new Error('only generated QA report files may be registered as task-owned outputs');
+    error.code = 'EUNTRACKEDOUTPUTNOTOWNED';
+    throw error;
+  }
+  const safeReason = taskOwnedOutputReason(reason);
+  const paths = (state?.untrackedAtStart ?? []).map(untrackedRelativePath);
+  const baseline = state?.untrackedAtStartBaseline;
+  if (!Array.isArray(baseline) || baseline.length !== paths.length) {
+    throw untrackedBaselineUnavailable('release loop cannot register a task-owned output without the complete original untracked baseline');
+  }
+  const baselineByPath = new Map();
+  for (const entry of baseline) {
+    if (!entry || typeof entry.path !== 'string' || baselineByPath.has(entry.path)) {
+      throw untrackedBaselineUnavailable('release loop baseline untracked fingerprints are invalid');
+    }
+    baselineByPath.set(entry.path, entry);
+  }
+  if (!paths.includes(pathValue) || !baselineByPath.has(pathValue)) {
+    const error = new Error(`task-owned QA report was not present in untrackedAtStart: ${pathValue}`);
+    error.code = 'EUNTRACKEDOUTPUTNOTOWNED';
+    throw error;
+  }
+  const expectedByPath = validateTaskOwnedUntrackedOutputChanges(state, paths, baselineByPath);
+  const original = baselineByPath.get(pathValue);
+  const previous = expectedByPath.get(pathValue) ?? original;
+  const otherPaths = paths.filter((candidate) => candidate !== pathValue);
+  const otherBaseline = baseline.filter((entry) => entry.path !== pathValue);
+  const otherChanges = (state.taskOwnedUntrackedOutputChanges ?? []).filter((change) => change.path !== pathValue);
+  assertInitialUntrackedPreserved({
+    ...state,
+    untrackedAtStart: otherPaths,
+    untrackedAtStartBaseline: otherBaseline,
+    taskOwnedUntrackedOutputChanges: otherChanges,
+  }, { rootDir, lstat, readlink, hashFile, realpath });
+
+  let accepted;
+  try {
+    accepted = snapshotUntrackedPath(pathValue, { rootDir, lstat, readlink, hashFile, realpath });
+  } catch (error) {
+    throw untrackedMutationError(pathValue, 'the path is missing or cannot be read', error);
+  }
+  if (!sameUntrackedFingerprint(accepted, original, TASK_OWNED_UNTRACKED_OUTPUT_STABLE_FIELDS)) {
+    throw untrackedMutationError(pathValue, 'file identity or metadata changed');
+  }
+  if (accepted.size === previous.size && accepted.sha256 === previous.sha256) {
+    const error = new Error(`task-owned QA report has no new content update to record: ${pathValue}`);
+    error.code = 'EUNTRACKEDOUTPUTUNCHANGED';
+    throw error;
+  }
+
+  const recordedAt = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+  const change = {
+    path: pathValue,
+    originalFingerprint: { ...original },
+    previousFingerprint: { ...previous },
+    acceptedFingerprint: { ...accepted },
+    reason: safeReason,
+    recordedAt,
+    recordedBy: TASK_OWNED_UNTRACKED_OUTPUT_RECORDED_BY,
+  };
+  return {
+    ...state,
+    taskOwnedUntrackedOutputChanges: [...(state.taskOwnedUntrackedOutputChanges ?? []), change],
+    updatedAt: recordedAt,
+  };
+}
+
 export function assertInitialUntrackedPreserved(
   state,
   {
@@ -2096,6 +2255,7 @@ export function assertInitialUntrackedPreserved(
     }
     baselineByPath.set(entry.path, entry);
   }
+  const expectedByPath = validateTaskOwnedUntrackedOutputChanges(state, paths, baselineByPath);
   for (const relativePath of paths) {
     const expected = baselineByPath.get(relativePath);
     if (!expected) {
@@ -2111,7 +2271,8 @@ export function assertInitialUntrackedPreserved(
     } catch (error) {
       throw untrackedMutationError(relativePath, 'the path is missing or cannot be read', error);
     }
-    const changedFields = UNTRACKED_BASELINE_FIELDS.filter((field) => current[field] !== expected[field]);
+    const accepted = expectedByPath.get(relativePath) ?? expected;
+    const changedFields = UNTRACKED_BASELINE_FIELDS.filter((field) => current[field] !== accepted[field]);
     if (changedFields.length > 0) {
       throw untrackedMutationError(relativePath, `fingerprint changed (${changedFields.join(', ')})`);
     }

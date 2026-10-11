@@ -10,6 +10,7 @@ import {
   applyPhaseSuccess,
   createInitialState,
   missingGates,
+  recordTaskOwnedUntrackedOutputChange,
   readState as readReleaseLoopState,
   resetAfterPhaseFailure,
   runGatePhase,
@@ -69,6 +70,8 @@ export const RELEASE_UPDATE_BLOCKER_CODES = new Set([
   'EUNTRACKEDSTARTMUTATED',
   'EUNTRACKEDBASELINEINVALID',
   'EUNTRACKEDBASELINEUNAVAILABLE',
+  'EUNTRACKEDOUTPUTNOTOWNED',
+  'EUNTRACKEDOUTPUTUNCHANGED',
   'EVERSIONNOTBUMPED',
   'EWORKTREEDIRTY',
   'EUPDATEOUTPUT',
@@ -459,7 +462,7 @@ export function validateBrowserAttestation(input, state, surface, now = new Date
 export function parseReleaseUpdateArgs(argv) {
   const args = [...argv];
   const first = args[0];
-  const knownCommands = new Set(['run', 'start', 'machine', 'package', 'public', 'browser', 'status', 'supersede', 'reconcile', 'complete']);
+  const knownCommands = new Set(['run', 'start', 'machine', 'package', 'public', 'browser', 'status', 'supersede', 'reconcile', 'complete', 'record-owned-output']);
   const command = first && !first.startsWith('--') ? first : 'run';
   if (!knownCommands.has(command)) throw new Error(`unknown release:update command: ${command}`);
   let index = first && !first.startsWith('--') ? 1 : 0;
@@ -470,6 +473,7 @@ export function parseReleaseUpdateArgs(argv) {
     surface: undefined,
     evidencePath: undefined,
     reason: undefined,
+    untrackedPath: undefined,
     statePath: undefined,
   };
   while (index < args.length) {
@@ -483,6 +487,7 @@ export function parseReleaseUpdateArgs(argv) {
     else if (arg === '--surface') options.surface = value();
     else if (arg === '--evidence' || arg === '--file') options.evidencePath = value();
     else if (arg === '--reason') options.reason = value();
+    else if (arg === '--path') options.untrackedPath = value();
     else if (arg === '--state') options.statePath = value();
     else if (arg === '--observations') options.observationsPath = value();
     else throw new Error(`unknown release:update argument: ${arg}`);
@@ -491,6 +496,10 @@ export function parseReleaseUpdateArgs(argv) {
   if (command === 'browser' && !options.surface) throw new Error('browser requires --surface');
   if (command === 'browser' && options.surface && automatedPhases.has(options.surface)) {
     throw new Error('browser --surface must be portal, installed, desktop, or mobile');
+  }
+  if (command === 'record-owned-output') {
+    assertNonEmptyString(options.untrackedPath, '--path');
+    assertNonEmptyString(options.reason, '--reason');
   }
   return options;
 }
@@ -1189,6 +1198,20 @@ async function executeCli(argv) {
     if (options.command === 'supersede') return await supersedeCommand(statePath, options.reason);
     const state = await readCanonicalState(statePath);
     assertPackagePath(state, options.packagePath);
+    if (options.command === 'record-owned-output') {
+      const next = recordTaskOwnedUntrackedOutputChange(state, options.untrackedPath, options.reason, { rootDir: root });
+      next.releaseUpdate = updateMetadata(next, { lastActivity: next.updatedAt });
+      await writeCanonicalState(next, statePath);
+      return outputJson({
+        status: 'READY',
+        phase: 'record-owned-output',
+        runId: next.runId,
+        path: options.untrackedPath,
+        recordedChanges: next.taskOwnedUntrackedOutputChanges.length,
+        state: next.status,
+        nextAction: nextAction(next),
+      });
+    }
     if (options.command === 'status') {
       const payload = await runLoopCommand(statePath, ['status'], 'status', state, { allowBlocked: true });
       const current = await readCanonicalState(statePath);

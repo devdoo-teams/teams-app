@@ -10,6 +10,7 @@ import { deflateSync } from 'node:zlib';
 import {
   applyEvidence,
   applyPhaseSuccess,
+  assertInitialUntrackedPreserved,
   assertReleaseUpdateCompletionContract,
   assertCurrentReleaseArtifacts,
   assertPackageIntegrity,
@@ -20,6 +21,7 @@ import {
   createGitSnapshot,
   createInitialState,
   classifyGitStatus,
+  captureUntrackedBaseline,
   deriveStatus,
   gatePhaseForLoop,
   missingGates,
@@ -28,6 +30,7 @@ import {
   probePublicTabRoutes,
   rasterDimensions,
   resetAfterPhaseFailure,
+  recordTaskOwnedUntrackedOutputChange,
   requestedSourceIoMode,
   assertReleaseVersionAdvanced,
   readPreviousSourceVersion,
@@ -267,6 +270,79 @@ assert.deepEqual(
 );
 
 const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-release-loop-'));
+
+{
+  const qaRelativePath = '.teams-ui-qa-test/ui-qa-report.md';
+  const userRelativePath = 'poc/README.md';
+  await fs.mkdir(path.join(tempDir, '.teams-ui-qa-test'), { recursive: true });
+  await fs.mkdir(path.join(tempDir, 'poc'), { recursive: true });
+  await fs.writeFile(path.join(tempDir, qaRelativePath), 'initial QA report\n');
+  await fs.writeFile(path.join(tempDir, userRelativePath), 'user-owned content\n');
+  const untrackedAtStart = [`?? ${qaRelativePath}`, `?? ${userRelativePath}`];
+  const untrackedAtStartBaseline = captureUntrackedBaseline(untrackedAtStart, { rootDir: tempDir });
+  const state = {
+    untrackedAtStart,
+    untrackedAtStartBaseline,
+  };
+
+  await fs.appendFile(path.join(tempDir, qaRelativePath), 'task-owned QA observation\n');
+  assert.throws(
+    () => assertInitialUntrackedPreserved(state, { rootDir: tempDir }),
+    (error) => error?.code === 'EUNTRACKEDSTARTMUTATED' && error.message.includes(qaRelativePath),
+    'a task-owned QA report update must stay blocked until explicitly recorded',
+  );
+
+  const recorded = recordTaskOwnedUntrackedOutputChange(state, qaRelativePath, 'Record this task-owned QA report update', {
+    rootDir: tempDir,
+    now: new Date('2026-10-11T05:00:00.000Z'),
+  });
+  assert.deepEqual(recorded.untrackedAtStartBaseline, untrackedAtStartBaseline,
+    'recording a task-owned output update must preserve the original start fingerprints');
+  assert.equal(recorded.taskOwnedUntrackedOutputChanges.length, 1);
+  assertInitialUntrackedPreserved(recorded, { rootDir: tempDir });
+  assert.throws(
+    () => assertInitialUntrackedPreserved({
+      ...recorded,
+      taskOwnedUntrackedOutputChanges: [{
+        ...recorded.taskOwnedUntrackedOutputChanges[0],
+        acceptedFingerprint: { ...recorded.taskOwnedUntrackedOutputChanges[0].acceptedFingerprint, sha256: 'tampered' },
+      }],
+    }, { rootDir: tempDir }),
+    (error) => error?.code === 'EUNTRACKEDBASELINEUNAVAILABLE',
+    'tampered audit fingerprints must not authorize untracked changes',
+  );
+
+  await fs.appendFile(path.join(tempDir, qaRelativePath), 'second QA observation\n');
+  assert.throws(
+    () => assertInitialUntrackedPreserved(recorded, { rootDir: tempDir }),
+    (error) => error?.code === 'EUNTRACKEDSTARTMUTATED' && error.message.includes(qaRelativePath),
+    'later report edits must require another explicit audit record',
+  );
+  const recordedAgain = recordTaskOwnedUntrackedOutputChange(recorded, qaRelativePath, 'Record a second task-owned update', {
+    rootDir: tempDir,
+    now: new Date('2026-10-11T05:01:00.000Z'),
+  });
+  assert.equal(recordedAgain.taskOwnedUntrackedOutputChanges.length, 2);
+  assertInitialUntrackedPreserved(recordedAgain, { rootDir: tempDir });
+
+  await fs.appendFile(path.join(tempDir, userRelativePath), 'unexpected user-file modification\n');
+  assert.throws(
+    () => assertInitialUntrackedPreserved(recordedAgain, { rootDir: tempDir }),
+    (error) => error?.code === 'EUNTRACKEDSTARTMUTATED' && error.message.includes(userRelativePath),
+    'task-owned output records must never permit user-owned file modifications',
+  );
+  assert.throws(
+    () => recordTaskOwnedUntrackedOutputChange(recordedAgain, userRelativePath, 'Do not allow this file', { rootDir: tempDir }),
+    /only generated QA report files may be registered/,
+    'only the generated QA report path may use the audited update transition',
+  );
+  assert.throws(
+    () => recordTaskOwnedUntrackedOutputChange(recordedAgain, qaRelativePath, 'api_key=sk-secretsecret', { rootDir: tempDir }),
+    /must not contain credentials/,
+    'audit reasons must not persist recognizable credential values',
+  );
+}
+
 const artifactPath = path.join(tempDir, 'desktop-proof.png');
 const surfaceArtifactPaths = {
   portal: artifactPath,
@@ -2028,7 +2104,7 @@ currentState.package.sourceCommit = currentCommit;
 currentState.public.sourceCommit = currentCommit;
 await fs.writeFile(cliStatePath, JSON.stringify(currentState, null, 2));
 const statusResult = runCli(['status']);
-assert.equal(statusResult.status, 0);
+assert.equal(statusResult.status, 0, statusResult.stderr);
 assert.match(statusResult.stdout, /PUBLIC_READY/);
 const statusPayload = JSON.parse(statusResult.stdout);
 assert.equal(statusPayload.status, 'IN_PROGRESS');
