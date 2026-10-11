@@ -425,6 +425,26 @@ assert.match(workHubMarkup, /Quarterly review/);
 assert.match(workHubMarkup, /Long request detail\./, 'a short preview retains useful context without making the full prompt the list title');
 assert.match(workHubMarkup, /aria-label="작업 고정"/);
 assert.match(workHubMarkup, /Quarterly review 프로젝트/);
+assert.match(workHubMarkup, /class="work-hub-master-pane"/, 'task navigation, filters, and results live in one master pane');
+assert.match(workHubMarkup, /class="work-hub-detail-pane"/, 'the hub reserves an adjacent detail pane for the selected task');
+assert.match(workHubMarkup, /aria-label="상태별 작업 필터"/, 'the hub presents the main task states as accessible filter chips');
+assert.match(workHubMarkup, /aria-label="작업 목록 열기 또는 닫기"/, 'the master pane has an accessible drawer control');
+assert.match(workHubMarkup, /aria-controls="work-hub-master-pane"/, 'the drawer control points to the task master pane');
+
+const selectedWorkHubMarkup = renderToStaticMarkup(<OrchestrationPanelView {...baseProps} phase="ready"
+  jobs={[task('running', { id: 'task-selected', prompt: 'Refresh the approved work hub design.', tokenUsage: {
+    source: 'codex.exec.jsonl.turn.completed.usage', inputTokens: 1_200, cachedInputTokens: 1_000,
+    outputTokens: 240, reasoningOutputTokens: 80,
+  } })]}
+  pendingJobs={[]} selectedJob={task('running', { id: 'task-selected', prompt: 'Refresh the approved work hub design.', tokenUsage: {
+    source: 'codex.exec.jsonl.turn.completed.usage', inputTokens: 1_200, cachedInputTokens: 1_000,
+    outputTokens: 240, reasoningOutputTokens: 80,
+  } })} error="" mobile={false} />);
+assert.match(selectedWorkHubMarkup, /aria-label="선택한 작업 상세"/, 'selected task details are rendered inside the detail pane');
+assert.match(selectedWorkHubMarkup, /<summary>사용량·비용<\/summary>/, 'usage and cost are disclosed on demand');
+assert.match(selectedWorkHubMarkup, /입력 토큰/);
+assert.match(selectedWorkHubMarkup, /비용 추정.*미연결/, 'cost remains explicitly unavailable without a verified price table');
+assert.match(selectedWorkHubMarkup, /data-job-id="task-selected"/);
 
 for (const phase of ['ready', 'loading'] as const) {
   const notification = renderToStaticMarkup(<OrchestrationPanelView

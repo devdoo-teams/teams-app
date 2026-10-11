@@ -9,6 +9,7 @@ import { CoreResultReview } from './CoreResultReview.js';
 import { isConversationHistoryAccessFailure, loadJobConversation, refreshVisibleJobConversation } from './job-conversation.js';
 import { isApiAuthError } from './auth.js';
 import { createLatestDetailRequestController } from './latest-detail-request.js';
+import { projectReceiptFacts } from '../shared/receipt-presentation.js';
 export { createLatestDetailRequestController } from './latest-detail-request.js';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
@@ -356,6 +357,16 @@ function actionLabel(idle: string, busy: string, active: boolean): string {
   return active ? busy : idle;
 }
 
+function UsageCostDisclosure({ job }: { job: CoreOrchestrationJob }) {
+  const usageLabels = new Set(['사용량 출처', '사용 토큰', '입력 토큰', '캐시 입력', '캐시 쓰기', '출력 토큰', '추론 출력', '토큰 계산 참고', '비용 추정', '계정 잔여량']);
+  const usageFacts = projectReceiptFacts(job).filter(fact => usageLabels.has(fact.label));
+  return <details aria-label="사용량 및 비용" className="work-hub-usage-disclosure">
+    <summary>사용량·비용</summary>
+    {usageFacts.length ? <dl>{usageFacts.map(fact => <div key={fact.label}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}</dl>
+      : <p>Core 사용량 관측이 제공되지 않았습니다.</p>}
+  </details>;
+}
+
 export function orchestrationMutationNotice(
   result: { replayed?: boolean; status?: string; reason?: string },
   successMessage: string,
@@ -404,7 +415,10 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
     if (props.selectedJob) void props.onProvideInput(props.selectedJob.id);
   };
   const selectTask = (jobId: string) => {
-    props.onNavigationDrawerOpenChange?.(false);
+    if (props.selectedJob?.id === jobId) return;
+    if (typeof window !== 'undefined' && window.matchMedia?.('(max-width: 760px)').matches) {
+      props.onNavigationDrawerOpenChange?.(false);
+    }
     void props.onSelectTask(jobId);
   };
   const submitSearch = (event: FormEvent) => {
@@ -423,7 +437,7 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
       <div className="section-heading">
         <div>
           <p className="eyebrow">TEAMS CORE</p>
-          <h2 id="orchestration-heading">에이전트 작업</h2>
+          <h2 id="orchestration-heading">작업 현황</h2>
           <p className="panel-description">
             자동 새로고침 3초
             {props.lastUpdatedAt ? ` · 마지막 업데이트 ${new Date(props.lastUpdatedAt).toLocaleTimeString('ko-KR')}` : ''}
@@ -440,9 +454,99 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
         </aside>
       ) : null}
 
+      {props.phase === 'ready' ? <section aria-label="업무 허브 작업 목록" className="work-hub-workspace">
+        <div className="work-hub-heading">
+          <div><h3>내 작업</h3><p className="panel-description">최근 작업을 찾고, 선택한 작업의 진행과 사용량을 확인하세요.</p></div>
+          <button aria-controls="work-hub-master-pane" aria-expanded={drawerOpen} aria-label="작업 목록 열기 또는 닫기"
+            className="secondary" onClick={() => props.onNavigationDrawerOpenChange?.(!drawerOpen)} type="button">
+            {drawerOpen ? '목록 닫기' : '목록 열기'}
+          </button>
+        </div>
+        <div className={`work-hub-layout${drawerOpen ? '' : ' navigation-collapsed'}`}>
+          <div aria-label="업무 허브 작업 목록" className="work-hub-master-pane" hidden={!drawerOpen} id="work-hub-master-pane">
+          {drawerOpen ? <aside aria-label="업무 허브 탐색" className="work-hub-navigation">
+            <button aria-pressed={currentSection === 'recent'} className="work-hub-nav-item"
+              onClick={() => props.onListNavigate?.('recent')} type="button">최근 작업</button>
+            <button aria-pressed={currentSection === 'pinned'} className="work-hub-nav-item"
+              onClick={() => props.onListNavigate?.('pinned')} type="button">고정한 작업 <span>{navigationPreferences.pinnedJobIds.length}</span></button>
+            <div className="work-hub-projects">
+              <h4>프로젝트</h4>
+              {navigationPreferences.projectNames.map(name => <button aria-pressed={currentSection === 'project' && props.selectedProject === name}
+                className="work-hub-nav-item" key={name} onClick={() => props.onListNavigate?.('project', name)} type="button">{name}</button>)}
+              <p className="panel-description">프로젝트 배정은 이 기기에 저장되며 최대 50개 작업까지 유지됩니다.</p>
+            </div>
+            <form className="work-hub-project-form" onSubmit={createProject}>
+              <label htmlFor="work-hub-project-name">새 프로젝트</label>
+              <input id="work-hub-project-name" maxLength={64} onChange={event => props.onProjectDraftChange?.(event.currentTarget.value)}
+                placeholder="프로젝트 이름" value={props.projectDraft ?? ''} />
+              <button className="secondary" disabled={!(props.projectDraft ?? '').trim()} type="submit">프로젝트 추가</button>
+            </form>
+            {!props.navigationStorageAvailable ? <p className="panel-description" role="note">Teams 계정 식별 정보를 사용할 수 없어 고정·프로젝트 설정은 이 탭에서만 유지됩니다.</p> : null}
+          </aside> : null}
+          <div className="work-hub-results">
+            <form aria-label="작업 검색" className="work-hub-search" onSubmit={submitSearch}>
+              <label className="work-hub-search-input"><span className="sr-only">작업 검색</span>
+                <input maxLength={200} onChange={event => props.onListSearchDraftChange?.(event.currentTarget.value)}
+                  placeholder="작업 검색" value={props.listSearchDraft ?? ''} />
+              </label>
+              <div aria-label="상태별 작업 필터" className="work-hub-status-chips" role="group">
+                {([
+                  ['all', '전체'], ['running', '실행 중'], ['completed', '완료'], ['failed', '오류'],
+                ] as const).map(([status, label]) => (
+                  <button aria-pressed={(props.listStatus ?? 'all') === status} className="work-hub-status-chip"
+                    key={status} onClick={() => props.onListStatusChange?.(status)} type="button">{label}</button>
+                ))}
+                <label className="work-hub-extra-status">추가 상태
+                  <select aria-label="추가 상태 필터" onChange={event => {
+                    if (event.currentTarget.value) props.onListStatusChange?.(event.currentTarget.value as CoreOrchestrationJobStatus);
+                  }} value={['queued', 'awaiting_approval', 'input_required', 'cancelled'].includes(props.listStatus ?? '') ? props.listStatus : ''}>
+                    <option value="">선택</option>
+                    {(['queued', 'awaiting_approval', 'input_required', 'cancelled'] as const).map(status =>
+                      <option key={status} value={status}>{statusLabels[status]}</option>)}
+                  </select>
+                </label>
+              </div>
+              <button className="primary" type="submit">검색</button>
+            </form>
+            <div aria-label="오케스트레이션 작업 목록" className="work-item-list" role="list">
+              {props.jobs.map(job => {
+                const summary = summarizeWorkHubPrompt(job.prompt);
+                const pinned = navigationPreferences.pinnedJobIds.includes(job.id);
+                return <article className={`work-item-card${props.selectedJob?.id === job.id ? ' selected' : ''}`} key={job.id} role="listitem">
+                  <div className="work-item-card-heading">
+                    <button aria-pressed={props.selectedJob?.id === job.id} className="work-item-title"
+                      onClick={() => selectTask(job.id)} type="button">{summary.title}</button>
+                    <span className="badge" data-job-status={job.status}>{statusLabels[job.status]}</span>
+                  </div>
+                  {summary.preview ? <p className="work-item-preview">{summary.preview}</p> : null}
+                  <p className="work-item-meta">작업 ID: {job.id} · 제공자: {job.provider ?? 'codex'} · 모드: {job.mode}</p>
+                  <div className="work-item-actions">
+                    <button aria-label={pinned ? '고정 해제' : '작업 고정'} aria-pressed={pinned} className="secondary"
+                      onClick={() => props.onTogglePin?.(job.id)} type="button">{pinned ? '고정됨' : '고정'}</button>
+                    {navigationPreferences.projectNames.length > 0 ? <label className="work-item-project-assignment">프로젝트
+                      <select aria-label={`${summary.title} 프로젝트`} value={navigationPreferences.projectByJobId[job.id] ?? ''}
+                        onChange={event => props.onAssignProject?.(job.id, event.currentTarget.value)}>
+                        <option value="">지정 안 함</option>
+                        {navigationPreferences.projectNames.map(name => <option key={name} value={name}>{name}</option>)}
+                      </select>
+                    </label> : null}
+                  </div>
+                </article>;
+              })}
+              {props.jobs.length === 0 ? <p aria-live="polite" className="empty" role="status">
+                {props.listIsFiltered || currentSection !== 'recent' ? '조건에 맞는 작업이 없습니다.' : '아직 실행한 작업이 없습니다.'}
+              </p> : null}
+            </div>
+            {props.listHasMore ? <button className="secondary work-hub-load-more" disabled={props.listLoadingMore}
+              onClick={() => void props.onLoadMore?.()} type="button">{props.listLoadingMore ? '불러오는 중…' : '다음 작업 불러오기'}</button> : null}
+          </div>
+          </div>
+          <aside aria-label="선택한 작업 상세" className="work-hub-detail-pane">
+            {props.selectedJob ? <>
+              <UsageCostDisclosure job={props.selectedJob} />
       <label className="presentation-job-selector">표시할 개인 작업
         <select aria-label="표시할 개인 작업" disabled={props.phase === 'loading' || selectedBusy} value={props.selectedJob?.id ?? ''}
-          onChange={event => { if (event.currentTarget.value) void props.onSelectTask(event.currentTarget.value); }}>
+          onChange={event => { if (event.currentTarget.value) selectTask(event.currentTarget.value); }}>
           <option value="">기존 작업을 선택하세요.</option>
           {includeRequestedJob(props.jobs, props.selectedJob ?? undefined).map(job => <option value={job.id} key={job.id}>{job.id} · {statusLabels[job.status]}</option>)}
         </select>
@@ -567,7 +671,13 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
           </div>
         </article>
       ) : null}
+            </> : <p className="work-hub-empty-detail" role="status">작업을 선택하면 진행 상황과 상세 정보가 여기에 표시됩니다.</p>}
+          </aside>
+        </div>
+      </section> : null}
 
+      <details className="work-hub-execution-details">
+      <summary>새 작업 실행</summary>
       <form className="work-item-detail" onSubmit={submit}>
         <label>
           실행 제공자
@@ -662,6 +772,7 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
           <span>내 업무 허브 개인 채팅으로 진행·결과 알림 받기</span>
         </label> : null}
       </form>
+      </details>
 
       {props.validationError ? <p className="error" role="alert">{props.validationError}</p> : null}
       {props.error && props.phase !== 'error' ? <p className="error" role="alert">{props.error}</p> : null}
@@ -680,95 +791,24 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
         </div>
       ) : null}
 
-      {props.phase === 'ready' ? <section aria-label="개인 승인 대기 목록">
+      {props.phase === 'ready' ? <details className="work-hub-approval-details">
+        <summary>승인 대기 ({(props.pendingJobs ?? props.jobs).filter(job => Boolean(job.pendingOperation)).length})</summary>
+        <section aria-label="개인 승인 대기 목록">
         <h3>승인 대기</h3>
         <p>승인 대상 확인 후 기존 작업 상세에서 승인하거나 거절하세요. 확인 카드가 만료돼도 작업은 자동 승인되지 않습니다.</p>
         {props.pendingHasMore ? <p role="status">승인 대기 작업 중 최근 100개를 표시합니다. 나머지는 작업 ID로 조회하세요.</p> : null}
         {props.pendingJobs == null ? <p role="status">전체 승인함 조회가 확인되지 않았습니다. 아래는 최근 작업에 포함된 승인 대기 항목입니다.</p> : null}
         {(props.pendingJobs ?? props.jobs).some(job => job.pendingOperation) ? (props.pendingJobs ?? props.jobs).filter(job => job.pendingOperation).map(job => (
           <article key={job.id} className="work-item-card">
-            <button type="button" onClick={() => void props.onSelectTask(job.id)}>{job.prompt}</button>
+            <button type="button" onClick={() => selectTask(job.id)}>{job.prompt}</button>
             <p>승인 대상: {job.pendingOperation!.jobId} · revision: {job.pendingOperation!.revision}</p>
             <ApprovalDetails job={job} />
             {!getOrchestrationApprovalIdentity(job) ? <p role="note">{approvalUnavailableMessage(job, approvalSupported)}</p> : null}
           </article>
         )) : <p role="status">{props.pendingJobs == null ? '최근 작업에 승인 대기 항목이 없습니다.' : '승인 대기 작업이 없습니다.'}</p>}
-      </section> : null}
-      {props.phase === 'ready' ? <section aria-label="업무 허브 작업 목록" className="work-hub-workspace">
-        <div className="work-hub-heading">
-          <div><h3>작업 라이브러리</h3><p className="panel-description">최근 작업을 찾고, 고정하거나 프로젝트별로 정리하세요.</p></div>
-          <button aria-expanded={drawerOpen} className="secondary" onClick={() => props.onNavigationDrawerOpenChange?.(!drawerOpen)} type="button">
-            {drawerOpen ? '탐색 접기' : '탐색 펼치기'}
-          </button>
-        </div>
-        <div className={`work-hub-layout${drawerOpen ? '' : ' navigation-collapsed'}`}>
-          {drawerOpen ? <aside aria-label="업무 허브 탐색" className="work-hub-navigation">
-            <button aria-pressed={currentSection === 'recent'} className="work-hub-nav-item"
-              onClick={() => props.onListNavigate?.('recent')} type="button">최근 작업</button>
-            <button aria-pressed={currentSection === 'pinned'} className="work-hub-nav-item"
-              onClick={() => props.onListNavigate?.('pinned')} type="button">고정한 작업 <span>{navigationPreferences.pinnedJobIds.length}</span></button>
-            <div className="work-hub-projects">
-              <h4>프로젝트</h4>
-              {navigationPreferences.projectNames.map(name => <button aria-pressed={currentSection === 'project' && props.selectedProject === name}
-                className="work-hub-nav-item" key={name} onClick={() => props.onListNavigate?.('project', name)} type="button">{name}</button>)}
-              <p className="panel-description">프로젝트 배정은 이 기기에 저장되며 최대 50개 작업까지 유지됩니다.</p>
-            </div>
-            <form className="work-hub-project-form" onSubmit={createProject}>
-              <label htmlFor="work-hub-project-name">새 프로젝트</label>
-              <input id="work-hub-project-name" maxLength={64} onChange={event => props.onProjectDraftChange?.(event.currentTarget.value)}
-                placeholder="프로젝트 이름" value={props.projectDraft ?? ''} />
-              <button className="secondary" disabled={!(props.projectDraft ?? '').trim()} type="submit">프로젝트 추가</button>
-            </form>
-            {!props.navigationStorageAvailable ? <p className="panel-description" role="note">Teams 계정 식별 정보를 사용할 수 없어 고정·프로젝트 설정은 이 탭에서만 유지됩니다.</p> : null}
-          </aside> : null}
-          <div className="work-hub-results">
-            <form aria-label="작업 검색" className="work-hub-search" onSubmit={submitSearch}>
-              <label className="work-hub-search-input"><span className="sr-only">작업 검색</span>
-                <input maxLength={200} onChange={event => props.onListSearchDraftChange?.(event.currentTarget.value)}
-                  placeholder="작업 검색" value={props.listSearchDraft ?? ''} />
-              </label>
-              <label className="work-hub-status-filter">상태
-                <select aria-label="상태 필터" onChange={event => props.onListStatusChange?.(event.currentTarget.value as CoreOrchestrationJobStatus | 'all')}
-                  value={props.listStatus ?? 'all'}>
-                  <option value="all">모든 상태</option>
-                  {Object.entries(statusLabels).map(([status, label]) => <option key={status} value={status}>{label}</option>)}
-                </select>
-              </label>
-              <button className="primary" type="submit">검색</button>
-            </form>
-            <div aria-label="오케스트레이션 작업 목록" className="work-item-list" role="list">
-              {props.jobs.map(job => {
-                const summary = summarizeWorkHubPrompt(job.prompt);
-                const pinned = navigationPreferences.pinnedJobIds.includes(job.id);
-                return <article className={`work-item-card${props.selectedJob?.id === job.id ? ' selected' : ''}`} key={job.id} role="listitem">
-                  <div className="work-item-card-heading">
-                    <button className="work-item-title" onClick={() => selectTask(job.id)} type="button">{summary.title}</button>
-                    <span className="badge" data-job-status={job.status}>{statusLabels[job.status]}</span>
-                  </div>
-                  {summary.preview ? <p className="work-item-preview">{summary.preview}</p> : null}
-                  <p className="work-item-meta">작업 ID: {job.id} · 제공자: {job.provider ?? 'codex'} · 모드: {job.mode}</p>
-                  <div className="work-item-actions">
-                    <button aria-label={pinned ? '고정 해제' : '작업 고정'} aria-pressed={pinned} className="secondary"
-                      onClick={() => props.onTogglePin?.(job.id)} type="button">{pinned ? '고정됨' : '고정'}</button>
-                    {navigationPreferences.projectNames.length > 0 ? <label className="work-item-project-assignment">프로젝트
-                      <select aria-label={`${summary.title} 프로젝트`} value={navigationPreferences.projectByJobId[job.id] ?? ''}
-                        onChange={event => props.onAssignProject?.(job.id, event.currentTarget.value)}>
-                        <option value="">지정 안 함</option>
-                        {navigationPreferences.projectNames.map(name => <option key={name} value={name}>{name}</option>)}
-                      </select>
-                    </label> : null}
-                  </div>
-                </article>;
-              })}
-              {props.jobs.length === 0 ? <p aria-live="polite" className="empty" role="status">
-                {props.listIsFiltered || currentSection !== 'recent' ? '조건에 맞는 작업이 없습니다.' : '아직 실행한 작업이 없습니다.'}
-              </p> : null}
-            </div>
-            {props.listHasMore ? <button className="secondary work-hub-load-more" disabled={props.listLoadingMore}
-              onClick={() => void props.onLoadMore?.()} type="button">{props.listLoadingMore ? '불러오는 중…' : '다음 작업 불러오기'}</button> : null}
-          </div>
-        </div>
-      </section> : null}
+        </section>
+      </details> : null}
+
 
     </section>
   );
@@ -813,6 +853,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
   const [selectedJob, setSelectedJob] = useState<CoreOrchestrationJob | null>(null);
   const [conversation, setConversation] = useState<VisibleJobConversation | undefined>();
   const detailRequests = useRef(createLatestDetailRequestController());
+  const selectingJobs = useRef(new Set<string>());
   useEffect(() => () => detailRequests.current.dispose(), []);
   useEffect(() => {
     if (selectedJob) setConversation(current => current ? refreshVisibleJobConversation(current, selectedJob) : current);
@@ -1100,20 +1141,26 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
   }, [client, mode, modelCatalog, modelId, notifyPersonal, prompt, providerId, providers, reasoningEffort, runMutation]);
 
   const selectJob = useCallback(async (jobId: string) => {
+    if (selectingJobs.current.has(jobId)) return;
+    selectingJobs.current.add(jobId);
     setRequestedJobId(current => current === jobId ? current : undefined);
     const slot = `detail:${jobId}`;
     setBusyAction(slot);
     setError('');
     setConversation(undefined);
-    await detailRequests.current.request(
-      signal => client.getJobConversation?.(jobId, signal) ?? loadJobConversation(jobId, client.getJob, signal),
-      { success: detail => {
-        updateJob(detail.job);
-        setConversation(detail.conversation);
-        setInputValue('');
-      }, error: caught => setError(errorMessage(caught)),
-      settled: () => setBusyAction((current) => current === slot ? '' : current) },
-    );
+    try {
+      await detailRequests.current.request(
+        signal => client.getJobConversation?.(jobId, signal) ?? loadJobConversation(jobId, client.getJob, signal),
+        { success: detail => {
+          updateJob(detail.job);
+          setConversation(detail.conversation);
+          setInputValue('');
+        }, error: caught => setError(errorMessage(caught)),
+        settled: () => setBusyAction((current) => current === slot ? '' : current) },
+      );
+    } finally {
+      selectingJobs.current.delete(jobId);
+    }
   }, [client, updateJob]);
 
   useEffect(() => {

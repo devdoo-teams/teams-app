@@ -134,3 +134,129 @@ footer { color: #777; font-size: 0.75rem; text-align: center; }
 }
 
 .work-item-card-heading .badge { flex-shrink: 0; white-space: nowrap; }
+
+/* Approved Teams work-hub layout: dark, task-first, and side-by-side on desktop. */
+:root { color: #f3f6fb; background: #101827; color-scheme: dark; }
+body { background: #101827; }
+.agent-hub-shell {
+  align-content: start;
+  background: #101827;
+  color: #f3f6fb;
+  margin: 0 auto;
+  max-width: 1440px;
+  min-height: 100vh;
+  padding: 26px clamp(14px, 2.5vw, 36px) 40px;
+  width: 100%;
+}
+.agent-hub-shell .panel, .agent-hub-shell .runtime-panel {
+  background: #172235;
+  border-color: #344257;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+}
+.agent-hub-shell .subtitle, .agent-hub-shell .panel-description, .agent-hub-shell .work-item-meta,
+.agent-hub-shell .runtime-panel > div > span { color: #b8c4d4; }
+.agent-hub-shell .work-hub-workspace { border-color: #334155; padding-top: 2px; }
+.work-hub-heading { align-items: center; }
+.work-hub-heading h3 { font-size: 1.15rem; }
+.work-hub-layout {
+  align-items: stretch;
+  gap: 16px;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+}
+.work-hub-master-pane {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(150px, 0.38fr) minmax(230px, 0.62fr);
+  min-width: 0;
+}
+.work-hub-master-pane[hidden] { display: none; }
+.work-hub-navigation {
+  align-content: start;
+  background: #141f31;
+  border-color: #344257;
+  border-radius: 12px;
+}
+.work-hub-nav-item { color: #d7e0ec; }
+.work-hub-nav-item[aria-pressed="true"] { background: #263b74; color: #fff; }
+.work-hub-results { max-height: 68vh; overflow: auto; }
+.work-hub-search { align-items: stretch; display: grid; gap: 10px; }
+.work-hub-search input, .work-hub-extra-status select, .work-item-project-assignment select,
+.work-hub-project-form input, .work-item-detail input, .work-item-detail select, .work-item-detail textarea {
+  background: #101827;
+  border-color: #4b5d73;
+  color: #f3f6fb;
+}
+.work-hub-status-chips { align-items: center; display: flex; flex-wrap: wrap; gap: 7px; }
+.work-hub-status-chip {
+  background: #263449;
+  border: 1px solid #41546d;
+  border-radius: 999px;
+  color: #e4eaf3;
+  cursor: pointer;
+  font-weight: 650;
+  min-height: 36px;
+  padding: 6px 13px;
+}
+.work-hub-status-chip[aria-pressed="true"] {
+  background: #465ff0;
+  border-color: #7186ff;
+  color: #fff;
+}
+.work-hub-extra-status { align-items: center; color: #b8c4d4; display: flex; font-size: 0.82rem; gap: 6px; }
+.work-hub-extra-status select { border: 1px solid #4b5d73; border-radius: 999px; min-height: 36px; padding: 5px 10px; }
+.work-hub-detail-pane {
+  align-content: start;
+  background: #141f31;
+  border: 1px solid #344257;
+  border-radius: 12px;
+  display: grid;
+  gap: 13px;
+  max-height: 68vh;
+  min-width: 0;
+  overflow: auto;
+  padding: 16px;
+}
+.work-hub-empty-detail { color: #b8c4d4; margin: 0; padding: 24px 8px; text-align: center; }
+.presentation-job-selector { display: grid; font-weight: 650; gap: 6px; }
+.work-hub-detail-pane .work-item-detail { gap: 10px; }
+.work-hub-usage-disclosure { background: #1d2b40; border: 1px solid #3a4c63; border-radius: 9px; padding: 10px 12px; }
+.work-hub-usage-disclosure summary, .work-hub-execution-details summary, .work-hub-approval-details summary,
+.work-hub-display-settings summary { cursor: pointer; font-weight: 700; }
+.work-hub-usage-disclosure dl { display: grid; gap: 7px; margin: 12px 0 0; }
+.work-hub-usage-disclosure dl > div { align-items: baseline; border-top: 1px solid #35465d; display: flex; gap: 12px; justify-content: space-between; padding-top: 7px; }
+.work-hub-usage-disclosure dt { color: #b8c4d4; }
+.work-hub-usage-disclosure dd { margin: 0; overflow-wrap: anywhere; text-align: right; }
+.work-hub-execution-details, .work-hub-approval-details, .work-hub-display-settings {
+  background: #141f31;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.work-hub-execution-details[open], .work-hub-approval-details[open], .work-hub-display-settings[open] { display: grid; gap: 14px; }
+.work-hub-execution-details .work-item-detail { padding-top: 4px; }
+.agent-hub-shell .work-item-card { background: #1d2b40; border-color: #3a4c63; }
+.agent-hub-shell .work-item-card.selected { border-color: #7186ff; box-shadow: 0 0 0 1px #7186ff; }
+.agent-hub-shell .work-item-title { color: #f3f6fb; }
+.agent-hub-shell .work-item-preview { color: #c7d1df; }
+.agent-hub-shell .secondary { background: #29374b; color: #f3f6fb; }
+.agent-hub-shell .primary { background: #5268f4; color: #fff; }
+.agent-hub-shell .badge { background: #113f3c; color: #74e2c0; }
+.agent-hub-shell .badge.warning { background: #4a272c; color: #ffb6b6; }
+.agent-hub-shell .error { background: #48282e; color: #ffc0c0; }
+.agent-hub-shell .runtime-panel-heading, .agent-hub-shell .work-hub-project-form { border-color: #334155; }
+
+@media (max-width: 900px) {
+  .work-hub-layout { grid-template-columns: minmax(0, 1fr); }
+  .work-hub-detail-pane { max-height: none; }
+  .work-hub-master-pane { grid-template-columns: minmax(145px, 0.35fr) minmax(230px, 0.65fr); }
+}
+@media (max-width: 760px) {
+  .agent-hub-shell { padding: 16px 12px 32px; }
+  .work-hub-master-pane { grid-template-columns: minmax(0, 1fr); }
+  .work-hub-results { max-height: none; }
+  .work-hub-layout.navigation-collapsed { grid-template-columns: minmax(0, 1fr); }
+  .work-hub-heading { align-items: center; flex-direction: row; }
+  .work-hub-heading .secondary { flex: none; }
+  .work-hub-detail-pane { padding: 13px; }
+  .work-hub-status-chip { min-height: 40px; }
+}

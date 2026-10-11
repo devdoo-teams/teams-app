@@ -176,15 +176,18 @@ export function App() {
       <header className="hero agent-hub-hero">
         <div>
           <p className="eyebrow">TEAMS AGENT CORE</p>
-          <h1>에이전트 허브</h1>
-          <p className="subtitle">에이전트 작업을 실행하고 진행 상황과 이력을 한곳에서 확인합니다.</p>
+          <h1>업무 허브</h1>
+          <p className="subtitle">최근 작업을 찾고 진행 상황과 실행 정보를 한곳에서 확인합니다.</p>
         </div>
         <span className={health?.a2aExecution?.state === 'ready' || health?.a2aExecution?.state === 'configured' ? 'badge' : 'badge warning'}>
           {runtimeBadge}
         </span>
       </header>
 
-      <ExecutionPresentationToolbar />
+      <details className="work-hub-display-settings">
+        <summary>화면 표시 설정</summary>
+        <ExecutionPresentationToolbar />
+      </details>
       <details className="presentation-runtime-details"><summary>실행 환경 상세</summary>
       <section className="runtime-panel agent-runtime-panel" aria-label="에이전트 런타임 상태">
         <div className="runtime-panel-heading">
@@ -217,7 +220,7 @@ export function App() {
       ) : null}
 
       <OrchestrationPanel />
-      <footer>Teams SDK · Agent execution · Durable history</footer>
+      <footer>Teams SDK · 업무 허브 · 작업 이력</footer>
     </main></ExecutionPresentationProvider>
   );
 }
