@@ -61,6 +61,36 @@ try {
   await terminal.recoverTerminalJobs([job]);
   await terminal.recoverTerminalJobs([job]);
   assert.equal(recoveredSends, 1, 'terminal persistence before enqueue is recovered once');
+  const writeFailureFile = path.join(directory, 'write-failure.json');
+  let recoveredWriteSends = 0;
+  const writeFailureBroker = new module.PersonalNotificationBroker(writeFailureFile, botId, async () => {
+    recoveredWriteSends++; return { state: 'accepted' };
+  });
+  await writeFailureBroker.initialize(); await writeFailureBroker.observeAuthenticatedActivity(activity);
+  const originalRename = fs.rename;
+  let failSendingWrite = true;
+  fs.rename = async (source, destination) => {
+    if (String(destination) === writeFailureFile && failSendingWrite) {
+      const pendingSnapshot = JSON.parse(await fs.readFile(source, 'utf8'));
+      if (pendingSnapshot.outbox.some((entry: any) => entry.receipt.state === 'sending')) {
+        failSendingWrite = false;
+        throw Object.assign(new Error('SYNTHETIC_PRE_SEND_WRITE_FAILURE'), { code: 'EIO' });
+      }
+    }
+    return originalRename(source, destination);
+  };
+  try { await assert.rejects(writeFailureBroker.deliver(event), /SYNTHETIC_PRE_SEND_WRITE_FAILURE/); }
+  finally { fs.rename = originalRename; }
+  assert.equal(recoveredWriteSends, 0, 'failed send reservation never invokes transport');
+  assert.equal(writeFailureBroker.status(job.id, principal)?.state, 'pending', 'pre-send write failure restores retryable memory state');
+  await writeFailureBroker.observeAuthenticatedActivity(activity);
+  const afterWriteFailure = new module.PersonalNotificationBroker(writeFailureFile, botId, async () => {
+    recoveredWriteSends++; return { state: 'accepted' };
+  });
+  await afterWriteFailure.initialize(); await afterWriteFailure.flush();
+  await afterWriteFailure.deliver(event); await afterWriteFailure.flush();
+  assert.equal(recoveredWriteSends, 1, 'unrelated persistence and restart recover the never-sent notification exactly once');
+  assert.equal(afterWriteFailure.status(job.id, principal)?.state, 'accepted');
   const stalled = new module.PersonalNotificationBroker(path.join(directory, 'stalled.json'), botId, async () => { recoveredSends++; return new Promise(() => {}); });
   await stalled.initialize(); await stalled.observeAuthenticatedActivity(activity);
   await stalled.deliver(event);

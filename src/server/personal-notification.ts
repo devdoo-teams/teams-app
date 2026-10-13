@@ -112,11 +112,10 @@ export class PersonalNotificationBroker {
     if (this.outstandingSend) return;
     const reference = this.snapshot.references.find(ref => sameOwner(ref, entry));
     if (!reference) {
-      if (entry.receipt.state !== 'waiting-personal-chat') { entry.receipt = { state: 'waiting-personal-chat', observedAt: stamp() }; await this.persist(); }
+      if (entry.receipt.state !== 'waiting-personal-chat') await this.persistBeforeSend(entry, 'waiting-personal-chat');
       return;
     }
-    entry.receipt = { state: 'sending', observedAt: stamp() };
-    await this.persist();
+    await this.persistBeforeSend(entry, 'sending');
     try {
       let timer: ReturnType<typeof setTimeout> | undefined;
       const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('PERSONAL_NOTIFICATION_SEND_TIMEOUT')), 10_000); });
@@ -130,6 +129,13 @@ export class PersonalNotificationBroker {
       entry.receipt = { state: receipt.state, observedAt: stamp(), ...(receipt.activityId ? { activityId: receipt.activityId } : {}) };
     } catch { entry.receipt = { state: 'ambiguous', observedAt: stamp() }; }
     await this.persist();
+  }
+
+  private async persistBeforeSend(entry: Entry, state: 'waiting-personal-chat' | 'sending'): Promise<void> {
+    const previous = entry.receipt;
+    entry.receipt = { state, observedAt: stamp() };
+    try { await this.persist(); }
+    catch (error) { entry.receipt = previous; throw error; }
   }
 
   async recoverTerminalJobs(jobs: readonly AgentJob[]): Promise<void> {
