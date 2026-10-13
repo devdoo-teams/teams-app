@@ -398,10 +398,19 @@ async function verifyQueueOnlyAgentService(): Promise<void> {
   assert.equal(completed?.tokenUsage?.inputTokens, 100, 'durable worker token usage reaches the shared AgentJob');
 
   const cancellable = await service.submit({ prompt: 'cancel this task', mode: 'read-only', scope, notify: false });
-  const cancelledJob = await service.cancelStrict(cancellable.id, scope, { notify: false });
-  assert.equal(cancelledJob?.status, 'cancelled');
+  const pendingCancellation = await service.cancelStrict(cancellable.id, scope, { notify: false });
+  assert.equal(pendingCancellation?.status, 'queued', 'dispatch acknowledgement alone cannot confirm worker termination');
+  assert.ok(pendingCancellation?.cancellationRequestedAt);
+  assert.equal(pendingCancellation?.finishedAt, undefined);
   assert.deepEqual(cancelled, [cancellable.id], 'queue mode requests cancellation through the durable dispatcher');
   assert.equal(runnerCancels, 0, 'queue mode never signals a local CLI runner');
+  observations.set(cancellable.id, { status: 'cancelled' });
+  assert.equal((await service.observe(cancellable.id, scope))?.status, 'cancelled', 'worker terminal acknowledgement settles cancellation');
+
+  const notDispatched = await service.submit({ prompt: 'cancel unapproved queued write', mode: 'workspace-write', scope, notify: false });
+  assert.equal(notDispatched.status, 'awaiting_approval');
+  assert.equal((await service.cancelStrict(notDispatched.id, scope, { notify: false }))?.status, 'cancelled');
+  assert.deepEqual(cancelled, [cancellable.id], 'unapproved work has no worker cancellation to request');
 
   const writable = await service.submit({ prompt: 'approved write task', mode: 'workspace-write', scope, notify: false });
   assert.equal(writable.status, 'awaiting_approval');
