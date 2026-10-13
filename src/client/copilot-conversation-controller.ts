@@ -16,7 +16,7 @@ export function canContinueConversation(state: CoreConversationState): boolean {
 }
 export function canStopConversation(state: CoreConversationState): boolean {
   return state.phase === 'ready' && !state.uncertain && !state.stopUncertain && Boolean(state.job &&
-    ['queued', 'running'].includes(state.job.status));
+    !state.job.cancellationRequestedAt && ['queued', 'running'].includes(state.job.status));
 }
 type Result = 'succeeded' | 'failed' | 'busy' | 'invalid' | 'disposed';
 
@@ -156,7 +156,8 @@ export function createCoreConversationController({ client, jobId, onChange, time
       assertCurrent(signal);
       if (job?.id !== previous.id || (job.provider ?? 'codex') !== (previous.provider ?? 'codex') || job.mode !== previous.mode
         || (previous.threadId && job.threadId && previous.threadId !== job.threadId)
-        || !['completed', 'failed', 'cancelled'].includes(job.status)) throw new Error('Unconfirmed cancellation response');
+        || (!['completed', 'failed', 'cancelled'].includes(job.status)
+          && !(job.cancellationRequestedAt && ['queued', 'running'].includes(job.status)))) throw new Error('Unconfirmed cancellation response');
       createExecutionPresentation(job);
       publish({ ...state, job, conversation: state.conversation ? refreshVisibleJobConversation(state.conversation, job) : undefined,
         phase: 'ready', uncertain: false, stopUncertain: false, stale: false, recovery: undefined });

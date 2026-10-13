@@ -702,6 +702,7 @@ function toCoreJob(job: AgentJob): CoreOrchestrationJob {
     ...(job.updatedAt ? { updatedAt: job.updatedAt } : {}),
     ...(job.startedAt ? { startedAt: job.startedAt } : {}),
     ...(job.finishedAt ? { finishedAt: job.finishedAt } : {}),
+    ...(job.cancellationRequestedAt ? { cancellationRequestedAt: job.cancellationRequestedAt } : {}),
   };
 }
 

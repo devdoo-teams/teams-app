@@ -13,6 +13,8 @@ import {
   type AgentNotification,
 } from '../src/server/agent-service.js';
 import { GitService } from '../src/server/git-service.js';
+import { projectCoreOrchestrationJob } from '../src/server/core-orchestration-service.js';
+import { GenUiResponseFactory } from '../src/server/genui-response.js';
 
 const scope: AgentJobScope = {
   tenantId: 'tenant-durable',
@@ -24,6 +26,8 @@ class ControlledDurableDispatcher implements AgentExecutionDispatcher {
   readonly kind = 'azure-queue' as const;
   readonly observations = new Map<string, AgentExecutionObservation>();
   completeDuringCancel = false;
+  delayCancellation = false;
+  cancellations = 0;
 
   async dispatch(job: AgentJob): Promise<void> {
     this.observations.set(job.id, { status: 'queued' });
@@ -34,6 +38,8 @@ class ControlledDurableDispatcher implements AgentExecutionDispatcher {
   }
 
   async cancel(job: AgentJob): Promise<void> {
+    this.cancellations++;
+    if (this.delayCancellation) return;
     this.observations.set(job.id, this.completeDuringCancel
       ? { status: 'completed', result: 'durable completion won the race' }
       : { status: 'cancelled' });
@@ -46,6 +52,7 @@ function createService(
   dispatcher: ControlledDurableDispatcher,
   journalName: string,
   notifications: AgentNotification[] = [],
+  admission?: AgentAdmissionController,
 ): AgentService {
   return new AgentService(
     store,
@@ -58,7 +65,7 @@ function createService(
       canReadScope: () => true,
       canMutateScope: () => true,
       executionDispatcher: dispatcher,
-      admissionController: new AgentAdmissionController(
+      admissionController: admission ?? new AgentAdmissionController(
         { globalLimit: 4, perTenantLimit: 4, perRequesterLimit: 4 },
         { journalPath: path.join(root, journalName) },
       ),
@@ -145,6 +152,55 @@ try {
     'a durable completion that wins the race must not emit a false cancellation notification',
   );
 
+  for (const terminalStatus of ['cancelled', 'completed', 'failed'] as const) {
+    const pendingFile = path.join(root, `pending-${terminalStatus}.json`);
+    const pendingStore = new AgentJobStore(pendingFile);
+    const pendingDispatcher = new ControlledDurableDispatcher(); pendingDispatcher.delayCancellation = true;
+    const pendingNotifications: AgentNotification[] = [];
+    const journal = `pending-${terminalStatus}-admission.json`;
+    const admission = new AgentAdmissionController({ globalLimit: 4, perTenantLimit: 4, perRequesterLimit: 4 }, { journalPath: path.join(root, journal) });
+    let pendingService = createService(root, pendingStore, pendingDispatcher, journal, pendingNotifications, admission);
+    try {
+      await pendingService.initialize();
+      const active = await pendingService.submit({ prompt: 'synthetic delayed worker cancellation', provider: 'codex', mode: 'read-only', scope });
+      pendingDispatcher.observations.set(active.id, { status: 'running' }); await pendingService.observe(active.id, scope);
+      const pending = await pendingService.cancelStrict(active.id, scope, { notify: true });
+      assert.equal(pending?.status, 'running', 'request acceptance is not terminal worker cancellation');
+      assert.equal(pending?.finishedAt, undefined);
+      assert.ok((pending as AgentJob & { cancellationRequestedAt?: string })?.cancellationRequestedAt);
+      assert.equal(projectCoreOrchestrationJob(pending!).cancellationRequestedAt, pending!.cancellationRequestedAt);
+      const card = new GenUiResponseFactory({} as never).cancelled(pending!);
+      assert.match(card.fallbackText, /취소 요청이 접수되었습니다/);
+      assert.equal(card.title, '작업 취소 확인 대기');
+      await assert.rejects(pendingStore.update(active.id, scope, { cancellationRequestedAt: 'invalid' }), /timestamp|date|ISO|immutable/i);
+      await assert.rejects(pendingStore.update(active.id, scope, { cancellationRequestedAt: '2026-10-15T00:00:00Z' }), /immutable/);
+      assert.equal(admission.snapshot().global, 1, 'pending cancellation retains execution capacity');
+      assert.equal(pendingNotifications.filter(note => note.kind === 'cancelled').length, 0);
+      await pendingService.cancelStrict(active.id, scope, { notify: true });
+      assert.equal(pendingDispatcher.cancellations, 1, 'a persisted cancellation request is not sent twice');
+      await pendingService.close({ closeAdmission: false });
+      const restartedPendingStore = new AgentJobStore(pendingFile);
+      const restartedAdmission = new AgentAdmissionController({ globalLimit: 4, perTenantLimit: 4, perRequesterLimit: 4 }, { journalPath: path.join(root, journal) });
+      pendingService = createService(root, restartedPendingStore, pendingDispatcher, journal, pendingNotifications, restartedAdmission);
+      await pendingService.initialize();
+      assert.equal(restartedPendingStore.get(active.id, scope)?.status, 'running');
+      assert.equal(restartedAdmission.snapshot().global, 1);
+      assert.ok((restartedPendingStore.get(active.id, scope) as AgentJob & { cancellationRequestedAt?: string })?.cancellationRequestedAt);
+      pendingDispatcher.observations.set(active.id, { status: terminalStatus,
+        ...(terminalStatus === 'completed' ? { result: 'synthetic worker completed before cancellation' } : {}),
+        ...(terminalStatus === 'failed' ? { error: 'synthetic worker failure' } : {}) });
+      const deadline = Date.now() + 2500;
+      while ((restartedPendingStore.get(active.id, scope)?.status !== terminalStatus || restartedAdmission.snapshot().global !== 0)
+        && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      assert.equal(restartedPendingStore.get(active.id, scope)?.status, terminalStatus, 'automatic polling settles the authoritative worker outcome');
+      assert.equal(restartedAdmission.snapshot().global, 0);
+      await pendingService.observe(active.id, scope);
+      assert.equal(pendingNotifications.filter(note => note.kind === 'cancelled').length, terminalStatus === 'cancelled' ? 1 : 0,
+        'only worker-confirmed cancellation emits one cancellation notification');
+    } finally { await pendingService.close({ closeAdmission: false }); }
+  }
   console.log('agent-durable-reconciliation-test: PASS');
 } finally {
   await fs.rm(root, { recursive: true, force: true });

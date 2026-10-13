@@ -76,6 +76,7 @@ export function CopilotConversationTranscript({ state, input, setInput, send, st
     {state.stale ? <p role="note">마지막으로 확인한 대화입니다. 연결을 복구하고 상태를 다시 확인하세요.</p> : null}
     {state.uncertain ? <p role="alert">후속 요청의 전송 결과가 아직 불확실합니다. 다시 보내지 말고 개인 작업 목록에서 새 작업을 확인하세요.</p> : null}
     {state.stopUncertain ? <p role="alert">중지 결과가 아직 불확실합니다. 중지를 다시 보내지 말고 상태를 새로고침하세요.</p> : null}
+    {state.job?.cancellationRequestedAt && activeJob ? <p role="status">취소 요청이 접수되었습니다. 실행 중단의 최종 상태를 확인하고 있습니다.</p> : null}
     {state.submittedPrompt && (state.phase === 'sending' || state.uncertain) ? <section aria-label="제출한 후속 요청">
       <h4>{state.uncertain ? '전송 결과 확인이 필요한 요청' : '전송 중인 요청'}</h4>
       <pre className="copilot-conversation-text">{state.submittedPrompt}</pre>

@@ -403,6 +403,15 @@ assert.match(loading, /role="status"/);
 assert.match(loading, /aria-busy="true"/);
 assert.match(loading, /오케스트레이션 작업을 불러오는 중입니다/);
 
+{
+  const pending = task('running', { cancellationRequestedAt: '2026-10-14T00:00:00Z' });
+  const markup = renderToStaticMarkup(<OrchestrationPanelView {...baseProps} phase="ready" jobs={[pending]}
+    selectedJob={pending} error="" mobile={false} />);
+  assert.match(markup, /취소 요청이 접수되었습니다/);
+  assert.match(markup, /실행 중단의 최종 상태/);
+  assert.doesNotMatch(markup, /취소 확인|>작업 취소</);
+}
+
 const empty = renderToStaticMarkup(<OrchestrationPanelView
   {...baseProps}
   phase="ready"

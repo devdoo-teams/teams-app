@@ -128,6 +128,7 @@ export type CoreOrchestrationJob = Readonly<{
   notificationDelivery?: { state: 'waiting-personal-chat' | 'pending' | 'sending' | 'accepted' | 'rejected' | 'ambiguous'; observedAt: string; activityId?: string };
   startedAt?: string;
   finishedAt?: string;
+  cancellationRequestedAt?: string;
 }>;
 
 export type CoreSubmitRequest = Readonly<{

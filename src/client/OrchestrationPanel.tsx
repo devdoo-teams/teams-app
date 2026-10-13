@@ -394,6 +394,7 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
   const submitBusy = props.busyAction === 'submit';
   const selectedBusy = props.selectedJob ? props.busyAction.endsWith(`:${props.selectedJob.id}`) : false;
   const canCancel = props.selectedJob
+    && !props.selectedJob.cancellationRequestedAt
     && ['queued', 'awaiting_approval', 'input_required', 'running'].includes(props.selectedJob.status)
     && supports(selectedProvider, 'cancel');
   const pendingConfirmation = props.selectedJob && props.pendingConfirmation?.jobId === props.selectedJob.id
@@ -631,6 +632,8 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
             </form>
           ) : null}
 
+          {props.selectedJob.cancellationRequestedAt && ['queued', 'running'].includes(props.selectedJob.status)
+            ? <p role="status">취소 요청이 접수되었습니다. 실행 중단의 최종 상태를 확인하고 있습니다.</p> : null}
           <div className="work-item-actions">
             {canCancel ? (
               pendingConfirmation?.kind === 'cancel' ? (

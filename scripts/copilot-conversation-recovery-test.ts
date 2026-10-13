@@ -221,4 +221,23 @@ await check('owner-hidden selected or boundary 404 clears paged history as forbi
     } finally { controller.dispose(); }
   }
 });
+await check('worker cancellation request remains pending and cannot be submitted twice', async () => {
+  const running = { ...base, status: 'running' as const };
+  let cancellationRequested = false;
+  let calls = 0;
+  const client = { getJob: async () => ({ ...running, ...(cancellationRequested ? { cancellationRequestedAt: '2026-10-14T00:00:00Z' } : {}) }),
+    continueJob: async () => { throw new Error('must not continue pending cancellation'); },
+    cancelJob: async () => { calls++; cancellationRequested = true; return { job: await client.getJob() }; } };
+  const controller = createCoreConversationController({ client, jobId: base.id, onChange: () => {} });
+  try {
+    await controller.load();
+    assert.equal(await controller.stop(), 'succeeded');
+    assert.equal(controller.getState().job?.status, 'running');
+    assert.equal(controller.getState().stopUncertain, false, 'an acknowledged request is not a lost receipt');
+    assert.equal(await controller.stop(), 'invalid');
+    assert.equal(calls, 1);
+    await controller.load();
+    assert.equal(controller.getState().job?.status, 'running');
+  } finally { controller.dispose(); }
+});
 assert.deepEqual(failures, [], 'conversation recovery regressions');

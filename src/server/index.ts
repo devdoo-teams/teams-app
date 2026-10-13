@@ -4926,7 +4926,9 @@ async function handleMessage(activity: any, send: BotSend): Promise<void> {
     try {
       const job = await agentService.cancelStrict(cancelMatch[1], scope);
       if (job) {
-        const responseText = `작업 ${job.id} 취소를 처리했습니다.\n상태: ${job.status}`;
+        const responseText = job.cancellationRequestedAt && ['queued', 'running'].includes(job.status)
+          ? `작업 ${job.id} 취소 요청이 접수되었습니다. 실행 중단의 최종 상태를 확인하고 있습니다.\n상태: ${job.status}`
+          : `작업 ${job.id} 취소를 처리했습니다.\n상태: ${job.status}`;
         const envelope = genUi.cancelled(job);
         await send(responseText, envelope);
       } else {

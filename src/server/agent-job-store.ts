@@ -103,7 +103,7 @@ export interface AgentJobScope {
 
 export type DurableAgentNotifications = {
   enabled: boolean;
-  delivered: Array<'running' | 'completed' | 'failed'>;
+  delivered: Array<'running' | 'completed' | 'failed' | 'cancelled'>;
 };
 
 export interface AgentJob {
@@ -147,6 +147,8 @@ export interface AgentJob {
   updatedAt?: string;
   startedAt?: string;
   finishedAt?: string;
+  /** Worker request acknowledgement; terminal outcome remains worker-owned. */
+  cancellationRequestedAt?: string;
 }
 
 export class AgentJobIdempotentReplayError extends Error {
@@ -520,6 +522,11 @@ export class AgentJobStore {
       if (updated.status === 'completed' && (!updated.result || !updated.result.trim())) {
         throw new Error('completed jobs must contain a result');
       }
+      if ('cancellationRequestedAt' in patch) {
+        readOptionalTimestamp({ cancellationRequestedAt: updated.cancellationRequestedAt }, 'cancellationRequestedAt', index, false);
+        const previous = this.jobs[index].cancellationRequestedAt;
+        if (previous && patch.cancellationRequestedAt !== previous) throw new Error('cancellation request timestamp is immutable');
+      }
       this.jobs = this.jobs.map((job, jobIndex) => jobIndex === index ? updated : job);
       return cloneAgentJob(updated);
     });
@@ -836,6 +843,7 @@ function loadJob(
   const updatedAt = readOptionalTimestamp(value, 'updatedAt', index, legacy);
   const startedAt = readOptionalTimestamp(value, 'startedAt', index, legacy);
   const finishedAt = readOptionalTimestamp(value, 'finishedAt', index, legacy);
+  const cancellationRequestedAt = readOptionalTimestamp(value, 'cancellationRequestedAt', index, false);
   const effectiveUpdatedAt = updatedAt.value ?? finishedAt.value ?? startedAt.value ?? createdAt.value;
   const updatedAtMigrated = updatedAt.migrated || updatedAt.value === undefined;
 
@@ -899,6 +907,7 @@ function loadJob(
     updatedAt: effectiveUpdatedAt,
     ...(startedAt.value ? { startedAt: startedAt.value } : {}),
     ...(finishedAt.value ? { finishedAt: finishedAt.value } : {}),
+    ...(cancellationRequestedAt.value ? { cancellationRequestedAt: cancellationRequestedAt.value } : {}),
   };
 
   if (value.durableApproval !== undefined) job.durableApproval = readDurableApproval(value.durableApproval, job);
@@ -1166,8 +1175,8 @@ function readDurableNotifications(value: { durableNotifications?: unknown }, ind
   }
   const record = candidate as Record<string, unknown>;
   if (typeof record.enabled !== 'boolean' || !Array.isArray(record.delivered)
-      || record.delivered.length > 3
-      || record.delivered.some(status => !['running', 'completed', 'failed'].includes(status))
+      || record.delivered.length > 4
+      || record.delivered.some(status => !['running', 'completed', 'failed', 'cancelled'].includes(status))
       || new Set(record.delivered).size !== record.delivered.length) {
     throw invalidJob(index, 'durableNotifications intent or delivery statuses are invalid');
   }

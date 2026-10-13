@@ -536,6 +536,7 @@ export class AgentService {
     const existing = this.store.get(id, scope);
     if (existing?.mode === 'workspace-write') this.assertMutationAllowed(scope);
     let cancelledWasRunning = false;
+    let externalCancellation = false;
     const cancelled = await this.withJobMutationLock(id, scope, async () => {
       const job = this.store.get(id, scope);
       if (!job) return undefined;
@@ -550,10 +551,16 @@ export class AgentService {
       const provider = this.providerForJob(job, options.provider);
       this.invalidateProgressState(job.id);
       cancelledWasRunning = job.status === 'running';
-      if (this.options.executionDispatcher) {
-        await this.options.executionDispatcher.cancel(job, 'cancellation requested by the Teams user');
-        const durable = await this.reconcileDurableObservation(job, scope);
-        if (durable && isTerminalJob(durable)) return durable;
+      if (this.options.executionDispatcher && job.status !== 'awaiting_approval') {
+        externalCancellation = true;
+        let requested = job;
+        if (!job.cancellationRequestedAt) {
+          await this.options.executionDispatcher.cancel(job, 'cancellation requested by the Teams user');
+          requested = await this.store.update(id, scope, { cancellationRequestedAt: new Date().toISOString() }) ?? job;
+        }
+        // Request acceptance does not acknowledge worker termination. Preserve
+        // running/queued state and admission until an authoritative receipt.
+        return await this.reconcileDurableObservation(requested, scope);
       } else if (cancelledWasRunning) {
         this.runnerFor(provider).cancel(id);
       }
@@ -570,9 +577,9 @@ export class AgentService {
     });
 
     if (cancelledWasRunning) await this.executionByJob.get(id);
-    if (cancelled) await this.finalizeAdmission(cancelled, scope);
+    if (cancelled && isTerminalJob(cancelled)) await this.finalizeAdmission(cancelled, scope);
 
-    if (options.notify && cancelled?.status === 'cancelled') {
+    if (options.notify && !externalCancellation && cancelled?.status === 'cancelled') {
       await this.notifyIfEnabled(cancelled, {
         kind: 'cancelled',
         phase: 'cancelled',
@@ -734,12 +741,15 @@ export class AgentService {
   private async deliverDurableNotification(job: AgentJob, scope: AgentJobScope): Promise<AgentJob> {
     const state = job.durableNotifications;
     const status = job.status;
-    if (!state?.enabled || !['running', 'completed', 'failed'].includes(status)
-        || state.delivered.includes(status as 'running' | 'completed' | 'failed')) return job;
+    if (status === 'cancelled' && !job.cancellationRequestedAt) return job;
+    if (!state?.enabled || !['running', 'completed', 'failed', 'cancelled'].includes(status)
+        || state.delivered.includes(status as 'running' | 'completed' | 'failed' | 'cancelled')) return job;
     const event: Omit<AgentNotification, 'conversationId' | 'job'> = status === 'running'
       ? { kind: 'progress', phase: 'analysis', message: `작업 ${job.id}이 실행을 시작했습니다.` }
       : status === 'completed'
         ? { kind: 'result', phase: 'completed', message: this.formatCompletion(job.id, job.result!) }
+        : status === 'cancelled'
+          ? { kind: 'cancelled', phase: 'cancelled', message: `작업 ${job.id}이 취소되었습니다.` }
         : { kind: 'error', phase: 'failed', message: `작업 ${job.id}이 실패했습니다.\n\n${redactCliDiagnostics(job.error ?? 'Azure worker execution failed.', {
             paths: [this.workspace, process.env.HOME, process.env.USERPROFILE], maxChars: 4_000,
           })}` };
@@ -752,7 +762,7 @@ export class AgentService {
     }
     // At-least-once boundary: a crash between send and ack may resend the card.
     return await this.store.update(job.id, scope, { durableNotifications: {
-      enabled: state.enabled, delivered: [...state.delivered, status as 'running' | 'completed' | 'failed'],
+      enabled: state.enabled, delivered: [...state.delivered, status as 'running' | 'completed' | 'failed' | 'cancelled'],
     } }) ?? job;
   }
 
@@ -772,9 +782,9 @@ export class AgentService {
     for (const job of this.store.listLocalOnly(Number.MAX_SAFE_INTEGER)) {
       if (this.closing) return;
       const scope = scopeForJob(job);
-      if (!scope || job.status === 'awaiting_approval' || job.status === 'cancelled') continue;
+      if (!scope || job.status === 'awaiting_approval' || (job.status === 'cancelled' && !job.cancellationRequestedAt)) continue;
       if (isTerminalJob(job) && (!job.durableNotifications?.enabled
-          || job.durableNotifications.delivered.includes(job.status as 'completed' | 'failed'))) continue;
+          || job.durableNotifications.delivered.includes(job.status as 'completed' | 'failed' | 'cancelled'))) continue;
       try { await this.observe(job.id, scope); }
       catch { /* Retry queue/read or acknowledgement failures on the next bounded tick. */ }
     }

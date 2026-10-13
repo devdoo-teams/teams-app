@@ -1061,12 +1061,14 @@ export class GenUiResponseFactory {
   cancelled(job: AgentJob): GenUiEnvelopeV1 {
     const jobId = safeJobId(job);
     const jobStatus = safeJobStatus(job);
-    const text = `작업 ${jobId} 취소를 처리했습니다.\n상태: ${jobStatus}`;
+    const pending = Boolean(job.cancellationRequestedAt && ['queued', 'running'].includes(jobStatus));
+    const text = pending ? `작업 ${jobId} 취소 요청이 접수되었습니다. 실행 중단의 최종 상태를 확인하고 있습니다.\n상태: ${jobStatus}`
+      : `작업 ${jobId} 취소를 처리했습니다.\n상태: ${jobStatus}`;
     return this.create({
       kind: 'result',
       id: jobId,
       status: jobStatus === 'cancelled' ? 'complete' : stateForJob(job),
-      title: '작업 취소 결과',
+      title: pending ? '작업 취소 확인 대기' : '작업 취소 결과',
       summary: text,
       prompt: safeJobPrompt(job),
       sections: [{ type: 'status', title: '취소 결과', status: jobStatus, description: safeJobPrompt(job) }, ...jobExecutionFactSections(job)],
