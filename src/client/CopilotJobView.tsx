@@ -302,12 +302,12 @@ export function CopilotJobView({ jobId, autoLoad = false, onJobChange }: {
       {connectionError ? <section role="alert"><p>{connectionError}</p>
         <button className="secondary" type="button" onClick={() => { setConnectionError(''); setConnectionAttempt(attempt => attempt + 1); }}>연결 다시 시도</button>
       </section> : null}
-      <CopilotKit key={activeJobId} runtimeUrl={COPILOT_PROJECTION_RUNTIME_PATH}
+      <CopilotKit key={jobId} runtimeUrl={COPILOT_PROJECTION_RUNTIME_PATH}
         agent={COPILOT_PROJECTION_AGENT_ID} headers={getCachedAuthHeaders} credentials="same-origin"
         useSingleEndpoint={false} showDevConsole={false} enableInspector={false}
         onError={() => { setAuthorized(false); setRevision(''); setConnectionError(unavailableMessage); }}>
         <>
-          <ConnectedCoreConversation jobId={activeJobId} onJobChange={changeJob} onStateChange={observeState} />
+          <ConnectedCoreConversation jobId={jobId} onJobChange={changeJob} onStateChange={observeState} />
           <ConnectedProjectionView jobId={activeJobId} autoLoad={autoLoad} revision={`${revision}:${connectionAttempt}`} authorized={authorized && !connectionError} />
         </>
       </CopilotKit>

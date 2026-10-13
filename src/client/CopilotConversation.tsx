@@ -116,11 +116,12 @@ export function ConnectedCoreConversation({ jobId, onJobChange, onStateChange }:
   const controller = useRef<ReturnType<typeof createCoreConversationController> | null>(null);
   useEffect(() => {
     let mounted = true;
+    let observedJobId = jobId;
     const next = createCoreConversationController({ client, jobId, onChange: value => {
       if (!mounted) return;
       setState(value);
       onStateChange?.(value);
-      if (value.jobId !== jobId) { setInput(''); onJobChange(value.jobId); }
+      if (value.jobId !== observedJobId) { observedJobId = value.jobId; setInput(''); onJobChange(value.jobId); }
     } });
     controller.current = next;
     setConfirmingStop(false);

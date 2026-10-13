@@ -45,6 +45,7 @@ export function CopilotConversationWorkspace({ initialJobId, client: suppliedCli
   const client = useMemo(() => suppliedClient ?? createCoreOrchestrationClient(), [suppliedClient]);
   const [jobs, setJobs] = useState<CoreOrchestrationJob[]>([]);
   const [selected, setSelected] = useState(initialJobId);
+  const [conversationRoot, setConversationRoot] = useState(initialJobId);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [confirmedJob, setConfirmedJob] = useState<CoreOrchestrationJob>();
@@ -109,12 +110,15 @@ export function CopilotConversationWorkspace({ initialJobId, client: suppliedCli
       {error ? <p role="alert">{error}</p> : null}
       {!loading && !error && !jobs.length ? <p>아직 개인 작업이 없습니다. 개인 작업 화면에서 첫 작업을 만든 뒤 여기서 대화를 이어갈 수 있습니다.</p> : null}
       <label>기존 대화 선택 <select aria-label="기존 대화 선택" disabled={loading || Boolean(error)} value={selected ?? ''}
-        onChange={event => setSelected(event.currentTarget.value || undefined)}>
+        onChange={event => {
+          const id = event.currentTarget.value || undefined;
+          setSelected(id); setConversationRoot(id);
+        }}>
         <option value="">개인 작업을 선택하세요.</option>
         {selected && !jobs.some(job => job.id === selected) ? <option value={selected}>{selected}</option> : null}
         {jobs.map(job => <option value={job.id} key={job.id}>{job.id} · {CORE_JOB_STATUS_LABELS[job.status]}</option>)}
       </select></label>
-      {!loading && !error && selected ? <CopilotJobView key={selected} jobId={selected} autoLoad={true} onJobChange={setSelected} /> : null}
+      {!loading && !error && selected ? <CopilotJobView key={conversationRoot ?? selected} jobId={conversationRoot ?? selected} autoLoad={true} onJobChange={setSelected} /> : null}
       {!loading && !error && confirmedJob && confirmedJob.id === selected ? <CoreResultReview key={selected} job={confirmedJob} /> : null}
       {resultError ? <p role="alert">{resultError}</p> : null}
     </section>
