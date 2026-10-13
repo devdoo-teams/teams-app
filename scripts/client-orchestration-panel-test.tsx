@@ -911,6 +911,66 @@ for (const denial of [401, 403, 404, 'auth-expired', 'forbidden'] as const) {
   assert.equal(props.selectedJob?.result, privateResult.result, 'deliberate fresh authorized selection remains available');
 }
 
+for (const denial of [401, 403, 'auth-expired', 'forbidden'] as const) {
+  for (const surface of ['page', 'detail', 'mutation'] as const) {
+    const retained = task('completed', { id: `retained-${surface}`, result: 'SYNTHETIC_DENIED_PRIVATE_RESULT' });
+    let denied = false;
+    const protectedClient = createCoreOrchestrationClient(async input => {
+      if (denied) {
+        if (typeof denial === 'string') throw new ApiAuthError(denial);
+        return Response.json({ error: 'SYNTHETIC_ACCESS_DENIED' }, { status: denial });
+      }
+      const list = new URL(String(input), 'http://core.test').pathname === `${apiBasePath}/jobs`;
+      return Response.json(list ? { jobs: [retained], pendingJobs: [pendingApprovalJob],
+        hasMore: true, nextCursor: 'next-private-page', providers: [provider] } : { job: retained });
+    });
+    const host = panelHookHost();
+    let props = host.render(protectedClient);
+    await props.onReload(); props = host.render(protectedClient);
+    await props.onSelectTask(retained.id); props = host.render(protectedClient);
+    denied = true;
+    if (surface === 'page') await props.onLoadMore?.();
+    else if (surface === 'detail') await props.onSelectTask('denied-detail');
+    else await props.onCancel(retained.id);
+    props = host.render(protectedClient);
+    assert.deepEqual(props.jobs, [], `${surface}/${denial} clears the private list`);
+    assert.equal(props.selectedJob, null, `${surface}/${denial} clears the private detail`);
+    assert.equal(props.conversation, undefined, `${surface}/${denial} clears the conversation`);
+    assert.deepEqual(props.pendingJobs, [], `${surface}/${denial} clears pending approvals`);
+    assert.equal(props.phase, 'error', `${surface}/${denial} requires deliberate access recovery`);
+    assert.doesNotMatch(renderToStaticMarkup(<OrchestrationPanelView {...props} />), /SYNTHETIC_DENIED_PRIVATE_RESULT/);
+  }
+}
+
+for (const lateOutcome of ['success', 'denied'] as const) {
+  const retained = task('running', { id: 'old-private-job', result: 'SYNTHETIC_OLD_ACCESS_RESULT' });
+  const fresh = task('running', { id: 'new-authorized-job' });
+  let denied = false;
+  let recovered = false;
+  let finishMutation!: () => void;
+  const protectedClient = createCoreOrchestrationClient(async () => denied
+    ? Response.json({ error: 'SYNTHETIC_ACCESS_DENIED' }, { status: 403 })
+    : Response.json({ jobs: [recovered ? fresh : retained], providers: [provider] }));
+  protectedClient.cancelJob = () => new Promise((resolve, reject) => {
+    finishMutation = () => lateOutcome === 'success' ? resolve({ job: retained })
+      : reject(new CoreOrchestrationClientError('old access denied', { code: 'Denied', status: 403, retryable: false }));
+  });
+  const host = panelHookHost();
+  let props = host.render(protectedClient);
+  await props.onReload(); props = host.render(protectedClient);
+  const mutation = props.onCancel(retained.id);
+  denied = true;
+  await props.onReload(); props = host.render(protectedClient);
+  assert.deepEqual(props.jobs, []);
+  denied = false; recovered = true;
+  await props.onReload(); props = host.render(protectedClient);
+  finishMutation(); await mutation; props = host.render(protectedClient);
+  assert.deepEqual(props.jobs.map(job => job.id), [fresh.id], `${lateOutcome} from a denied access generation cannot alter recovered state`);
+  assert.equal(props.selectedJob, null);
+  assert.equal(props.phase, 'ready');
+  assert.equal(props.error, '');
+}
+
 {
   const cached = task('completed', { result: 'SYNTHETIC_NON_ACCESS_FAILURE_CACHE' });
   let offline = false;

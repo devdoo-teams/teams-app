@@ -884,6 +884,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
   const listPageController = useRef<AbortController | null>(null);
   const listPageLock = useRef(false);
   const privateAccessBlocked = useRef(false);
+  const privateAccessGeneration = useRef(0);
 
   useEffect(() => {
     if (!teamsApp.isInitialized()) return;
@@ -919,6 +920,11 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
 
   const clearPrivateState = useCallback(() => {
     privateAccessBlocked.current = true;
+    privateAccessGeneration.current += 1;
+    loadController.current?.abort();
+    listPageController.current?.abort();
+    listPageController.current = null;
+    listPageLock.current = false;
     detailRequests.current.dispose();
     setJobs([]);
     setListHasMore(false);
@@ -941,6 +947,14 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     setNotice(null);
   }, []);
 
+  const handlePrivateAccessFailure = useCallback((caught: unknown) => {
+    if (!isApiAuthError(caught) && !isConversationHistoryAccessFailure(caught)) return false;
+    clearPrivateState();
+    setError(errorMessage(caught));
+    setPhase('error');
+    return true;
+  }, [clearPrivateState]);
+
   const updateJob = useCallback((nextJob: CoreOrchestrationJob) => {
     setJobs((current) => current.some((job) => job.id === nextJob.id)
       ? current.map((job) => job.id === nextJob.id ? nextJob : job)
@@ -958,6 +972,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     loadController.current?.abort();
     const controller = new AbortController();
     loadController.current = controller;
+    const generation = privateAccessGeneration.current;
     if (!options.silent) {
       setPhase('loading');
       setError('');
@@ -966,7 +981,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
       const result = await client.listJobs(controller.signal, listQuery);
       const selected = selectedJob ? await client.getJob(selectedJob.id, controller.signal) : undefined;
       const requestedJob = requestedJobId ? await loadRequestedJob(requestedJobId, client, controller.signal) : undefined;
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || generation !== privateAccessGeneration.current) return;
       privateAccessBlocked.current = false;
       const refreshedJobs = includeRequestedJob(result.jobs, requestedJob);
       setJobs(current => {
@@ -996,19 +1011,16 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
       setPhase('ready');
       setNotice(current => settleOrchestrationRefreshNotice(current, { status: 'succeeded' }));
     } catch (caught) {
-      if (controller.signal.aborted) return;
-      if (isApiAuthError(caught) || isConversationHistoryAccessFailure(caught)) {
-        clearPrivateState();
-        setError(errorMessage(caught));
-        setPhase('error');
-      } else if (options.silent) {
+      if (controller.signal.aborted || generation !== privateAccessGeneration.current) return;
+      if (handlePrivateAccessFailure(caught)) return;
+      if (options.silent) {
         setNotice(current => settleOrchestrationRefreshNotice(current, { status: 'failed', message: errorMessage(caught) }));
       } else {
         setError(errorMessage(caught));
         setPhase('error');
       }
     }
-  }, [clearPrivateState, client, listQuery, requestedJobId, selectedJob?.id]);
+  }, [client, handlePrivateAccessFailure, listQuery, requestedJobId, selectedJob?.id]);
 
   const loadMore = useCallback(async () => {
     if (!listHasMore || !listNextCursor || listPageLock.current || privateAccessBlocked.current) return;
@@ -1016,9 +1028,10 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     setListLoadingMore(true);
     const controller = new AbortController();
     listPageController.current = controller;
+    const generation = privateAccessGeneration.current;
     try {
       const result = await client.listJobs(controller.signal, { ...listQuery, cursor: listNextCursor });
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || generation !== privateAccessGeneration.current) return;
       setJobs(current => {
         const existing = new Set(current.map(job => job.id));
         return [...current, ...result.jobs.filter(job => !existing.has(job.id))];
@@ -1026,7 +1039,8 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
       setListHasMore(result.hasMore === true);
       setListNextCursor(result.nextCursor);
     } catch (caught) {
-      if (!controller.signal.aborted) {
+      if (!controller.signal.aborted && generation === privateAccessGeneration.current
+        && !handlePrivateAccessFailure(caught)) {
         setNotice({ kind: 'refresh-error', message: `다음 작업을 불러오지 못했습니다: ${errorMessage(caught)}` });
       }
     } finally {
@@ -1036,7 +1050,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
         setListLoadingMore(false);
       }
     }
-  }, [client, listHasMore, listNextCursor, listQuery]);
+  }, [client, handlePrivateAccessFailure, listHasMore, listNextCursor, listQuery]);
 
   const navigateList = useCallback((section: WorkHubNavigationSection, projectName?: string) => {
     setListNavigation(section);
@@ -1095,15 +1109,17 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     }>,
     successMessage: string,
   ): Promise<'success' | 'definitive-failure' | 'ambiguous-failure' | 'ignored'> => {
-    if (busy.isBusy(slot)) return 'ignored';
+    if (privateAccessBlocked.current || busy.isBusy(slot)) return 'ignored';
+    const generation = privateAccessGeneration.current;
     setBusyAction(slot);
     setError('');
     setNotice(null);
     try {
       const result = await busy.run(slot, operation);
-      if (!result) return 'ignored';
+      if (!result || generation !== privateAccessGeneration.current) return 'ignored';
       if (result.status === 'unsupported') {
         await load();
+        if (generation !== privateAccessGeneration.current) return 'ignored';
         setError(orchestrationMutationNotice(result, '추가 입력을 처리했습니다.'));
         return 'definitive-failure';
       }
@@ -1111,14 +1127,16 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
       setNotice({ kind: 'mutation', message: orchestrationMutationNotice(result, successMessage) });
       return 'success';
     } catch (caught) {
+      if (generation !== privateAccessGeneration.current) return 'ignored';
+      if (handlePrivateAccessFailure(caught)) return 'definitive-failure';
       setError(errorMessage(caught));
       return caught instanceof CoreOrchestrationClientError && !caught.retryable
         ? 'definitive-failure'
         : 'ambiguous-failure';
     } finally {
-      setBusyAction((current) => current === slot ? '' : current);
+      if (generation === privateAccessGeneration.current) setBusyAction((current) => current === slot ? '' : current);
     }
-  }, [busy, load, updateJob]);
+  }, [busy, handlePrivateAccessFailure, load, updateJob]);
 
   const submit = useCallback(async () => {
     const validation = validateOrchestrationSubmission(
@@ -1153,7 +1171,8 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
   }, [client, mode, modelCatalog, modelId, notifyPersonal, prompt, providerId, providers, reasoningEffort, runMutation]);
 
   const selectJob = useCallback(async (jobId: string) => {
-    if (selectingJobs.current.has(jobId)) return;
+    if (privateAccessBlocked.current || selectingJobs.current.has(jobId)) return;
+    const generation = privateAccessGeneration.current;
     selectingJobs.current.add(jobId);
     setRequestedJobId(current => current === jobId ? current : undefined);
     const slot = `detail:${jobId}`;
@@ -1164,16 +1183,19 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
       await detailRequests.current.request(
         signal => client.getJobConversation?.(jobId, signal) ?? loadJobConversation(jobId, client.getJob, signal),
         { success: detail => {
+          if (generation !== privateAccessGeneration.current) return;
           updateJob(detail.job);
           setConversation(detail.conversation);
           setInputValue('');
-        }, error: caught => setError(errorMessage(caught)),
+        }, error: caught => {
+          if (generation === privateAccessGeneration.current && !handlePrivateAccessFailure(caught)) setError(errorMessage(caught));
+        },
         settled: () => setBusyAction((current) => current === slot ? '' : current) },
       );
     } finally {
       selectingJobs.current.delete(jobId);
     }
-  }, [client, updateJob]);
+  }, [client, handlePrivateAccessFailure, updateJob]);
 
   useEffect(() => {
     if (requestedJobId) void selectJob(requestedJobId);
