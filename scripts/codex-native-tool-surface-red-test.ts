@@ -14,6 +14,7 @@ import {
   CODEX_READ_ONLY_PERMISSION_ARGS,
 } from '../src/server/codex-permission-profile-isolation-provider.js';
 import { createProductionAgentExecutionPolicy } from '../src/server/production-agent-isolation.js';
+import { TEAMS_CLI_AGENT_MODEL_ARGS } from '../src/shared/teams-cli-agent-policy.js';
 
 type EffectiveToolInventory = Readonly<{
   apps: readonly string[];
@@ -178,6 +179,7 @@ async function productionLaunchPinsEveryToolSurface(): Promise<void> {
       ...CODEX_READ_ONLY_PERMISSION_ARGS,
       '--cd',
       prepared.workspace,
+      ...TEAMS_CLI_AGENT_MODEL_ARGS,
       '--',
       'inspect only',
     ];

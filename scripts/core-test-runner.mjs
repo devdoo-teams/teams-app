@@ -13,6 +13,7 @@ const coreBuildSteps = [
   ['scripts/build-server.mjs', '--core'],
 ];
 const plainTests = [
+  'scripts/run-module-test-test.mjs',
   'scripts/independent-release-identity-test.mjs',
   'scripts/channels-renderer-build-test.mjs',
   'scripts/pinned-ts-test-runner-test.mjs',
@@ -132,6 +133,7 @@ const tsTests = [
   'scripts/production-agent-isolation-test.ts',
   'scripts/agent-execution-readiness-test.ts',
   'scripts/codex-native-permission-isolation-test.ts',
+  'scripts/codex-native-tool-surface-red-test.ts',
   'scripts/agent-job-store-hardening-test.ts',
   'scripts/agent-admission-control-test.ts',
   'scripts/agent-process-controller-security-test.ts',

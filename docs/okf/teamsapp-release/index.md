@@ -8,6 +8,8 @@ okf_version: 0.2
 
 ## Concepts
 
+- [Module test completion and failure propagation](module-test-process-lifetime.md)
+
 * [Local preview CSP and auth boundary](local-preview-csp.md) - 1.0.142 local UI failure, same-origin CSP cause, loopback-only preview token handling, and pending installed/runtime gates
 
 * [Existing-service 1.0.139 update](teams-139-existing-service-update.md) - verified candidate identity, existing public process and private stores, same-service staging/rollback gates, and separate catalog/install/UI read-back

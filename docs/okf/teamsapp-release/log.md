@@ -1,5 +1,12 @@
 # TeamsApp release knowledge update log
 
+## 2026-10-13 — Module runner false success
+
+* **Official contract**: Node's explicit exit overrides exitCode and terminates pending async work; see [module process lifetime](module-test-process-lifetime.md).
+* **RED/GREEN**: eleven real-process cases, eight failing before the fix and all passing after natural completion and entrypoint argument restoration. The real A2A orchestrator now reaches its completion output through the wrapper.
+* **Additional fixture repair**: the previously unregistered native-tool-surface test omitted mandatory model/provider arguments and failed before reaching its boundary assertions. Its valid launch now uses the existing policy arguments; the security assertions remain intact and this test is included in Core.
+* **Boundary**: full affected suites and final-SHA CI must be rerun; previous green CI does not prove the skipped/prematurely terminated tests completed. Existing 147 server and rollback remain preserved while the candidate is verified. Native host UI and session survival are separate pending evidence.
+
 ## 2026-10-10 — Teams 1.0.139 existing-service update baseline
 
 * **Official contract**: current Microsoft Teams Admin Center docs say update the existing app from its details page with **Upload file**, preserving prior app policies; current Microsoft Dev Tunnels docs mark the CLI as public preview and not recommended for production; installed Node v24.13.1 docs define relative `--env-file` resolution and inherited-environment precedence. See [1.0.139 update concept](teams-139-existing-service-update.md).
