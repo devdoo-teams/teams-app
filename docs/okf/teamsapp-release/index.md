@@ -8,6 +8,8 @@ okf_version: 0.2
 
 ## Concepts
 
+- [Private state and cancellation follow-up](state-integrity-followup.md)
+
 - [Module test completion and failure propagation](module-test-process-lifetime.md)
 
 * [Local preview CSP and auth boundary](local-preview-csp.md) - 1.0.142 local UI failure, same-origin CSP cause, loopback-only preview token handling, and pending installed/runtime gates

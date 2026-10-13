@@ -5,7 +5,7 @@ import path from 'node:path';
 
 import { observeTeamsCliTestCatalog } from './fixtures/teams-cli-agent-policy-fixture.js';
 import { AgentJobStore } from '../src/server/agent-job-store.js';
-import { AgentService, type AgentExecutionDispatcher } from '../src/server/agent-service.js';
+import { AgentService, type AgentExecutionDispatcher, type AgentExecutionObservation } from '../src/server/agent-service.js';
 import { CoreOrchestrationService, createServerDerivedCoreScope } from '../src/server/core-orchestration-service.js';
 import { GitService } from '../src/server/git-service.js';
 
@@ -13,10 +13,11 @@ const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-core-cross-surface-'
 const store = new AgentJobStore(path.join(root, 'agent-jobs.json'));
 let dispatches = 0;
 let cancellations = 0;
+const observations = new Map<string, AgentExecutionObservation>();
 const dispatcher: AgentExecutionDispatcher = {
   kind: 'azure-queue',
   async dispatch() { dispatches += 1; },
-  async observe() { return undefined; },
+  async observe(job) { return observations.get(job.id); },
   async cancel() { cancellations += 1; },
 };
 const agentService = new AgentService(
@@ -78,7 +79,11 @@ try {
   assert.equal(service.list(foreignScope).some((job) => job.id === chatCreated.job.id), false);
   const cancelledFromTab = await service.cancel(tabScope, { jobId: chatCreated.job.id });
   assert.equal(cancelledFromTab?.id, chatCreated.job.id);
-  assert.equal(cancelledFromTab?.status, 'cancelled');
+  assert.equal(cancelledFromTab?.status, 'queued', 'the tab sees accepted cancellation pending worker acknowledgement');
+  assert.ok(cancelledFromTab?.cancellationRequestedAt);
+  observations.set(chatCreated.job.id, { status: 'cancelled' });
+  await agentService.observe(chatCreated.job.id, { ...chatScope, conversationId: store.getLocalOnly(chatCreated.job.id)!.conversationId });
+  assert.equal(service.get(tabScope, { jobId: chatCreated.job.id })?.status, 'cancelled');
   assert.equal(cancellations, 1, 'cross-surface cancellation targets the stored chat scope');
 
   const tabCreated = await service.submit(tabScope, {
@@ -112,7 +117,11 @@ try {
 
   const cancelledFromTabAfterApproval = await service.cancel(tabScope, { jobId: tabCreated.job.id });
   assert.equal(cancelledFromTabAfterApproval?.id, tabCreated.job.id);
-  assert.equal(cancelledFromTabAfterApproval?.status, 'cancelled');
+  assert.equal(cancelledFromTabAfterApproval?.status, 'queued');
+  assert.ok(cancelledFromTabAfterApproval?.cancellationRequestedAt);
+  observations.set(tabCreated.job.id, { status: 'cancelled' });
+  await agentService.observe(tabCreated.job.id, { ...tabScope, conversationId: store.getLocalOnly(tabCreated.job.id)!.conversationId });
+  assert.equal(service.get(chatScope, { jobId: tabCreated.job.id })?.status, 'cancelled');
   assert.equal(cancellations, 2, 'the second cross-surface mutation targets the stored tab scope');
 
   const groupCreated = await service.submit(groupScope, {
