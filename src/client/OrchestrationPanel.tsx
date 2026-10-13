@@ -885,6 +885,14 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
   const listPageLock = useRef(false);
   const privateAccessBlocked = useRef(false);
   const privateAccessGeneration = useRef(0);
+  const currentJobs = useRef<CoreOrchestrationJob[]>([]);
+  const selectedJobId = useRef<string | undefined>(undefined);
+  const requestedJobHint = useRef(requestedJobId);
+  requestedJobHint.current = requestedJobId;
+  const publishJobs = useCallback((next: CoreOrchestrationJob[] | ((current: CoreOrchestrationJob[]) => CoreOrchestrationJob[])) => {
+    currentJobs.current = typeof next === 'function' ? next(currentJobs.current) : next;
+    setJobs(currentJobs.current);
+  }, []);
 
   useEffect(() => {
     if (!teamsApp.isInitialized()) return;
@@ -926,16 +934,18 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     listPageController.current = null;
     listPageLock.current = false;
     detailRequests.current.dispose();
-    setJobs([]);
+    publishJobs([]);
     setListHasMore(false);
     setListNextCursor(undefined);
     setListLoadingMore(false);
     setPendingJobs([]);
     setPendingHasMore(false);
     setSelectedJob(null);
+    selectedJobId.current = undefined;
     setConversation(undefined);
     setPendingConfirmation(null);
     setRequestedJobId(undefined);
+    requestedJobHint.current = undefined;
     setInputValue('');
     setBusyAction('');
     setProviders([]);
@@ -945,7 +955,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     setReasoningEffort('');
     setLastUpdatedAt('');
     setNotice(null);
-  }, []);
+  }, [publishJobs]);
 
   const handlePrivateAccessFailure = useCallback((caught: unknown) => {
     if (!isApiAuthError(caught) && !isConversationHistoryAccessFailure(caught)) return false;
@@ -956,11 +966,12 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
   }, [clearPrivateState]);
 
   const updateJob = useCallback((nextJob: CoreOrchestrationJob) => {
-    setJobs((current) => current.some((job) => job.id === nextJob.id)
+    publishJobs((current) => current.some((job) => job.id === nextJob.id)
       ? current.map((job) => job.id === nextJob.id ? nextJob : job)
       : [nextJob, ...current]);
     setSelectedJob(nextJob);
-  }, []);
+    selectedJobId.current = nextJob.id;
+  }, [publishJobs]);
 
   const load = useCallback(async (options: { silent?: boolean } = {}) => {
     if (options.silent && privateAccessBlocked.current) return;
@@ -979,21 +990,34 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     }
     try {
       const result = await client.listJobs(controller.signal, listQuery);
-      const selected = selectedJob ? await client.getJob(selectedJob.id, controller.signal) : undefined;
-      const requestedJob = requestedJobId ? await loadRequestedJob(requestedJobId, client, controller.signal) : undefined;
+      const observedId = selectedJobId.current;
+      const hint = requestedJobHint.current;
+      const selected = observedId ? await client.getJob(observedId, controller.signal) : undefined;
+      const requestedJob = hint ? await loadRequestedJob(hint, client, controller.signal) : undefined;
+      const retainedJobs: CoreOrchestrationJob[] = [];
+      if (options.silent) {
+        const ids = currentJobs.current.map(job => job.id);
+        // Revalidate every deliberately loaded row through the same owner and
+        // server filter. Batch within the Core API's 50-ID bound.
+        for (let start = 0; start < ids.length; start += 50) {
+          controller.signal.throwIfAborted();
+          const page = await client.listJobs(controller.signal, { ...listQuery, limit: 50, jobIds: ids.slice(start, start + 50) });
+          retainedJobs.push(...page.jobs);
+        }
+      }
       if (controller.signal.aborted || generation !== privateAccessGeneration.current) return;
       privateAccessBlocked.current = false;
       const refreshedJobs = includeRequestedJob(result.jobs, requestedJob);
-      setJobs(current => {
+      publishJobs(current => {
         if (!options.silent) return [...refreshedJobs];
-        const refreshedById = new Map(refreshedJobs.map(job => [job.id, job]));
+        const refreshedById = new Map([...refreshedJobs, ...retainedJobs].map(job => [job.id, job]));
         const currentIds = new Set(current.map(job => job.id));
         return [
           ...refreshedJobs.filter(job => !currentIds.has(job.id)),
-          ...current.map(job => refreshedById.get(job.id) ?? job),
+          ...current.map(job => refreshedById.get(job.id)).filter((job): job is CoreOrchestrationJob => Boolean(job)),
         ];
       });
-      if (!options.silent) {
+      if (!options.silent || result.hasMore !== true) {
         setListHasMore(result.hasMore === true);
         setListNextCursor(result.nextCursor);
       }
@@ -1002,6 +1026,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
       setProviders(result.providers);
       setModelCatalog(result.modelCatalog);
       setSelectedJob((current) => current ? selected?.id === current.id ? selected : result.jobs.find((job) => job.id === current.id) ?? (requestedJob?.id === current.id ? requestedJob : current) : requestedJob ?? null);
+      if (!selectedJobId.current && requestedJob) selectedJobId.current = requestedJob.id;
       setProviderId((current) => {
         const retained = result.providers.find((provider) => provider.provider === current);
         if (supports(retained, 'submit')) return current;
@@ -1020,7 +1045,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
         setPhase('error');
       }
     }
-  }, [client, handlePrivateAccessFailure, listQuery, requestedJobId, selectedJob?.id]);
+  }, [client, handlePrivateAccessFailure, listQuery, publishJobs]);
 
   const loadMore = useCallback(async () => {
     if (!listHasMore || !listNextCursor || listPageLock.current || privateAccessBlocked.current) return;
@@ -1032,7 +1057,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     try {
       const result = await client.listJobs(controller.signal, { ...listQuery, cursor: listNextCursor });
       if (controller.signal.aborted || generation !== privateAccessGeneration.current) return;
-      setJobs(current => {
+      publishJobs(current => {
         const existing = new Set(current.map(job => job.id));
         return [...current, ...result.jobs.filter(job => !existing.has(job.id))];
       });
@@ -1050,7 +1075,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
         setListLoadingMore(false);
       }
     }
-  }, [client, handlePrivateAccessFailure, listHasMore, listNextCursor, listQuery]);
+  }, [client, handlePrivateAccessFailure, listHasMore, listNextCursor, listQuery, publishJobs]);
 
   const navigateList = useCallback((section: WorkHubNavigationSection, projectName?: string) => {
     setListNavigation(section);

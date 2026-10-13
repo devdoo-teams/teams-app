@@ -3,23 +3,30 @@ import React from 'react';
 import { teamsCliTestCatalog } from './fixtures/teams-cli-agent-policy-fixture.js';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ApiAuthError } from '../src/client/auth.js';
+import { registerHooks } from 'node:module';
 import type { VisibleJobConversation } from '../src/shared/job-conversation.js';
 
+import type { OrchestrationPanelViewProps } from '../src/client/OrchestrationPanel.js';
+const hostHooks = registerHooks({ resolve(specifier, context, nextResolve) {
+  if (specifier === '@microsoft/teams-js') return { format: 'module', shortCircuit: true,
+    url: 'data:text/javascript,export const app={isInitialized:()=>false}; export const authentication={};' };
+  return nextResolve(specifier, context);
+} });
+const orchestrationPanelModule = await import('../src/client/OrchestrationPanel.js');
+hostHooks.deregister();
 import {
   CoreOrchestrationClientError,
   createCoreOrchestrationClient,
 } from '../src/client/core-orchestration-client.js';
-import {
+const {
   createOrchestrationBusyController,
   decideSelectedOrchestrationApproval,
   getOrchestrationApprovalIdentity,
   orchestrationMutationNotice,
   OrchestrationPanel,
   OrchestrationPanelView,
-  type OrchestrationPanelViewProps,
   validateOrchestrationSubmission,
-} from '../src/client/OrchestrationPanel.js';
-import * as orchestrationPanelModule from '../src/client/OrchestrationPanel.js';
+} = orchestrationPanelModule;
 import type {
   CoreCodexModelCatalog,
   CoreOrchestrationJob,
@@ -739,8 +746,8 @@ assert.equal((error.match(/작업 목록을 불러오지 못했습니다/g) ?? [
 
 // Exercise production hook handlers and the actual latest-detail controller.
 // Host effects are held by this fixture so no Teams host, polling timer, or DOM is used.
-function panelHookHost() {
-  type Cell = { value: unknown; dependencies?: readonly unknown[] };
+function panelHookHost({ effects = false } = {}) {
+  type Cell = { value: unknown; dependencies?: readonly unknown[]; effect?: () => void | (() => void); pending?: boolean };
   const cells: Cell[] = [];
   let cursor = 0;
   function memo(factory: () => unknown, dependencies: readonly unknown[]): unknown {
@@ -767,9 +774,25 @@ function panelHookHost() {
     },
     useMemo: memo,
     useCallback: (callback: unknown, dependencies: readonly unknown[]) => memo(() => callback, dependencies),
-    useEffect: () => { cursor++; },
+    useEffect(effect: () => void | (() => void), dependencies: readonly unknown[] = []) {
+      const index = cursor++;
+      if (!effects) return;
+      const old = cells[index];
+      if (!old || dependencies.length !== old.dependencies?.length
+        || dependencies.some((value, n) => !Object.is(value, old.dependencies?.[n]))) {
+        cells[index] = { value: old?.value, dependencies, effect, pending: true };
+      }
+    },
   };
   return {
+    flushEffects() {
+      for (const cell of cells) if (cell?.pending) {
+        cell.pending = false;
+        if (typeof cell.value === 'function') cell.value();
+        cell.value = cell.effect?.();
+      }
+    },
+    dispose() { for (const cell of cells) if (cell?.effect && typeof cell.value === 'function') cell.value(); },
     render(panelClient: Parameters<typeof OrchestrationPanel>[0]['client']) {
       cursor = 0;
       const internals = (React as unknown as {
@@ -781,6 +804,53 @@ function panelHookHost() {
       } finally { internals.H = previous; }
     },
   };
+}
+
+{
+  const oldDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  Object.defineProperty(globalThis, 'document', { configurable: true, value: { getElementById: () => null } });
+  const rows = Array.from({ length: 65 }, (_, i) => task('running', { id: `paged-${i}` }));
+  const calls: string[] = [];
+  const client = createCoreOrchestrationClient(async input => {
+    const url = new URL(String(input), 'http://core.test'); calls.push(url.pathname + url.search);
+    if (url.pathname !== `${apiBasePath}/jobs`) return Response.json({ job: rows.find(row => url.pathname.endsWith('/' + row.id)) });
+    const ids = url.searchParams.getAll('jobIds');
+    const candidates = rows.filter(row => (!ids.length || ids.includes(row.id))
+      && (!url.searchParams.has('status') || row.status === url.searchParams.get('status')));
+    const start = url.searchParams.has('cursor') ? Number(url.searchParams.get('cursor')) : 0;
+    const limit = Number(url.searchParams.get('limit') ?? 30);
+    const jobs = candidates.slice(start, start + limit), hasMore = start + limit < candidates.length;
+    return Response.json({ jobs, hasMore, ...(hasMore ? { nextCursor: String(start + limit) } : {}), providers: [provider] });
+  });
+  const host = panelHookHost({ effects: true });
+  const settle = async () => {
+    for (let i = 0; i < 4; i++) { await new Promise(resolve => setImmediate(resolve)); host.render(client); host.flushEffects(); }
+    return host.render(client);
+  };
+  try {
+    let props = host.render(client); host.flushEffects(); props = await settle();
+    await props.onLoadMore?.(); props = host.render(client); host.flushEffects();
+    const callsBeforeSelection = calls.length;
+    await props.onSelectTask(rows[44].id); props = host.render(client); host.flushEffects(); props = await settle();
+    assert.equal(props.jobs.length, 60, 'detail selection effects preserve all deliberately loaded pages');
+    assert.equal(props.selectedJob?.id, rows[44].id);
+    assert.equal(props.listHasMore, true);
+    assert.equal(calls.slice(callsBeforeSelection).filter(call => call.startsWith(`${apiBasePath}/jobs?`)).length, 0,
+      'detail selection never restarts the list query');
+    rows[44] = { ...rows[44], status: 'completed' };
+    await (props.onReload as (options?: { silent?: boolean }) => Promise<void>)({ silent: true });
+    props = host.render(client);
+    assert.equal(props.jobs.find(row => row.id === rows[44].id)?.status, 'completed', 'older loaded rows receive authoritative state updates');
+    props.onListStatusChange?.('running'); props = host.render(client); host.flushEffects(); props = await settle();
+    rows[0] = { ...rows[0], status: 'completed' };
+    await (props.onReload as (options?: { silent?: boolean }) => Promise<void>)({ silent: true });
+    props = host.render(client);
+    assert.equal(props.jobs.some(row => row.id === rows[0].id), false, 'polling removes jobs that leave the active server status filter');
+    assert.ok(props.jobs.every(row => row.status === 'running'));
+  } finally {
+    host.dispose();
+    if (oldDocument) Object.defineProperty(globalThis, 'document', oldDocument); else Reflect.deleteProperty(globalThis, 'document');
+  }
 }
 
 function privateConversation(job: CoreOrchestrationJob): VisibleJobConversation {
@@ -797,7 +867,9 @@ function privateConversation(job: CoreOrchestrationJob): VisibleJobConversation 
     const hasCursor = url.searchParams.has('cursor');
     const emptySelection = url.searchParams.has('jobIds') && url.searchParams.get('jobIds') === '';
     return Response.json({
-      jobs: emptySelection ? [] : [task('running', { id: hasCursor ? 'page-two' : 'page-one' })],
+      jobs: emptySelection ? [] : url.searchParams.getAll('jobIds').length
+        ? url.searchParams.getAll('jobIds').map(id => task('running', { id }))
+        : [task('running', { id: hasCursor ? 'page-two' : 'page-one' })],
       hasMore: !hasCursor && !emptySelection,
       ...(hasCursor || emptySelection ? {} : { nextCursor: 'cursor-two' }),
       pendingJobs: [], pendingHasMore: false, providers: [provider], modelCatalog: teamsCliTestCatalog,
