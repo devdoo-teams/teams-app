@@ -9,6 +9,7 @@ okf_version: 0.2
 ## Concepts
 
 - [Private state and cancellation follow-up](state-integrity-followup.md)
+- [Read-only multi-job output monitor](work-output-monitor.md) - stage 1, 2/4 panels, mobile selection, masked polling and separate Teams host gates
 
 - [Module test completion and failure propagation](module-test-process-lifetime.md)
 

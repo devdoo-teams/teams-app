@@ -48,6 +48,8 @@
 
 여기서 `near-real-time`은 3초 polling contract다. push, WebSocket 또는 streaming UI가 구현됐다는 뜻이 아니다. 서버의 durable record가 기준이며 탭의 일시적인 메모리 상태를 완료 증거로 사용하지 않는다.
 
+1단계 `출력 모니터`는 같은 owner-scoped 작업 ID를 최대 4개까지 관찰한다. 데스크톱 2·4분할과 모바일 단일 패널 전환, 같은 작업의 상세·대화 이동을 제공한다. 목록과 모니터가 동시에 polling하지 않으며, 인증 거부 시 선택·출력을 지우고 명시적 인증 확인 후 새로고침을 요구한다. 화면은 저장된 상태·마스킹한 출력 요약의 3초 조회로 명시한다. 새 CLI·PTY·직접 입력·실시간 스트림·네이티브 세션 재접속은 추가하지 않는다. [공식 계약·소스·합성 시험 범위](okf/teamsapp-release/work-output-monitor.md)를 실제 Teams 설치·데스크톱·아이폰 검증과 구분한다.
+
 ## 도구 provenance의 truth boundary
 
 도구 이력은 provider가 구조화된 실행 이벤트에 명시한 제한된 식별자만 기록한다.

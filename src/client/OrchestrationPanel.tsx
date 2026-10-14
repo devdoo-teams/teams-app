@@ -6,12 +6,14 @@ import { TEAMS_CLI_AGENT_POLICY } from '../shared/teams-cli-agent-policy.js';
 import type { VisibleJobConversation } from '../shared/job-conversation.js';
 import { ExecutionPresentationPanel } from './ExecutionPresentationPanel.js';
 import { CoreResultReview } from './CoreResultReview.js';
+import { WorkOutputMonitor } from './WorkOutputMonitor.js';
+import { normalizeOutputMonitorSlots, type OutputMonitorSlots } from './work-output-monitor.js';
 import { isConversationHistoryAccessFailure, loadJobConversation, refreshVisibleJobConversation } from './job-conversation.js';
 import { isApiAuthError } from './auth.js';
 import { createLatestDetailRequestController } from './latest-detail-request.js';
 import { projectReceiptFacts } from '../shared/receipt-presentation.js';
 export { createLatestDetailRequestController } from './latest-detail-request.js';
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import {
   addWorkHubProject,
   assignJobToProject,
@@ -333,6 +335,9 @@ export type OrchestrationPanelViewProps = {
   onNavigationDrawerOpenChange?: (open: boolean) => void;
   onProjectDraftChange?: (value: string) => void;
   onLoadMore?: () => void | Promise<void>;
+  onOpenOutputMonitor?: () => void;
+  outputMonitorOpen?: boolean;
+  outputMonitor?: ReactNode;
   pendingConfirmation?: OrchestrationConfirmation | null;
   approvalDecisionSupported?: boolean;
   onPromptChange: (value: string) => void;
@@ -444,11 +449,13 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
             {props.lastUpdatedAt ? ` · 마지막 업데이트 ${new Date(props.lastUpdatedAt).toLocaleTimeString('ko-KR')}` : ''}
           </p>
         </div>
-        <button className="secondary" disabled={props.phase === 'loading'} onClick={() => void props.onReload()} type="button">
+        {props.phase === 'ready' && !props.outputMonitorOpen ? <button className="secondary" onClick={props.onOpenOutputMonitor} type="button">출력 모니터</button> : null}
+        {!props.outputMonitorOpen ? <button className="secondary" disabled={props.phase === 'loading'} onClick={() => void props.onReload()} type="button">
           새로고침
-        </button>
+        </button> : null}
       </div>
 
+      {props.outputMonitorOpen ? props.outputMonitor : <>
       {props.mobile ? (
         <aside aria-label="모바일 대체 안내" className="panel-description" role="note">
           모바일에서 작업 제어가 원활하지 않으면 Teams 데스크톱 또는 웹 탭에서 계속하세요.
@@ -814,6 +821,7 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
       </details> : null}
 
 
+      </>}
     </section>
   );
 }
@@ -844,6 +852,10 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
   const [listNavigation, setListNavigation] = useState<WorkHubNavigationSection>('recent');
   const [selectedProject, setSelectedProject] = useState('');
   const [navigationDrawerOpen, setNavigationDrawerOpen] = useState(true);
+  const [outputMonitorOpen, setOutputMonitorOpen] = useState(false);
+  const [outputMonitorSlots, setOutputMonitorSlots] = useState<OutputMonitorSlots>([undefined, undefined, undefined, undefined]);
+  const [outputMonitorLayout, setOutputMonitorLayout] = useState<2 | 4>(2);
+  const [outputMonitorActiveSlot, setOutputMonitorActiveSlot] = useState(0);
   const [projectDraft, setProjectDraft] = useState('');
   const [navigationPreferences, setNavigationPreferences] = useState<WorkHubPreferences>({
     pinnedJobIds: [], projectNames: [], projectByJobId: {},
@@ -930,6 +942,8 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
   }), [listJobIds, listSearch, listStatus]);
 
   const clearPrivateState = useCallback(() => {
+    setOutputMonitorOpen(false);
+    setOutputMonitorSlots([undefined, undefined, undefined, undefined]);
     privateAccessBlocked.current = true;
     privateAccessGeneration.current += 1;
     loadController.current?.abort();
@@ -1098,7 +1112,8 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
   }, []);
 
   useEffect(() => {
-    if (!privateAccessBlocked.current) void load();
+    if (outputMonitorOpen) return;
+    if (!privateAccessBlocked.current) void load({ silent: currentJobs.current.length > 0 });
     const polling = createOrchestrationPollingController({
       intervalMs: ORCHESTRATION_POLL_INTERVAL_MS,
       refresh: () => load({ silent: true }),
@@ -1109,7 +1124,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
       loadController.current?.abort();
       listPageController.current?.abort();
     };
-  }, [load]);
+  }, [load, outputMonitorOpen]);
 
   useEffect(() => {
     setModelId((current) => {
@@ -1254,6 +1269,19 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
 
   const isMobile = mobile ?? (typeof navigator !== 'undefined' && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent));
   return <OrchestrationPanelView
+    onOpenOutputMonitor={() => {
+      if (privateAccessBlocked.current) return;
+      setOutputMonitorSlots(current => current.some(Boolean) ? current : normalizeOutputMonitorSlots(
+        [...new Set([selectedJob?.id, ...jobs.map(job => job.id)].filter((id): id is string => Boolean(id)))].slice(0, 2),
+      ));
+      setOutputMonitorOpen(true);
+    }}
+    outputMonitorOpen={outputMonitorOpen}
+    outputMonitor={<WorkOutputMonitor client={client} slots={outputMonitorSlots} layout={outputMonitorLayout}
+      activeSlot={outputMonitorActiveSlot} jobs={jobs} mobile={isMobile} createPolling={createOrchestrationPollingController}
+      onAccessDenied={handlePrivateAccessFailure} onSlotsChange={setOutputMonitorSlots}
+      onLayoutChange={setOutputMonitorLayout} onActiveSlotChange={setOutputMonitorActiveSlot}
+      onClose={() => setOutputMonitorOpen(false)} onOpenJob={jobId => { setOutputMonitorOpen(false); void selectJob(jobId); }} />}
     busyAction={busyAction}
     error={error}
     inputValue={inputValue}

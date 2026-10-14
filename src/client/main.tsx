@@ -5,6 +5,7 @@ import { app } from '@microsoft/teams-js';
 import { App } from './App.js';
 import { enableLocalBrowserPreviewAuth, markTeamsHostReady } from './auth.js';
 import './styles.css';
+import './work-output-monitor.css';
 
 type BootstrapResult = 'ready' | 'preview' | 'recovery' | 'stale';
 type BootstrapMode = 'teams' | 'preview';

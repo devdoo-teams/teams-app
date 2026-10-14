@@ -1,0 +1,33 @@
+.output-monitor { display: grid; gap: 16px; min-width: 0; }
+.output-monitor-heading, .output-monitor-actions, .output-monitor-status { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.output-monitor-heading { justify-content: space-between; }
+.output-monitor-heading h3 { margin: 0; }
+.output-monitor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: stretch; }
+.output-monitor-panel { min-width: 0; padding: 16px; border: 1px solid #40506b; border-radius: 12px; background: #142034; color: #edf3ff; display: flex; flex-direction: column; gap: 10px; }
+.output-monitor-panel[hidden] { display: none; }
+.output-monitor-panel label { display: grid; gap: 6px; }
+.output-monitor-panel select { width: 100%; min-width: 0; }
+.output-monitor-status, .output-monitor-prompt, .output-monitor-mobile-tabs button { overflow-wrap: anywhere; }
+.output-monitor-prompt { margin: 0; max-height: 4.5em; overflow: auto; white-space: pre-wrap; }
+.output-monitor-output { flex: 1; min-height: 180px; max-height: 380px; overflow: auto; padding: 12px; background: #0b1322; border-radius: 8px; }
+.output-monitor-output h4 { margin: 0 0 6px; font-size: .82rem; color: #b5caea; }
+.output-monitor-output pre { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; margin: 0 0 18px; font: .85rem/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.output-monitor-panel > button { align-self: flex-start; }
+.output-monitor-actions button[aria-pressed="true"] { outline: 2px solid #91b9ff; outline-offset: 1px; }
+.output-monitor-grid.layout-4 .output-monitor-panel { gap: 6px; padding: 12px; }
+.output-monitor-grid.layout-4 .output-monitor-output { min-height: 100px; max-height: 140px; }
+.output-monitor-grid.layout-4 .output-monitor-prompt { max-height: 2.9em; }
+.output-monitor-mobile-tabs { display: none; gap: 8px; flex-wrap: wrap; }
+.output-monitor-mobile-tabs button[aria-selected="true"] { border: 2px solid #91b9ff; }
+.output-monitor.force-mobile .output-monitor-grid { grid-template-columns: minmax(0, 1fr); }
+.output-monitor.force-mobile .output-monitor-mobile-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.output-monitor.force-mobile .output-monitor-mobile-tabs button { min-width: 0; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 760px) {
+  .output-monitor-grid { grid-template-columns: minmax(0, 1fr); }
+  .output-monitor-panel[data-mobile-active="false"] { display: none; }
+  .output-monitor-mobile-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .output-monitor-mobile-tabs button { min-width: 0; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .output-monitor-output { max-height: 48vh; }
+  .output-monitor-grid.layout-4 .output-monitor-output { max-height: 48vh; }
+  .output-monitor-panel { padding: 12px; }
+}

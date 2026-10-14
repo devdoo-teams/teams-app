@@ -816,6 +816,34 @@ function panelHookHost({ effects = false } = {}) {
 }
 
 {
+  const calls: string[] = [];
+  const rows = [task('running', { id: 'monitor-a' }), task('completed', { id: 'monitor-b' })];
+  const client = createCoreOrchestrationClient(async (input, init) => {
+    calls.push(`${init?.method ?? 'GET'} ${input}`);
+    const url = new URL(String(input), 'http://core.test');
+    return Response.json(url.pathname.endsWith('/jobs') ? { jobs: rows, providers: [provider] }
+      : { job: rows.find(row => url.pathname.endsWith('/' + row.id)) });
+  });
+  const host = panelHookHost();
+  let props = host.render(client);
+  await props.onReload(); props = host.render(client);
+  assert.equal(typeof props.onOpenOutputMonitor, 'function', 'the existing task view opens a read-only output monitor');
+  props.onOpenOutputMonitor!(); props = host.render(client);
+  assert.equal(props.outputMonitorOpen, true);
+  const monitor = props.outputMonitor as React.ReactElement<{ slots: string[]; onOpenJob: (id: string) => void; onSlotsChange: (ids: string[]) => void; onClose: () => void }>;
+  assert.deepEqual(monitor.props.slots.filter(Boolean), ['monitor-a', 'monitor-b']);
+  monitor.props.onSlotsChange(['monitor-b', 'monitor-a']);
+  monitor.props.onOpenJob('monitor-b');
+  await new Promise(resolve => setImmediate(resolve)); props = host.render(client);
+  assert.equal(props.outputMonitorOpen, false);
+  assert.equal(props.selectedJob?.id, 'monitor-b', 'the monitor returns to the same existing job and conversation');
+  props.onOpenOutputMonitor!(); props = host.render(client);
+  assert.deepEqual((props.outputMonitor as typeof monitor).props.slots.filter(Boolean), ['monitor-b', 'monitor-a'], 'returning from the conversation preserves monitor selection');
+  assert.equal(calls.some(call => !call.startsWith('GET ')), false, 'opening and leaving the monitor never executes or mutates a job');
+  host.dispose();
+}
+
+{
   const oldDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
   Object.defineProperty(globalThis, 'document', { configurable: true, value: { getElementById: () => null } });
   const rows = Array.from({ length: 65 }, (_, i) => task('running', { id: `paged-${i}` }));

@@ -1,6 +1,6 @@
 {
   "name": "teams-sdk-mvp",
-  "version": "1.0.149",
+  "version": "1.0.150",
   "private": true,
   "type": "module",
   "scripts": {
@@ -80,6 +80,7 @@
     "test:core-orchestration-cross-surface": "tsx scripts/core-orchestration-cross-surface-test.ts",
     "test:core-orchestration-provider-gate": "tsx scripts/core-orchestration-provider-gate-test.ts",
     "test:client-orchestration-panel": "node scripts/pinned-ts-test-runner.mjs scripts/client-orchestration-panel-test.tsx",
+    "test:output-monitor": "node scripts/pinned-ts-test-runner.mjs scripts/work-output-monitor-test.ts && node scripts/pinned-ts-test-runner.mjs scripts/work-output-monitor-ui-test.tsx",
     "test:agent-only-hub-contract": "node scripts/pinned-ts-test-runner.mjs scripts/agent-only-hub-contract-test.mjs",
     "test:core-runtime-smoke-isolation": "node scripts/core-runtime-smoke-isolation-test.mjs",
     "test:a2a-auth-bootstrap": "node scripts/a2a-auth-bootstrap-test.mjs",
