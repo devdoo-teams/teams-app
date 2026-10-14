@@ -115,6 +115,17 @@ export class PtyReadSessionRegistry {
     });
   }
 
+  /** Existing-session metadata only. Discovery never registers, launches or resumes a process. */
+  describe(scope: ServerDerivedCoreScope, jobId: string): PtySessionIdentity {
+    this.assertOpen();
+    const job = this.options.jobs.get(scope, { jobId });
+    const record = this.sessions.get(jobId);
+    if (!job || !record || record.tenantId !== scope.tenantId || record.requesterId !== scope.requesterId) {
+      throw new PtyReadSessionError('PTY_SESSION_NOT_FOUND');
+    }
+    return record.identity;
+  }
+
   /** Trusted executor control only; an accepted stop is never reported as exit. */
   terminate(scope: ServerDerivedCoreScope, identity: PtySessionIdentity): void {
     const record = this.resolve(scope, identity);

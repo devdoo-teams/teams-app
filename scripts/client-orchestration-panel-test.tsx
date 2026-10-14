@@ -1,4 +1,6 @@
 import { strict as assert } from 'node:assert';
+import { createPtyOutputAccessGroup } from '../src/client/pty-output-access.js';
+import type { PtyReadSnapshot } from '../src/shared/pty-read.js';
 import React from 'react';
 import { teamsCliTestCatalog } from './fixtures/teams-cli-agent-policy-fixture.js';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -802,17 +804,62 @@ function panelHookHost({ effects = false } = {}) {
       }
     },
     dispose() { for (const cell of cells) if (cell?.effect && typeof cell.value === 'function') cell.value(); },
-    render(panelClient: Parameters<typeof OrchestrationPanel>[0]['client']) {
+    render(panelClient: Parameters<typeof OrchestrationPanel>[0]['client'], injected: Partial<Parameters<typeof OrchestrationPanel>[0]> = {}) {
       cursor = 0;
       const internals = (React as unknown as {
         __CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE: { H: unknown };
       }).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
       const previous = internals.H; internals.H = dispatcher;
       try {
-        return (OrchestrationPanel({ client: panelClient, mobile: false }) as React.ReactElement<OrchestrationPanelViewProps>).props;
+        return (OrchestrationPanel({ client: panelClient, mobile: false, ...injected }) as React.ReactElement<OrchestrationPanelViewProps>).props;
       } finally { internals.H = previous; }
     },
   };
+}
+
+for (const surface of ['hub', 'pty'] as const) {
+  let hubDenied = false; let ptyDenied = false; let waiting = false; let calls = 0;
+  let finishLate!: (snapshot: PtyReadSnapshot) => void;
+  const late = new Promise<PtyReadSnapshot>(resolve => { finishLate = resolve; });
+  let pendingSignal: AbortSignal | undefined;
+  const job = task('running', { id: 'injected-pty-job', result: 'SYNTHETIC_HUB_PRIVATE' });
+  const protectedClient = createCoreOrchestrationClient(async () => hubDenied
+    ? Response.json({ error: 'denied' }, { status: 403 })
+    : Response.json({ jobs: [job], providers: [provider] }));
+  const groups: ReturnType<typeof createPtyOutputAccessGroup>[] = [];
+  const injected = { createPtyOutputAccess: (options: Parameters<typeof createPtyOutputAccessGroup>[0]) => {
+    const group = createPtyOutputAccessGroup(options); groups.push(group); return group;
+  } };
+  const host = panelHookHost({ effects: true });
+  try {
+    let props = host.render(protectedClient, injected);
+    await props.onReload(); props = host.render(protectedClient, injected); host.flushEffects();
+    assert.equal(groups.length, 1, 'only an explicitly injected factory receives the current hub access lifecycle');
+    const identity = { jobId: job.id, sessionId: 'synthetic-pty-session', generation: 1 };
+    const safe: PtyReadSnapshot = { ...identity, source: 'pty', outputMode: 'redacted-lines', state: 'running',
+      frames: [{ sequence: 1, text: 'SYNTHETIC_PTY_PRIVATE\n' }], firstAvailableSequence: 1, nextCursor: 1,
+      truncated: false, pendingOutput: false, outputSuppressed: false, outputClipped: false };
+    const first = groups[0]!.open({ identity, transport: { read: async () => {
+      calls++; if (ptyDenied) throw new ApiAuthError('forbidden'); return safe;
+    } } });
+    const second = groups[0]!.open({ identity, transport: { read: async (_id, _after, signal) => {
+      calls++; pendingSignal = signal; return waiting ? late : safe;
+    } } });
+    await first.read(); await second.read(); waiting = true;
+    const pending = second.read(); await Promise.resolve();
+    if (surface === 'hub') { hubDenied = true; await props.onReload(); }
+    else { ptyDenied = true; await first.read(); }
+    assert.equal(pendingSignal?.aborted, true, 'either surface denial immediately aborts all pending PTY observation');
+    props = host.render(protectedClient, injected);
+    assert.equal(props.phase, 'error'); assert.deepEqual(props.jobs, []);
+    assert.equal(first.getSnapshot().frames.length + second.getSnapshot().frames.length, 0);
+    finishLate({ ...safe, frames: [{ sequence: 1, text: 'SYNTHETIC_LATE_PRIVATE\n' }] }); await pending;
+    assert.equal(second.getSnapshot().frames.length, 0);
+    hubDenied = false; ptyDenied = false;
+    await props.onReload(); props = host.render(protectedClient, injected); host.flushEffects();
+    assert.equal(groups.length, 2, 'only a fresh explicit authorized reload creates a new access group');
+    const before = calls; await first.read(); assert.equal(calls, before, 'old groups cannot regain access');
+  } finally { host.dispose(); }
 }
 
 {

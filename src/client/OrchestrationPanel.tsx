@@ -830,9 +830,11 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
 export type OrchestrationPanelProps = {
   client?: CoreOrchestrationClient;
   mobile?: boolean;
+  /** Internal test injection only. Production supplies no PTY read transport/factory. */
+  createPtyOutputAccess?: typeof import('./pty-output-access.js').createPtyOutputAccessGroup;
 };
 
-export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: OrchestrationPanelProps) {
+export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile, createPtyOutputAccess }: OrchestrationPanelProps) {
   const [phase, setPhase] = useState<PanelPhase>('loading');
   const [requestedJobId, setRequestedJobId] = useState(() => parseRequestedJobId(typeof window === 'undefined' ? '' : window.location.search));
   useEffect(() => {
@@ -901,6 +903,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
   const listPageLock = useRef(false);
   const privateAccessBlocked = useRef(false);
   const privateAccessGeneration = useRef(0);
+  const ptyOutputAccess = useRef<ReturnType<NonNullable<OrchestrationPanelProps['createPtyOutputAccess']>> | undefined>(undefined);
   const currentJobs = useRef<CoreOrchestrationJob[]>([]);
   const selectedJobId = useRef<string | undefined>(undefined);
   const requestedJobHint = useRef(requestedJobId);
@@ -947,6 +950,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     setOutputMonitorSlots([undefined, undefined, undefined, undefined]);
     privateAccessBlocked.current = true;
     privateAccessGeneration.current += 1;
+    ptyOutputAccess.current?.invalidate();
     loadController.current?.abort();
     listPageController.current?.abort();
     listPageController.current = null;
@@ -982,6 +986,19 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     setPhase('error');
     return true;
   }, [clearPrivateState]);
+
+  useEffect(() => {
+    if (!createPtyOutputAccess || phase !== 'ready' || privateAccessBlocked.current) return;
+    const access = createPtyOutputAccess({
+      getAccessGeneration: () => privateAccessGeneration.current,
+      onAccessDenied: handlePrivateAccessFailure,
+    });
+    ptyOutputAccess.current = access;
+    return () => {
+      if (ptyOutputAccess.current === access) ptyOutputAccess.current = undefined;
+      access.dispose();
+    };
+  }, [createPtyOutputAccess, handlePrivateAccessFailure, phase]);
 
   const updateJob = useCallback((nextJob: CoreOrchestrationJob) => {
     publishJobs((current) => current.some((job) => job.id === nextJob.id)
