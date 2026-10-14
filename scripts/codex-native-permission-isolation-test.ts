@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { createAgentProcessTreeController } from '../src/server/agent-process-controller.js';
 import type { ChildProcess } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -14,6 +16,7 @@ import {
   type AgentIsolationSpawnOptions,
 } from '../src/server/agent-execution-policy.js';
 import { buildCodexExecArguments } from '../src/server/codex-runner.js';
+import { SupervisedCommandCleanupError } from '../src/server/supervised-command.js';
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-codex-native-isolation-'));
 const sourceWorkspace = path.join(root, 'source');
@@ -28,7 +31,7 @@ const scope = {
   conversationId: 'conversation-a',
   jobId: 'job-a',
 };
-const fakeChild = {} as ChildProcess;
+const fakeChild = Object.assign(new EventEmitter(), { pid: 123458 }) as unknown as ChildProcess;
 const spawnCalls: Array<{
   command: string;
   args: readonly string[];
@@ -217,11 +220,17 @@ try {
   });
   await assert.rejects(
     () => replacementProvider.acquire(acquireInput(replacementExecutable)),
-    (error: unknown) => error instanceof AgentExecutionUnavailableError
-      && error.reason === 'trusted-isolation-required'
-      && (error as Error & { classification?: unknown }).classification === 'unknown-infrastructure',
+    (error: unknown) => error instanceof SupervisedCommandCleanupError,
     'native canary cleanup must fail closed when the canary path contains a replacement file',
   );
+  let replacementPreflights = 0;
+  const replacementCompetitor = new CodexPermissionProfileIsolationProvider({
+    codexExecutable: replacementExecutable, codexExecutableSha256: replacementExecutableSha256,
+    codexHome: replacementServiceCodexHome, platform: 'darwin', spawn: () => fakeChild,
+    executableTrustVerifier: () => undefined, preflight: async () => { replacementPreflights++; },
+  });
+  await assert.rejects(() => replacementCompetitor.acquire(acquireInput(replacementExecutable)), /leased|reserved|busy/i);
+  assert.equal(replacementPreflights, 0, 'uncertain canary cleanup cannot downgrade process quarantine and release its reservation');
   assert.equal(
     await fs.readFile(path.join(replacementServiceCodexHome, '.teams-permission-canary'), 'utf8'),
     'replacement service canary\n',
@@ -409,6 +418,8 @@ try {
       && error.reason === 'provider-rejected-request',
     'the lease must not launch an unpinned executable',
   );
+  const fixtureController = createAgentProcessTreeController(fakeChild, { sendSignal() {}, groupAlive: () => false });
+  fakeChild.emit('close', 0, null); await fixtureController!.cleanup();
   await lease.dispose();
 
   const authPath = path.join(serviceCodexHome, 'auth.json');

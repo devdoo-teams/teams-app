@@ -8,6 +8,7 @@ okf_version: 0.2
 
 ## Concepts
 
+- [Codex pipe and preflight execution safety](codex-execution-safety.md) - MP388 cooperative service-home reservation, stdout provenance and bounded child cleanup; actual shared-auth/native-PTY trials remain separate
 - [Internal authenticated PTY observation](pty-output-access.md) - isolated stage2d, per-read Core owner/policy checks and test-injected hub access invalidation; public transport/native executor remain disconnected
 - [Private state and cancellation follow-up](state-integrity-followup.md)
 - [Read-only multi-job output monitor](work-output-monitor.md) - stage 1, 2/4 panels, mobile selection, masked polling and separate Teams host gates

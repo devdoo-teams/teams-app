@@ -1,9 +1,7 @@
 import {
-  execFile,
   execFileSync,
   spawn,
   type ChildProcess,
-  type ExecFileOptionsWithStringEncoding,
 } from 'node:child_process';
 import crypto from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
@@ -12,6 +10,9 @@ import fs from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
 import { assertTeamsCliAgentEnvironment, TEAMS_CLI_AGENT_MODEL_ARGS } from '../shared/teams-cli-agent-policy.js';
+import { acquirePrivateDirectoryProcessLease, type StoreProcessLease } from './process-lease.js';
+import { runSupervisedCommand as execFileClosedStdin, SupervisedCommandCleanupError } from './supervised-command.js';
+import { hasVerifiedAgentProcessCleanup, invalidateAgentProcessCleanup } from './agent-process-controller.js';
 
 import {
   AgentExecutionUnavailableError,
@@ -170,6 +171,7 @@ export class CodexPermissionProfileIsolationProvider extends AgentIsolationProvi
   private readonly executableTrustVerifier: ExecutableTrustVerifier;
   private readonly pty: AgentIsolationPtyLaunchCapability | undefined;
   private leaseReserved = false;
+  private serviceReservation: StoreProcessLease | undefined;
 
   constructor(options: CodexPermissionProfileIsolationProviderOptions) {
     super(PROVIDER_ID);
@@ -206,8 +208,13 @@ export class CodexPermissionProfileIsolationProvider extends AgentIsolationProvi
     }
     this.leaseReserved = true;
     try {
+      const home = await requirePrivateDirectory(this.codexHome, 'service CODEX_HOME');
+      this.serviceReservation = await acquirePrivateDirectoryProcessLease(home.path);
       return await this.acquireReserved(input);
     } catch (error) {
+      if (error instanceof SupervisedCommandCleanupError) throw error;
+      await this.serviceReservation?.release();
+      this.serviceReservation = undefined;
       this.leaseReserved = false;
       throw error;
     }
@@ -255,7 +262,7 @@ export class CodexPermissionProfileIsolationProvider extends AgentIsolationProvi
         toolSurfacePolicy: CODEX_EXTERNAL_TOOL_SURFACE_POLICY,
       });
     } catch (error) {
-      if (error instanceof CodexPermissionProfilePreflightError) throw error;
+      if (error instanceof CodexPermissionProfilePreflightError || error instanceof SupervisedCommandCleanupError) throw error;
       const detail = error instanceof Error ? error.message : String(error);
       const classification = classifyPreflightFailure(error);
       throw preflightFailure(
@@ -267,6 +274,8 @@ export class CodexPermissionProfileIsolationProvider extends AgentIsolationProvi
     authFile = await requirePrivateAuthFile(path.join(codexHome.path, 'auth.json'));
 
     const pty = this.pty;
+    const pipeChildren: ChildProcess[] = [];
+    let pipeStartUnverified = false;
     if (pty) {
       try { await pty.preflight(); }
       catch { throw new AgentExecutionUnavailableError('process-tree-control-required', 'PTY 프로세스 트리 제어 preflight를 확인하지 못했습니다.'); }
@@ -285,14 +294,29 @@ export class CodexPermissionProfileIsolationProvider extends AgentIsolationProvi
       workspace,
       protectedRoots,
       environmentOverrides,
-      dispose: () => { this.leaseReserved = false; },
+      dispose: async () => {
+        if (pipeStartUnverified || pipeChildren.some(child => !hasVerifiedAgentProcessCleanup(child))) throw new SupervisedCommandCleanupError();
+        await this.serviceReservation?.release();
+        this.serviceReservation = undefined;
+        this.leaseReserved = false;
+      },
       spawn: (command, args, options) => {
+        if (options.detached !== true || !arraysEqual(options.stdio ?? [], ['ignore', 'pipe', 'pipe'])) {
+          throw rejected('Codex protocol execution requires detached ownership and separate stdio pipes.');
+        }
         const launch = trustedLaunch(command, args, options);
-        return this.spawnChild(launch.command, launch.args, {
-          ...options,
-          cwd: workspace,
-          env: { ...environmentOverrides },
-        });
+        try {
+          const child = this.spawnChild(launch.command, launch.args, {
+            ...options, cwd: workspace, env: { ...environmentOverrides },
+          });
+          if (!child || typeof child !== 'object') throw new SupervisedCommandCleanupError();
+          invalidateAgentProcessCleanup(child);
+          pipeChildren.push(child);
+          return child;
+        } catch {
+          pipeStartUnverified = true;
+          throw new SupervisedCommandCleanupError();
+        }
       },
       ...(pty ? { preparePty: (command: string, args: readonly string[], options: AgentIsolationPtySpawnOptions) => {
         const launch = trustedLaunch(command, args, options);
@@ -361,38 +385,6 @@ function buildTrustedExecArgs(args: readonly string[], workspace: string): strin
   return [...commandArgs, '--', prompt];
 }
 
-type ExecFileFailure = Error & {
-  code?: string | number | null;
-  killed?: boolean;
-  signal?: NodeJS.Signals | null;
-  stdout?: string | Buffer;
-  stderr?: string | Buffer;
-};
-
-function execFileClosedStdin(
-  file: string,
-  args: readonly string[],
-  options: ExecFileOptionsWithStringEncoding,
-): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = execFile(file, [...args], options, (error, stdout, stderr) => {
-      const output = {
-        stdout,
-        stderr,
-      };
-      if (error) {
-        const failure = error as ExecFileFailure;
-        failure.stdout = output.stdout;
-        failure.stderr = output.stderr;
-        reject(failure);
-        return;
-      }
-      resolve(output);
-    });
-    child.stdin?.end();
-  });
-}
-
 async function runNativePermissionPreflight(input: {
   codexExecutable: string;
   codexHome: string;
@@ -402,8 +394,9 @@ async function runNativePermissionPreflight(input: {
 }): Promise<void> {
   void input.toolSurfacePolicy;
   const environment = { ...input.environment };
+  const signal = AbortSignal.timeout(120_000);
   const version = await execFileClosedStdin(input.codexExecutable, ['--version'], {
-    env: environment,
+    env: environment, signal,
     encoding: 'utf8',
     timeout: PREFLIGHT_TIMEOUT_MS,
     maxBuffer: 4 * 1024,
@@ -413,7 +406,7 @@ async function runNativePermissionPreflight(input: {
   }
 
   const mcpInventory = await execFileClosedStdin(input.codexExecutable, ['mcp', 'list', '--json'], {
-    env: environment,
+    env: environment, signal,
     encoding: 'utf8',
     timeout: PREFLIGHT_TIMEOUT_MS,
     maxBuffer: 32 * 1024,
@@ -423,7 +416,7 @@ async function runNativePermissionPreflight(input: {
     throw new Error('service Codex MCP inventory must be empty');
   }
   const pluginInventory = await execFileClosedStdin(input.codexExecutable, ['plugin', 'list', '--json'], {
-    env: environment,
+    env: environment, signal,
     encoding: 'utf8',
     timeout: PREFLIGHT_TIMEOUT_MS,
     maxBuffer: 32 * 1024,
@@ -447,30 +440,30 @@ async function runNativePermissionPreflight(input: {
     await execFileClosedStdin(input.codexExecutable, [
       ...sandboxPrefix,
       '/bin/sh', '-c', 'test -r "$1"', 'workspace-read-canary', workspaceCanary,
-    ], { env: environment, timeout: PREFLIGHT_TIMEOUT_MS, maxBuffer: 16 * 1024 });
+    ], { env: environment, signal, timeout: PREFLIGHT_TIMEOUT_MS, maxBuffer: 16 * 1024 });
     await expectSandboxDenial(input.codexExecutable, [
       ...sandboxPrefix,
       '/bin/sh', '-c', 'cat "$1" >/dev/null', 'service-read-denied-canary', serviceCanary.path,
-    ], environment, 'service-home read');
+    ], environment, 'service-home read', { signal });
     const writeCanary = path.join(input.workspace, 'write-denied-canary');
     await expectSandboxDenial(input.codexExecutable, [
       ...sandboxPrefix,
       '/bin/sh', '-c', ': > "$1"', 'workspace-write-denied-canary', writeCanary,
-    ], environment, 'workspace write');
+    ], environment, 'workspace write', { signal });
     await withLoopbackServer(async (port) => {
       // The macOS Codex sandbox currently reports a denied loopback connect as
       // exit code 1 with no stderr. Prove the same command and listener work
       // outside the sandbox first; only then may this canary accept that silent
       // non-zero result as the expected policy denial.
       await execFileClosedStdin('/usr/bin/nc', ['-z', '127.0.0.1', String(port)], {
-        env: environment,
+        env: environment, signal,
         timeout: PREFLIGHT_TIMEOUT_MS,
         maxBuffer: 16 * 1024,
       });
       await expectSandboxDenial(input.codexExecutable, [
         ...sandboxPrefix,
         '/bin/sh', '-c', 'exec /usr/bin/nc -z 127.0.0.1 "$1"', 'network-denied-canary', String(port),
-      ], environment, 'network', { allowSilentExit: true });
+      ], environment, 'network', { allowSilentExit: true, signal });
     });
 
     const authenticated = await execFileClosedStdin(input.codexExecutable, [
@@ -479,7 +472,7 @@ async function runNativePermissionPreflight(input: {
       ...TEAMS_CLI_AGENT_MODEL_ARGS,
       '--', 'Reply with exactly TEAMS_CODEX_AUTH_PREFLIGHT_OK. Do not call any tool.',
     ], {
-      env: environment,
+      env: environment, signal,
       cwd: input.workspace,
       encoding: 'utf8',
       timeout: PREFLIGHT_TIMEOUT_MS,
@@ -489,7 +482,12 @@ async function runNativePermissionPreflight(input: {
       throw new Error('authenticated Codex exec preflight did not return the exact terminal canary');
     }
   } finally {
-    await cleanupCreatedServiceCanary(serviceCanary);
+    try { await cleanupCreatedServiceCanary(serviceCanary); }
+    catch {
+      // A secondary cleanup failure must never downgrade an unverified child
+      // group into an ordinary preflight rejection that releases its reservation.
+      throw new SupervisedCommandCleanupError();
+    }
   }
 }
 
@@ -808,15 +806,16 @@ async function expectSandboxDenial(
   args: readonly string[],
   environment: NodeJS.ProcessEnv,
   label: string,
-  options: Readonly<{ allowSilentExit?: boolean }> = {},
+  options: Readonly<{ allowSilentExit?: boolean; signal?: AbortSignal }> = {},
 ): Promise<void> {
   try {
     await execFileClosedStdin(executable, [...args], {
-      env: environment,
+      env: environment, signal: options.signal,
       timeout: PREFLIGHT_TIMEOUT_MS,
       maxBuffer: 16 * 1024,
     });
   } catch (error) {
+    if (error instanceof SupervisedCommandCleanupError) throw error;
     const classification = classifyPreflightFailure(error);
     if (classification === 'genuine-denial' || (options.allowSilentExit && isSilentExpectedDenial(error))) return;
     const detail = error instanceof Error ? error.message : String(error);

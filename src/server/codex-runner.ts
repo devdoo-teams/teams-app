@@ -632,6 +632,11 @@ export class CodexRunner {
       stdoutBuffer += remainder;
     };
 
+    // A PTY's merged onData stream is not the documented stdout JSONL port.
+    // Never recover it by dropping diagnostics or by inventing a stderr port.
+    if (!child.stdout || !child.stderr || child.stdout === child.stderr) {
+      terminate(new CodexTerminalProtocolError('Codex structured output requires separate stdout and stderr pipes.'));
+    }
     child.stdout?.setEncoding('utf8');
     child.stderr?.setEncoding('utf8');
     child.stdout?.on('data', handleStdout);

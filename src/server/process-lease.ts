@@ -56,13 +56,53 @@ export async function acquireStoreProcessLease(storePaths: string[]): Promise<St
   }
 }
 
+/** Existing private service home; coordination never reads/chmods its auth file.
+ * Dead owners are deliberately not reclaimed: their children may still exist. */
+export async function acquirePrivateDirectoryProcessLease(home: string): Promise<StoreProcessLease> {
+  const canonical = await fs.realpath(home);
+  await assertPrivateDirectory(home);
+  const coordination = path.join(canonical, '.teams-execution-coordination');
+  try { await fs.mkdir(coordination, { mode: PRIVATE_DIRECTORY_MODE }); }
+  catch (error) { if (!isFileExists(error)) throw error; }
+  await assertPrivateDirectory(coordination);
+  const storePath = path.join(coordination, 'execution');
+  const directory = path.join(coordination, `.execution.${LEASE_DIRECTORY_SUFFIX}`);
+  // mkdir is the no-replace CAS. POSIX rename can overwrite an empty directory,
+  // which would silently reclaim an owner whose identity is still unknown.
+  try { await fs.mkdir(directory, { mode: PRIVATE_DIRECTORY_MODE }); }
+  catch (error) { if (isFileExists(error)) throw leaseConflict(storePath); throw error; }
+  const lease = await writeOwner(directory, path.join(directory, OWNER_FILE_NAME), storePath, true);
+  try { await syncDirectory(coordination); }
+  catch (error) { await lease.ownerHandle.close().catch(() => undefined); throw error; }
+  return new StoreProcessLease([lease], true);
+}
+
+async function assertPrivateDirectory(directory: string): Promise<void> {
+  const stat = await fs.lstat(directory);
+  const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
+  if (stat.isSymbolicLink() || !stat.isDirectory() || (stat.mode & 0o077) !== 0
+    || (uid !== undefined && stat.uid !== uid)) throw new Error('Private execution coordination directory is unsafe.');
+}
+
 export class StoreProcessLease {
   private released = false;
+  private releasePromise: Promise<void> | undefined;
 
-  constructor(private readonly leases: AcquiredLease[]) {}
+  constructor(private readonly leases: AcquiredLease[], private readonly strictRelease = false) {}
 
   async release(): Promise<void> {
     if (this.released) return;
+    if (this.strictRelease) {
+      this.releasePromise ??= (async () => {
+        for (const lease of [...this.leases].reverse()) {
+          const verified = await releasePrivateDirectoryLease(lease);
+          await lease.ownerHandle.close();
+          if (!verified) throw new Error('Private execution reservation release is unverified.');
+        }
+        this.released = true;
+      })();
+      return this.releasePromise;
+    }
     this.released = true;
     await releaseLeases(this.leases);
   }
@@ -70,6 +110,8 @@ export class StoreProcessLease {
   /** Best-effort synchronous cleanup for process exit after an uncaught failure. */
   releaseSync(): void {
     if (this.released) return;
+    // Private execution reservations survive an unverified process shutdown.
+    if (this.strictRelease) return;
     this.released = true;
 
     for (const lease of [...this.leases].reverse()) {
@@ -143,7 +185,7 @@ async function createStagedLease(parent: string, storePath: string): Promise<Sta
   throw new Error(`Unable to create a unique staging directory for store: ${storePath}`);
 }
 
-async function writeOwner(directory: string, ownerPath: string, storePath: string): Promise<StagedLease> {
+async function writeOwner(directory: string, ownerPath: string, storePath: string, preserveDirectoryOnFailure = false): Promise<StagedLease> {
   const owner: LeaseOwner = {
     version: 1,
     pid: process.pid,
@@ -168,9 +210,28 @@ async function writeOwner(directory: string, ownerPath: string, storePath: strin
     return { directory, ownerPath, owner, ownerHandle };
   } catch (error) {
     await ownerHandle?.close().catch(() => undefined);
-    await fs.rm(directory, { recursive: true, force: true }).catch(() => undefined);
+    if (!preserveDirectoryOnFailure) await fs.rm(directory, { recursive: true, force: true }).catch(() => undefined);
     throw error;
   }
+}
+
+async function releasePrivateDirectoryLease(lease: AcquiredLease): Promise<boolean> {
+  try {
+    await assertPrivateDirectory(lease.directory);
+    const current = await readOwner(lease.ownerPath);
+    const named = await fs.lstat(lease.ownerPath);
+    const opened = await lease.ownerHandle.stat();
+    if (current?.token !== lease.owner.token || current.storePath !== lease.owner.storePath
+      || !named.isFile() || named.isSymbolicLink() || named.nlink !== 1 || (named.mode & 0o077) !== 0
+      || named.dev !== opened.dev || named.ino !== opened.ino || named.uid !== opened.uid) return false;
+    // Keep the final CAS path in place while verifying and removing our owner.
+    // Competitors fail closed even while it is empty. Never rename a conflicting
+    // owner out of the way or recursively delete unknown directory contents.
+    await fs.unlink(lease.ownerPath);
+    await fs.rmdir(lease.directory);
+    await syncDirectory(path.dirname(lease.directory));
+    return true;
+  } catch { return false; }
 }
 
 async function abandonStagedLease(staged: StagedLease): Promise<void> {

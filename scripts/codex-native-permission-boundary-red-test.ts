@@ -242,7 +242,9 @@ async function authAndServiceHomeIdentityAreRevalidated(): Promise<void> {
     'SEC-07 service CODEX_HOME directory identity replacement after acquire',
     () => spawnLease(lease, subject, fixture),
   );
-  await lease.dispose();
+  await assert.rejects(() => lease.dispose(), /reservation release is unverified/i,
+    'a displaced service-home reservation must not be reported as released');
+  await fs.access(path.join(movedHome, '.teams-execution-coordination', '.execution.teams-sdk-store-lease', 'owner.json'));
 }
 
 async function defaultPreflightExercisesTheActualBoundary(): Promise<void> {

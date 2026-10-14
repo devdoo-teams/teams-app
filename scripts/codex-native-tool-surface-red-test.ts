@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -15,6 +16,7 @@ import {
 } from '../src/server/codex-permission-profile-isolation-provider.js';
 import { createProductionAgentExecutionPolicy } from '../src/server/production-agent-isolation.js';
 import { TEAMS_CLI_AGENT_MODEL_ARGS } from '../src/shared/teams-cli-agent-policy.js';
+import { createAgentProcessTreeController } from '../src/server/agent-process-controller.js';
 
 type EffectiveToolInventory = Readonly<{
   apps: readonly string[];
@@ -112,7 +114,7 @@ const scope = {
   requesterId: 'requester-sec-05',
   conversationId: 'conversation-sec-05',
 };
-const fakeChild = {} as ChildProcess;
+const fakeChild = Object.assign(new EventEmitter(), { pid: 123461 }) as unknown as ChildProcess;
 const findings: string[] = [];
 let codexExecutableSha256 = '';
 
@@ -218,6 +220,10 @@ async function productionLaunchPinsEveryToolSurface(): Promise<void> {
       }
     }
   } finally {
+    // No native child exists here; explicitly model the owned-tree cleanup receipt.
+    const controller = createAgentProcessTreeController(fakeChild, { sendSignal: () => undefined, groupAlive: () => false });
+    fakeChild.emit('close', 0, null);
+    await controller?.cleanup();
     await prepared.dispose();
   }
 }

@@ -45,6 +45,11 @@ const DEFAULT_TERM_GRACE_MS = 5_000;
 const DEFAULT_CLEANUP_WAIT_MS = 1_000;
 const DEFAULT_RETRY_DELAY_MS = 25;
 const DEFAULT_MAX_ATTEMPTS = 3;
+const verifiedCleanups = new WeakSet<object>();
+
+/** Receipt is minted only by a successful controller cleanup, never by close alone. */
+export function hasVerifiedAgentProcessCleanup(target: AgentProcessTreeTarget): boolean { return verifiedCleanups.has(target); }
+export function invalidateAgentProcessCleanup(target: AgentProcessTreeTarget): void { verifiedCleanups.delete(target); }
 
 export function processPlatform(platform: NodeJS.Platform | AgentProcessPlatform = process.platform): AgentProcessPlatform {
   if (platform === 'win32') return 'win32';
@@ -72,6 +77,7 @@ export function createAgentProcessTreeController(
   const platform = options.platform ?? processPlatform();
   const pid = child.pid;
   if (platform !== 'posix' || !pid || !isProcessTreeControllerAvailable(options)) return undefined;
+  invalidateAgentProcessCleanup(child);
 
   const graceMs = boundedMilliseconds(options.graceMs, DEFAULT_TERM_GRACE_MS);
   const cleanupWaitMs = boundedMilliseconds(options.cleanupWaitMs, DEFAULT_CLEANUP_WAIT_MS);
@@ -172,6 +178,7 @@ export function createAgentProcessTreeController(
         await awaitGroupAbsence();
       }
       if (closeError && !terminationRequested) throw closeError;
+      verifiedCleanups.add(child);
     })();
     await cleanupPromise;
   };

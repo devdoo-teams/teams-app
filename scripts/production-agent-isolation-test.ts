@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -12,6 +13,7 @@ import {
 import { CODEX_READ_ONLY_PERMISSION_ARGS } from '../src/server/codex-permission-profile-isolation-provider.js';
 import { createProductionAgentExecutionPolicy } from '../src/server/production-agent-isolation.js';
 import { TEAMS_CLI_AGENT_MODEL_ARGS } from '../src/shared/teams-cli-agent-policy.js';
+import { createAgentProcessTreeController } from '../src/server/agent-process-controller.js';
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-production-agent-isolation-'));
 const sourceWorkspace = path.join(root, 'source');
@@ -27,7 +29,7 @@ const spawnCalls: Array<{
   args: readonly string[];
   options: AgentIsolationSpawnOptions;
 }> = [];
-const fakeChild = {} as ChildProcess;
+const fakeChild = Object.assign(new EventEmitter(), { pid: 123460 }) as unknown as ChildProcess;
 let preflightCalls = 0;
 
 const fakeSpawn = (
@@ -194,6 +196,10 @@ try {
     assert.equal(spawnCalls[0]?.command, await fs.realpath(codexExecutable));
     assert.deepEqual(spawnCalls[0]?.args, args);
   } finally {
+    // This fixture has no OS child. Explicitly satisfy the runner's tree-cleanup contract.
+    const controller = createAgentProcessTreeController(fakeChild, { sendSignal: () => undefined, groupAlive: () => false });
+    fakeChild.emit('close', 0, null);
+    await controller?.cleanup();
     await prepared.dispose();
   }
 
