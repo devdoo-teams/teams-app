@@ -110,6 +110,8 @@ const tsTests = [
   'scripts/pty-read-session-test.ts',
   'scripts/pty-isolation-lease-test.ts',
   'scripts/pty-codex-provider-test.ts',
+  'scripts/pty-output-view-test.ts',
+  'scripts/pty-output-view-ui-test.tsx',
   'scripts/agent-job-presentation-test.ts',
   'scripts/agent-execution-receipt-test.ts',
   'scripts/agent-cli-invocation-test.ts',

@@ -3,23 +3,9 @@ import { randomUUID } from 'node:crypto';
 import type { CoreOrchestrationService, ServerDerivedCoreScope } from './core-orchestration-service.js';
 import { isNodePtyReadProcess, type NodePtyReadProcess, type PtyExit } from './node-pty-read-process.js';
 import { PtyOutputLines } from './pty-output-lines.js';
+import type { PtySessionIdentity, PtyReadSnapshot, PtyReadState as SessionState, PtyReadFrame as Frame } from '../shared/pty-read.js';
 
-export type PtySessionIdentity = Readonly<{ jobId: string; sessionId: string; generation: number }>;
-type SessionState = 'running' | 'terminating' | 'termination_unverified' | 'exited';
-type Frame = Readonly<{ sequence: number; text: string }>;
-export type PtyReadSnapshot = PtySessionIdentity & Readonly<{
-  source: 'pty';
-  outputMode: 'redacted-lines';
-  state: SessionState;
-  frames: readonly Frame[];
-  nextCursor: number;
-  firstAvailableSequence: number;
-  truncated: boolean;
-  pendingOutput: boolean;
-  outputSuppressed: boolean;
-  outputClipped: boolean;
-  exit?: PtyExit;
-}>;
+export type { PtySessionIdentity, PtyReadSnapshot } from '../shared/pty-read.js';
 
 type RecordState = {
   identity: PtySessionIdentity;

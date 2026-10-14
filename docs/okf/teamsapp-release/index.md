@@ -12,6 +12,7 @@ okf_version: 0.2
 - [Read-only multi-job output monitor](work-output-monitor.md) - stage 1, 2/4 panels, mobile selection, masked polling and separate Teams host gates
 - [Native PTY session read contract](pty-read-session-contract.md) - isolated stage 2a, owner checks, identity/generation, bounded replay, native Mac fixtures and disconnected production/VT/ConPTY gates
 - [Provider-owned PTY lease lifecycle](pty-isolation-lease.md) - stage 2b, single start, cancellation/dispose/TTL, bounded child-tree cleanup and distinct native/CI/live evidence
+- [Masked PTY output view](pty-output-view.md) - isolated stage 2c, text rendering, same-session cursor reconnect, observer-only close and display resize; foreground/Teams/raw VT remain separate
 
 - [Module test completion and failure propagation](module-test-process-lifetime.md)
 
