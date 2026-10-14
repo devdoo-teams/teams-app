@@ -21,7 +21,10 @@ const jobs = [{ id: first.jobId, status: 'running', prompt: '합성 Core 기록 
   { id: 'task-no-pty-session', status: 'completed', prompt: '기존 PTY 세션이 없는 합성 작업', mode: 'read-only', provider: 'codex',
     progress: [], result: 'NO_SESSION_CORE_RESULT', createdAt: '2026-10-14T00:00:00Z' }];
 const sourceCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', timeout: 5000 }).trim();
-const payload = JSON.stringify({ sourceCommit, nativeSourceCommit: retained.sourceCommit, jobs, snapshots });
+const trackedDiff = execFileSync('git', ['diff', 'HEAD', '--binary'], { cwd: root, timeout: 5000 });
+const sourceState = trackedDiff.length ? 'modified-worktree' : 'clean';
+const sourcePatchSha256 = createHash('sha256').update(trackedDiff).digest('hex');
+const payload = JSON.stringify({ sourceCommit, sourceState, sourcePatchSha256, nativeSourceCommit: retained.sourceCommit, jobs, snapshots });
 assert.doesNotMatch(payload, /synthetic-private-value|synthetic-final|U1lOVEhFVElD/);
 const result = await build({ absWorkingDir: root, entryPoints: [path.join(root, 'scripts/fixtures/work-output-pty-preview.tsx')],
   bundle: true, write: false, platform: 'browser', format: 'iife', jsx: 'automatic', minify: true, metafile: true,
@@ -39,7 +42,7 @@ await fs.mkdir(directory, { recursive: true, mode: 0o700 });
 await fs.writeFile(path.join(directory, 'index.html'), html, { mode: 0o600 });
 const sourcePaths = ['src/client/WorkOutputMonitor.tsx', 'src/client/WorkOutputPtyObservation.tsx', 'src/client/work-output-pty.ts',
   'src/client/OrchestrationPanel.tsx', 'src/client/work-output-monitor.css', 'scripts/fixtures/work-output-pty-preview.tsx'];
-const receipt = { generatedAt: new Date().toISOString(), file: path.join(directory, 'index.html'), sourceCommit,
+const receipt = { generatedAt: new Date().toISOString(), file: path.join(directory, 'index.html'), sourceCommit, sourceState, sourcePatchSha256,
   nativeReceiptPath: receiptPath, nativeReceiptSha256: createHash('sha256').update(await fs.readFile(receiptPath)).digest('hex'), nativeSourceCommit: retained.sourceCommit,
   htmlSha256: createHash('sha256').update(html).digest('hex'), sourceSha256: Object.fromEntries(await Promise.all(sourcePaths.map(async name =>
     [name, createHash('sha256').update(await fs.readFile(path.join(root, name))).digest('hex')]))),

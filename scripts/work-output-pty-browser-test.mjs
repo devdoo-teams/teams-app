@@ -74,6 +74,27 @@ try {
   await page.getByRole('button', { name: '늦은 응답 전달', exact: true }).click();
   assert.equal(await page.evaluate(() => window.__hubPtyAudit.metadataAborts), 1);
   assert.equal(await output().count(), 0); assert.equal(await page.evaluate(() => window.__hubPtyAudit.reads.length), 0);
+  await load(); await open().click(); await output().waitFor();
+  await page.getByRole('button', { name: '같은 작업 client 교체', exact: true }).click();
+  await page.waitForFunction(() => window.__hubPtyAudit.beforeEffects.length === 1);
+  const replaced = await page.evaluate(() => structuredClone(window.__hubPtyAudit));
+  receipt.contextReplacement = { beforeEffects: replaced.beforeEffects, portEventsBeforeExplicitOpen: replaced.portEvents };
+  assert.deepEqual(replaced.beforeEffects[0], { version: 1, outputText: '', observerControls: 0, openDisabled: true });
+  assert.equal(replaced.portEvents.filter(event => event.version === 1).length, 0, 'replacement cannot discover or read automatically');
+  assert.equal(await output().count(), 0); await coreUnchanged(); await capture('07-client-replaced');
+  await open().click(); await output().waitFor(); await coreUnchanged();
+  assert.equal(await page.evaluate(() => window.__hubPtyAudit.portEvents.filter(event => event.version === 1 && event.kind === 'read').length), 1);
+  await capture('08-current-client-opened');
+  await load(); await page.getByRole('button', { name: '메타데이터 지연', exact: true }).click(); await open().click();
+  await page.waitForFunction(() => window.__hubPtyAudit.descriptions.length === 1);
+  await page.getByRole('button', { name: '같은 작업 client 교체', exact: true }).click();
+  await page.getByRole('button', { name: '늦은 응답 전달', exact: true }).click();
+  assert.equal(await page.evaluate(() => window.__hubPtyAudit.metadataAborts), 1);
+  assert.equal(await output().count(), 0); assert.equal(await page.evaluate(() => window.__hubPtyAudit.reads.length), 0);
+  assert.deepEqual(await page.evaluate(() => window.__hubPtyAudit.beforeEffects[0]), { version: 1, outputText: '', observerControls: 0, openDisabled: true });
+  receipt.lateContextReplacement = await page.evaluate(() => ({ beforeEffects: window.__hubPtyAudit.beforeEffects,
+    metadataAborts: window.__hubPtyAudit.metadataAborts, reads: window.__hubPtyAudit.reads }));
+  receipt.checks.push('same-job client swap hides text and disables controls in the DOM commit before passive effects; old late metadata cannot revive it');
   receipt.checks.push('reconnect/close/no-session/selection/parent-generation transitions create no execution and suppress late metadata');
   assert.equal(receipt.errors.length, 0); assert.equal(receipt.dialogs.length, 0); assert.equal(receipt.network.length, 0);
   receipt.result = 'PASS';
