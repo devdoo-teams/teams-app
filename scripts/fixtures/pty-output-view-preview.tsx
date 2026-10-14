@@ -6,7 +6,7 @@ import { createPtyOutputReader, PtyOutputReadError, type PtyOutputViewSnapshot }
 import type { PtyReadSnapshot } from '../../src/shared/pty-read.js';
 
 const fixture: { sourceCommit: string; worktree: string; snapshots: PtyReadSnapshot[] } = JSON.parse(document.getElementById('synthetic-fixture')!.textContent!);
-const audit = { reads: [] as Array<{ after: number; sessionId: string; generation: number }>, spawn: 0, input: 0, nativeResize: 0, terminate: 0 };
+const audit = { reads: [] as Array<{ after: number; sessionId: string; generation: number }> };
 Object.assign(window, { __ptyFixtureAudit: audit });
 let selected = 0;
 let failure: 'none' | 'network' | 'denied' | 'raw-vt' = 'none';

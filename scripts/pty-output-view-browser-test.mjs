@@ -137,10 +137,8 @@ try {
   await page.getByRole('button', { name: '출력 보기 닫기', exact: true }).click();
   assert.match(await state().innerText(), /닫았습니다/); assert.equal(await page.locator('section button').count(), 0);
   remember('close ends the observer view without hidden process controls'); await capture('10-closed');
-  assert.deepEqual(await page.evaluate(() => { const { reads, ...counts } = window.__ptyFixtureAudit; return counts; }),
-    { spawn: 0, input: 0, nativeResize: 0, terminate: 0 });
   assert.equal(networkRequests.length, 0); assert.deepEqual(errors, []); assert.deepEqual(dialogs, []);
-  remember('no external requests, console/page errors, dialogs, input or process-control calls');
+  remember('no external requests, console/page errors or dialogs; fixture has no input/process capability');
   receipt.result = 'PASS';
 } catch (error) {
   receipt.result = 'FAIL'; receipt.failure = { name: error.name, message: error.message };

@@ -60,8 +60,8 @@ try {
     file, url: new URL(`file://${file}`).href, htmlSha256: createHash('sha256').update(html).digest('hex'),
     snapshotsSha256: createHash('sha256').update(data).digest('hex'), browserInputs: Object.keys(result.metafile!.inputs),
     snapshotCount: 3, firstCursor: first.nextCursor, secondCursor: second.nextCursor, finalCursor: third.nextCursor,
-    processLaunches: 0, nativeResize: 0, input: 0, sourceTerminationRequests: source.kills,
-    limits: ['No real PTY/process in this preview', 'No HTTP listener, credentials, operating jobs or network connection',
+    ptyProcessLaunches: 0, exposedCapabilities: ['read-synthetic-snapshot'], sourceTerminationRequests: source.kills,
+    limits: ['No real PTY/job process in this preview; Git provenance and the browser runner use their own inspection processes', 'No HTTP listener, credentials, operating jobs or network connection',
       'Display resize only; no native PTY resize', 'Headless pixels and foreground/native Teams acceptance are separate'] };
   await fs.writeFile(path.join(directory, 'fixture-receipt.json'), JSON.stringify(receipt, null, 2) + '\n', { mode: 0o600 });
   console.log(JSON.stringify({ directory, file, receipt: path.join(directory, 'fixture-receipt.json'), sourceCommit }));
