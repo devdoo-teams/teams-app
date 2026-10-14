@@ -107,6 +107,7 @@ const tsTests = [
   'scripts/client-orchestration-panel-test.tsx',
   'scripts/work-output-monitor-test.ts',
   'scripts/work-output-monitor-ui-test.tsx',
+  'scripts/pty-read-session-test.ts',
   'scripts/agent-job-presentation-test.ts',
   'scripts/agent-execution-receipt-test.ts',
   'scripts/agent-cli-invocation-test.ts',
