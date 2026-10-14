@@ -19,6 +19,8 @@ import {
   type AgentIsolationAcquireInput,
   type AgentIsolationLease,
   type AgentIsolationSpawnOptions,
+  type AgentIsolationPtySpawnOptions,
+  type AgentIsolationPtyLaunchCapability,
 } from './agent-execution-policy.js';
 
 const PROVIDER_ID = 'codex-permission-profile';
@@ -144,6 +146,9 @@ export type CodexPermissionProfileIsolationProviderOptions = Readonly<{
   codexHome: string;
   platform?: NodeJS.Platform;
   spawn?: (command: string, args: readonly string[], options: AgentIsolationSpawnOptions) => ChildProcess;
+  /** Explicit provider-owned PTY/tree-control capability. Production composition
+   * does not supply one; no environment flag or unrestricted spawn fallback. */
+  pty?: AgentIsolationPtyLaunchCapability;
   preflight?: (input: {
     codexExecutable: string;
     codexHome: string;
@@ -163,6 +168,7 @@ export class CodexPermissionProfileIsolationProvider extends AgentIsolationProvi
   private readonly spawnChild: NonNullable<CodexPermissionProfileIsolationProviderOptions['spawn']>;
   private readonly preflight: NonNullable<CodexPermissionProfileIsolationProviderOptions['preflight']>;
   private readonly executableTrustVerifier: ExecutableTrustVerifier;
+  private readonly pty: AgentIsolationPtyLaunchCapability | undefined;
   private leaseReserved = false;
 
   constructor(options: CodexPermissionProfileIsolationProviderOptions) {
@@ -182,6 +188,13 @@ export class CodexPermissionProfileIsolationProvider extends AgentIsolationProvi
     ));
     this.preflight = options.preflight ?? runNativePermissionPreflight;
     this.executableTrustVerifier = options.executableTrustVerifier ?? verifyOpenAICodexSignature;
+    if (options.pty && (typeof options.pty.preflight !== 'function' || typeof options.pty.spawn !== 'function')) {
+      throw new AgentExecutionUnavailableError('process-tree-control-required', '명시적인 PTY preflight와 spawn capability가 필요합니다.');
+    }
+    this.pty = options.pty ? Object.freeze({
+      preflight: options.pty.preflight.bind(options.pty),
+      spawn: options.pty.spawn.bind(options.pty),
+    }) : undefined;
   }
 
   override async acquire(input: AgentIsolationAcquireInput): Promise<AgentIsolationLease> {
@@ -253,6 +266,20 @@ export class CodexPermissionProfileIsolationProvider extends AgentIsolationProvi
     codexHome = await requirePrivateDirectory(this.codexHome, 'service CODEX_HOME');
     authFile = await requirePrivateAuthFile(path.join(codexHome.path, 'auth.json'));
 
+    const pty = this.pty;
+    if (pty) {
+      try { await pty.preflight(); }
+      catch { throw new AgentExecutionUnavailableError('process-tree-control-required', 'PTY 프로세스 트리 제어 preflight를 확인하지 못했습니다.'); }
+    }
+
+    const trustedLaunch = (command: string, args: readonly string[], options: Pick<AgentIsolationSpawnOptions, 'cwd' | 'env'>) => {
+      assertTrustedPathSnapshot(codexHome, 'service CODEX_HOME');
+      assertPrivateAuthSnapshot(authFile);
+      assertTrustedExecutableSnapshot(codexExecutable, this.codexExecutableSha256, this.executableTrustVerifier);
+      validateLaunch({ command, args, options, codexExecutable: codexExecutable.path, codexHome: codexHome.path, workspace });
+      return { command: codexExecutable.path, args: buildTrustedExecArgs(args, workspace) };
+    };
+
     return this.issueLease({
       subject: input.subject,
       workspace,
@@ -260,28 +287,17 @@ export class CodexPermissionProfileIsolationProvider extends AgentIsolationProvi
       environmentOverrides,
       dispose: () => { this.leaseReserved = false; },
       spawn: (command, args, options) => {
-        assertTrustedPathSnapshot(codexHome, 'service CODEX_HOME');
-        assertPrivateAuthSnapshot(authFile);
-        assertTrustedExecutableSnapshot(
-          codexExecutable,
-          this.codexExecutableSha256,
-          this.executableTrustVerifier,
-        );
-        validateLaunch({
-          command,
-          args,
-          options,
-          codexExecutable: codexExecutable.path,
-          codexHome: codexHome.path,
-          workspace,
-        });
-        const trustedArgs = buildTrustedExecArgs(args, workspace);
-        return this.spawnChild(codexExecutable.path, trustedArgs, {
+        const launch = trustedLaunch(command, args, options);
+        return this.spawnChild(launch.command, launch.args, {
           ...options,
           cwd: workspace,
           env: { ...environmentOverrides },
         });
       },
+      ...(pty ? { preparePty: (command: string, args: readonly string[], options: AgentIsolationPtySpawnOptions) => {
+        const launch = trustedLaunch(command, args, options);
+        return () => pty.spawn(launch.command, launch.args, { ...options, cwd: workspace, env: { ...environmentOverrides } });
+      } } : {}),
     });
   }
 }
@@ -289,7 +305,7 @@ export class CodexPermissionProfileIsolationProvider extends AgentIsolationProvi
 function validateLaunch(input: {
   command: string;
   args: readonly string[];
-  options: AgentIsolationSpawnOptions;
+  options: Pick<AgentIsolationSpawnOptions, 'cwd' | 'env'>;
   codexExecutable: string;
   codexHome: string;
   workspace: string;

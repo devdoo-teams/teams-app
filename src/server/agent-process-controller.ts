@@ -19,6 +19,14 @@ export type AgentProcessTreeController = {
   cleanup: () => Promise<void>;
 };
 
+/** Native PTY adapters can forward their observed close event without posing
+ * as a ChildProcess or exposing streams/stdin. Existing ChildProcess fits it. */
+export type AgentProcessTreeTarget = {
+  readonly pid?: number;
+  once(event: 'close', callback: () => void): unknown;
+  once(event: 'error', callback: (error: unknown) => void): unknown;
+};
+
 export type AgentProcessControllerProvider = {
   preflight: () => Promise<void> | void;
   attach: (child: ChildProcess) => Promise<AgentProcessTreeController | undefined> | AgentProcessTreeController | undefined;
@@ -58,7 +66,7 @@ export function isProcessTreeControllerAvailable(options: AgentProcessController
 }
 
 export function createAgentProcessTreeController(
-  child: ChildProcess,
+  child: AgentProcessTreeTarget,
   options: AgentProcessControllerOptions = {},
 ): AgentProcessTreeController | undefined {
   const platform = options.platform ?? processPlatform();

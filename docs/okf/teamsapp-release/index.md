@@ -11,6 +11,7 @@ okf_version: 0.2
 - [Private state and cancellation follow-up](state-integrity-followup.md)
 - [Read-only multi-job output monitor](work-output-monitor.md) - stage 1, 2/4 panels, mobile selection, masked polling and separate Teams host gates
 - [Native PTY session read contract](pty-read-session-contract.md) - isolated stage 2a, owner checks, identity/generation, bounded replay, native Mac fixtures and disconnected production/VT/ConPTY gates
+- [Provider-owned PTY lease lifecycle](pty-isolation-lease.md) - stage 2b, single start, cancellation/dispose/TTL, bounded child-tree cleanup and distinct native/CI/live evidence
 
 - [Module test completion and failure propagation](module-test-process-lifetime.md)
 

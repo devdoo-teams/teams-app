@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import type { AgentJobMode, AgentJobScope } from './agent-job-store.js';
+import { isManagedAgentPtyProcess, type ManagedAgentPtyProcess } from './agent-pty-process.js';
 
 const DEFAULT_ALLOWED_DIRECTORIES = [
   'appPackage',
@@ -51,6 +52,19 @@ export type AgentIsolationSpawnOptions = {
   stdio: ['ignore', 'pipe', 'pipe'];
 };
 
+export type AgentIsolationPtySpawnOptions = Pick<AgentIsolationSpawnOptions, 'cwd' | 'env'> & {
+  cols: number;
+  rows: number;
+  signal?: AbortSignal;
+};
+
+/** Provider-owned atomic factory: throw before creating a child, or return its
+ * managed cleanup capability synchronously. Async post-spawn handoff is unsupported. */
+export type AgentIsolationPtyLaunchCapability = Readonly<{
+  preflight(): Promise<void> | void;
+  spawn(command: string, args: readonly string[], options: AgentIsolationPtySpawnOptions): ManagedAgentPtyProcess;
+}>;
+
 export type AgentIsolationAcquireInput = {
   subject: AgentIsolationSubject;
   sourceWorkspace: string;
@@ -66,6 +80,9 @@ type ProviderLeaseInput = {
   protectedRoots: readonly string[];
   environmentOverrides: Record<string, string>;
   spawn: (command: string, args: readonly string[], options: AgentIsolationSpawnOptions) => ChildProcess;
+  /** Validate/build the trusted launch before reserving execution. The returned
+   * atomic function is the only phase allowed to create a native process. */
+  preparePty?: (command: string, args: readonly string[], options: AgentIsolationPtySpawnOptions) => () => ManagedAgentPtyProcess;
   dispose?: () => Promise<void> | void;
   ttlMs?: number;
 };
@@ -82,6 +99,8 @@ export type AgentIsolationLease = {
     args: readonly string[],
     options: AgentIsolationSpawnOptions,
   ) => Promise<ChildProcess>;
+  /** Absent unless this exact provider preflighted and supplied native PTY/tree control. */
+  spawnPty?: (subject: AgentIsolationSubject, command: string, args: readonly string[], options: AgentIsolationPtySpawnOptions) => Promise<ManagedAgentPtyProcess>;
   dispose: () => Promise<void>;
 };
 
@@ -158,8 +177,13 @@ export abstract class AgentIsolationProvider {
     let boundJobId = input.subject.jobId;
     let disposed = false;
     let disposePromise: Promise<void> | undefined;
+    let executionReserved = false;
+    let ptyStart: Promise<ManagedAgentPtyProcess> | undefined;
+    let ptyProcess: ManagedAgentPtyProcess | undefined;
+    let unverifiedPtyStart = false;
+    let expiryTimer: NodeJS.Timeout | undefined;
 
-    const validate = (subject: AgentIsolationSubject, options: AgentIsolationSpawnOptions, args: readonly string[]): void => {
+    const validate = (subject: AgentIsolationSubject, options: Pick<AgentIsolationSpawnOptions, 'cwd' | 'env'>, args: readonly string[]): void => {
       if (disposed || Date.now() >= expiresAt) {
         throw new AgentExecutionUnavailableError('stale-isolation-lease', '읽기 전용 Codex 격리 lease가 만료되었거나 폐기되었습니다.');
       }
@@ -201,16 +225,75 @@ export abstract class AgentIsolationProvider {
       },
       spawn: async (subject, command, args, options): Promise<ChildProcess> => {
         validate(subject, options, args);
+        if (input.preparePty) {
+          if (executionReserved) throw new AgentExecutionUnavailableError('provider-rejected-request', '격리 lease의 실행은 이미 시작되었습니다.');
+          executionReserved = true;
+        }
         return input.spawn(command, args, options);
       },
+      ...(input.preparePty ? {
+        spawnPty: async (subject: AgentIsolationSubject, command: string, args: readonly string[], options: AgentIsolationPtySpawnOptions): Promise<ManagedAgentPtyProcess> => {
+          validate(subject, options, args);
+          if (!boundJobId || subject.jobId !== boundJobId || executionReserved
+            || !Number.isSafeInteger(options.cols) || options.cols < 1 || options.cols > 512
+            || !Number.isSafeInteger(options.rows) || options.rows < 1 || options.rows > 256) {
+            throw new AgentExecutionUnavailableError('provider-rejected-request', 'PTY 작업 바인딩, 실행 상태 또는 크기가 유효하지 않습니다.');
+          }
+          const signal = options.signal;
+          if (signal?.aborted) throw new AgentExecutionUnavailableError('stale-isolation-lease', 'PTY 시작이 취소되었습니다.');
+          executionReserved = true;
+          let launch: () => ManagedAgentPtyProcess;
+          try {
+            launch = input.preparePty!(command, Object.freeze([...args]), { ...options, env: { ...options.env }, signal });
+            if (typeof launch !== 'function') throw new AgentExecutionUnavailableError('process-tree-control-required', '원자적인 PTY 시작 capability가 필요합니다.');
+            validate(subject, options, args);
+            if (signal?.aborted) throw new AgentExecutionUnavailableError('stale-isolation-lease', 'PTY 준비 중 시작이 취소되었습니다.');
+          } catch (error) { executionReserved = false; throw error; }
+          let resolveStart!: (value: ManagedAgentPtyProcess) => void;
+          let rejectStart!: (error: unknown) => void;
+          ptyStart = new Promise((resolve, reject) => { resolveStart = resolve; rejectStart = reject; });
+          void ptyStart.catch(() => undefined);
+          try {
+            const resource = launch();
+            if (!isManagedAgentPtyProcess(resource)) throw new AgentExecutionUnavailableError('process-tree-control-required', '관리되는 PTY 정리 capability가 필요합니다.');
+            ptyProcess = resource;
+            const cancel = () => resource.requestTermination();
+            signal?.addEventListener('abort', cancel, { once: true });
+            const removeAbort = () => signal?.removeEventListener('abort', cancel);
+            void resource.finished.then(removeAbort, removeAbort);
+            queueMicrotask(() => {
+              if (disposed || signal?.aborted) {
+                void resource.terminate().then(
+                  () => rejectStart(new AgentExecutionUnavailableError('stale-isolation-lease', 'PTY 시작 중 lease가 종료되거나 취소되었습니다.')),
+                  rejectStart,
+                );
+              } else resolveStart(resource);
+            });
+          } catch {
+            unverifiedPtyStart = true;
+            rejectStart(new AgentExecutionUnavailableError('process-tree-control-required', 'PTY_START_UNVERIFIED'));
+          }
+          return ptyStart;
+        },
+      } : {}),
       dispose: async (): Promise<void> => {
         disposePromise ??= (async () => {
           disposed = true;
+          if (expiryTimer) clearTimeout(expiryTimer);
+          if (ptyStart) {
+            try { await ptyStart; } catch { /* still reap any resource created before the failed handoff */ }
+            if (ptyProcess) await ptyProcess.terminate();
+            else if (unverifiedPtyStart) throw new AgentExecutionUnavailableError('process-tree-control-required', 'PTY_START_UNVERIFIED');
+          }
           await input.dispose?.();
         })();
         await disposePromise;
       },
     };
+    if (input.preparePty) {
+      expiryTimer = setTimeout(() => { void lease.dispose().catch(() => undefined); }, ttlMs);
+      expiryTimer.unref();
+    }
     return lease;
   }
 }

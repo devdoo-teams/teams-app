@@ -21,7 +21,10 @@ const nativeProcesses = new WeakSet<object>();
  * Attach an already-created native IPty. This adapter cannot spawn, write,
  * resize, or acquire execution permission. The executor retains process ownership.
  */
-export function connectNodePtyReadProcess(pty: NodePtyProcessPort): NodePtyReadProcess {
+export function connectNodePtyReadProcess(pty: NodePtyProcessPort, lifecycle?: Readonly<{
+  requestTermination(): void;
+  observedExit(): PtyExit | undefined;
+}>): NodePtyReadProcess {
   if (!pty || !Number.isSafeInteger(pty.pid) || pty.pid < 1
     || typeof pty.onData !== 'function' || typeof pty.onExit !== 'function' || typeof pty.kill !== 'function') {
     throw new TypeError('A native node-pty process is required.');
@@ -44,11 +47,14 @@ export function connectNodePtyReadProcess(pty: NodePtyProcessPort): NodePtyReadP
       };
       try {
         listeners.push(pty.onData(value => { if (!disposed && !exited) callbacks.data(value); }));
-        listeners.push(pty.onExit(value => {
+        const deliverExit = (value: PtyExit) => {
           if (disposed || exited) return;
           exited = true;
           callbacks.exit(value);
-        }));
+        };
+        listeners.push(pty.onExit(deliverExit));
+        const alreadyExited = lifecycle?.observedExit();
+        if (alreadyExited) deliverExit(alreadyExited);
         return { dispose };
       } catch (error) {
         dispose();
@@ -60,7 +66,8 @@ export function connectNodePtyReadProcess(pty: NodePtyProcessPort): NodePtyReadP
       // Mark before invoking native code: a thrown kill must never cause a
       // second close of the same ConPTY handle on a repeated request.
       terminationRequested = true;
-      pty.kill();
+      if (lifecycle) lifecycle.requestTermination();
+      else pty.kill();
     },
   });
   sources.add(source);
