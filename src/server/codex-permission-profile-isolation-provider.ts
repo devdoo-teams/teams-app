@@ -13,6 +13,7 @@ import { assertTeamsCliAgentEnvironment, TEAMS_CLI_AGENT_MODEL_ARGS } from '../s
 import { acquirePrivateDirectoryProcessLease, type StoreProcessLease } from './process-lease.js';
 import { runSupervisedCommand as execFileClosedStdin, SupervisedCommandCleanupError } from './supervised-command.js';
 import { hasVerifiedAgentProcessCleanup, invalidateAgentProcessCleanup } from './agent-process-controller.js';
+import { observeCodexCliVersion } from './agent-cli-invocation-receipt.js';
 
 import {
   AgentExecutionUnavailableError,
@@ -294,6 +295,12 @@ export class CodexPermissionProfileIsolationProvider extends AgentIsolationProvi
       workspace,
       protectedRoots,
       environmentOverrides,
+      observeCliVersion: async signal => {
+        assertTrustedPathSnapshot(codexHome, 'service CODEX_HOME');
+        assertPrivateAuthSnapshot(authFile);
+        assertTrustedExecutableSnapshot(codexExecutable, this.codexExecutableSha256, this.executableTrustVerifier);
+        return observeCodexCliVersion(codexExecutable.path, [], { cwd: workspace, env: { ...environmentOverrides }, signal });
+      },
       dispose: async () => {
         if (pipeStartUnverified || pipeChildren.some(child => !hasVerifiedAgentProcessCleanup(child))) throw new SupervisedCommandCleanupError();
         await this.serviceReservation?.release();

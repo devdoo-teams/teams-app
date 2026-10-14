@@ -66,6 +66,8 @@ async function executableIdentityReplacementIsRejected(): Promise<void> {
   await fs.rename(replacement, fixture.codexExecutable);
   const after = await fs.stat(fixture.codexExecutable);
   assert.notEqual(after.ino, before.ino, 'fixture must replace the executable inode after acquire');
+  await recordUnexpectedAcceptance('SEC-01 metadata probe rejects replaced executable before launch',
+    () => lease.observeCliVersion!(scope('executable-identity'), new AbortController().signal));
 
   await recordUnexpectedAcceptance(
     'SEC-01 executable inode replacement after preflight/acquire',
@@ -229,6 +231,8 @@ async function authAndServiceHomeIdentityAreRevalidated(): Promise<void> {
   await fs.rename(replacementAuth, fixture.authPath);
   const afterAuth = await fs.stat(fixture.authPath);
   assert.notEqual(afterAuth.ino, beforeAuth.ino, 'fixture must replace auth.json inode after acquire');
+  await recordUnexpectedAcceptance('SEC-07 metadata probe rejects replaced auth before launch',
+    () => lease.observeCliVersion!(subject, new AbortController().signal));
   await recordUnexpectedAcceptance(
     'SEC-07 auth.json identity replacement after acquire',
     () => spawnLease(lease, subject, fixture),
@@ -238,6 +242,8 @@ async function authAndServiceHomeIdentityAreRevalidated(): Promise<void> {
   await fs.rename(fixture.serviceCodexHome, movedHome);
   await fs.mkdir(fixture.serviceCodexHome, { mode: 0o700 });
   await fs.writeFile(fixture.authPath, '{"fixture":"replacement-home-auth"}\n', { mode: 0o600 });
+  await recordUnexpectedAcceptance('SEC-07 metadata probe rejects replaced service home before launch',
+    () => lease.observeCliVersion!(subject, new AbortController().signal));
   await recordUnexpectedAcceptance(
     'SEC-07 service CODEX_HOME directory identity replacement after acquire',
     () => spawnLease(lease, subject, fixture),

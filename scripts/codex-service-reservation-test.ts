@@ -11,6 +11,8 @@ import { SupervisedCommandCleanupError } from '../src/server/supervised-command.
 import { acquirePrivateDirectoryProcessLease } from '../src/server/process-lease.js';
 import { CodexPermissionProfileIsolationProvider } from '../src/server/codex-permission-profile-isolation-provider.js';
 import { createCodexPtyLeaseContext } from './fixtures/codex-pty-lease-context.js';
+import { withAgentIsolationObservation } from '../src/server/agent-execution-policy.js';
+import { observeCodexCliVersion } from '../src/server/agent-cli-invocation-receipt.js';
 
 if (process.argv[2] === '--reservation-child') {
   const input = JSON.parse(await fs.readFile(process.argv[3]!, 'utf8')); let preflights = 0;
@@ -178,6 +180,31 @@ try {
     await assert.rejects(() => lease.spawn(subject, context.executable, context.args(), { cwd: lease.workspace, env: { ...lease.environmentOverrides }, detached: true, stdio: ['ignore', 'pipe', 'pipe'] }));
     await assert.rejects(() => lease.dispose(), /CLEANUP_UNVERIFIED/);
     await assert.rejects(() => provider().acquire(context.acquireInput), /leased|reserved|busy/i);
+    await fs.rm(path.join(context.codexHome, '.teams-execution-coordination', '.execution.teams-sdk-store-lease'), { recursive: true });
+  });
+  await check('dispose waits for an active auxiliary observation before releasing its reservation', async () => {
+    const lease = await provider().acquire(context.acquireInput);
+    let entered!: () => void; let release!: () => void; let disposed = false;
+    const started = new Promise<void>(resolve => { entered = resolve; }); const blocked = new Promise<void>(resolve => { release = resolve; });
+    const operation = withAgentIsolationObservation(lease, async () => { entered(); await blocked; return 'safe'; });
+    await started;
+    const disposing = lease.dispose().then(() => { disposed = true; });
+    await new Promise(resolve => setImmediate(resolve)); assert.equal(disposed, false);
+    await assert.rejects(() => provider().acquire(context.acquireInput), /leased|reserved|busy/i);
+    release(); assert.equal(await operation, 'safe'); await disposing;
+    let lateStarts = 0;
+    await assert.rejects(() => withAgentIsolationObservation(lease, async () => { lateStarts++; }), /폐기/);
+    assert.equal(lateStarts, 0);
+    const next = await provider().acquire(context.acquireInput); await next.dispose();
+  });
+  await check('an uncertain metadata-probe tree cannot be downgraded to unavailable version and release the home', async () => {
+    const lease = await provider().acquire(context.acquireInput);
+    await assert.rejects(() => withAgentIsolationObservation(lease, () => observeCodexCliVersion(context.executable, [], {
+      cwd: lease.workspace, env: {}, signal: new AbortController().signal,
+    }, async () => { throw new SupervisedCommandCleanupError(); })), /CLEANUP_UNVERIFIED/);
+    await assert.rejects(() => lease.dispose(), /AUXILIARY_PROCESS_CLEANUP_UNVERIFIED/);
+    await assert.rejects(() => provider().acquire(context.acquireInput), /leased|reserved|busy/i);
+    // Injected cleanup failure only; no OS child exists in this fixture.
     await fs.rm(path.join(context.codexHome, '.teams-execution-coordination', '.execution.teams-sdk-store-lease'), { recursive: true });
   });
   await check('unverified preflight cleanup quarantines the service reservation across provider instances', async () => {

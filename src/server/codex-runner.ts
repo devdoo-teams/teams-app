@@ -344,7 +344,10 @@ export class CodexRunner {
       stdio: ['ignore', 'pipe', 'pipe'],
     };
 
-    const cliVersion = await observeCodexCliVersion(command, prefixArgs, { cwd: options.workspace, env: environment, signal: options.signal });
+    const observeVersion = () => observeCodexCliVersion(command, prefixArgs, { cwd: options.workspace, env: environment, signal: options.signal });
+    const cliVersion = await (options.mode === 'read-only'
+      ? options.isolationLease!.observeCliVersion?.(options.subject!, options.signal)
+      : observeVersion());
     const cliInvocationReceipt = cliInvocationReceiptFromArguments(args, cliVersion);
     if (options.signal.aborted) throw new Error('Codex 작업이 취소되었습니다.');
     await options.onInvocationReceipt?.({ ...cliInvocationReceipt });

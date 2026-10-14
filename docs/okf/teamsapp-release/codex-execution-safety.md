@@ -6,10 +6,10 @@ resource: /codex-execution-safety.md
 tags: [teamsapp, codex, process, reservation, stdout, preflight]
 generated:
   by: "Codex /root"
-  at: "2026-10-14T10:33:00Z"
+  at: "2026-10-14T10:45:00Z"
 verified:
   by: "Codex /root, primary contracts and synthetic regressions"
-  at: "2026-10-14T10:33:00Z"
+  at: "2026-10-14T10:45:00Z"
 status: "source-fixture-only-live-shared-auth-unverified"
 stale_after: "2026-11-13T10:33:00Z"
 sources:
@@ -73,6 +73,7 @@ AbortSignal or timeout alone is not a process-tree cleanup receipt.
 | Recovery | An operator must independently establish owner and descendant absence and validate the exact reservation before any stale cleanup. This change provides no automatic cleanup or permission repair. |
 | Preflight | Closed stdin; separate bounded UTF-8 output; 45s per command,120s aggregate command signal and15s cleanup deadline. Detached owned group is terminated/reaped on natural parent close as well as failure. Results/errors are published only after cleanup. |
 | Pipe lifetime | Existing process-tree controller mints an object-bound cleanup receipt only after successful close/group checks. Lease disposal requires this receipt for every spawned pipe child. A close event alone cannot release the service home. |
+| Version metadata | The version probe uses the same supervisor. Read-only runners request a fixed provider-owned capability, which rechecks pinned executable, auth/home identity and trusted environment before launch. Providers lacking it report version unavailable. Disposal waits for active observation; uncertain cleanup retains the reservation. |
 
 No raw credential contents are read, copied or hashed by coordination. Existing
 private directory/auth metadata checks, pinned executable/signature checks,
@@ -101,6 +102,12 @@ seam, not an OS enforcement attestation.
 7. Existing synthetic spawn fixtures now explicitly produce a controller cleanup
    receipt. A displaced service-home fixture expects unverified release and checks
    that the original reservation remains. Product guards were not weakened.
+8. Follow-up inspection found the invocation-receipt version probe still used
+   plain execFile. A real synthetic Node descendant remained after the version
+   was returned (RED). The same probe now reaps its owned group first (GREEN).
+   Cleanup uncertainty cannot be downgraded to unavailable version, and disposal
+   waits for active metadata work. Fixed provider capability tests also reject
+   replaced executable/auth/home before the metadata launch.
 
 The first canary rerun hit sandbox `listen EPERM 127.0.0.1`. This was retained as
 an environment-limited attempt. The normal approved execution boundary then
@@ -124,7 +131,9 @@ provenance characterization. Reservation fixtures use synthetic auth files and
 trust/preflight seams, including another OS process and actual pipe runner
 cleanup. Supervision fixtures use synthetic Node parents/descendants; resistant
 children are absent as an owned group after natural parent exit and timeout.
-They are not Codex/model/native-PTY trials.
+The version probe separately proves its synthetic descendant is absent before
+returning. They are not Codex/model/native-PTY trials. The default supervisor is
+POSIX-only; no Windows version process is started without supported supervision.
 
 Focused strict TypeScript includes tracked production sources and this slice's
 test files, preserving pre-existing untracked user copies. Final exact-commit

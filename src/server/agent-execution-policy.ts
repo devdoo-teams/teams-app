@@ -1,6 +1,7 @@
 import { constants as fsConstants } from 'node:fs';
 import type { ChildProcess } from 'node:child_process';
 import crypto from 'node:crypto';
+import { SupervisedCommandCleanupError } from './supervised-command.js';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -83,6 +84,7 @@ type ProviderLeaseInput = {
   /** Validate/build the trusted launch before reserving execution. The returned
    * atomic function is the only phase allowed to create a native process. */
   preparePty?: (command: string, args: readonly string[], options: AgentIsolationPtySpawnOptions) => () => ManagedAgentPtyProcess;
+  observeCliVersion?: (signal: AbortSignal) => Promise<string | undefined>;
   dispose?: () => Promise<void> | void;
   ttlMs?: number;
 };
@@ -101,8 +103,30 @@ export type AgentIsolationLease = {
   ) => Promise<ChildProcess>;
   /** Absent unless this exact provider preflighted and supplied native PTY/tree control. */
   spawnPty?: (subject: AgentIsolationSubject, command: string, args: readonly string[], options: AgentIsolationPtySpawnOptions) => Promise<ManagedAgentPtyProcess>;
+  /** Fixed metadata operation; provider owns executable identity and environment. */
+  observeCliVersion?: (subject: AgentIsolationSubject, signal: AbortSignal) => Promise<string | undefined>;
   dispose: () => Promise<void>;
 };
+
+type LeaseObservations = { closed: boolean; unverified: boolean; pending: Set<Promise<unknown>> };
+const leaseObservations = new WeakMap<AgentIsolationLease, LeaseObservations>();
+
+/** Trusted internal metadata work shares the lease lifetime. This grants no
+ * launch/input capability and cannot clear an uncertain cleanup. */
+export function withAgentIsolationObservation<T>(lease: AgentIsolationLease, operation: () => Promise<T>): Promise<T> {
+  const state = leaseObservations.get(lease);
+  if (!state || state.closed) return Promise.reject(new AgentExecutionUnavailableError('stale-isolation-lease', '격리 관측 lease가 폐기되었습니다.'));
+  const pending = Promise.resolve().then(() => {
+    if (state.closed) throw new AgentExecutionUnavailableError('stale-isolation-lease', '격리 관측 lease가 폐기되었습니다.');
+    return operation();
+  }).catch(error => {
+    if (error instanceof SupervisedCommandCleanupError) state.unverified = true;
+    throw error;
+  });
+  state.pending.add(pending);
+  void pending.finally(() => state.pending.delete(pending)).catch(() => undefined);
+  return pending;
+}
 
 export class AgentExecutionUnavailableError extends Error {
   readonly code = 'UNAVAILABLE' as const;
@@ -182,6 +206,7 @@ export abstract class AgentIsolationProvider {
     let ptyProcess: ManagedAgentPtyProcess | undefined;
     let unverifiedPtyStart = false;
     let expiryTimer: NodeJS.Timeout | undefined;
+    const observations: LeaseObservations = { closed: false, unverified: false, pending: new Set() };
 
     const validate = (subject: AgentIsolationSubject, options: Pick<AgentIsolationSpawnOptions, 'cwd' | 'env'>, args: readonly string[]): void => {
       if (disposed || Date.now() >= expiresAt) {
@@ -231,6 +256,13 @@ export abstract class AgentIsolationProvider {
         }
         return input.spawn(command, args, options);
       },
+      ...(input.observeCliVersion ? {
+        observeCliVersion: (subject: AgentIsolationSubject, signal: AbortSignal) => {
+          validate(subject, { cwd: input.workspace, env: { ...input.environmentOverrides } }, ['--version']);
+          if (signal.aborted) return Promise.reject(new AgentExecutionUnavailableError('stale-isolation-lease', '격리 관측이 취소되었습니다.'));
+          return withAgentIsolationObservation(lease, () => input.observeCliVersion!(signal));
+        },
+      } : {}),
       ...(input.preparePty ? {
         spawnPty: async (subject: AgentIsolationSubject, command: string, args: readonly string[], options: AgentIsolationPtySpawnOptions): Promise<ManagedAgentPtyProcess> => {
           validate(subject, options, args);
@@ -279,17 +311,21 @@ export abstract class AgentIsolationProvider {
       dispose: async (): Promise<void> => {
         disposePromise ??= (async () => {
           disposed = true;
+          observations.closed = true;
           if (expiryTimer) clearTimeout(expiryTimer);
+          await Promise.allSettled([...observations.pending]);
           if (ptyStart) {
             try { await ptyStart; } catch { /* still reap any resource created before the failed handoff */ }
             if (ptyProcess) await ptyProcess.terminate();
             else if (unverifiedPtyStart) throw new AgentExecutionUnavailableError('process-tree-control-required', 'PTY_START_UNVERIFIED');
           }
+          if (observations.unverified) throw new AgentExecutionUnavailableError('process-tree-control-required', 'AUXILIARY_PROCESS_CLEANUP_UNVERIFIED');
           await input.dispose?.();
         })();
         await disposePromise;
       },
     };
+    leaseObservations.set(lease, observations);
     if (input.preparePty) {
       expiryTimer = setTimeout(() => { void lease.dispose().catch(() => undefined); }, ttlMs);
       expiryTimer.unref();

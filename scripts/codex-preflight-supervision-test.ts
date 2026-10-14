@@ -7,6 +7,7 @@ import { createAgentProcessTreeController } from '../src/server/agent-process-co
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { observeCodexCliVersion } from '../src/server/agent-cli-invocation-receipt.js';
 let release!: () => void;
 const cleanup = new Promise<void>(resolve => { release = resolve; });
 let stdinClosed = false; let requested = 0; let settled = false;
@@ -58,4 +59,23 @@ try {
 } finally {
   for (const pid of knownGroups) { if (!absent(pid)) { try { process.kill(-pid, 'SIGKILL'); } catch {} } }
   await fs.rm(directory, { recursive: true, force: true });
+}
+
+const probeDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-version-probe-tree-'));
+const probe = path.join(probeDirectory, 'codex-version.mjs'); const pidFile = path.join(probeDirectory, 'descendant.json');
+await fs.writeFile(probe, `#!${process.execPath}\nimport {spawn} from 'node:child_process';import fs from 'node:fs';
+const child=spawn(process.execPath,['-e','process.on("SIGTERM",()=>{});console.log("ready");setInterval(()=>{},1000)'],{stdio:['ignore','pipe','ignore']});
+child.stdout.once('data',()=>{fs.writeFileSync(${JSON.stringify(pidFile)},JSON.stringify({parent:process.pid,child:child.pid}));console.log('codex-cli 99.0.0-fixture');process.exit(0);});\n`, { mode: 0o700 });
+let probeChild = 0;
+try {
+  const version = await observeCodexCliVersion(probe, [], { cwd: probeDirectory, env: { PATH: '/usr/bin:/bin' }, signal: new AbortController().signal },
+    (file, args, options) => runSupervisedCommand(file, args, options, { controller: target => createAgentProcessTreeController(target, { graceMs: 20, cleanupWaitMs: 1000 }) }));
+  probeChild = JSON.parse(await fs.readFile(pidFile, 'utf8')).child;
+  assert.equal(version, 'codex-cli 99.0.0-fixture');
+  assert.throws(() => process.kill(probeChild, 0), (error: any) => error.code === 'ESRCH', 'version observation cannot finish while its descendant remains');
+  console.log('PASS the version metadata probe also reaps its real synthetic descendant before returning');
+} finally {
+  if (!probeChild) { try { probeChild = JSON.parse(await fs.readFile(pidFile, 'utf8')).child; } catch {} }
+  if (probeChild) { try { process.kill(probeChild, 'SIGKILL'); } catch {} }
+  await fs.rm(probeDirectory, { recursive: true, force: true });
 }

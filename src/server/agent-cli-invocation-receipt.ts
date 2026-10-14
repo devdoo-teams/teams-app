@@ -1,8 +1,6 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { runSupervisedCommand, SupervisedCommandCleanupError } from './supervised-command.js';
 import type { CoreCliInvocationReceipt, CoreCodexReasoningEffort } from '../shared/core-orchestration.js';
 
-const execFileAsync = promisify(execFile);
 const versionPattern = /^codex-cli \d{1,4}\.\d{1,4}\.\d{1,4}(?:-[A-Za-z0-9][A-Za-z0-9.-]{0,63})?$/u;
 const efforts = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 
@@ -52,13 +50,15 @@ export function cliInvocationReceiptFromArguments(args: readonly string[], cliVe
   })!;
 }
 
-/** Harmless bounded probe of the same executable/environment; retain no diagnostics. */
-export async function observeCodexCliVersion(command: string, prefixArgs: readonly string[], options: { cwd: string; env: NodeJS.ProcessEnv; signal: AbortSignal }): Promise<string | undefined> {
+/** Bounded owned-tree probe of the same executable/environment; retain no diagnostics.
+ * The injected runner is only a synthetic fixture seam. */
+export async function observeCodexCliVersion(command: string, prefixArgs: readonly string[], options: { cwd: string; env: NodeJS.ProcessEnv; signal: AbortSignal }, run: typeof runSupervisedCommand = runSupervisedCommand): Promise<string | undefined> {
   try {
-    const result = await execFileAsync(command, [...prefixArgs, '--version'], { ...options, timeout: 5_000, maxBuffer: 4_096, encoding: 'utf8', windowsHide: true });
+    const result = await run(command, [...prefixArgs, '--version'], { ...options, timeout: 5_000, maxBuffer: 4_096, encoding: 'utf8' });
     const version = result.stdout.trim();
     return versionPattern.test(version) ? version : undefined;
-  } catch {
+  } catch (error) {
+    if (error instanceof SupervisedCommandCleanupError) throw error;
     if (options.signal.aborted) throw new Error('Codex 작업이 취소되었습니다.');
     return undefined;
   }
