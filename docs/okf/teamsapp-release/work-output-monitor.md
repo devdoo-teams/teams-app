@@ -32,10 +32,10 @@ Mobile uses one selectable panel, contextual loading/error feedback and bounded 
 
 ## IMPLEMENTED SOURCE
 
-- `src/client/work-output-monitor.ts`: GET-only reader, four validated/unique IDs, identity equality, one in-flight refresh, abort/generation/timeout, independent missing/error cells. Any 401/403 or existing auth failure clears every private cell and blocks silent recovery.
-- `src/client/WorkOutputMonitor.tsx`: two/four desktop panels, mobile single panel and keyboard selection, saved slot/layout selection, safe common execution projection and same-job detail/conversation return. Output is explicitly labeled stored, masked and polled, without PTY/streaming claims. Layout changes never execute a job.
-- `src/client/OrchestrationPanel.tsx`: the existing list poll stops while the monitor owns the same 3-second polling controller. Closing/reselecting aborts and disposes the previous reader; returning preserves deliberately loaded rows. Existing submit/cancel/approval/conversation handlers remain the execution boundary.
-- `src/client/work-output-monitor.css`: a responsive two-column grid with four cells, bounded scrollable output, one visible mobile panel and visible selected layout/focus.
+- `src/client/work-output-monitor.ts:25`: GET-only reader, four validated/unique IDs, identity equality, one in-flight refresh, abort/generation/timeout, independent missing/error cells. Any 401/403 or existing auth failure clears every private cell and blocks silent recovery.
+- `src/client/WorkOutputMonitor.tsx:15`: two/four desktop panels, mobile single panel and keyboard selection, saved slot/layout selection, safe common execution projection and same-job detail/conversation return. Output is explicitly labeled stored, masked and polled, without PTY/streaming claims. Layout changes never execute a job.
+- `src/client/OrchestrationPanel.tsx:1115`: the existing list poll stops while the monitor owns the same 3-second polling controller. Closing/reselecting aborts and disposes the previous reader; returning preserves deliberately loaded rows only for the unchanged query. A changed filter/search/project resets its own first page/cursor. Existing submit/cancel/approval/conversation handlers remain the execution boundary.
+- `src/client/work-output-monitor.css:4`: a responsive two-column grid with four cells, bounded scrollable output, one visible mobile panel and visible selected layout/focus.
 
 Current CLI observations are already masked before persistence. The shared projection retains only status, bounded prompt/result/progress and safe tool outcome text. It does not reconstruct raw stdout/stderr, command arguments, internal reasoning or a full terminal transcript.
 
@@ -52,6 +52,10 @@ node --import tsx/esm scripts/run-module-test.mjs scripts/client-orchestration-p
 ```
 
 Coverage includes owner-read endpoint usage and mismatched response ID, server output masking through projection, duplicate reads, 401/403, late responses, disposal, timeout, completed/missing/error/recovery, preserved selection and mobile layout. Both new tests are registered in the Core suite. Local fixture uses cached Playwright and a temporary headless Chrome profile, with only synthetic jobs and mocked host/auth. Existing installation browser space 9 and public 3978 remain separate.
+
+Post-gate review reproduced a paging regression before deployment: the initial monitor-resume code also treated a new filter as a silent refresh. With 65 synthetic rows and 60 loaded, changing the filter retained 60 rows and its old cursor instead of a new 30-row first page. The focused RED/GREEN now checks both preserved monitor-return pages and reset filter cursors. The 150 candidate's successful machine/package gates do not certify this follow-up; final-SHA gates must run again. Version 150 was already reserved in Git, so the corrected candidate advances to 151 without uploading or serving 150.
+
+The same preservation review found that replacing the whole main view would unmount expanded conversation history. Its RED/GREEN checks the original subtree remains mounted but hidden during monitoring. The monitor itself still unmounts and disposes its polling reader on close. This preserves existing conversation/UI state without granting the monitor execution controls.
 
 The ordinary workspace typecheck still includes eight errors from pre-existing untracked `* 2.ts` copies. Those files are preserved. A temporary config including tracked production source plus this feature passes; it does not rewrite the user's files or hide a new feature error.
 

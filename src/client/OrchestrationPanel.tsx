@@ -455,7 +455,8 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
         </button> : null}
       </div>
 
-      {props.outputMonitorOpen ? props.outputMonitor : <>
+      {props.outputMonitorOpen ? props.outputMonitor : null}
+      <div data-orchestration-main-view="" hidden={props.outputMonitorOpen}>
       {props.mobile ? (
         <aside aria-label="모바일 대체 안내" className="panel-description" role="note">
           모바일에서 작업 제어가 원활하지 않으면 Teams 데스크톱 또는 웹 탭에서 계속하세요.
@@ -821,7 +822,7 @@ export function OrchestrationPanelView(props: OrchestrationPanelViewProps) {
       </details> : null}
 
 
-      </>}
+      </div>
     </section>
   );
 }
@@ -1111,9 +1112,14 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile }: Orchestr
     setNavigationPreferences(current => assignJobToProject(current, jobId, projectName));
   }, []);
 
+  const pollingContext = useRef<{ load: typeof load | null; monitoring: boolean }>({ load: null, monitoring: false });
   useEffect(() => {
-    if (outputMonitorOpen) return;
-    if (!privateAccessBlocked.current) void load({ silent: currentJobs.current.length > 0 });
+    if (outputMonitorOpen) { pollingContext.current.monitoring = true; return; }
+    // Only resume the unchanged query. A filter/search/project change must
+    // reset its page and cursor instead of retaining the previous query's.
+    const resumed = pollingContext.current.monitoring && pollingContext.current.load === load;
+    pollingContext.current = { load, monitoring: false };
+    if (!privateAccessBlocked.current) void load({ silent: resumed });
     const polling = createOrchestrationPollingController({
       intervalMs: ORCHESTRATION_POLL_INTERVAL_MS,
       refresh: () => load({ silent: true }),

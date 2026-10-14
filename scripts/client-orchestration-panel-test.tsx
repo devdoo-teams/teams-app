@@ -830,6 +830,8 @@ function panelHookHost({ effects = false } = {}) {
   assert.equal(typeof props.onOpenOutputMonitor, 'function', 'the existing task view opens a read-only output monitor');
   props.onOpenOutputMonitor!(); props = host.render(client);
   assert.equal(props.outputMonitorOpen, true);
+  assert.match(renderToStaticMarkup(<OrchestrationPanelView {...props} />), /data-orchestration-main-view="" hidden=""/,
+    'the existing conversation subtree stays mounted but hidden while monitoring, preserving its expanded history');
   const monitor = props.outputMonitor as React.ReactElement<{ slots: string[]; onOpenJob: (id: string) => void; onSlotsChange: (ids: string[]) => void; onClose: () => void }>;
   assert.deepEqual(monitor.props.slots.filter(Boolean), ['monitor-a', 'monitor-b']);
   monitor.props.onSlotsChange(['monitor-b', 'monitor-a']);
@@ -841,6 +843,40 @@ function panelHookHost({ effects = false } = {}) {
   assert.deepEqual((props.outputMonitor as typeof monitor).props.slots.filter(Boolean), ['monitor-b', 'monitor-a'], 'returning from the conversation preserves monitor selection');
   assert.equal(calls.some(call => !call.startsWith('GET ')), false, 'opening and leaving the monitor never executes or mutates a job');
   host.dispose();
+}
+
+{
+  const rows = Array.from({ length: 65 }, (_, index) => task('running', { id: `monitor-cursor-${index}` }));
+  const cursors: string[] = [];
+  const client = createCoreOrchestrationClient(async input => {
+    const url = new URL(String(input), 'http://core.test');
+    const scope = url.searchParams.get('status') ?? 'all';
+    const cursor = url.searchParams.get('cursor');
+    if (cursor) cursors.push(cursor);
+    const offset = cursor ? Number(cursor.split(':')[1]) : 0;
+    const ids = url.searchParams.getAll('jobIds');
+    const candidates = rows.filter(row => !ids.length || ids.includes(row.id));
+    const limit = Number(url.searchParams.get('limit') ?? 30);
+    const jobs = candidates.slice(offset, offset + limit), hasMore = offset + limit < candidates.length;
+    return Response.json({ jobs, providers: [provider], hasMore, ...(hasMore ? { nextCursor: `${scope}:${offset + limit}` } : {}) });
+  });
+  const host = panelHookHost({ effects: true });
+  const settle = async () => {
+    for (let index = 0; index < 4; index++) { await new Promise(resolve => setImmediate(resolve)); host.render(client); host.flushEffects(); }
+    return host.render(client);
+  };
+  try {
+    let props = host.render(client); host.flushEffects(); props = await settle();
+    await props.onLoadMore?.(); props = host.render(client); host.flushEffects();
+    assert.equal(props.jobs.length, 60);
+    props.onOpenOutputMonitor!(); props = host.render(client); host.flushEffects();
+    (props.outputMonitor as React.ReactElement<{ onClose: () => void }>).props.onClose();
+    props = host.render(client); host.flushEffects(); props = await settle();
+    assert.equal(props.jobs.length, 60, 'monitor close preserves deliberately loaded pages for the unchanged query');
+    props.onListStatusChange?.('running'); props = host.render(client); host.flushEffects(); props = await settle();
+    assert.equal(props.jobs.length, 30, 'a new filter starts its own first page rather than reusing the prior polling cursor');
+    await props.onLoadMore?.(); assert.equal(cursors.at(-1), 'running:30', 'pagination cursor belongs to the current filter');
+  } finally { host.dispose(); }
 }
 
 {
