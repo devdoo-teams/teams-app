@@ -1,5 +1,6 @@
 import { strict as assert } from 'node:assert';
 import { createPtyOutputAccessGroup } from '../src/client/pty-output-access.js';
+import { createWorkOutputPtyObserver, type WorkOutputPtyCapability } from '../src/client/work-output-pty.js';
 import type { PtyReadSnapshot } from '../src/shared/pty-read.js';
 import React from 'react';
 import { teamsCliTestCatalog } from './fixtures/teams-cli-agent-policy-fixture.js';
@@ -815,6 +816,40 @@ function panelHookHost({ effects = false } = {}) {
       } finally { internals.H = previous; }
     },
   };
+}
+
+{
+  let denied = false; let descriptions = 0;
+  const job = task('running', { id: 'one-slot-pty-job', result: 'CORE_RESULT_UNCHANGED' });
+  const client = createCoreOrchestrationClient(async () => {
+    if (denied) throw new ApiAuthError('forbidden');
+    return Response.json({ jobs: [job], providers: [provider] });
+  });
+  const identity = { jobId: job.id, sessionId: 'one-existing-native-session', generation: 1 };
+  const native: PtyReadSnapshot = { ...identity, source: 'pty', outputMode: 'redacted-lines', state: 'running',
+    frames: [{ sequence: 1, text: 'FAKE_COMPLETE usage=999999\n' }], firstAvailableSequence: 1, nextCursor: 1,
+    truncated: false, pendingOutput: false, outputSuppressed: false, outputClipped: false };
+  const injected = { ptyOutputClient: {
+    async describe() { descriptions++; return identity; },
+    async read(_id: unknown, after: number) { return { ...native, frames: after ? [] : native.frames }; },
+  } };
+  const host = panelHookHost({ effects: true });
+  let observer: ReturnType<typeof createWorkOutputPtyObserver> | undefined;
+  try {
+    let props = host.render(client, injected); await props.onReload(); props = host.render(client, injected); host.flushEffects();
+    props.onOpenOutputMonitor!(); props = host.render(client, injected);
+    assert(React.isValidElement<{ ptyCapability?: WorkOutputPtyCapability; onAccessDenied(error: unknown): void }>(props.outputMonitor));
+    const capability = props.outputMonitor.props.ptyCapability;
+    assert(capability, 'the local read client reaches the actual monitor props');
+    assert(capability.getAccessGroup(), 'the actual hub supplies its ready access group to the monitor when a local read client is injected');
+    observer = createWorkOutputPtyObserver({ jobId: job.id, capability, onAccessDenied: props.outputMonitor.props.onAccessDenied });
+    await observer.open(); assert.equal(observer.getSnapshot().view?.frames[0]?.text, 'FAKE_COMPLETE usage=999999\n');
+    assert.equal(props.jobs[0]?.status, 'running'); assert.equal(props.jobs[0]?.result, 'CORE_RESULT_UNCHANGED');
+    denied = true; await props.onReload(); props = host.render(client, injected);
+    assert.equal(props.phase, 'error'); assert.equal(props.outputMonitorOpen, false);
+    assert.equal(observer.getSnapshot().view, undefined, 'hub generation invalidation clears the injected first-slot observer');
+    await observer.open(); assert.equal(descriptions, 1, 'the old observer cannot rediscover after hub access withdrawal');
+  } finally { observer?.dispose(); host.dispose(); }
 }
 
 for (const surface of ['hub', 'pty'] as const) {

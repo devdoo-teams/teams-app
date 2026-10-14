@@ -8,6 +8,8 @@ okf_version: 0.2
 
 ## Concepts
 
+- [Local first-slot Core and PTY observation](work-output-pty-slot.md) - optional local read injection, hub generation/cursor/close lifecycle and separate authoritative pipe results
+
 - [Codex pipe and preflight execution safety](codex-execution-safety.md) - MP388 cooperative service-home reservation, stdout provenance and bounded child cleanup; actual shared-auth/native-PTY trials remain separate
 - [Internal authenticated PTY observation](pty-output-access.md) - isolated stage2d, per-read Core owner/policy checks and test-injected hub access invalidation; public transport/native executor remain disconnected
 - [Private state and cancellation follow-up](state-integrity-followup.md)

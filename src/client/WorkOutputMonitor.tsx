@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState, type Ref } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
+import { WorkOutputPtyObservation } from './WorkOutputPtyObservation.js';
+import type { WorkOutputPtyCapability } from './work-output-pty.js';
 import type { CoreOrchestrationClient } from './core-orchestration-client.js';
 import type { CoreOrchestrationJob } from '../shared/core-orchestration.js';
 import { createOutputMonitorReader, normalizeOutputMonitorSlots, outputMonitorKey,
@@ -10,6 +12,7 @@ type ViewProps = {
   onSlotsChange: (slots: OutputMonitorSlots) => void; onLayoutChange: (layout: 2 | 4) => void;
   onActiveSlotChange: (slot: number) => void; onOpenJob: (id: string) => void;
   onClose: () => void; onRefresh: () => void;
+  ptyObservation?: ReactNode;
 };
 
 export function WorkOutputMonitorView(props: ViewProps & { headingRef?: Ref<HTMLHeadingElement> }) {
@@ -24,7 +27,7 @@ export function WorkOutputMonitorView(props: ViewProps & { headingRef?: Ref<HTML
   </section>;
   return <section aria-label="읽기 전용 다중 작업 출력 모니터" className={`output-monitor${props.mobile ? ' force-mobile' : ''}`}>
     <div className="output-monitor-heading">
-      <div><h3 ref={props.headingRef} tabIndex={-1}>현재 출력 조회</h3><p className="panel-description">읽기 전용 · 3초마다 저장된 상태·마스킹한 출력 요약을 조회합니다. PTY·실시간 스트림이 아닙니다.</p></div>
+      <div><h3 ref={props.headingRef} tabIndex={-1}>현재 출력 조회</h3><p className="panel-description">읽기 전용 · 3초마다 저장된 상태·마스킹한 출력 요약을 조회합니다. {props.ptyObservation ? '첫 패널의 PTY 관찰은 별도로 조회합니다.' : 'PTY·실시간 스트림이 아닙니다.'}</p></div>
       <div className="output-monitor-actions">
         <button className="secondary" onClick={props.onRefresh} type="button" disabled={blocked || !current || props.snapshot.phase === 'loading'}>출력 새로고침</button>
         <button className="secondary" onClick={props.onClose} type="button">작업 목록으로</button>
@@ -87,6 +90,7 @@ export function WorkOutputMonitorView(props: ViewProps & { headingRef?: Ref<HTML
               {presentation.progress.length ? <><h4>최근 진행 (최대 8개)</h4><pre>{presentation.progress.join('\n')}</pre></> : null}
             </div>
             <button className="secondary" type="button" onClick={() => props.onOpenJob(presentation.jobId)}>같은 작업의 상세·대화</button>
+            {index === 0 ? props.ptyObservation : null}
           </> : null}
         </article>;
       })}
@@ -94,9 +98,10 @@ export function WorkOutputMonitorView(props: ViewProps & { headingRef?: Ref<HTML
   </section>;
 }
 
-export function WorkOutputMonitor(props: Omit<ViewProps, 'snapshot' | 'onRefresh'> & {
+export function WorkOutputMonitor(props: Omit<ViewProps, 'snapshot' | 'onRefresh' | 'ptyObservation'> & {
   client: Pick<CoreOrchestrationClient, 'getJob'>; onAccessDenied: (error: unknown) => void;
   createPolling: (options: { refresh: () => Promise<void> }) => { start: () => void; stop: () => void };
+  ptyCapability?: WorkOutputPtyCapability;
 }) {
   const key = outputMonitorKey(props.slots);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -120,5 +125,10 @@ export function WorkOutputMonitor(props: Omit<ViewProps, 'snapshot' | 'onRefresh
     void current.read(slots).then(() => { if (active) polling.start(); });
     return () => { active = false; polling.stop(); current.dispose(); };
   }, [props.client, props.createPolling, props.onAccessDenied, key]);
-  return <WorkOutputMonitorView {...props} headingRef={heading} snapshot={snapshot} onRefresh={() => { void reader?.read(props.slots); }} />;
+  const firstJob = normalizeOutputMonitorSlots(props.slots)[0];
+  const observeFirst = snapshot.key === key && snapshot.phase !== 'blocked' && firstJob
+    && snapshot.entries[firstJob]?.status === 'ready' ? firstJob : undefined;
+  return <WorkOutputMonitorView {...props} headingRef={heading} snapshot={snapshot} onRefresh={() => { void reader?.read(props.slots); }}
+    ptyObservation={props.ptyCapability && observeFirst ? <WorkOutputPtyObservation key={observeFirst} jobId={observeFirst}
+      capability={props.ptyCapability} onAccessDenied={props.onAccessDenied} /> : undefined} />;
 }

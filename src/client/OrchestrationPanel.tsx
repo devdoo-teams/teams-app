@@ -7,6 +7,8 @@ import type { VisibleJobConversation } from '../shared/job-conversation.js';
 import { ExecutionPresentationPanel } from './ExecutionPresentationPanel.js';
 import { CoreResultReview } from './CoreResultReview.js';
 import { WorkOutputMonitor } from './WorkOutputMonitor.js';
+import { createPtyOutputAccessGroup } from './pty-output-access.js';
+import type { WorkOutputPtyCapability, WorkOutputPtyClient } from './work-output-pty.js';
 import { normalizeOutputMonitorSlots, type OutputMonitorSlots } from './work-output-monitor.js';
 import { isConversationHistoryAccessFailure, loadJobConversation, refreshVisibleJobConversation } from './job-conversation.js';
 import { isApiAuthError } from './auth.js';
@@ -832,9 +834,11 @@ export type OrchestrationPanelProps = {
   mobile?: boolean;
   /** Internal test injection only. Production supplies no PTY read transport/factory. */
   createPtyOutputAccess?: typeof import('./pty-output-access.js').createPtyOutputAccessGroup;
+  /** Explicit read-only local injection; default production supplies no client. */
+  ptyOutputClient?: WorkOutputPtyClient;
 };
 
-export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile, createPtyOutputAccess }: OrchestrationPanelProps) {
+export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile, createPtyOutputAccess, ptyOutputClient }: OrchestrationPanelProps) {
   const [phase, setPhase] = useState<PanelPhase>('loading');
   const [requestedJobId, setRequestedJobId] = useState(() => parseRequestedJobId(typeof window === 'undefined' ? '' : window.location.search));
   useEffect(() => {
@@ -904,6 +908,11 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile, createPtyO
   const privateAccessBlocked = useRef(false);
   const privateAccessGeneration = useRef(0);
   const ptyOutputAccess = useRef<ReturnType<NonNullable<OrchestrationPanelProps['createPtyOutputAccess']>> | undefined>(undefined);
+  const ptyCapability = useMemo<WorkOutputPtyCapability | undefined>(() => ptyOutputClient ? {
+    client: ptyOutputClient,
+    getAccessGroup: () => ptyOutputAccess.current,
+    getAccessGeneration: () => privateAccessGeneration.current,
+  } : undefined, [ptyOutputClient, createPtyOutputAccess]);
   const currentJobs = useRef<CoreOrchestrationJob[]>([]);
   const selectedJobId = useRef<string | undefined>(undefined);
   const requestedJobHint = useRef(requestedJobId);
@@ -988,8 +997,9 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile, createPtyO
   }, [clearPrivateState]);
 
   useEffect(() => {
-    if (!createPtyOutputAccess || phase !== 'ready' || privateAccessBlocked.current) return;
-    const access = createPtyOutputAccess({
+    const factory = createPtyOutputAccess ?? (ptyOutputClient ? createPtyOutputAccessGroup : undefined);
+    if (!factory || phase !== 'ready' || privateAccessBlocked.current) return;
+    const access = factory({
       getAccessGeneration: () => privateAccessGeneration.current,
       onAccessDenied: handlePrivateAccessFailure,
     });
@@ -998,7 +1008,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile, createPtyO
       if (ptyOutputAccess.current === access) ptyOutputAccess.current = undefined;
       access.dispose();
     };
-  }, [createPtyOutputAccess, handlePrivateAccessFailure, phase]);
+  }, [createPtyOutputAccess, ptyOutputClient, handlePrivateAccessFailure, phase]);
 
   const updateJob = useCallback((nextJob: CoreOrchestrationJob) => {
     publishJobs((current) => current.some((job) => job.id === nextJob.id)
@@ -1301,6 +1311,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile, createPtyO
     }}
     outputMonitorOpen={outputMonitorOpen}
     outputMonitor={<WorkOutputMonitor client={client} slots={outputMonitorSlots} layout={outputMonitorLayout}
+      ptyCapability={ptyCapability}
       activeSlot={outputMonitorActiveSlot} jobs={jobs} mobile={isMobile} createPolling={createOrchestrationPollingController}
       onAccessDenied={handlePrivateAccessFailure} onSlotsChange={setOutputMonitorSlots}
       onLayoutChange={setOutputMonitorLayout} onActiveSlotChange={setOutputMonitorActiveSlot}

@@ -49,6 +49,16 @@ assert.equal(blocked.includes('합성 요청'), false, 'access denial also remov
 const empty = render({ slots: [], snapshot: { key: '', phase: 'ready', entries: {} } });
 assert.equal((empty.match(/조회할 기존 작업을 선택하세요/g) ?? []).length, 4);
 assert.equal(empty.includes('output-monitor-output'), false, 'empty slots neither display old output nor start jobs');
+const ptyObservation = React.createElement('section', { 'data-pty-slot-observation': true }, 'PTY 혼합 출력 FAKE_COMPLETE');
+const combined = render({ ptyObservation });
+assert.equal((combined.match(/data-pty-slot-observation="true"/g) ?? []).length, 1,
+  'an injected PTY observation is rendered only inside the first Core slot');
+assert.ok(combined.includes('FAKE_COMPLETE'));
+assert.equal((combined.match(/data-job-status="running"/g) ?? []).length, 1,
+  'observation text must not turn the Core running status into completion');
+assert.equal(render({ ptyObservation, snapshot: { ...props.snapshot, phase: 'blocked', entries: {} } }).includes('FAKE_COMPLETE'), false);
+assert.equal(render({ ptyObservation, snapshot: { ...props.snapshot, key: 'stale-selection' } }).includes('FAKE_COMPLETE'), false);
+assert.equal(render({ ptyObservation, snapshot: { ...props.snapshot, entries: { 'task-1': { status: 'missing' } } } }).includes('FAKE_COMPLETE'), false);
 const loading = render({ snapshot: { key: props.snapshot.key, phase: 'loading', entries: {} } });
 assert.ok(loading.includes('aria-busy="true"')); assert.ok(loading.includes('저장된 출력을 조회 중'));
 const style = await readFile(new URL('../src/client/work-output-monitor.css', import.meta.url), 'utf8').catch(() => '');

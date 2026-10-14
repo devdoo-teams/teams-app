@@ -1,4 +1,6 @@
 .output-monitor { display: grid; gap: 16px; min-width: 0; }
+.output-monitor-pty { min-width: 0; padding: 12px; border-radius: 10px; background: #f7f8fc; color: #182033; }
+.output-monitor-pty h4 { margin-top: 0; }
 .output-monitor-heading, .output-monitor-actions, .output-monitor-status { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .output-monitor-heading { justify-content: space-between; }
 .output-monitor-heading h3 { margin: 0; }
