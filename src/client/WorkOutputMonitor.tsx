@@ -32,9 +32,8 @@ export function WorkOutputMonitorView(props: ViewProps & { headingRef?: Ref<HTML
       <div><h3 ref={props.headingRef} tabIndex={-1}>현재 출력 조회</h3><p className="panel-description">읽기 전용 · 자동 조회 중에는 3초마다 저장된 상태·마스킹한 출력 요약을 조회합니다. {props.ptyObservation ? '첫 패널의 PTY 관찰은 별도로 조회합니다.' : 'PTY·실시간 스트림이 아닙니다.'}</p></div>
       <div className="output-monitor-actions">
         <button className="secondary" onClick={props.onRefresh} type="button" disabled={blocked || !current || paused || props.snapshot.phase === 'loading'}>출력 새로고침</button>
-        <button className="secondary" onClick={paused ? props.onResume : props.onPause} type="button" disabled={blocked || !current}>
-          {paused ? '같은 작업 다시 조회' : '자동 조회 일시정지'}
-        </button>
+        <button className="secondary" onClick={props.onPause} type="button" disabled={blocked || !current || paused}>자동 조회 일시정지</button>
+        <button className="secondary" onClick={props.onResume} type="button" disabled={blocked || !current || !paused}>같은 작업 다시 조회</button>
         <button className="secondary" onClick={props.onClose} type="button">작업 목록으로</button>
       </div>
     </div>

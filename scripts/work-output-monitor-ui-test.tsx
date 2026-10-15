@@ -104,4 +104,67 @@ const style = await readFile(new URL('../src/client/work-output-monitor.css', im
 assert.match(style, /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
 assert.match(style, /max-width:\s*760px/);
 assert.match(style, /data-mobile-active="false"/);
+
+// Replay two clicks at the same control position against the latest real View
+// and session. Session.resume() twice alone misses a View that changes the
+// second click into pause after the first loading publication. Browser pixels
+// and native event dispatch remain separate host verification gates.
+{
+  let snapshot: any;
+  let starts = 0;
+  const reads: Array<{ id: string; aborted: boolean; resolve: (job: CoreOrchestrationJob) => void }> = [];
+  const resumes: Promise<void>[] = [];
+  const session = monitor.createOutputMonitorSession({ slots: props.slots,
+    client: { getJob(id, signal) { return new Promise<CoreOrchestrationJob>(resolve => {
+      const read = { id, aborted: false, resolve }; reads.push(read);
+      signal?.addEventListener('abort', () => { read.aborted = true; }, { once: true });
+    }); } },
+    onChange(value) { snapshot = value; },
+    createPolling() { return { start() { starts++; }, stop() {} }; },
+  });
+  const buttons = (node: any): any[] => Array.isArray(node) ? node.flatMap(buttons)
+    : React.isValidElement<{ children?: React.ReactNode }>(node)
+      ? node.type === 'button' ? [node] : buttons(node.props.children) : [];
+  const controls = () => buttons(module.WorkOutputMonitorView({ ...props, snapshot,
+    onPause: () => session.pause(), onResume: () => { resumes.push(session.resume()); },
+  }));
+  const clickPosition = (index: number) => { const control = controls()[index];
+    assert.ok(control, 'the query control keeps its position between clicks');
+    if (!control.props.disabled) control.props.onClick();
+  };
+  try {
+    const initial = session.start(); session.pause(); await initial;
+    const before = reads.length;
+    const index = controls().findIndex(button => button.props.children === '같은 작업 다시 조회');
+    assert.ok(index >= 0);
+    clickPosition(index); clickPosition(index);
+    assert.deepEqual({ connection: snapshot.connection, newReads: reads.length - before,
+      newAborts: reads.slice(before).filter(read => read.aborted).length },
+    { connection: 'connected', newReads: jobs.length, newAborts: 0 },
+    'a double reconnect click must not toggle into pause or abort its fresh selected-job reads');
+    reads.forEach(read => read.resolve(jobs.find(job => job.id === read.id)!));
+    await Promise.all(resumes);
+    assert.equal(starts, 1, 'fresh reconnect completion starts exactly one poller');
+    assert.equal(snapshot.phase, 'ready');
+    assert.equal(controls()[index].props.children, '같은 작업 다시 조회', 'reconnect keeps a stable action and position');
+    assert.equal(controls()[index].props.disabled, true, 'connected reconnect is inactive');
+    const pauseIndex = controls().findIndex(button => button.props.children === '자동 조회 일시정지');
+    assert.ok(pauseIndex >= 0); clickPosition(pauseIndex);
+    assert.equal(snapshot.connection, 'paused', 'explicit pause remains usable after reconnect');
+    const beforeSecondResume = reads.length;
+    clickPosition(index);
+    assert.equal(controls()[pauseIndex].props.disabled, false, 'explicit pause stays usable during a pending reconnect');
+    clickPosition(pauseIndex);
+    assert.equal(snapshot.connection, 'paused');
+    assert.equal(reads.slice(beforeSecondResume).filter(read => read.aborted).length, jobs.length,
+      'an intentional pause still aborts its pending observer reads');
+    reads.forEach(read => read.resolve(jobs.find(job => job.id === read.id)!));
+    await Promise.all(resumes);
+    assert.equal(snapshot.connection, 'paused', 'intentional pause rejects late reconnect publication');
+    assert.equal(starts, 1, 'intentional pause prevents a second poller from starting');
+  } finally {
+    session.dispose(); reads.forEach(read => read.resolve(jobs.find(job => job.id === read.id)!));
+    await Promise.all(resumes);
+  }
+}
 console.log('Work output monitor UI: PASS (2/4 panels, mobile selection, safe output, loading/missing/error/auth, same-job navigation)');

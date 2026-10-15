@@ -4,10 +4,16 @@ title: "Existing GET output monitor: query control and bounded command excerpts"
 description: "Observer-only pause/reconnect and the existing server-masked CLI projection; native PTY production wiring remains separate."
 resource: /output-monitor-query-control.md
 generated: { by: "Codex /root", at: "2026-10-15T03:32:40Z" }
-verified: { by: "Codex /root, focused synthetic RED/GREEN", at: "2026-10-15T03:32:40Z" }
-status: "candidate-fixture-pass-host-unverified"
+verified: { by: "Codex /root, rendered153 finding and View/session RED/GREEN", at: "2026-10-15T05:02:00Z" }
+status: "candidate-focused-pass-local-pixel-retest-required"
 stale_after: "2026-11-14T03:30:00Z"
 sources:
+  - resource: "https://react.dev/reference/react-dom/components/common#mouseevent-handler"
+    title: "React common components: mouse event handlers"
+    location: "onClick and onDoubleClick; read2026-10-15; HTML lines92-107 observed, unstable"
+  - resource: "https://esbuild.github.io/content-types/#css"
+    title: "esbuild CSS bundling"
+    location: "CSS imports and bundling; read2026-10-15; section anchor used because HTML lines are unstable"
   - resource: "https://learn.chatgpt.com/docs/non-interactive-mode#make-output-machine-readable"
     title: "Codex non-interactive JSONL output"
     location: "stdout JSONL and saved authentication; read2026-10-15; HTML lines are unstable"
@@ -80,6 +86,35 @@ Internal code and tests:
   scripts/work-output-monitor-ui-test.tsx:64 (rendering branches).
 
 # Reproduction
+
+## Follow-up: MP-389 rendered153 double reconnect
+
+The synthetic rendered153 UI reproduced a double click issuing four fresh reads
+then aborting all four and returning to paused. A new test invokes the actual
+View callbacks at the same control position against the real reader/session;
+it was RED with `connection=paused,newReads=4,newAborts=4`. The first click
+published connected/loading, changing the same button from resume to pause.
+The existing `resume()`-twice session test did not reach this View behavior.
+
+Pause and reconnect now keep separate fixed actions/positions. Reconnect is
+inactive while connected, while explicit pause remains usable during a pending
+read. GREEN requires one read per selected job, zero accidental aborts, one
+poller after success, and intentional pause/late-response suppression. This
+callback replay is not browser/native event or Teams acceptance; the original
+synthetic browser double click must still be repeated on the new candidate.
+
+The standalone synthetic153 HTML also concatenated `styles.css` without its
+two local CSS imports, which its `style-src 'unsafe-inline'` CSP blocked. This
+is fixture packaging evidence, not a production CSP failure. The fixture
+rebuild bundles the CSS import closure inline and uses the same
+`shell agent-hub-shell` wrapper as `src/client/App.tsx:175`; no production CSP,
+auth or unrelated stylesheet change is part of the reconnect correction.
+
+Official references refreshed2026-10-15: [React click/double-click handlers](https://react.dev/reference/react-dom/components/common#mouseevent-handler)
+and [esbuild CSS bundling](https://esbuild.github.io/content-types/#css).
+Local RED/GREEN and the three directly reviewed synthetic153 PNGs are retained
+under `/private/tmp/teams154-monitor-fix-20261015-qziyr8_u`. Actual153 Teams
+Web/Mac remains0/17; iPhone and productionPTY are unverified/disconnected.
 
 ```sh
 node --import tsx/esm scripts/run-module-test.mjs scripts/work-output-monitor-test.ts
