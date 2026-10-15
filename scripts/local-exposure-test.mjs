@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -207,6 +207,50 @@ try {
     assert.equal(versionResult.tools.devtunnel.version, '1.0.1549.2');
     assert.ok(!JSON.stringify(versionResult).includes('DO-NOT-ECHO'));
   });
+  const resistantFixture = path.join(temporary, 'resistant-version-fixture.mjs');
+  const ownedPids = path.join(temporary, 'owned-version-pids.json');
+  await writeFile(resistantFixture, `#!${process.execPath}
+import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+process.on('SIGTERM', () => {});
+const child = spawn(process.execPath, ['-e', "process.on('SIGTERM',()=>{});setTimeout(()=>process.exit(0),6000)"], { stdio: 'inherit' });
+writeFileSync(${JSON.stringify(ownedPids)}, JSON.stringify([process.pid, child.pid]));
+console.log('fixture 9.8.7');
+setTimeout(() => process.exit(0), 6000);
+`, { mode: 0o700 });
+  let pids = [];
+  try {
+    const started = performance.now();
+    const resistant = await checkExposurePlan(createExposurePlan(config('devtunnel')), {
+      findExecutable: async () => resistantFixture,
+      probeHealth: async () => ({ status: 'checked', httpStatus: 200 }),
+    });
+    pids = JSON.parse(await readFile(ownedPids, 'utf8'));
+    check('SIGTERM-resistant version probes and pipe-holding descendants are bounded', () => {
+      assert.ok(performance.now() - started < 4500, 'version probe exceeded timeout and bounded cleanup grace');
+      assert.equal(resistant.tools.devtunnel.status, 'version-unverified');
+      assert.equal(resistant.tools.devtunnel.version, null);
+      assert.equal(resistant.tools.devtunnel.reason, 'ETIMEDOUT');
+      assert.equal(resistant.tools.devtunnel.termination.sentKill, true);
+      assert.equal(resistant.tools.devtunnel.termination.reaped, true);
+    });
+    for (const pid of pids) {
+      const deadline = performance.now() + 2000;
+      let exists = true;
+      while (exists && performance.now() < deadline) {
+        try { process.kill(pid, 0); await new Promise((resolve) => setTimeout(resolve, 20)); }
+        catch (error) { if (error.code !== 'ESRCH') throw error; exists = false; }
+      }
+      assert.equal(exists, false, 'owned version probe process survived cleanup');
+    }
+  } finally {
+    if (!pids.length) {
+      try { pids = JSON.parse(await readFile(ownedPids, 'utf8')); } catch { /* Startup may have failed before recording a child. */ }
+    }
+    for (const pid of pids) {
+      try { process.kill(pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+    }
+  }
 
   let mode = 'normal';
   let requests = 0;

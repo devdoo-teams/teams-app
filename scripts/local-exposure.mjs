@@ -1,11 +1,11 @@
 import { access, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { execFile } from 'node:child_process';
 import { request } from 'node:http';
 import { isIP } from 'node:net';
 import path from 'node:path';
 
 import { isValidPublicHostname } from '../src/shared/public-hostname.js';
+import { runWithTimeout } from './release-gate.mjs';
 
 const providers = {
   none: { stableHostname: 'not-applicable', webSocket: 'unverified', sse: 'unverified' },
@@ -172,22 +172,31 @@ async function findExecutable(name) {
   return null;
 }
 
-function toolVersion(executable) {
-  return new Promise((resolve) => {
-    execFile(executable, ['--version'], {
-      timeout: 2000, maxBuffer: 32768, encoding: 'utf8',
+async function toolVersion(executable) {
+  try {
+    const result = await runWithTimeout(executable, ['--version'], {
+      cwd: process.cwd(), timeoutMs: 2000, terminationGraceMs: 100, reapTimeoutMs: 1000, maxOutputChars: 32768,
       env: {
         PATH: process.env.PATH ?? '',
         ...(process.env.HOME ? { HOME: process.env.HOME } : {}),
         ...(process.env.DOTNET_BUNDLE_EXTRACT_BASE_DIR ? { DOTNET_BUNDLE_EXTRACT_BASE_DIR: process.env.DOTNET_BUNDLE_EXTRACT_BASE_DIR } : {}),
         ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot } : {}),
       },
-    }, (error, stdout) => {
-      const observed = stdout.match(/\b[0-9]+\.[0-9]+(?:\.[0-9]+){0,2}(?:[-+][0-9A-Za-z.-]+)?\b/)?.[0];
-      const version = observed && observed.length <= 80 ? observed : null;
-      resolve({ status: !error && version ? 'version-checked' : 'version-unverified', version });
     });
-  });
+    const observed = result.stdout.match(/\b[0-9]+\.[0-9]+(?:\.[0-9]+){0,2}(?:[-+][0-9A-Za-z.-]+)?\b/)?.[0];
+    const version = result.code === 0 && observed && observed.length <= 80 ? observed : null;
+    return { status: version ? 'version-checked' : 'version-unverified', version };
+  } catch (error) {
+    return {
+      status: 'version-unverified', version: null,
+      reason: ['ETIMEDOUT', 'EPROCESSREAPTIMEOUT'].includes(error.code) ? error.code : 'PROBE_FAILED',
+      ...(error.termination ? { termination: {
+        sentTerm: error.termination.sentTerm === true,
+        sentKill: error.termination.sentKill === true,
+        reaped: error.termination.reaped === true,
+      } } : {}),
+    };
+  }
 }
 
 export function probeLocalHealth(localUrl, { timeoutMs = 2000 } = {}) {

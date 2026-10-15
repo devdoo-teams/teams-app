@@ -31,6 +31,9 @@ sources:
   - url: https://raw.githubusercontent.com/cloudflare/cloudflared/2026.10.0/LICENSE
     title: cloudflared 2026.10.0 license
     section: "Apache License 2.0; observed lines 0-2"
+  - url: https://raw.githubusercontent.com/nodejs/node/v24.13.1/doc/api/child_process.md
+    title: Node 24.13.1 child_process contract
+    section: "execFile timeout/killSignal and subprocess.kill; a signal does not prove termination; descendants require separate handling"
 generated: 2026-10-15
 verified: 2026-10-15
 status: LOCAL_VERIFIED_EXTERNAL_UNVERIFIED
@@ -63,7 +66,7 @@ npm run test:local-exposure
 
 예제의 Cloudflare/ngrok 호스트명·터널명·파일 경로와 Docker digest는 **합성 입력**이다. 실제 계정에 할당된 값이나 준비된 이미지라는 뜻이 아니다. `plan`은 실행 파일·인수·환경변수를 분리해 보여 주며 shell 문자열을 실행하지 않는다.
 
-`check` 종료 코드는 `0=로컬 점검 통과`, `1=입력 오류`, `2=도구 또는 로컬 health 차단`이다. CLI 버전과 literal loopback의 `/api/health`만 읽는다. 각각 2초 제한, health 본문 64 KiB 제한, 외부 redirect 미추적이다. HTTP 200이어도 올바른 버전·full SHA가 없으면 `identity-unverified`다. 임의 응답 본문과 CLI 출력은 내보내지 않고 허용된 버전/SHA만 반환한다. 설치된 CLI의 버전 조회는 해당 도구의 정상 metadata 서비스/cache를 사용할 수 있다. 공개 앱 URL은 조회하지 않는다. 통과해도 runtime 인증·탭 자산·외부 인증·HTTP·WebSocket·SSE·Teams 설치·실기기 결과는 `unverified`다.
+`check` 종료 코드는 `0=로컬 점검 통과`, `1=입력 오류`, `2=도구 또는 로컬 health 차단`이다. CLI 버전과 literal loopback의 `/api/health`만 읽는다. 각각 조회 한도는 2초다. CLI는 timeout 뒤 소유 프로세스 그룹에 TERM을 보내고 100ms 뒤 KILL, 최대 1초의 종료 확인을 더한다. 종료 실패는 `EPROCESSREAPTIMEOUT`으로 차단한다. health 본문은 64 KiB로 제한하고 외부 redirect를 추적하지 않는다. HTTP 200이어도 올바른 버전·full SHA가 없으면 `identity-unverified`다. 임의 응답 본문과 CLI 출력은 내보내지 않고 허용된 버전/SHA만 반환한다. 설치된 CLI의 버전 조회는 해당 도구의 정상 metadata 서비스/cache를 사용할 수 있다. 공개 앱 URL은 조회하지 않는다. 통과해도 runtime 인증·탭 자산·외부 인증·HTTP·WebSocket·SSE·Teams 설치·실기기 결과는 `unverified`다.
 
 ## 서버 선택
 
@@ -105,8 +108,9 @@ Cloudflare는 장기 WS 연결이 인프라 재시작 때 끊길 수 있다고 �
 
 ## OBSERVED EVIDENCE / FIXTURE / LIVE RESULT
 
-- 구현 경계: `scripts/local-exposure.mjs:61`의 JSON 입력, `:71`의 계획 생성, `:193`의 health probe, `:228`의 로컬 점검. `scripts/local-exposure-cli.mjs:17`은 `plan|check`만 받는다. `scripts/core-test-runner.mjs:30`이 회귀시험을 Core 목록에 등록한다.
+- 구현 경계: `scripts/local-exposure.mjs:61`의 JSON 입력, `:71`의 계획 생성, `:202`의 health probe, `:237`의 로컬 점검. `scripts/local-exposure-cli.mjs:18`은 `plan|check`만 받는다. `scripts/core-test-runner.mjs:30`이 회귀시험을 Core 목록에 등록한다.
 - 합성 회귀시험: `scripts/local-exposure-test.mjs`. 정상 조합, 잘못된 origin·토큰 필드·argv, 미설치 도구, 변조된 계획, 4자리 CLI 버전, HTTP 성공·redirect·timeout·본문 초과·잘못된 JSON을 구분한다.
+- 독립 Standards/Spec 리뷰가 지적한 CLI timeout을 SIGTERM 무시·stdout 유지 자손 fixture로 재현했다. 단순 `execFile(timeout)`에서 약 7초 지연 RED를 확인한 뒤 기존 `scripts/release-gate.mjs:323`의 그룹 종료 도구를 재사용했다. 조회 프로세스와 자손의 종료를 함께 검증한다. 기존 운영 프로세스를 종료하지 않는다.
 - 실제 Mac 관찰: Node 24.13.1, npm 11.8.0, DevTunnel CLI `1.0.2014+3c9645ccd8`. 설치 help의 `devtunnel host [<tunnel-id>]`와 생성 인수가 일치한다. ngrok·Docker는 미설치이므로 설치 help·실제 실행은 **UNVERIFIED**다.
 - Cloudflare CLI `2026.10.0`을 OS 임시 경로에만 materialize해 버전·`tunnel --help`·`tunnel run --help`를 직접 실행했다. 공식 Darwin arm64 archive SHA-256은 `a2f79ff7b9420aa537d74af239f376da170bbabeb529aec416002adac6a72e70`, 실행 파일은 `72edfd3eea463aef4d5cb89e2e209cecb048cc756c2b01915de2e0ad7cb39830`로 일치했다. 생성 계획의 `--url`, `--config`, `run` 계약을 확인했다. 라이선스는 Apache 2.0이다. 시스템 설치·PATH 변경·로그인·터널 연결·service 등록은 하지 않았다.
 - 생성된 Node `npm start` 계획을 기존 검증된 Core 1.0.154/`ea17384ef2202f5fa8122394d146108ded4a81a7` 번들, 별도 loopback 포트, 빈 합성 저장소에서 실행했다. health identity·탭 HTML·JS 200, loopback bind, 시험 종료 후 포트 닫힘을 확인했다. 이 번들을 새 ops 변경 커밋에서 재빌드했다고 주장하지 않는다.

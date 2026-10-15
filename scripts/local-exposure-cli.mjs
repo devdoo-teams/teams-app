@@ -6,6 +6,7 @@ const help = `Usage: node scripts/local-exposure-cli.mjs <plan|check> [--config 
 
 plan   Validate a profile and print a server/tunnel plan. No command is executed.
 check  Read selected CLI versions and loopback /api/health (2s per probe).
+       CLI timeout cleanup: 100ms TERM grace, then at most 1s KILL/reap confirmation.
 
 Default: existing 127.0.0.1:3978 server + existing DevTunnel; no restart or reconfiguration.
 No apply/start/login/install, public-app probe, token input or registration mutation is supported.
