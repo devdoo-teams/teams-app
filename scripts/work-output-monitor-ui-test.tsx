@@ -12,6 +12,7 @@ const hooks = registerHooks({ resolve(specifier, context, nextResolve) {
 } });
 const module = await import('../src/client/WorkOutputMonitor.js').catch(() => ({} as Record<string, any>));
 assert.equal(typeof module.WorkOutputMonitorView, 'function', 'the same read-only output view supports split and mobile layouts');
+const monitor = await import('../src/client/work-output-monitor.js');
 hooks.deregister();
 const jobs: CoreOrchestrationJob[] = Array.from({ length: 4 }, (_, index) => ({
   id: `task-${index + 1}`, status: index ? 'completed' : 'running', prompt: '합성 요청 · 한글 줄바꿈과 긴 작업 이력',
@@ -61,6 +62,44 @@ assert.equal(render({ ptyObservation, snapshot: { ...props.snapshot, key: 'stale
 assert.equal(render({ ptyObservation, snapshot: { ...props.snapshot, entries: { 'task-1': { status: 'missing' } } } }).includes('FAKE_COMPLETE'), false);
 const loading = render({ snapshot: { key: props.snapshot.key, phase: 'loading', entries: {} } });
 assert.ok(loading.includes('aria-busy="true"')); assert.ok(loading.includes('저장된 출력을 조회 중'));
+
+const commandOutput = '합성 저장 출력 '.repeat(35) + '끝까지-펼쳐보기';
+const observedJob = { ...jobs[0], tools: [
+  { category: 'cli', name: 'cat', observedAt: '2026-10-14T00:00:01Z', execution: {
+    source: 'codex.exec.jsonl.command_execution', itemId: 'item_1', status: 'completed', exitCode: 0, output: commandOutput, outputTruncated: false,
+  } },
+  { category: 'cli', name: 'sleep', observedAt: '2026-10-14T00:00:02Z', execution: {
+    source: 'codex.exec.jsonl.command_execution', itemId: 'item_2', status: 'in_progress',
+  } },
+] } as CoreOrchestrationJob;
+const entries = { 'task-1': { status: 'ready', presentation: createExecutionPresentation(observedJob),
+  commands: monitor.projectOutputMonitorCommands(observedJob), checkedAt: '2026-10-14T00:00:03Z' } };
+const expanded = render({ snapshot: { ...props.snapshot, connection: 'connected', entries } });
+assert.ok(expanded.includes('CLI 마스킹 출력 펼치기'), 'existing safe CLI excerpts can be inspected beyond the128-character summary');
+assert.ok(expanded.includes('끝까지-펼쳐보기'));
+assert.ok(expanded.includes('CLI 실행 중 · 종료 미관측'));
+assert.ok(expanded.includes('CLI 종료 관측 · exit 0'));
+assert.match(expanded, /data-job-status="running"/, 'a terminal command never completes the Core job');
+assert.ok(expanded.includes('자동 조회 일시정지'));
+const paused = render({ snapshot: { ...props.snapshot, connection: 'paused', entries } });
+assert.ok(paused.includes('자동 조회 일시정지 중 · 마지막 조회 자료'));
+assert.match(paused, /<button[^>]*disabled=""[^>]*>출력 새로고침/);
+assert.ok(paused.includes('같은 작업 다시 조회'));
+assert.ok(paused.includes('끝까지-펼쳐보기'), 'paused output remains clearly labeled as the last read');
+const pausedEmpty = render({ snapshot: { ...props.snapshot, connection: 'paused', entries: {} } });
+assert.ok(pausedEmpty.includes('조회가 일시정지되어 있습니다'));
+assert.equal(pausedEmpty.includes('저장된 출력을 조회 중입니다'), false);
+assert.equal(render({ snapshot: { ...props.snapshot, phase: 'blocked', entries } }).includes('끝까지-펼쳐보기'), false);
+assert.equal(render({ snapshot: { ...props.snapshot, key: 'previous-selection', entries } }).includes('끝까지-펼쳐보기'), false);
+const pausedFailure = render({ snapshot: { ...props.snapshot, connection: 'paused', entries: { 'task-1': { status: 'error' } } } });
+assert.equal(pausedFailure.includes('3초 뒤 다시 조회'), false, 'a paused observer must not promise a scheduled retry');
+assert.ok(pausedFailure.includes('같은 작업 다시 조회로 재시도'));
+const escapedJob = { ...observedJob, tools: [{ ...observedJob.tools![0], execution: { ...observedJob.tools![0].execution!,
+  output: '<script>window.privateFixture = true</script>',
+} }] };
+const escaped = render({ snapshot: { ...props.snapshot, entries: { 'task-1': { ...entries['task-1'], commands: monitor.projectOutputMonitorCommands(escapedJob) } } } });
+assert.ok(escaped.includes('&lt;script&gt;'));
+assert.equal(escaped.includes('<script>window.privateFixture'), false, 'saved output remains text nodes');
 const style = await readFile(new URL('../src/client/work-output-monitor.css', import.meta.url), 'utf8').catch(() => '');
 assert.match(style, /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
 assert.match(style, /max-width:\s*760px/);

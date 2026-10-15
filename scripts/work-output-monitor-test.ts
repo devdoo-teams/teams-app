@@ -115,4 +115,101 @@ for (const status of [401, 403]) {
   const reader = monitor.createOutputMonitorReader({ client: { getJob() { return new Promise(() => {}); } }, onChange: publish, timeoutMs: 5 });
   await reader.read(['task-a']); assert.equal(latest.entries['task-a'].status, 'error', 'uncooperative reads have a bounded timeout'); reader.dispose();
 }
+
+{
+  assert.equal(typeof monitor.projectOutputMonitorCommands, 'function', 'the monitor projects the existing masked command observations without a new transport');
+  const safe = maskAgentToolOutput('한글 관측\n' + 'saved-output '.repeat(100));
+  const input = { ...job('task-a'), status: 'running', tools: [
+    { category: 'cli', name: 'cat', observedAt: '2026-10-14T00:00:00Z', execution: {
+      source: 'codex.exec.jsonl.command_execution', itemId: 'item_1', status: 'completed', exitCode: 0, ...safe,
+    } },
+    { category: 'cli', name: 'sleep', observedAt: '2026-10-14T00:00:01Z', execution: {
+      source: 'codex.exec.jsonl.command_execution', itemId: 'item_2', status: 'in_progress',
+    } },
+    { category: 'mcp', name: 'fixture/tool', observedAt: '2026-10-14T00:00:02Z' },
+  ] };
+  const observed = monitor.projectOutputMonitorCommands(input);
+  assert.equal(observed.length, 2);
+  assert.equal(observed[0].output, safe.output, 'the monitor retains the already masked1024-character excerpt instead of the128-character summary');
+  assert.equal(observed[0].output.length, 1024);
+  assert.equal(observed[0].outputTruncated, true);
+  assert.equal(observed[1].status, 'in_progress');
+  assert.equal(observed[1].exitCode, undefined, 'an active CLI observation cannot invent an exit');
+  assert.equal(input.status, 'running', 'a completed command does not complete its Core job');
+  assert.deepEqual(monitor.projectOutputMonitorCommands({ ...job('task-a'), tools: [{
+    category: 'cli', name: 'legacy', observedAt: '2026-10-14T00:00:00Z',
+  }] }), [], 'legacy CLI names do not become structured output observations');
+  const capped = monitor.projectOutputMonitorCommands({ ...job('task-a'), tools: Array.from({ length: 32 }, (_, i) => ({
+    ...input.tools[0], execution: { ...input.tools[0].execution, itemId: `item_${i}` },
+  })) });
+  assert.equal(capped.length, 16); assert.equal(capped[0].itemId, 'item_16'); assert.equal(capped.at(-1).itemId, 'item_31');
+  const reader = monitor.createOutputMonitorReader({ client: { async getJob() { return input; } }, onChange: publish });
+  await reader.read(['task-a']); reader.dispose();
+  assert.deepEqual(latest.entries['task-a'].commands, observed, 'the existing authenticated GET publishes its bounded command projection');
+}
+
+{
+  assert.equal(typeof monitor.createOutputMonitorSession, 'function', 'automatic GET observation has an owned pause/reconnect lifecycle');
+  const pending = deferred<CoreOrchestrationJob>(); const calls: string[] = [];
+  let tick!: () => Promise<void>; let starts = 0; let stops = 0; let aborted = false;
+  const session = monitor.createOutputMonitorSession({ slots: ['task-a'], onChange: publish,
+    client: { getJob(id: string, signal: AbortSignal) { calls.push(id); signal.addEventListener('abort', () => { aborted = true; });
+      return calls.length === 1 ? pending.promise : Promise.resolve(job(id));
+    } },
+    createPolling(options: { refresh: () => Promise<void> }) { tick = options.refresh; return { start() { starts++; }, stop() { stops++; } }; },
+  });
+  const starting = session.start(); session.pause(); session.pause();
+  assert.equal(aborted, true, 'pausing cancels only the pending GET');
+  assert.equal(latest.connection, 'paused');
+  const count = changes.length; pending.resolve({ ...job('task-a'), result: 'late old snapshot' }); await starting;
+  assert.equal(changes.length, count, 'a response arriving after pause cannot restore live output');
+  assert.equal(starts, 0, 'an initial read that was paused cannot later start the poller');
+  await session.refresh(); await tick(); assert.deepEqual(calls, ['task-a'], 'paused manual and scheduled refreshes do not issue GETs');
+  await Promise.all([session.resume(), session.resume()]);
+  assert.deepEqual(calls, ['task-a', 'task-a'], 'repeated reconnects share one owner-scoped GET');
+  assert.equal(latest.connection, 'connected'); assert.equal(starts, 1);
+  await tick(); assert.equal(calls.length, 3, 'automatic observation resumes after its fresh read');
+  const saved = latest.entries['task-a']; session.pause();
+  assert.equal(latest.entries['task-a'], saved, 'pause preserves the last observed snapshot, explicitly marked paused');
+  assert.equal(latest.connection, 'paused'); session.dispose();
+  const afterDispose = calls.length; await session.resume(); await session.refresh(); await tick();
+  assert.equal(calls.length, afterDispose, 'a disposed observer never reads, executes, resumes or cancels a job');
+  assert.ok(stops > 0);
+}
+{
+  let calls = 0; let starts = 0;
+  const session = monitor.createOutputMonitorSession({ slots: ['task-b'], initiallyPaused: true, onChange: publish,
+    client: { async getJob(id: string) { calls++; return job(id); } },
+    createPolling() { return { start() { starts++; }, stop() {} }; },
+  });
+  await session.start(); assert.equal(calls, 0); assert.equal(starts, 0);
+  assert.equal(latest.connection, 'paused', 'a replacement slot retains the paused observation preference');
+  await session.resume(); assert.equal(calls, 1); assert.equal(latest.entries['task-b'].presentation.jobId, 'task-b');
+  session.dispose();
+}
+
+for (const status of [401, 403]) {
+  let tick!: () => Promise<void>; let starts = 0; let stops = 0; let calls = 0; let denies = 0;
+  const session = monitor.createOutputMonitorSession({ slots: ['task-a'], onChange: publish, onAccessDenied() { denies++; },
+    client: { async getJob(id: string) { calls++; if (calls > 1) throw new CoreOrchestrationClientError('private failure', { code: 'Denied', status, retryable: false });
+      return { ...job(id), result: 'last private output' }; } },
+    createPolling(options: { refresh: () => Promise<void> }) { tick = options.refresh; return { start() { starts++; }, stop() { stops++; } }; },
+  });
+  await session.start(); assert.equal(starts, 1); await tick();
+  assert.equal(latest.phase, 'blocked'); assert.deepEqual(latest.entries, {}); assert.equal(denies, 1);
+  assert.equal(stops, 1, 'an access denial stops the owned poller even when a host leaves the component mounted');
+  await session.resume(); await tick(); assert.equal(calls, 2, 'a blocked observer cannot reconnect or restore output');
+  assert.equal(starts, 1); session.dispose();
+}
+
+{
+  let calls = 0; let starts = 0; let pausedOnce = false;
+  const session = monitor.createOutputMonitorSession({ slots: ['task-a'],
+    onChange(value: any) { publish(value); if (value.phase === 'loading' && !pausedOnce) { pausedOnce = true; session.pause(); } },
+    client: { async getJob(id: string) { calls++; return job(id); } },
+    createPolling() { return { start() { starts++; }, stop() {} }; },
+  });
+  await session.start(); assert.equal(calls, 0, 'a pause requested while loading is published cannot start a later GET');
+  assert.equal(starts, 0); assert.equal(latest.connection, 'paused'); session.dispose();
+}
 console.log('Work output monitor reader: PASS (read-only, identity, access denial, refresh, missing/error, selection, cleanup)');

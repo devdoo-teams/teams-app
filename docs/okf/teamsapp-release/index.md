@@ -8,6 +8,8 @@ okf_version: 0.2
 
 ## Concepts
 
+- [Output monitor query control](output-monitor-query-control.md) - observer pause/reconnect and existing bounded CLI excerpts; separate native PTY/host gates
+
 - [Local first-slot Core and PTY observation](work-output-pty-slot.md) - optional local read injection, hub generation/cursor/close lifecycle and separate authoritative pipe results
 
 - [Codex pipe and preflight execution safety](codex-execution-safety.md) - MP388 cooperative service-home reservation, stdout provenance and bounded child cleanup; actual shared-auth/native-PTY trials remain separate

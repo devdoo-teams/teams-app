@@ -3,7 +3,7 @@ import { WorkOutputPtyObservation } from './WorkOutputPtyObservation.js';
 import type { WorkOutputPtyCapability } from './work-output-pty.js';
 import type { CoreOrchestrationClient } from './core-orchestration-client.js';
 import type { CoreOrchestrationJob } from '../shared/core-orchestration.js';
-import { createOutputMonitorReader, normalizeOutputMonitorSlots, outputMonitorKey,
+import { createOutputMonitorSession, normalizeOutputMonitorSlots, outputMonitorKey,
   type OutputMonitorSlots, type OutputMonitorSnapshot } from './work-output-monitor.js';
 
 type ViewProps = {
@@ -12,6 +12,7 @@ type ViewProps = {
   onSlotsChange: (slots: OutputMonitorSlots) => void; onLayoutChange: (layout: 2 | 4) => void;
   onActiveSlotChange: (slot: number) => void; onOpenJob: (id: string) => void;
   onClose: () => void; onRefresh: () => void;
+  onPause: () => void; onResume: () => void;
   ptyObservation?: ReactNode;
 };
 
@@ -21,18 +22,23 @@ export function WorkOutputMonitorView(props: ViewProps & { headingRef?: Ref<HTML
   const current = props.snapshot.key === outputMonitorKey(slots);
   const entries = current ? props.snapshot.entries : {};
   const blocked = props.snapshot.phase === 'blocked';
+  const paused = props.snapshot.connection === 'paused';
   if (blocked) return <section className="output-monitor" aria-label="읽기 전용 다중 작업 출력 모니터">
     <p role="alert">출력 접근이 중단되었습니다. Teams에서 다시 인증하고 작업 목록을 새로고침하세요.</p>
     <button className="secondary" type="button" onClick={props.onClose}>작업 목록으로</button>
   </section>;
   return <section aria-label="읽기 전용 다중 작업 출력 모니터" className={`output-monitor${props.mobile ? ' force-mobile' : ''}`}>
     <div className="output-monitor-heading">
-      <div><h3 ref={props.headingRef} tabIndex={-1}>현재 출력 조회</h3><p className="panel-description">읽기 전용 · 3초마다 저장된 상태·마스킹한 출력 요약을 조회합니다. {props.ptyObservation ? '첫 패널의 PTY 관찰은 별도로 조회합니다.' : 'PTY·실시간 스트림이 아닙니다.'}</p></div>
+      <div><h3 ref={props.headingRef} tabIndex={-1}>현재 출력 조회</h3><p className="panel-description">읽기 전용 · 자동 조회 중에는 3초마다 저장된 상태·마스킹한 출력 요약을 조회합니다. {props.ptyObservation ? '첫 패널의 PTY 관찰은 별도로 조회합니다.' : 'PTY·실시간 스트림이 아닙니다.'}</p></div>
       <div className="output-monitor-actions">
-        <button className="secondary" onClick={props.onRefresh} type="button" disabled={blocked || !current || props.snapshot.phase === 'loading'}>출력 새로고침</button>
+        <button className="secondary" onClick={props.onRefresh} type="button" disabled={blocked || !current || paused || props.snapshot.phase === 'loading'}>출력 새로고침</button>
+        <button className="secondary" onClick={paused ? props.onResume : props.onPause} type="button" disabled={blocked || !current}>
+          {paused ? '같은 작업 다시 조회' : '자동 조회 일시정지'}
+        </button>
         <button className="secondary" onClick={props.onClose} type="button">작업 목록으로</button>
       </div>
     </div>
+    <p role="status" className="panel-description">{paused ? '자동 조회 일시정지 중 · 마지막 조회 자료' : '자동 조회 연결 · 3초 주기'} · 조회 제어는 작업을 실행하거나 중단하지 않습니다.</p>
     <div aria-label="모니터 배치" className="output-monitor-actions" role="group">
       {([2, 4] as const).map(layout => <button key={layout} aria-pressed={props.layout === layout}
         className="secondary" type="button" onClick={() => props.onLayoutChange(layout)}>{layout}분할</button>)}
@@ -74,9 +80,9 @@ export function WorkOutputMonitorView(props: ViewProps & { headingRef?: Ref<HTML
           </label>
           {!id ? <p className="panel-description">조회할 기존 작업을 선택하세요. 새 실행은 시작하지 않습니다.</p>
             : blocked ? <p role="status">인증 확인 필요</p>
-              : !entry ? <p role="status">저장된 출력을 조회 중입니다.</p>
+              : !entry ? <p role="status">{paused ? '조회가 일시정지되어 있습니다. 같은 작업 다시 조회로 연결하세요.' : '저장된 출력을 조회 중입니다.'}</p>
                 : entry.status === 'missing' ? <p role="status">찾을 수 없거나 접근 권한이 없는 작업입니다. 패널에서 다른 작업을 선택하세요.</p>
-                  : entry.status === 'error' ? <p role="alert">조회에 실패했습니다. 3초 뒤 다시 조회하며, 출력 새로고침으로 재시도할 수 있습니다.</p> : null}
+                  : entry.status === 'error' ? <p role="alert">{paused ? '조회에 실패했고 자동 조회가 일시정지되어 있습니다. 같은 작업 다시 조회로 재시도하세요.' : '조회에 실패했습니다. 3초 뒤 다시 조회하며, 출력 새로고침으로 재시도할 수 있습니다.'}</p> : null}
           {presentation ? <>
             <div className="output-monitor-status"><span className="badge" data-job-status={presentation.status}>{presentation.statusLabel}</span>
               <span>{presentation.jobId}</span>{presentation.truncated ? <span className="work-item-meta">일부 생략</span> : null}</div>
@@ -85,6 +91,18 @@ export function WorkOutputMonitorView(props: ViewProps & { headingRef?: Ref<HTML
             <div className="output-monitor-output" tabIndex={0} aria-label={`패널 ${index + 1} 저장된 출력 요약`}>
               <h4>관찰된 CLI·도구 결과</h4>
               <pre>{presentation.tools.length ? presentation.tools.map(tool => `${tool.category}: ${tool.name}${tool.outcome ? `\n${tool.outcome}` : ''}`).join('\n\n') : '보고된 도구 결과가 없습니다.'}</pre>
+              {entry?.commands?.length ? <details>
+                <summary>CLI 마스킹 출력 펼치기 · 최근 {entry.commands.length}개</summary>
+                <p className="panel-description">명령별 저장 관측입니다. 출력은 최대 1,024자이며 전체 작업의 완료 상태와 구분합니다.</p>
+                {entry.commands.map(command => <div key={command.itemId} data-cli-command={command.itemId}>
+                  <h4>{command.name} · {command.itemId}</h4>
+                  <p>{command.status === 'in_progress' ? 'CLI 실행 중 · 종료 미관측'
+                    : `${command.status === 'declined' ? 'CLI 거부 관측' : command.status === 'failed' ? 'CLI 실패 관측' : 'CLI 종료 관측'} · ${command.exitCode === undefined ? 'exit 미관측' : `exit ${command.exitCode}`}`}</p>
+                  {command.observedAt ? <p className="work-item-meta">종료 관측 <time dateTime={command.observedAt}>{new Date(command.observedAt).toLocaleTimeString('ko-KR')}</time></p> : null}
+                  <pre>{command.output || (command.status === 'in_progress' ? '저장된 출력이 아직 없습니다. 실행 중 원시 출력은 제공되지 않습니다.' : '보고된 출력이 없습니다.')}</pre>
+                  {command.outputTruncated ? <p className="panel-description">출력 일부가 생략되었습니다.</p> : null}
+                </div>)}
+              </details> : null}
               <h4>저장된 최종 응답</h4><pre>{presentation.result || '저장된 최종 응답이 아직 없습니다.'}</pre>
               {presentation.error ? <><h4>기록된 오류</h4><pre>{presentation.error}</pre></> : null}
               {presentation.progress.length ? <><h4>최근 진행 (최대 8개)</h4><pre>{presentation.progress.join('\n')}</pre></> : null}
@@ -98,7 +116,7 @@ export function WorkOutputMonitorView(props: ViewProps & { headingRef?: Ref<HTML
   </section>;
 }
 
-export function WorkOutputMonitor(props: Omit<ViewProps, 'snapshot' | 'onRefresh' | 'ptyObservation'> & {
+export function WorkOutputMonitor(props: Omit<ViewProps, 'snapshot' | 'onRefresh' | 'onPause' | 'onResume' | 'ptyObservation'> & {
   client: Pick<CoreOrchestrationClient, 'getJob'>; onAccessDenied: (error: unknown) => void;
   createPolling: (options: { refresh: () => Promise<void> }) => { start: () => void; stop: () => void };
   ptyCapability?: WorkOutputPtyCapability;
@@ -106,8 +124,9 @@ export function WorkOutputMonitor(props: Omit<ViewProps, 'snapshot' | 'onRefresh
   const key = outputMonitorKey(props.slots);
   const heading = useRef<HTMLHeadingElement>(null);
   const positioned = useRef(false);
-  const [snapshot, setSnapshot] = useState<OutputMonitorSnapshot>({ key, phase: 'loading', entries: {} });
-  const [reader, setReader] = useState<ReturnType<typeof createOutputMonitorReader>>();
+  const [snapshot, setSnapshot] = useState<OutputMonitorSnapshot>({ key, phase: 'loading', connection: 'connected', entries: {} });
+  const session = useRef<ReturnType<typeof createOutputMonitorSession> | undefined>(undefined);
+  const paused = useRef(false);
   useEffect(() => {
     // Loading cells are shorter than real output. Position once after the
     // first read; later polling must preserve the user's reading position.
@@ -117,18 +136,19 @@ export function WorkOutputMonitor(props: Omit<ViewProps, 'snapshot' | 'onRefresh
     heading.current?.scrollIntoView({ block: 'start' });
   }, [snapshot.phase]);
   useEffect(() => {
-    let active = true;
-    const current = createOutputMonitorReader({ client: props.client, onChange: setSnapshot, onAccessDenied: props.onAccessDenied });
-    setReader(current);
     const slots = key ? key.split('|') : [];
-    const polling = props.createPolling({ refresh: () => current.read(slots) });
-    void current.read(slots).then(() => { if (active) polling.start(); });
-    return () => { active = false; polling.stop(); current.dispose(); };
+    const current = createOutputMonitorSession({ client: props.client, onChange: setSnapshot, onAccessDenied: props.onAccessDenied,
+      slots, initiallyPaused: paused.current, createPolling: props.createPolling });
+    session.current = current;
+    void current.start();
+    return () => { if (session.current === current) session.current = undefined; current.dispose(); };
   }, [props.client, props.createPolling, props.onAccessDenied, key]);
   const firstJob = normalizeOutputMonitorSlots(props.slots)[0];
   const observeFirst = snapshot.key === key && snapshot.phase !== 'blocked' && firstJob
     && snapshot.entries[firstJob]?.status === 'ready' ? firstJob : undefined;
-  return <WorkOutputMonitorView {...props} headingRef={heading} snapshot={snapshot} onRefresh={() => { void reader?.read(props.slots); }}
+  return <WorkOutputMonitorView {...props} headingRef={heading} snapshot={snapshot} onRefresh={() => { void session.current?.refresh(); }}
+    onPause={() => { paused.current = true; session.current?.pause(); }}
+    onResume={() => { paused.current = false; void session.current?.resume(); }}
     ptyObservation={props.ptyCapability && observeFirst ? <WorkOutputPtyObservation key={observeFirst} jobId={observeFirst}
       capability={props.ptyCapability} onAccessDenied={props.onAccessDenied} /> : undefined} />;
 }
