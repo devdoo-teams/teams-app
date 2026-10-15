@@ -27,6 +27,7 @@ const plainTests = [
   'scripts/fileprovider-runtime-deps-test.mjs',
   'scripts/typecheck-boundary-test.mjs',
   'scripts/deployment-env-test.mjs',
+  'scripts/local-exposure-test.mjs',
   'scripts/codex-a2a-isolation-validation-test.mjs',
   'scripts/a2a-auth-bootstrap-test.mjs',
   'scripts/validate-manifest-test.mjs',

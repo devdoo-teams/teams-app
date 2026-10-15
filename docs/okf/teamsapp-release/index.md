@@ -8,6 +8,8 @@ okf_version: 0.2
 
 ## Concepts
 
+- [Local server and tunnel choices](../../local-server-options.md) - independent server/provider plans, bounded loopback checks and separate external-domain/Teams approval gates
+
 - [Output monitor query control](output-monitor-query-control.md) - observer pause/reconnect and existing bounded CLI excerpts; separate native PTY/host gates
 
 - [Local first-slot Core and PTY observation](work-output-pty-slot.md) - optional local read injection, hub generation/cursor/close lifecycle and separate authoritative pipe results

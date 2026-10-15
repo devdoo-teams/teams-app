@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "server": { "kind": "existing", "localUrl": "http://127.0.0.1:43978" },
+  "tunnel": {
+    "provider": "cloudflare-named",
+    "reference": "existing-teams-tunnel",
+    "configFile": "./config/cloudflared.local.yml",
+    "publicOrigin": "https://teams.example.com"
+  }
+}

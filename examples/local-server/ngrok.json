@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "server": { "kind": "existing", "localUrl": "http://127.0.0.1:43978" },
+  "tunnel": {
+    "provider": "ngrok",
+    "publicOrigin": "https://assigned.ngrok-free.app"
+  }
+}

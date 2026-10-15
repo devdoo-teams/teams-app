@@ -83,6 +83,18 @@ agent input <작업 ID> <추가 입력>
 
 운영에서는 에이전트 실행기를 별도 worker로 분리하고, Teams 서버에는 사용자 범위·승인·작업 상태만 노출합니다. 현재 파일 JSON backend는 단일 프로세스 전용입니다. 여러 replica는 transactional shared store와 durable queue/outbox가 검증된 뒤에만 사용합니다.
 
+### 로컬 서버와 터널 선택
+
+기존 서버/Node/Docker와 DevTunnel/Cloudflare/ngrok 조합의 계획 및 로컬 점검을 지원합니다.
+
+```bash
+npm run local:server:plan -- --config examples/local-server/cloudflare-quick.json
+npm run local:server:check -- --config examples/local-server/existing.json
+npm run test:local-exposure
+```
+
+이 명령은 서버·터널을 시작하거나 운영 설정을 바꾸지 않습니다. 기본값은 기존 3978 서버와 DevTunnel입니다. 실제 연결 조건, 공급자별 한도와 Teams 도메인 변경 절차는 [로컬 서버 선택 안내](docs/local-server-options.md)를 참고하세요.
+
 ## 선택 provider 경계
 
 CopilotKit, OpenAI-compatible provider, 로컬 모델, MCP, Jira/Confluence/Bitbucket adapter는 명시적인 optional build·설정·테스트 대상입니다. 설정되지 않은 선택 provider는 `OPTIONAL_PROVIDER_NOT_CONFIGURED`이며 agent-only Core 실패가 아닙니다. optional provider의 fixture 통과를 실제 connector 인증이나 Teams 사용자 왕복 성공으로 보고하지 않습니다.

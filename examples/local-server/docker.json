@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "server": {
+    "kind": "docker",
+    "localUrl": "http://127.0.0.1:43978",
+    "image": "ghcr.io/example/teams-app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "tunnel": { "provider": "none" }
+}
