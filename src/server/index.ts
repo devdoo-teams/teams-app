@@ -10,6 +10,8 @@ import express from 'express';
 import type { IMessageActivity, IMessageActivityInput } from '@microsoft/teams.api';
 
 import { createUserAuthMiddleware, parseAcceptedAudiences } from './user-auth.js';
+import { RepositoryPrService } from './repository-pr.js';
+import { mountRepositoryPrRoutes } from './repository-pr-route.js';
 import { ItemStore, MAX_ITEM_TITLE_LENGTH, type ItemScope } from './item-store.js';
 import {
   AgentJobStore,
@@ -1851,7 +1853,8 @@ http.use((request: any, response: any, next: any) => {
   // Core orchestration owns an auth-first parser inside its router. Do not let
   // the process-wide parser reject malformed JSON before the Teams identity
   // middleware can establish the authenticated scope.
-  if (requestPath === '/api/core-orchestration' || requestPath.startsWith('/api/core-orchestration/')) {
+  if (requestPath === '/api/core-orchestration' || requestPath.startsWith('/api/core-orchestration/')
+    || requestPath === '/api/repository-pr' || requestPath.startsWith('/api/repository-pr/')) {
     next();
     return;
   }
@@ -3066,6 +3069,13 @@ mountCoreOrchestrationRoutes(http, {
 const presentationAuth = createUserAuthMiddleware({
   allowUnauthenticated: skipAuth, validator: userAuthValidator,
   configuredTenantId: configuredTenantId || undefined, acceptedAudiences: acceptedUserAudiences,
+});
+// Intranet composition is deliberately unconfigured until its existing identity,
+// repository ACL and approved network placement have been supplied and reviewed.
+mountRepositoryPrRoutes(http, {
+  service: new RepositoryPrService({ repositories: [], authorize: async () => undefined }),
+  authenticate: presentationAuth,
+  resolvePrincipal: responseModeScope,
 });
 const coreResultPublication = new CoreResultPublicationService({
   state: {

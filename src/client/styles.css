@@ -260,3 +260,36 @@ body { background: #101827; }
   .work-hub-detail-pane { padding: 13px; }
   .work-hub-status-chip { min-height: 40px; }
 }
+
+.repo-pr-panel { margin-top: 24px; padding: 20px; border: 1px solid #dce2eb; border-radius: 16px; background: #fff; min-width: 0; }
+.repo-pr-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.repo-pr-heading h2 { margin: 0 0 6px; font-size: 19px; }
+.repo-pr-heading p, .repo-pr-source { margin: 0; color: #59677e; font-size: 13px; }
+.repo-pr-panel button { min-height: 42px; padding: 9px 13px; border: 1px solid #d6deea; border-radius: 9px; background: #f7f9fd; color: #24334a; cursor: pointer; }
+.repo-pr-panel button:disabled { cursor: default; opacity: .55; }
+.repo-pr-panel button[aria-pressed="true"] { background: #e8edff; border-color: #7a8bc9; color: #263f91; }
+.repo-pr-content { margin-top: 18px; display: grid; gap: 16px; min-width: 0; }
+.repo-pr-notice { margin: 0; padding: 12px; background: #f3f6fb; border-radius: 9px; color: #4c5c74; }
+.repo-pr-panel fieldset { border: 1px solid #dce2eb; border-radius: 10px; padding: 12px; min-width: 0; }
+.repo-pr-panel legend { font-size: 13px; padding: 0 5px; }
+.repo-pr-selection, .repo-pr-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+.repo-pr-selection label { display: flex; align-items: center; gap: 8px; min-height: 42px; padding: 5px 10px; overflow-wrap: anywhere; }
+.repo-pr-selection input { width: 18px; height: 18px; flex: none; }
+.repo-pr-batch { margin-top: 20px; min-width: 0; }
+.repo-pr-batch h3 { margin: 0 0 12px; font-size: 16px; overflow-wrap: anywhere; }
+.repo-pr-items { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 12px; }
+.repo-pr-item { display: block; padding: 16px; margin-bottom: 12px; min-width: 0; border: 1px solid #dce2eb; border-radius: 10px; }
+.repo-pr-item h4 { margin: 0 0 10px; font-size: 15px; line-height: 1.55; overflow-wrap: anywhere; }
+.repo-pr-item p { color: #59677e; font-size: 13px; }
+.repo-pr-item a { display: inline-block; padding: 8px 0; color: #3753a3; }
+.repo-pr-item details { margin-top: 12px; font-size: 12px; }
+.repo-pr-item summary { cursor: pointer; min-height: 32px; }
+.repo-pr-item dl { margin-bottom: 0; }
+.repo-pr-item dt { color: #59677e; margin-top: 9px; }
+.repo-pr-item dd { margin: 4px 0 0; overflow-wrap: anywhere; white-space: normal; }
+.repo-pr-item code { white-space: normal; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .repo-pr-panel { padding: 14px; }
+  .repo-pr-heading { align-items: flex-start; flex-direction: column; }
+  .repo-pr-controls button { flex: 1 1 auto; }
+}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { apiFetch, setAuthRequired } from './auth.js';
 import { OrchestrationPanel } from './OrchestrationPanel.js';
+import { RepositoryPrPanel } from './RepositoryPrPanel.js';
 import { ExecutionPresentationProvider, ExecutionPresentationToolbar } from './ExecutionPresentationSettings.js';
 import * as teamsSdk from '@microsoft/teams-js';
 const teamsApp = teamsSdk.app;
@@ -220,6 +221,7 @@ export function App() {
       ) : null}
 
       <OrchestrationPanel />
+      <RepositoryPrPanel />
       <footer>Teams SDK · 업무 허브 · 작업 이력</footer>
     </main></ExecutionPresentationProvider>
   );
