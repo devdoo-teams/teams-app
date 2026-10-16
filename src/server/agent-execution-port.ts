@@ -18,7 +18,7 @@ export type AgentExecutionObservation = Readonly<{
  * worker. Implementations must not execute a CLI in the HTTP server process.
  */
 export interface AgentExecutionDispatcher {
-  readonly kind: 'azure-queue';
+  readonly kind: 'azure-queue' | 'pull-worker';
   dispatch(job: AgentJob): Promise<void>;
   observe(job: AgentJob): Promise<AgentExecutionObservation | undefined>;
   cancel(job: AgentJob, reason: string): Promise<void>;
