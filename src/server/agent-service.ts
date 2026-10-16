@@ -260,6 +260,8 @@ export class AgentService {
 
   async submit(input: {
     prompt: string;
+    idempotencyKey?: string;
+    requestHash?: string;
     provider?: CliAgentProvider;
     mode: AgentJobMode;
     scope: AgentJobScope;
