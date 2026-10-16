@@ -1,4 +1,6 @@
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from 'express';
+import crypto from 'node:crypto';
+import { API_PRINCIPAL_SCOPE_HEADER, API_EXPECTED_PRINCIPAL_SCOPE_HEADER, isPrincipalScopeKey } from '../shared/api-principal-scope.js';
 
 import { AgentCapacityError } from './agent-admission-controller.js';
 import { AgentExecutionUnavailableError } from './agent-execution-policy.js';
@@ -75,6 +77,7 @@ class CoreOrchestrationNotFoundError extends Error {
     this.name = 'CoreOrchestrationNotFoundError';
   }
 }
+class CorePrincipalChangedError extends Error {}
 
 export function createCoreOrchestrationRouter(options: CoreOrchestrationRouteOptions): express.Router {
   const router = express.Router();
@@ -179,7 +182,15 @@ function scopeFor(
 ): ServerDerivedCoreScope {
   const scope = options.resolveAuthenticatedScope(request, response);
   if (!scope) throw new CoreOrchestrationUnauthorizedError();
-  return createServerDerivedCoreScope(scope);
+  const validated = createServerDerivedCoreScope(scope);
+  const key = crypto.createHash('sha256').update(JSON.stringify([validated.tenantId, validated.requesterId, validated.conversationId])).digest('hex');
+  response.set(API_PRINCIPAL_SCOPE_HEADER, key);
+  const expected = request.get(API_EXPECTED_PRINCIPAL_SCOPE_HEADER);
+  if (expected !== undefined) {
+    if (!isPrincipalScopeKey(expected)) throw invalidRequest();
+    if (expected !== key) throw new CorePrincipalChangedError();
+  }
+  return validated;
 }
 
 function submitRequest(value: unknown): CoreSubmitRequest {
@@ -308,6 +319,10 @@ function invalidRequest(): CoreOrchestrationValidationError {
 }
 
 function sendError(response: Response, error: unknown): void {
+  if (error instanceof CorePrincipalChangedError) {
+    sendPublicError(response, 409, 'CORE_PRINCIPAL_CHANGED', false);
+    return;
+  }
   if (error instanceof CoreApprovalRecoveryError) {
     const status = error.reason === 'unsupported' ? 501 : error.reason === 'invalid' ? 400 : 409;
     sendPublicError(response, status, error.code, false);

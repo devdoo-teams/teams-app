@@ -74,6 +74,8 @@ async function assertProcessReaped(pid, label, timeoutMs = 2_000) {
     'scripts/repository-pr-client-test.ts', 'scripts/repository-pr-view-test.tsx', 'scripts/repository-pr-panel-test.tsx']) {
     assert.ok(invocations.some(({ args }) => args.includes(file)), `Core must include deterministic repository PR reading: ${file}`);
   }
+  assert.ok(invocations.some(({ args }) => args.includes('scripts/core-mutation-auth-race-test.tsx')),
+    'Core CI must exercise sent mutation/auth races and scope-bound idempotent recovery');
   assert.ok(invocations.some(({ args }) => args.includes('scripts/portable-worker-build-test.mjs')),
     'Core CI must prove the opt-in handoff runtime is included in the exact server tree');
   assert.ok(invocations.some(({ args }) => args.includes('scripts/local-exposure-test.mjs')),

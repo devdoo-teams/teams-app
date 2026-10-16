@@ -1,4 +1,5 @@
 import * as teamsSdk from '@microsoft/teams-js';
+import { API_PRINCIPAL_SCOPE_HEADER, isPrincipalScopeKey } from '../shared/api-principal-scope.js';
 
 type AuthTokenProvider = (signal?: AbortSignal) => Promise<string>;
 
@@ -24,6 +25,14 @@ export class ApiAuthError extends Error {
 export function isApiAuthError(value: unknown): value is ApiAuthError {
   return value instanceof ApiAuthError;
 }
+
+export class ApiMutationUncertainError extends Error {
+  constructor(readonly reason: 'authentication-changed' | 'response-unavailable', readonly responseStatus?: number) {
+    super('접수 결과 미확인: 요청이 이미 처리되었을 수 있습니다. 자동으로 다시 보내지 말고 원래 계정에서 결과를 확인하세요.');
+    this.name = 'ApiMutationUncertainError';
+  }
+}
+export const isApiMutationUncertainError = (value: unknown): value is ApiMutationUncertainError => value instanceof ApiMutationUncertainError;
 
 export const LOCAL_ACCESS_TOKEN_HEADER = 'X-Teams-Local-Access-Token';
 export const LOCAL_ACCESS_TOKEN_STORAGE_KEY = 'teams.localAccessToken';
@@ -52,6 +61,37 @@ let credentialFingerprint: string | undefined;
 let authenticationGeneration = 0;
 let operationSequence = 0;
 let latestAuthenticationOperation = 0;
+let principalScopeKey: string | undefined;
+export const getApiPrincipalScopeKey = (): string | undefined => principalScopeKey;
+type ApiResponseFacts = { generation: number; mutation: boolean; owner?: string };
+const responseFacts = new WeakMap<Response, ApiResponseFacts>();
+function assertResponseScope(facts: ApiResponseFacts, status: number): void {
+  if (facts.generation === authenticationGeneration) return;
+  // A changed opaque token never proves an owner. Only two server-validated
+  // Core scope observations may confirm a same-owner mutation receipt.
+  if (facts.mutation && facts.owner && facts.owner === principalScopeKey) return;
+  if (facts.mutation) throw new ApiMutationUncertainError('authentication-changed', status);
+  throw new ApiAuthError('auth-expired');
+}
+export async function readApiResponseJson(response: Response, mutation = false): Promise<unknown> {
+  const facts = responseFacts.get(response);
+  let value: unknown;
+  try { value = await response.json(); }
+  catch (error) {
+    if (facts) assertResponseScope(facts, response.status);
+    if ((facts?.mutation ?? mutation) && response.ok) throw new ApiMutationUncertainError('response-unavailable', response.status);
+    throw error;
+  }
+  if (facts) assertResponseScope(facts, response.status);
+  return value;
+}
+function isCoreSameOriginRequest(input: RequestInfo | URL): boolean {
+  const value = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+  if (value.startsWith('/api/core-orchestration/')) return true;
+  if (typeof window === 'undefined') return false;
+  try { const url = new URL(value, window.location.href); return url.origin === window.location.origin && url.pathname.startsWith('/api/core-orchestration/'); }
+  catch { return false; }
+}
 const authenticationListeners = new Set<() => void>();
 export function subscribeApiAuthentication(listener: () => void): () => void {
   authenticationListeners.add(listener);
@@ -61,6 +101,7 @@ function invalidateApiAuthentication(operation: number, expectedGeneration = aut
   if (operation < latestAuthenticationOperation || expectedGeneration !== authenticationGeneration) return false;
   latestAuthenticationOperation = operation;
   credentialFingerprint = undefined;
+  principalScopeKey = undefined;
   authenticationGeneration += 1;
   for (const listener of authenticationListeners) listener();
   return true;
@@ -73,6 +114,7 @@ async function observeApiCredential(credential: string, operation: number, signa
   const changed = credentialFingerprint !== undefined && credentialFingerprint !== fingerprint;
   credentialFingerprint = fingerprint;
   if (changed) {
+    principalScopeKey = undefined;
     authenticationGeneration += 1;
     for (const listener of authenticationListeners) listener();
   }
@@ -349,6 +391,7 @@ export async function runApiOperation<T>(
   const operation = ++operationSequence;
   let authGeneration = authenticationGeneration;
   let tokenLease: Promise<string> | undefined;
+  let possiblyAcceptedMutations = 0;
 
   const request: ApiOperationRequest = async (input, init = {}) => {
     scope.assertActive();
@@ -403,14 +446,27 @@ export async function runApiOperation<T>(
       scope.assertActive();
     }
 
+    const method = (init.method ?? (typeof Request !== 'undefined' && input instanceof Request ? input.method : 'GET')).toUpperCase();
+    const mutation = !['GET', 'HEAD', 'OPTIONS'].includes(method);
+    const coreSameOrigin = isCoreSameOriginRequest(input);
     const composed = composeRequestSignal(scope.signal, init.signal ?? undefined);
+    let sent = false, rejected = false, responseStatus: number | undefined;
     try {
+      sent = true;
+      if (mutation) possiblyAcceptedMutations += 1;
       const response = await waitForSignal(
-        fetch(input, { ...init, headers, signal: composed.signal }),
+        fetch(input, { ...init, headers, signal: composed.signal, ...(coreSameOrigin ? { redirect: 'error' as const } : {}) }),
         composed.signal,
       );
+      responseStatus = response.status;
       scope.assertActive();
-      if (authGeneration !== authenticationGeneration) throw new ApiAuthError('auth-expired');
+      const ownerHeader = coreSameOrigin ? response.headers.get(API_PRINCIPAL_SCOPE_HEADER) : undefined;
+      const owner = isPrincipalScopeKey(ownerHeader) ? ownerHeader : undefined;
+      if (authGeneration === authenticationGeneration && coreSameOrigin && response.status !== 401 && response.status !== 403) principalScopeKey = owner;
+      const facts = { generation: authGeneration, mutation, owner };
+      responseFacts.set(response, facts);
+      assertResponseScope(facts, response.status);
+      if (mutation && response.status >= 400 && response.status < 500) { rejected = true; possiblyAcceptedMutations -= 1; }
       if (authRequired && response.status === 401) {
         if (invalidateApiAuthentication(operation, authGeneration)) lastAuthError = AUTH_EXPIRED_MESSAGE;
         throw new ApiAuthError('auth-expired');
@@ -420,6 +476,11 @@ export async function runApiOperation<T>(
         throw new ApiAuthError('forbidden');
       }
       return response;
+    } catch (error) {
+      if (mutation && sent && !rejected && !isApiMutationUncertainError(error)) {
+        throw new ApiMutationUncertainError(isApiAuthError(error) ? 'authentication-changed' : 'response-unavailable', responseStatus);
+      }
+      throw error;
     } finally {
       composed.dispose();
     }
@@ -430,6 +491,11 @@ export async function runApiOperation<T>(
     const result = await execute(request, scope.signal);
     scope.assertActive();
     return result;
+  } catch (error) {
+    if (possiblyAcceptedMutations > 0 && !isApiMutationUncertainError(error)) {
+      throw new ApiMutationUncertainError(isApiAuthError(error) ? 'authentication-changed' : 'response-unavailable');
+    }
+    throw error;
   } finally {
     scope.dispose();
   }

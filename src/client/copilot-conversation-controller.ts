@@ -3,7 +3,7 @@ import { createExecutionPresentation, ExecutionPresentationJobIdSchema } from '.
 import type { VisibleJobConversation } from '../shared/job-conversation.js';
 import type { CoreOrchestrationClient } from './core-orchestration-client.js';
 import { loadJobConversation, loadEarlierJobConversation, mergeVisibleJobConversation, refreshVisibleJobConversation, isConversationHistoryAccessFailure } from './job-conversation.js';
-import { isApiAuthError } from './auth.js';
+import { isApiAuthError, isApiMutationUncertainError } from './auth.js';
 
 export type CoreConversationState = Readonly<{
   jobId: string; phase: 'idle' | 'loading' | 'ready' | 'sending' | 'stopping' | 'blocked';
@@ -66,11 +66,11 @@ export function createCoreConversationController({ client, jobId, onChange, time
     } catch (error) {
       if (disposed) return 'disposed';
       const status = error && typeof error === 'object' && 'status' in error ? error.status : undefined;
-      const auth = isApiAuthError(error) ? error.kind : status === 401 ? 'auth-expired'
+      const auth = isApiAuthError(error) ? error.kind : isApiMutationUncertainError(error) && error.reason === 'authentication-changed' ? 'auth-expired' : status === 401 ? 'auth-expired'
         : status === 403 || (kind === 'load' && isConversationHistoryAccessFailure(error)) ? 'forbidden' : undefined;
-      // SSO failures happen before the mutation or are definitive HTTP rejects.
-      // A transport/server failure after a mutation may have lost its receipt.
-      const ambiguous = !auth && (typeof status !== 'number' || status >= 500);
+      // A pre-send SSO failure is definitive; a sent mutation can lose its
+      // receipt even when later authentication also blocks private results.
+      const ambiguous = isApiMutationUncertainError(error) || !auth && (typeof status !== 'number' || status >= 500);
       const uncertain = state.uncertain || (kind === 'send' && ambiguous);
       const stopUncertain = state.stopUncertain || (kind === 'stop' && ambiguous);
       const keepConfirmed = !auth && kind !== 'send' && ambiguous;

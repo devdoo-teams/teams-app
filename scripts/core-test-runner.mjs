@@ -60,6 +60,7 @@ const runtimeTests = [
   'scripts/core-orchestration-confirmation-chat-runtime-test.ts',
 ];
 const tsTests = [
+  'scripts/core-mutation-auth-race-test.tsx',
   'scripts/repository-pr-test.ts',
   'scripts/repository-pr-route-test.ts',
   'scripts/repository-pr-client-test.ts',

@@ -1,4 +1,4 @@
-import { apiFetch } from './auth.js';
+import { apiFetch, readApiResponseJson } from './auth.js';
 import { createLatestDetailRequestController } from './latest-detail-request.js';
 import { RepositoryCatalogSchema, RepositoryPrRequestSchema, RepositoryPrSnapshotSchema, repositoryPrSnapshotContent, repositoryPrStart,
   type RepositoryCatalog, type RepositoryPrRequest, type RepositoryPrSnapshot } from '../shared/repository-pr.js';
@@ -17,7 +17,7 @@ export function createRepositoryPrClient(fetcher: ApiFetch = apiFetch): Reposito
         : response.status === 409 ? 'STALE_CATALOG' : response.status === 503 ? 'NOT_CONFIGURED' : 'UNAVAILABLE';
       throw new RepositoryPrClientError(code, response.status);
     }
-    return response.json();
+    return readApiResponseJson(response);
   }
   return {
     async catalog(signal) { return RepositoryCatalogSchema.parse(await read('catalog', { signal })); },

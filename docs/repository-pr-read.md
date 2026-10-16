@@ -53,6 +53,9 @@ execution DTO, login or credential change is required.
   that has not yet been observed by an API operation. Reopen/reload under the new
   identity before querying. Late token/fetch/body success and failure cannot
   restore the previous view. No automatic authentication retry is introduced.
+  Core mutations separately retain sent-but-unconfirmed request identities;
+  see [mutation/auth recovery](mutation-auth-recovery.md). Read eviction does
+  not turn a possibly accepted mutation into a definitive auth rejection.
 - Page offsets use own properties only, including valid IDs such as `toString`.
   A page failure retains an enabled first-page recovery action outside the
   removed result area. Authorization/catalog failures still clear that scope.

@@ -1,4 +1,5 @@
-import { apiFetch, type ApiOperationRequest } from './auth.js';
+import { apiFetch, readApiResponseJson, isApiAuthError, isApiMutationUncertainError, ApiMutationUncertainError, getApiPrincipalScopeKey, type ApiOperationRequest } from './auth.js';
+import { API_EXPECTED_PRINCIPAL_SCOPE_HEADER } from '../shared/api-principal-scope.js';
 import type {
   CoreOrchestrationJob,
   CoreListRequest,
@@ -73,10 +74,11 @@ export type CoreOrchestrationClient = {
   retryJob: (jobId: string, signal?: AbortSignal) => Promise<CoreOrchestrationJobResult>;
 };
 
-async function readJson(response: Response): Promise<unknown> {
+async function readJson(response: Response, mutation = false): Promise<unknown> {
   try {
-    return await response.json();
-  } catch {
+    return await readApiResponseJson(response, mutation);
+  } catch (error) {
+    if (isApiAuthError(error) || isApiMutationUncertainError(error)) throw error;
     return {};
   }
 }
@@ -96,8 +98,11 @@ function errorFromResponse(response: Response, body: unknown): CoreOrchestration
 
 async function expectResponse<T>(request: ApiOperationRequest, path: string, init: RequestInit = {}): Promise<T> {
   const response = await request(path, init);
-  const body = await readJson(response);
+  const mutation = Boolean(init.method && !['GET', 'HEAD', 'OPTIONS'].includes(init.method.toUpperCase()));
+  const body = await readJson(response, mutation);
   if (!response.ok) throw errorFromResponse(response, body);
+  if (mutation && (!body || typeof body !== 'object' || !('job' in body) || !body.job || typeof body.job !== 'object'
+    || !('id' in body.job) || typeof body.job.id !== 'string' || !body.job.id)) throw new ApiMutationUncertainError('response-unavailable', response.status);
   return body as T;
 }
 
@@ -107,7 +112,7 @@ async function expectProvideInputResponse(
   init: RequestInit,
 ): Promise<CoreProvideInputResult> {
   const response = await request(path, init);
-  const body = await readJson(response);
+  const body = await readJson(response, true);
   if (response.ok || (response.status === 501 && isUnsupportedInputResult(body))) {
     return body as CoreProvideInputResult;
   }
@@ -119,9 +124,10 @@ function isUnsupportedInputResult(value: unknown): boolean {
 }
 
 function jsonPost(body: Record<string, unknown>, signal?: AbortSignal): RequestInit {
+  const owner = getApiPrincipalScopeKey();
   return {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(owner ? { [API_EXPECTED_PRINCIPAL_SCOPE_HEADER]: owner } : {}) },
     body: JSON.stringify(body),
     signal,
   };

@@ -11,7 +11,7 @@ import { createPtyOutputAccessGroup } from './pty-output-access.js';
 import type { WorkOutputPtyCapability, WorkOutputPtyClient } from './work-output-pty.js';
 import { normalizeOutputMonitorSlots, type OutputMonitorSlots } from './work-output-monitor.js';
 import { isConversationHistoryAccessFailure, loadJobConversation, refreshVisibleJobConversation } from './job-conversation.js';
-import { isApiAuthError } from './auth.js';
+import { isApiAuthError, isApiMutationUncertainError, getApiPrincipalScopeKey, subscribeApiAuthentication } from './auth.js';
 import { createLatestDetailRequestController } from './latest-detail-request.js';
 import { projectReceiptFacts } from '../shared/receipt-presentation.js';
 export { createLatestDetailRequestController } from './latest-detail-request.js';
@@ -152,22 +152,36 @@ function submissionFingerprint(input: SubmissionIdentity): string {
 }
 
 export type SubmissionIdempotencyController = {
-  keyFor: (input: SubmissionIdentity) => string;
-  complete: (input: SubmissionIdentity, key: string) => void;
+  keyFor: (input: SubmissionIdentity, ownerScope?: string) => string;
+  complete: (input: SubmissionIdentity, key: string, ownerScope?: string) => void;
+  settle: (input: SubmissionIdentity, key: string, outcome: 'success' | 'definitive-failure' | 'ambiguous-failure' | 'ignored', ownerScope?: string) => void;
 };
 
 export function createSubmissionIdempotencyController(
   issueKey: () => string = () => nextIdempotencyKey('teams-tab-submit'),
 ): SubmissionIdempotencyController {
-  let active: { fingerprint: string; key: string } | undefined;
+  const pending = new Map<string, { key: string; uncertain: boolean; intent: string }>();
+  const fingerprint = (input: SubmissionIdentity, ownerScope?: string) => JSON.stringify([ownerScope ?? 'unverified-client-session', submissionFingerprint(input)]);
   return {
-    keyFor(input) {
-      const fingerprint = submissionFingerprint(input);
-      if (!active || active.fingerprint !== fingerprint) active = { fingerprint, key: issueKey() };
-      return active.key;
+    keyFor(input, ownerScope) {
+      const identity = fingerprint(input, ownerScope); const existing = pending.get(identity);
+      if (existing) return existing.key;
+      const intent = fingerprint({ ...input, catalogRevision: undefined }, ownerScope);
+      if ([...pending.values()].some(entry => entry.uncertain && entry.intent === intent)) {
+        throw new Error('이전 요청의 접수 결과가 미확인입니다. 새로 제출하기 전에 기존 작업을 확인하세요.');
+      }
+      if (pending.size >= 64) throw new Error('미확인 제출이 많습니다. 기존 요청의 접수 결과를 먼저 확인하세요.');
+      const entry = { key: issueKey(), uncertain: false, intent }; pending.set(identity, entry); return entry.key;
     },
-    complete(input, key) {
-      if (active?.fingerprint === submissionFingerprint(input) && active.key === key) active = undefined;
+    complete(input, key, ownerScope) {
+      const identity = fingerprint(input, ownerScope);
+      if (pending.get(identity)?.key === key) pending.delete(identity);
+    },
+    settle(input, key, outcome, ownerScope) {
+      const identity = fingerprint(input, ownerScope), entry = pending.get(identity);
+      if (!entry || entry.key !== key) return;
+      if (outcome === 'success' || outcome === 'definitive-failure' && !entry.uncertain) pending.delete(identity);
+      else entry.uncertain = true;
     },
   };
 }
@@ -989,12 +1003,21 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile, createPtyO
   }, [publishJobs]);
 
   const handlePrivateAccessFailure = useCallback((caught: unknown) => {
-    if (!isApiAuthError(caught) && !isConversationHistoryAccessFailure(caught)) return false;
+    if (!isApiAuthError(caught) && !isConversationHistoryAccessFailure(caught)
+      && !(caught instanceof CoreOrchestrationClientError && caught.code === 'CORE_PRINCIPAL_CHANGED')) return false;
     clearPrivateState();
     setError(errorMessage(caught));
     setPhase('error');
     return true;
   }, [clearPrivateState]);
+
+  useEffect(() => subscribeApiAuthentication(() => {
+    const pendingSubmit = busy.isBusy('submit');
+    clearPrivateState(); setPrompt(''); setValidationError(''); setPhase('error');
+    setError(pendingSubmit
+      ? '접수 결과 미확인: 인증 정보가 변경되었습니다. 원래 계정으로 새로고침한 뒤 같은 내용으로 접수 결과를 확인하세요.'
+      : '인증 정보가 변경되거나 만료되었습니다. 새로고침해 현재 계정의 작업을 확인하세요.');
+  }), [busy, clearPrivateState]);
 
   useEffect(() => {
     const factory = createPtyOutputAccess ?? (ptyOutputClient ? createPtyOutputAccessGroup : undefined);
@@ -1204,6 +1227,11 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile, createPtyO
       return 'success';
     } catch (caught) {
       if (generation !== privateAccessGeneration.current) return 'ignored';
+      if (isApiMutationUncertainError(caught)) {
+        if (caught.reason === 'authentication-changed') { clearPrivateState(); setPrompt(''); setPhase('error'); }
+        setError(errorMessage(caught));
+        return 'ambiguous-failure';
+      }
       if (handlePrivateAccessFailure(caught)) return 'definitive-failure';
       setError(errorMessage(caught));
       return caught instanceof CoreOrchestrationClientError && !caught.retryable
@@ -1212,7 +1240,7 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile, createPtyO
     } finally {
       if (generation === privateAccessGeneration.current) setBusyAction((current) => current === slot ? '' : current);
     }
-  }, [busy, handlePrivateAccessFailure, load, updateJob]);
+  }, [busy, clearPrivateState, handlePrivateAccessFailure, load, updateJob]);
 
   const submit = useCallback(async () => {
     const validation = validateOrchestrationSubmission(
@@ -1236,14 +1264,15 @@ export function OrchestrationPanel({ client = DEFAULT_CLIENT, mobile, createPtyO
         catalogRevision: modelCatalog.revision,
       } : {}),
     };
-    const idempotencyKey = submissionKeys.current.keyFor(identity);
+    const ownerScope = getApiPrincipalScopeKey();
+    let idempotencyKey: string;
+    try { idempotencyKey = submissionKeys.current.keyFor(identity, ownerScope); }
+    catch (caught) { setValidationError(errorMessage(caught)); return; }
     const outcome = await runMutation('submit', () => client.submitJob({
       idempotencyKey,
       ...identity,
     }), '작업을 제출했습니다.');
-    if (outcome === 'success' || outcome === 'definitive-failure') {
-      submissionKeys.current.complete(identity, idempotencyKey);
-    }
+    submissionKeys.current.settle(identity, idempotencyKey, outcome, ownerScope);
   }, [client, mode, modelCatalog, modelId, notifyPersonal, prompt, providerId, providers, reasoningEffort, runMutation]);
 
   const selectJob = useCallback(async (jobId: string) => {
