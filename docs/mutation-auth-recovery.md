@@ -98,6 +98,18 @@ same-scope parallel reads, fetches inside one logical operation, and credential
 changes. Conversation switching is fixture-only: production conversation scope
 is fixed per principal. This is not a live cross-account data-leak reproduction.
 
+The repository PR React fixture observes the real client promises through schema,
+body and snapshot-digest completion. A fixed number of event-loop turns does not
+establish readiness. Explicit held body/token gates acknowledge the intended
+pending state; releasing a gate joins the actual operations before UI assertions.
+A controlled real WebCrypto digest regression verifies this completion boundary.
+
+The Copilot continuity fixture uses the production auth/apiFetch/Core client with
+synthetic token/scope headers and a transport limited to synthetic Core paths.
+Only Teams host and SDK display slots are shimmed. The fixture checks actual
+uncertain-receipt errors,60→61 owner-visible turns,draft retention and one send.
+Node24.19.0/npm11.17.0 match CI; a macOS run does not certify Ubuntu execution.
+
 These are local contracts and synthetic results, not a live Teams/Entra/DC test.
 Keys are not persisted across page/app restart; durable server job read-back is
 required before repeating a submission after losing the browser session. New

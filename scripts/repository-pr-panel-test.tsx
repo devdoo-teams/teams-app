@@ -3,6 +3,7 @@ import test from 'node:test';
 import React, { act } from 'react';
 import { RepositoryPrPanel } from '../src/client/RepositoryPrPanel.js';
 import { apiFetch, markTeamsHostReady, resetAuthStateForTest, setAuthRequired, setAuthTokenProviderForTest } from '../src/client/auth.js';
+import { createRepositoryPrClient, type RepositoryPrClient } from '../src/client/repository-pr-client.js';
 import { RepositoryPrService } from '../src/server/repository-pr.js';
 import { BitbucketDcReadAdapter } from '../src/server/bitbucket-dc-read.js';
 import { repoFixtureRecord as record, repoFixtureBaseUrl } from './fixtures/repository-pr-fixture.js';
@@ -29,6 +30,24 @@ async function mountPanel(document: Parameters<Parameters<typeof withTestDom>[0]
   let holdBody = false, holdAuthentication = false;
   const held: Array<{ path: string; scope: RepositoryPrincipal; release(status?: number): void }> = [];
   const heldTokens: Array<(fail?: boolean) => void> = [];
+  const holds = new Set<() => void>();
+  const operations: Array<Promise<void>> = [];
+  const observe = <T,>(operation: Promise<T>): Promise<T> => {
+    operations.push(operation.then(() => {}, () => {}));
+    return operation;
+  };
+  const realClient = createRepositoryPrClient();
+  const client: RepositoryPrClient = {
+    catalog: signal => observe(realClient.catalog(signal)),
+    query: (catalog, request, signal) => observe(realClient.query(catalog, request, signal)),
+  };
+  const withinDeadline = async <T,>(operation: Promise<T>, label: string): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try { return await Promise.race([operation, new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} did not settle within2000ms`)), 2000);
+    })]); } finally { clearTimeout(timer); }
+  };
+  const signalHold = () => { for (const notify of holds) notify(); };
   const requests: Array<{ path: string; scope: RepositoryPrincipal; body?: Record<string, unknown> }> = [];
   const tokenScopes = new Map<string, RepositoryPrincipal>();
   const adapter = new BitbucketDcReadAdapter({ request: async (grant, url, init) => {
@@ -59,13 +78,17 @@ async function mountPanel(document: Parameters<Parameters<typeof withTestDom>[0]
     if (holdBody && path.endsWith('/query')) {
       holdBody = false;
       const body = await response.clone().json();
-      response.json = () => new Promise((resolve, reject) => held.push({ path, scope,
-        release: status => status ? reject(new Error('synthetic delayed body failure')) : resolve(body) }));
+      response.json = () => new Promise((resolve, reject) => {
+        held.push({ path, scope, release: status => status ? reject(new Error('synthetic delayed body failure')) : resolve(body) });
+        signalHold();
+      });
     }
     if (hold && path.endsWith(`/${hold}`)) {
       hold = undefined;
-      return new Promise<Response>(resolve => held.push({ path, scope,
-        release: status => resolve(status ? new Response('{}', { status }) : response) }));
+      return new Promise<Response>(resolve => {
+        held.push({ path, scope, release: status => resolve(status ? new Response('{}', { status }) : response) });
+        signalHold();
+      });
     }
     return response;
   };
@@ -77,18 +100,29 @@ async function mountPanel(document: Parameters<Parameters<typeof withTestDom>[0]
     tokenScopes.set(`Bearer ${token}`, { ...principal });
     if (holdAuthentication) {
       holdAuthentication = false;
-      return new Promise<string>((resolve, reject) => heldTokens.push(fail => fail
-        ? reject(new Error('synthetic previous account auth failure')) : resolve(token)));
+      return new Promise<string>((resolve, reject) => {
+        heldTokens.push(fail => fail ? reject(new Error('synthetic previous account auth failure')) : resolve(token));
+        signalHold();
+      });
     }
     return token;
   });
   const container = document.createElement('div'); document.body.appendChild(container);
   const root = createRoot(container);
-  await act(async () => { root.render(<RepositoryPrPanel />); });
+  await act(async () => { root.render(<RepositoryPrPanel client={client} />); });
   const click = async (name: string) => {
     const button = findTestElement(container, e => e.tagName === 'BUTTON' && e.textContent === name);
     assert.equal(button.disabled, false, `${name} must be enabled`);
-    await act(async () => { button.dispatchEvent(new Event('click', { bubbles: true })); }); await flushReact();
+    const start = operations.length, expectsHold = Boolean(hold || holdBody || holdAuthentication);
+    let notify!: () => void;
+    const holdObserved = new Promise<void>(resolve => { notify = resolve; }); holds.add(notify);
+    try {
+      await act(async () => { button.dispatchEvent(new Event('click', { bubbles: true })); });
+      // Fixed event-loop turns do not join WebCrypto or the client validation
+      // chain. Intentional holds acknowledge readiness without awaiting release.
+      await act(async () => { await withinDeadline(expectsHold ? holdObserved : Promise.all(operations.slice(start)), name); });
+      await flushReact();
+    } finally { holds.delete(notify); }
   };
   const select = async () => {
     const checkbox = findTestElement(container, e => e.tagName === 'INPUT' && e.type === 'checkbox');
@@ -112,9 +146,22 @@ async function mountPanel(document: Parameters<Parameters<typeof withTestDom>[0]
         else await assert.rejects(apiFetch('/probe-current-account'), { kind: 'auth-expired' });
       }); await flushReact();
     },
-    async release(index: number, status?: number) { await act(async () => { held[index].release(status); }); await flushReact(); },
-    async releaseToken(index: number, fail?: boolean) { await act(async () => { heldTokens[index](fail); }); await flushReact(); },
-    async close() { await act(async () => root.unmount()); globalThis.fetch = previousFetch; console.warn = previousWarn; resetAuthStateForTest(); },
+    async release(index: number, status?: number) {
+      await act(async () => { held[index].release(status); await withinDeadline(Promise.all(operations), 'released response'); }); await flushReact();
+    },
+    async releaseToken(index: number, fail?: boolean) {
+      await act(async () => { heldTokens[index](fail); await withinDeadline(Promise.all(operations), 'released token'); }); await flushReact();
+    },
+    async close() {
+      try {
+        await act(async () => root.unmount());
+        await act(async () => {
+          for (const entry of held) entry.release(500);
+          for (const release of heldTokens) release(true);
+          await withinDeadline(Promise.all(operations), 'fixture cleanup');
+        });
+      } finally { globalThis.fetch = previousFetch; console.warn = previousWarn; resetAuthStateForTest(); }
+    },
   };
 }
 
@@ -213,4 +260,43 @@ test('page failure leaves an enabled first-page action outside the removed resul
     h.failNextPage(false); await h.click('처음 페이지'); assert.ok(h.text().includes(title(alice)));
     assert.deepEqual(h.requests.filter(r => r.path.endsWith('/query')).at(-1)!.body?.starts, {});
   });
+});
+
+test('query actions wait for real asynchronous snapshot digest completion', async () => {
+  const subtle = globalThis.crypto.subtle;
+  const descriptor = Object.getOwnPropertyDescriptor(subtle, 'digest');
+  const nativeDigest = subtle.digest.bind(subtle);
+  let started!: () => void, release!: () => void, paused = false;
+  const digestStarted = new Promise<void>(resolve => { started = resolve; });
+  const digestGate = new Promise<void>(resolve => { release = resolve; });
+  Object.defineProperty(subtle, 'digest', { configurable: true, writable: true,
+    value: async (algorithm: AlgorithmIdentifier, data: BufferSource) => {
+      if (!paused && new TextDecoder().decode(data).includes('"batches"')) {
+        paused = true; started(); await digestGate;
+      }
+      return nativeDigest(algorithm, data);
+    } });
+  try {
+    await withPanel(async h => {
+      await h.open();
+      let settled = false, actionError: unknown;
+      const action = h.click('PR 조회 / 새로고침').then(() => { settled = true; }, error => { settled = true; actionError = error; });
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([digestStarted, new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error('snapshot digest did not start within2000ms')), 2000);
+        })]);
+        for (let i = 0; i < 6; i++) await new Promise<void>(resolve => setImmediate(resolve));
+        assert.equal(settled, false, 'a query action must await its real digest, not a fixed number of event-loop turns');
+      } finally {
+        clearTimeout(timeout); release(); await action;
+      }
+      assert.equal(actionError, undefined);
+      assert.ok(h.text().includes(title(alice)));
+    });
+  } finally {
+    release();
+    if (descriptor) Object.defineProperty(subtle, 'digest', descriptor);
+    else Reflect.deleteProperty(subtle, 'digest');
+  }
 });
