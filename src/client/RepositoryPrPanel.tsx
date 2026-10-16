@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { REPOSITORY_PR_LABELS, type RepositoryCatalog, type RepositoryPrCategory, type RepositoryPrSnapshot } from '../shared/repository-pr.js';
-import { isApiAuthError } from './auth.js';
+import { isApiAuthError, subscribeApiAuthentication } from './auth.js';
 import { createLatestDetailRequestController } from './latest-detail-request.js';
 import { createRepositoryPrClient, createRepositoryQueryController, RepositoryPrClientError, type RepositoryPrClient } from './repository-pr-client.js';
 
@@ -26,6 +26,12 @@ export function RepositoryPrPanel({ client = defaultClient }: { client?: Reposit
   const catalogRequest = useRef(createLatestDetailRequestController());
   const queries = useRef(createRepositoryQueryController(client));
   const invalidate = useCallback(() => { queries.current.reset(); setSnapshot(null); setBusy(false); setStarts({}); setError(''); }, []);
+  useEffect(() => subscribeApiAuthentication(() => {
+    // Invalidate generations synchronously, before a previous identity's
+    // abort-ignoring network/body continuation can publish a value or error.
+    catalogRequest.current.dispose(); invalidate(); setCatalog(null); setSelected([]); setLoading(false);
+    setError('인증 정보가 변경되거나 만료되었습니다. 저장소 목록을 다시 읽으세요.');
+  }), [invalidate]);
   const loadCatalog = useCallback(() => {
     invalidate(); setCatalog(null); setSelected([]); setLoading(true);
     return catalogRequest.current.request(signal => client.catalog(signal), { success: setCatalog,
@@ -90,8 +96,8 @@ export function RepositoryPrPanel({ client = defaultClient }: { client?: Reposit
           </article>)}</div>
           {batch.nextStart !== undefined ? <button type="button" disabled={busy} onClick={() => run({ ...starts, [batch.repository.id]: batch.nextStart! })}>{batch.repository.label} 다음 페이지</button> : null}
         </section>)}
-        {Object.values(starts).some(v => v > 0) ? <button type="button" disabled={busy} onClick={() => run({})}>처음 페이지</button> : null}
       </div> : null}
+      {Object.values(starts).some(v => v > 0) ? <button type="button" disabled={loading || busy || !catalog || !selected.length} onClick={() => run({})}>처음 페이지</button> : null}
     </div> : null}
   </section>;
 }

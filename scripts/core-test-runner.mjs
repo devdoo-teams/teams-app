@@ -64,6 +64,7 @@ const tsTests = [
   'scripts/repository-pr-route-test.ts',
   'scripts/repository-pr-client-test.ts',
   'scripts/repository-pr-view-test.tsx',
+  'scripts/repository-pr-panel-test.tsx',
   'scripts/portable-worker-test.ts',
   'scripts/portable-worker-service-test.ts',
   'scripts/core-approval-recovery-test.ts',

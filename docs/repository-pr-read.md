@@ -45,6 +45,17 @@ execution DTO, login or credential change is required.
   provider's NEWEST ordering does not establish global merge-time completeness.
 - The panel clears old data on selection, identity, permission failure and close.
   Abort plus generation guards defeat late responses; duplicate reads coalesce.
+- Authentication observed by `apiFetch` invalidates the panel synchronously on
+  credential change, auth failure or auth-mode change. Only a memory-only SHA-256
+  credential digest is retained for eviction; no raw token, decoded identity or
+  digest is persisted or exposed. Token renewal also conservatively clears the
+  view. This is not an authorization decision or proof of a host account switch
+  that has not yet been observed by an API operation. Reopen/reload under the new
+  identity before querying. Late token/fetch/body success and failure cannot
+  restore the previous view. No automatic authentication retry is introduced.
+- Page offsets use own properties only, including valid IDs such as `toString`.
+  A page failure retains an enabled first-page recovery action outside the
+  removed result area. Authorization/catalog failures still clear that scope.
 - `repositoryPrCard()` is an authenticated-caller projection only, at most3 PRs,
   Adaptive Cards1.6 and OpenUrl only. It is not automatically sent to Teams.
 
@@ -52,7 +63,9 @@ execution DTO, login or credential change is required.
 
 `npm run test:repository-pr` runs the actual read module, mock DC HTTP server,
 Express/Entra-claim middleware, DTO/client race checks and React/native projections.
-All four files are registered in Core. The finite loopback preview uses the actual
+An additional actual React DOM + `apiFetch` suite exercises synthetic credential,
+tenant, logout, late-token/fetch/body and page-recovery branches without a browser.
+All five files are registered in Core. The finite loopback preview uses the actual
 React panel, same CSS, actual routes/auth middleware and synthetic identities;
 `scripts/repository-pr-preview.ts` is never the public runtime.
 

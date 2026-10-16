@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { RepositoryPrService, publicRepository } from '../src/server/repository-pr.js';
 import { createRepositoryPrFixture as fixture, repoFixtureOwner as owner, repoFixtureRecord as record, repoFixtureBaseUrl as baseUrl } from './fixtures/repository-pr-fixture.js';
+import { RepositoryDescriptorSchema, RepositoryPrRequestSchema } from '../src/shared/repository-pr.js';
 
 test('actual mock DC multi-repository read pins revisions and canonical verified links', async () => {
   const f = await fixture();
@@ -122,5 +123,31 @@ test('timeouts/cancellation are bounded and unconfigured production has no inven
     const empty = new RepositoryPrService({ repositories: [], authorize: async () => undefined });
     assert.equal((await empty.catalog(owner)).connection, 'not-configured');
     await assert.rejects(empty.query(owner, { repositoryIds: ['alpha'], category: 'mine', catalogRevision: catalog.revision }));
+  } finally { await f.close(); }
+});
+
+test('allowed Object prototype names use only own page offsets and unsafe IDs remain rejected', async () => {
+  const f = await fixture();
+  try {
+    for (const id of ['toString', 'valueOf', 'hasOwnProperty', 'isPrototypeOf', 'propertyIsEnumerable', 'toLocaleString']) {
+      const service = new RepositoryPrService({ mode: 'fixture', repositories: [{ ...f.repositories[0], id }],
+        authorize: async (scope, repo) => ({ ...scope, repositoryId: repo.id, revision: 'acl-1', user: { id: 7, name: 'fixture-owner' } }) });
+      const catalog = await service.catalog(owner);
+      const request = { repositoryIds: [id], category: 'mine', catalogRevision: catalog.revision };
+      for (const starts of [undefined, {}]) {
+        const result = await service.query(owner, { ...request, starts });
+        assert.equal(result.batches[0].start, 0); assert.equal(result.batches[0].items.length, 1);
+      }
+      f.payload = { start: 20, isLastPage: true, values: [record()] };
+      assert.equal((await service.query(owner, { ...request, starts: { [id]: 20 } })).batches[0].start, 20);
+      f.payload = undefined;
+    }
+    for (const id of ['constructor', 'prototype', '__proto__']) {
+      assert.equal(RepositoryDescriptorSchema.safeParse({ ...publicRepository(f.repositories[0]), id }).success, false);
+      const request = { repositoryIds: [id], category: 'mine', catalogRevision: 'a'.repeat(64) };
+      assert.equal(RepositoryPrRequestSchema.safeParse(request).success, false);
+      assert.equal(RepositoryPrRequestSchema.safeParse({ ...request, repositoryIds: ['alpha'], starts: JSON.parse(`{"${id}":20}`) }).success, false);
+    }
+    assert.equal(({} as Record<string, unknown>).polluted, undefined);
   } finally { await f.close(); }
 });

@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { RepositoryCatalogSchema, RepositoryDescriptorSchema, RepositoryGrantSchema, RepositoryPrincipalSchema,
-  RepositoryPrRequestSchema, RepositoryPrSnapshotSchema, type RepositoryCatalog, type RepositoryDescriptor,
+  RepositoryPrRequestSchema, RepositoryPrSnapshotSchema, repositoryPrStart, type RepositoryCatalog, type RepositoryDescriptor,
   type RepositoryGrant, type RepositoryPrincipal, type RepositoryPrBatch, type RepositoryPrCategory,
   type RepositoryPrSnapshot } from '../shared/repository-pr.js';
 
@@ -80,7 +80,7 @@ export class RepositoryPrService {
       });
       if (request.catalogRevision !== before.catalog.revision) throw new RepositoryPrError('STALE_CATALOG', 409);
       const batches = await Promise.all(selected.map(async ({ repo, access }) => {
-        const batch = await repo.adapter.read(publicRepository(repo), access, request.category, request.starts?.[repo.id] ?? 0, s);
+        const batch = await repo.adapter.read(publicRepository(repo), access, request.category, repositoryPrStart(request.starts, repo.id), s);
         if (JSON.stringify(batch.repository) !== JSON.stringify(publicRepository(repo))) throw new RepositoryPrError('UNAVAILABLE', 502);
         return batch;
       }));

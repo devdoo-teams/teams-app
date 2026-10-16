@@ -1,6 +1,6 @@
 import { apiFetch } from './auth.js';
 import { createLatestDetailRequestController } from './latest-detail-request.js';
-import { RepositoryCatalogSchema, RepositoryPrRequestSchema, RepositoryPrSnapshotSchema, repositoryPrSnapshotContent,
+import { RepositoryCatalogSchema, RepositoryPrRequestSchema, RepositoryPrSnapshotSchema, repositoryPrSnapshotContent, repositoryPrStart,
   type RepositoryCatalog, type RepositoryPrRequest, type RepositoryPrSnapshot } from '../shared/repository-pr.js';
 
 type ApiFetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -31,7 +31,7 @@ export function createRepositoryPrClient(fetcher: ApiFetch = apiFetch): Reposito
       if (revision !== result.revision) throw new RepositoryPrClientError('UNAVAILABLE');
       if (result.scopeKey !== catalog.scopeKey || result.catalogRevision !== catalog.revision || result.category !== request.category
         || JSON.stringify(result.repositoryIds) !== JSON.stringify(request.repositoryIds)
-        || result.batches.some(b => b.start !== (request.starts?.[b.repository.id] ?? 0)
+        || result.batches.some(b => b.start !== repositoryPrStart(request.starts, b.repository.id)
           || JSON.stringify(b.repository) !== JSON.stringify(catalog.repositories.find(r => r.id === b.repository.id))
           || b.items.some(i => i.state !== (request.category === 'merged' ? 'MERGED' : 'OPEN')))) throw new RepositoryPrClientError('UNAVAILABLE');
       return result;

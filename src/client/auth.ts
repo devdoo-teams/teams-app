@@ -45,6 +45,40 @@ const defaultAuthTokenProvider: AuthTokenProvider = () => {
 };
 let authTokenProvider: AuthTokenProvider = defaultAuthTokenProvider;
 
+// Only an in-memory digest is retained, never a reusable token or decoded
+// identity. Any credential change conservatively invalidates private views,
+// including token renewal. This is cache eviction, not authorization.
+let credentialFingerprint: string | undefined;
+let authenticationGeneration = 0;
+let operationSequence = 0;
+let latestAuthenticationOperation = 0;
+const authenticationListeners = new Set<() => void>();
+export function subscribeApiAuthentication(listener: () => void): () => void {
+  authenticationListeners.add(listener);
+  return () => { authenticationListeners.delete(listener); };
+}
+function invalidateApiAuthentication(operation: number, expectedGeneration = authenticationGeneration): boolean {
+  if (operation < latestAuthenticationOperation || expectedGeneration !== authenticationGeneration) return false;
+  latestAuthenticationOperation = operation;
+  credentialFingerprint = undefined;
+  authenticationGeneration += 1;
+  for (const listener of authenticationListeners) listener();
+  return true;
+}
+async function observeApiCredential(credential: string, operation: number, signal: AbortSignal): Promise<number> {
+  const bytes = await waitForSignal(globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(credential)), signal);
+  const fingerprint = Array.from(new Uint8Array(bytes), value => value.toString(16).padStart(2, '0')).join('');
+  if (operation < latestAuthenticationOperation && fingerprint !== credentialFingerprint) throw new ApiAuthError('auth-expired');
+  latestAuthenticationOperation = Math.max(latestAuthenticationOperation, operation);
+  const changed = credentialFingerprint !== undefined && credentialFingerprint !== fingerprint;
+  credentialFingerprint = fingerprint;
+  if (changed) {
+    authenticationGeneration += 1;
+    for (const listener of authenticationListeners) listener();
+  }
+  return authenticationGeneration;
+}
+
 function getSessionStorage(): Storage | undefined {
   if (typeof window === 'undefined') return undefined;
   try {
@@ -160,6 +194,7 @@ export function getLastAuthError(): string {
 }
 
 export function setAuthRequired(required: boolean): void {
+  if (authRequired !== required) invalidateApiAuthentication(++operationSequence);
   authRequired = required;
   if (!required) {
     // Teams owns its SSO token cache. The app only resets its safe error state
@@ -202,6 +237,7 @@ export function setAuthTokenTimeoutForTest(timeoutMs: number | null): void {
 }
 
 export function resetAuthStateForTest(): void {
+  invalidateApiAuthentication(++operationSequence);
   teamsHostReady = false;
   authRequired = true;
   clearCachedAuthToken();
@@ -310,6 +346,8 @@ export async function runApiOperation<T>(
   parentSignal?: AbortSignal,
 ): Promise<T> {
   const scope = createAbortScope(parentSignal);
+  const operation = ++operationSequence;
+  let authGeneration = authenticationGeneration;
   let tokenLease: Promise<string> | undefined;
 
   const request: ApiOperationRequest = async (input, init = {}) => {
@@ -325,6 +363,7 @@ export async function runApiOperation<T>(
 
     if (authRequired && !teamsHostReady) {
       clearCachedAuthToken();
+      invalidateApiAuthentication(operation, authGeneration);
       lastAuthError = AUTH_EXPIRED_MESSAGE;
       throw new ApiAuthError('auth-expired');
     }
@@ -334,14 +373,17 @@ export async function runApiOperation<T>(
         tokenLease ??= waitForSignal(
           Promise.resolve().then(() => authTokenProvider(scope.signal)),
           scope.signal,
-        ).then((token) => {
+        ).then(async (token) => {
           scope.assertActive();
           const normalized = token.trim();
           if (!normalized) throw new Error('Teams SSO token response was empty');
+          authGeneration = await observeApiCredential(`teams:${normalized}`, operation, scope.signal);
+          scope.assertActive();
           return normalized;
         });
         const token = await tokenLease;
         scope.assertActive();
+        if (authGeneration !== authenticationGeneration) throw new ApiAuthError('auth-expired');
         headers.set('Authorization', `Bearer ${token}`);
         lastAuthError = '';
       } catch (error) {
@@ -352,10 +394,13 @@ export async function runApiOperation<T>(
           const reason = abortReason(scope.signal);
           if ((reason as { name?: string }).name !== 'TimeoutError') throw reason;
         }
-        lastAuthError = AUTH_EXPIRED_MESSAGE;
+        if (invalidateApiAuthentication(operation, authGeneration)) lastAuthError = AUTH_EXPIRED_MESSAGE;
         console.warn('Teams SSO token request failed');
         throw new ApiAuthError('auth-expired');
       }
+    } else if (localToken) {
+      authGeneration = await observeApiCredential(`local:${localToken}`, operation, scope.signal);
+      scope.assertActive();
     }
 
     const composed = composeRequestSignal(scope.signal, init.signal ?? undefined);
@@ -365,12 +410,13 @@ export async function runApiOperation<T>(
         composed.signal,
       );
       scope.assertActive();
+      if (authGeneration !== authenticationGeneration) throw new ApiAuthError('auth-expired');
       if (authRequired && response.status === 401) {
-        lastAuthError = AUTH_EXPIRED_MESSAGE;
+        if (invalidateApiAuthentication(operation, authGeneration)) lastAuthError = AUTH_EXPIRED_MESSAGE;
         throw new ApiAuthError('auth-expired');
       }
       if (authRequired && response.status === 403) {
-        lastAuthError = AUTH_FORBIDDEN_MESSAGE;
+        if (invalidateApiAuthentication(operation, authGeneration)) lastAuthError = AUTH_FORBIDDEN_MESSAGE;
         throw new ApiAuthError('forbidden');
       }
       return response;

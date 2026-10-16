@@ -37,6 +37,9 @@ export const RepositoryPrRequestSchema = z.object({ repositoryIds: z.array(id).m
   }
 });
 export type RepositoryPrRequest = z.infer<typeof RepositoryPrRequestSchema>;
+export function repositoryPrStart(starts: RepositoryPrRequest['starts'], repositoryId: string): number {
+  return starts && Object.hasOwn(starts, repositoryId) ? starts[repositoryId] : 0;
+}
 export function repositoryPrUrls(repo: RepositoryDescriptor, prId: number) {
   const suffix = `/projects/${encodeURIComponent(repo.projectKey)}/repos/${encodeURIComponent(repo.slug)}/pull-requests/${prId}`;
   return { apiUrl: `${repo.baseUrl}/rest/api/latest${suffix}`, webUrl: `${repo.baseUrl}${suffix}/overview` };
