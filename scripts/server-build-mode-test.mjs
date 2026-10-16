@@ -32,8 +32,10 @@ assert.match(
 );
 assert.match(
   buildScript,
-  /entryPoints:\s*\[materializedSource\?\.entryPointRelative \?\? 'src\/server\/index\.ts'\]/,
-  'server entry points must be relative to absWorkingDir so bundle comments and chunk identities are repeatable',
+  /entryPoints:\s*materializedSource\s*\?\s*\[materializedSource\.entryPointRelative,\s*'server\/portable-worker-runtime\.ts'\]\s*:\s*\['src\/server\/index\.ts',\s*'src\/server\/portable-worker-runtime\.ts'\]/,
+  'both server entry points must stay relative in normal and FileProvider builds',
 );
+assert.match(buildScript, /entryNames:\s*'\[name\]'/,
+  'the server and opt-in portable runtime must have distinct output names');
 
 console.log('Server build mode contract test passed');
