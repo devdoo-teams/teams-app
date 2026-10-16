@@ -40,6 +40,14 @@ does not erase the last valid scope in the same credential generation. A credent
 change, reset or401/403 still clears it. A different valid scope, including a
 conversation change with the same token, invalidates private views and late bodies.
 
+Every same-origin Core fetch receives a monotonic dispatch sequence, even when
+several fetches share one logical operation/token lease. The first valid scope
+observation records its sequence immediately. An older response with a different
+or missing scope cannot replace it or expose its body. This is checked before
+scope mutation and again after JSON completion. Older parallel responses with the
+same verified scope still succeed; credential-generation isolation and the
+same-owner accepted-mutation recovery rule continue to apply.
+
 Core JSON mutations send the previously observed scope in
 `X-Teams-Expected-Principal-Scope` when available. The server compares it with
 the authenticated scope before service admission; mismatch is409
@@ -85,6 +93,10 @@ loss, GET/POST boundaries, scope mismatch, sticky/bounded keys and UI replay.
 `npm run test:principal-scope` adds unknown-to-known and known-to-unknown mounted
 React recovery, headerless503 retention, same-token conversation changes, and real
 HTTP307 redirect refusal with no requests reaching the redirect destination.
+`npm run test:principal-scope-order` covers initial full-response/body reordering,
+same-scope parallel reads, fetches inside one logical operation, and credential
+changes. Conversation switching is fixture-only: production conversation scope
+is fixed per principal. This is not a live cross-account data-leak reproduction.
 
 These are local contracts and synthetic results, not a live Teams/Entra/DC test.
 Keys are not persisted across page/app restart; durable server job read-back is

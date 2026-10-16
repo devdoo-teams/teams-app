@@ -1,6 +1,6 @@
 {
   "name": "teams-sdk-mvp",
-  "version": "1.0.161",
+  "version": "1.0.162",
   "private": true,
   "type": "module",
   "scripts": {
@@ -246,7 +246,8 @@
     "test:portable-worker-service": "tsx scripts/portable-worker-service-test.ts",
     "test:repository-pr": "node --import tsx --test --test-concurrency=1 scripts/repository-pr-test.ts scripts/repository-pr-route-test.ts scripts/repository-pr-client-test.ts scripts/repository-pr-view-test.tsx scripts/repository-pr-panel-test.tsx",
     "test:mutation-auth": "node --import tsx --test --test-concurrency=1 scripts/core-mutation-auth-race-test.tsx",
-    "test:principal-scope": "node --import tsx --test --test-concurrency=1 scripts/core-principal-scope-recovery-test.tsx"
+    "test:principal-scope": "node --import tsx --test --test-concurrency=1 scripts/core-principal-scope-recovery-test.tsx",
+    "test:principal-scope-order": "node --import tsx --test --test-concurrency=1 scripts/core-principal-scope-order-test.ts"
   },
   "dependencies": {
     "@azure/cosmos": "^4.10.0",

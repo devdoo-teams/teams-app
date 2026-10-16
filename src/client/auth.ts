@@ -62,11 +62,15 @@ let authenticationGeneration = 0;
 let operationSequence = 0;
 let latestAuthenticationOperation = 0;
 let principalScopeKey: string | undefined;
+let coreScopeRequestSequence = 0;
+let latestPrincipalScopeRequest = 0;
 export const getApiPrincipalScopeKey = (): string | undefined => principalScopeKey;
-type ApiResponseFacts = { generation: number; mutation: boolean; owner?: string };
+type ApiResponseFacts = { generation: number; mutation: boolean; owner?: string; scopeRequest?: number };
 const responseFacts = new WeakMap<Response, ApiResponseFacts>();
 function assertResponseScope(facts: ApiResponseFacts, status: number): void {
-  if (facts.generation === authenticationGeneration) return;
+  const superseded = facts.scopeRequest !== undefined && principalScopeKey !== undefined
+    && facts.scopeRequest < latestPrincipalScopeRequest && facts.owner !== principalScopeKey;
+  if (facts.generation === authenticationGeneration && !superseded) return;
   // A changed opaque token never proves an owner. Only two server-validated
   // Core scope observations may confirm a same-owner mutation receipt.
   if (facts.mutation && facts.owner && facts.owner === principalScopeKey) return;
@@ -449,6 +453,9 @@ export async function runApiOperation<T>(
     const method = (init.method ?? (typeof Request !== 'undefined' && input instanceof Request ? input.method : 'GET')).toUpperCase();
     const mutation = !['GET', 'HEAD', 'OPTIONS'].includes(method);
     const coreSameOrigin = isCoreSameOriginRequest(input);
+    // Order each dispatched fetch, including parallel fetches sharing a token
+    // lease. First scope proof must already protect against older responses.
+    const scopeRequest = coreSameOrigin ? ++coreScopeRequestSequence : undefined;
     const composed = composeRequestSignal(scope.signal, init.signal ?? undefined);
     let sent = false, rejected = false, responseStatus: number | undefined;
     try {
@@ -462,11 +469,16 @@ export async function runApiOperation<T>(
       scope.assertActive();
       const ownerHeader = coreSameOrigin ? response.headers.get(API_PRINCIPAL_SCOPE_HEADER) : undefined;
       const owner = isPrincipalScopeKey(ownerHeader) ? ownerHeader : undefined;
-      if (authGeneration === authenticationGeneration && owner && response.status !== 401 && response.status !== 403) {
+      const facts = { generation: authGeneration, mutation, owner, scopeRequest };
+      // Reject an older conflicting/unproven response before it can replace
+      // scope; the same check also runs after a delayed JSON body completes.
+      assertResponseScope(facts, response.status);
+      if (authGeneration === authenticationGeneration && owner && scopeRequest !== undefined && response.status !== 401 && response.status !== 403) {
         // A headerless proxy/error response cannot revoke an earlier proof in
         // this credential generation. Credential invalidation still clears it.
         const changed = principalScopeKey !== undefined && principalScopeKey !== owner;
         principalScopeKey = owner;
+        latestPrincipalScopeRequest = Math.max(latestPrincipalScopeRequest, scopeRequest);
         if (changed) {
           // A conversation can change while the opaque credential stays the
           // same. Invalidate old private views/bodies before exposing this one.
@@ -474,7 +486,7 @@ export async function runApiOperation<T>(
           for (const listener of authenticationListeners) listener();
         }
       }
-      const facts = { generation: authGeneration, mutation, owner };
+      facts.generation = authGeneration;
       responseFacts.set(response, facts);
       assertResponseScope(facts, response.status);
       if (mutation && response.status >= 400 && response.status < 500) { rejected = true; possiblyAcceptedMutations -= 1; }
