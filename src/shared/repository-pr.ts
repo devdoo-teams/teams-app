@@ -41,15 +41,24 @@ export function repositoryPrUrls(repo: RepositoryDescriptor, prId: number) {
   const suffix = `/projects/${encodeURIComponent(repo.projectKey)}/repos/${encodeURIComponent(repo.slug)}/pull-requests/${prId}`;
   return { apiUrl: `${repo.baseUrl}/rest/api/latest${suffix}`, webUrl: `${repo.baseUrl}${suffix}/overview` };
 }
+/** Accept only a provider-supplied self link for this exact approved origin/repo/PR. */
+export function verifiedRepositoryPrWebUrl(repo: RepositoryDescriptor, prId: number, value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const expected = repositoryPrUrls(repo, prId).webUrl;
+  return value === expected || value === expected.replace(/\/overview$/u, '') ? value : undefined;
+}
 export const RepositoryPrItemSchema = z.object({ repositoryId: id, id: z.number().int().positive(), version: z.number().int().nonnegative(),
   title: text(300), state: z.enum(['OPEN', 'MERGED']), sourceCommit: commit, targetCommit: commit, updatedAt: date, closedAt: date.optional(),
-  source: z.object({ apiUrl: text(2048), webUrl: text(2048), linkVerification: z.literal('api-identity'),
+  source: z.object({ apiUrl: text(2048), webUrl: text(2048).optional(), linkVerification: z.enum(['api-identity', 'unverified']),
     contract: z.literal('bitbucket-dc-rest-10.5'), observedAt: date }).strict() }).strict();
 export type RepositoryPrItem = z.infer<typeof RepositoryPrItemSchema>;
 export const RepositoryPrBatchSchema = z.object({ repository: RepositoryDescriptorSchema, items: z.array(RepositoryPrItemSchema).max(20),
   start: z.number().int().min(0).max(1_000_000), nextStart: z.number().int().min(1).max(1_000_000).optional() }).strict().superRefine((v, ctx) => {
   if (v.nextStart !== undefined && v.nextStart <= v.start || new Set(v.items.map(i => i.id)).size !== v.items.length
-    || v.items.some(i => i.repositoryId !== v.repository.id || JSON.stringify(repositoryPrUrls(v.repository, i.id)) !== JSON.stringify({ apiUrl: i.source.apiUrl, webUrl: i.source.webUrl }))) {
+    || v.items.some(i => i.repositoryId !== v.repository.id || repositoryPrUrls(v.repository, i.id).apiUrl !== i.source.apiUrl
+      || (i.source.linkVerification === 'api-identity'
+        ? !i.source.webUrl || verifiedRepositoryPrWebUrl(v.repository, i.id, i.source.webUrl) !== i.source.webUrl
+        : i.source.webUrl !== undefined))) {
     ctx.addIssue({ code: 'custom', message: 'Repository source identity mismatch' });
   }
 });

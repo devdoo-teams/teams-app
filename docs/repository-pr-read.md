@@ -32,8 +32,11 @@ execution DTO, login or credential change is required.
   URL shapes fail. The transport dependency must already be bound to the
   authenticated DC user; a shared token alone cannot prove that user's access.
 - Provider REPO_READ, target repository identity, PR ID/version and full40-hex
-  head/base commits are checked. Canonical links come from catalog/API identity,
-  never arbitrary provider link fields. Snapshot fingerprints are checked by
+  head/base commits are checked. A provider-supplied self link must match the
+  approved HTTPS origin and exact repository/PR path. Missing or foreign links
+  display **PR 웹주소 미검증** without an action; no URL is invented. The OpenAPI
+  schema does not guarantee a returned self link or actual web-page readiness.
+  Snapshot fingerprints are checked by
   the browser and native projection. They are correlation/integrity evidence,
   not authentication or a signature from Bitbucket.
 - PR titles are plain React text; native Markdown/URLs in titles are escaped or

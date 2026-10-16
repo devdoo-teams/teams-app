@@ -49,8 +49,9 @@ oversized bodies, malformed responses and timeouts fail closed. The mock transpo
 maps the approved synthetic HTTPS origin to a loopback-only fixture server.
 
 Each item pins target repository ID, PR ID/version, full source/target commit,
-observedAt and canonical API/source URLs. Browser links are built from the approved
-base and verified API identity; provider-supplied arbitrary links are ignored.
+observedAt and canonical API/source URLs. Browser links require a provider-supplied
+self address constrained to the approved base and exact repository/PR identity.
+Missing/foreign addresses have no link and display PR 웹주소 미검증; no URL is invented.
 No descriptions, comments, emails or conversation bodies are collected. Titles
 are bounded plain text; native Markdown is escaped. Unknown revisions fail closed.
 

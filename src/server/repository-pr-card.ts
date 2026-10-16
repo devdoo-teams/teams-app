@@ -14,9 +14,11 @@ export function repositoryPrCard(input: RepositoryPrSnapshot) {
       ...rows.flatMap(({ repository, item }) => [
         { type: 'TextBlock', text: `${nativeText(repository.label)} · #${item.id} ${nativeText(item.title)}`, wrap: true },
         { type: 'TextBlock', text: `PR v${item.version} · head ${item.sourceCommit} · base ${item.targetCommit}`, wrap: true },
+        ...(!item.source.webUrl ? [{ type: 'TextBlock', text: 'PR 웹주소 미검증', wrap: true }] : []),
       ]),
       ...(!rows.length ? [{ type: 'TextBlock', text: '현재 조회 페이지에 해당 PR이 없습니다.', wrap: true }] : []),
     ],
-    actions: rows.map(({ repository, item }) => ({ type: 'Action.OpenUrl', title: `${nativeText(repository.label).slice(0, 25)} #${item.id}`, url: item.source.webUrl })),
+    actions: rows.flatMap(({ repository, item }) => item.source.webUrl && item.source.linkVerification === 'api-identity'
+      ? [{ type: 'Action.OpenUrl', title: `${nativeText(repository.label).slice(0, 25)} #${item.id}`, url: item.source.webUrl }] : []),
   };
 }

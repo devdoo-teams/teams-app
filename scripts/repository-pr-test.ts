@@ -98,6 +98,20 @@ test('malformed provider identity/revision/page and redirects fail closed', asyn
   } finally { await f.close(); }
 });
 
+test('missing or foreign provider web links never become a verified invented URL', async () => {
+  const f = await fixture();
+  try {
+    const catalog = await f.service.catalog(owner);
+    for (const links of [undefined, { self: [{ href: 'https://evil.invalid/forged' }] },
+      { self: [{ href: `${baseUrl}/projects/TEST/repos/beta/pull-requests/1/overview` }] }]) {
+      f.payload = { start: 0, isLastPage: true, values: [{ ...record(), links }] };
+      const value = await f.service.query(owner, { repositoryIds: ['alpha'], category: 'mine', catalogRevision: catalog.revision });
+      assert.equal(value.batches[0].items[0].source.webUrl, undefined);
+      assert.equal(value.batches[0].items[0].source.linkVerification, 'unverified');
+    }
+  } finally { await f.close(); }
+});
+
 test('timeouts/cancellation are bounded and unconfigured production has no invented repositories', async () => {
   const f = await fixture();
   try {

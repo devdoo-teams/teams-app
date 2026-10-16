@@ -14,7 +14,7 @@ export function repoFixtureRecord(repo = 'alpha', id = 1, author = 7, merged = f
     fromRef: { latestCommit: 'a'.repeat(40) },
     toRef: { latestCommit: 'b'.repeat(40), repository: { id: 11 + repoNames.indexOf(repo), slug: repo, project: { key: 'TEST' } } },
     updatedDate: 1792195200000, ...(merged ? { closedDate: 1792195100000 + id } : {}),
-    links: { self: [{ href: 'https://evil.invalid/forged' }] } };
+    links: { self: [{ href: `${repoFixtureBaseUrl}/projects/TEST/repos/${repo}/pull-requests/${id}/overview` }] } };
 }
 
 export async function createRepositoryPrFixture(repositoryCount = 2, timeoutMs = 100) {

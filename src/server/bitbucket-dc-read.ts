@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { RepositoryDescriptorSchema, RepositoryGrantSchema, RepositoryPrBatchSchema, RepositoryPrCategorySchema, repositoryPrUrls,
+import { RepositoryDescriptorSchema, RepositoryGrantSchema, RepositoryPrBatchSchema, RepositoryPrCategorySchema, repositoryPrUrls, verifiedRepositoryPrWebUrl,
   type RepositoryDescriptor, type RepositoryGrant, type RepositoryPrCategory, type RepositoryPrBatch } from '../shared/repository-pr.js';
 import { boundedRepositoryRead, RepositoryPrError, type RepositoryReadAdapter } from './repository-pr.js';
 
@@ -11,7 +11,8 @@ const row = z.object({ id: z.number().int().positive(), version: z.number().int(
     status: z.enum(['UNAPPROVED', 'APPROVED', 'NEEDS_WORK']) })).max(100),
   fromRef: z.object({ latestCommit: z.string().regex(/^[a-f0-9]{40}$/u) }),
   toRef: z.object({ latestCommit: z.string().regex(/^[a-f0-9]{40}$/u), repository: remoteRepo }),
-  updatedDate: timestamp, closedDate: timestamp.optional() });
+  updatedDate: timestamp, closedDate: timestamp.optional(),
+  links: z.object({ self: z.array(z.object({ href: z.string().max(2048) })).max(5).optional() }).optional() });
 const page = z.object({ start: z.number().int().min(0).max(1_000_000), isLastPage: z.boolean(),
   nextPageStart: z.number().int().min(1).max(1_000_000).optional(), values: z.array(row).max(20) });
 
@@ -45,10 +46,12 @@ export class BitbucketDcReadAdapter implements RepositoryReadAdapter {
         const mine = value.author.user.id === access.user.id;
         const review = !mine && value.reviewers.some(r => r.user.id === access.user.id && !r.approved && r.status !== 'APPROVED');
         if (category === 'mine' && !mine || category === 'review' && !review) return [];
+        const webUrl = value.links?.self?.map(link => verifiedRepositoryPrWebUrl(repo, value.id, link.href)).find(link => link !== undefined);
         return [{ repositoryId: repo.id, id: value.id, version: value.version, title: value.title, state: value.state,
           sourceCommit: value.fromRef.latestCommit, targetCommit: value.toRef.latestCommit,
           updatedAt: new Date(value.updatedDate).toISOString(), ...(value.closedDate === undefined ? {} : { closedAt: new Date(value.closedDate).toISOString() }),
-          source: { ...repositoryPrUrls(repo, value.id), linkVerification: 'api-identity' as const,
+          source: { apiUrl: repositoryPrUrls(repo, value.id).apiUrl,
+            ...(webUrl ? { webUrl, linkVerification: 'api-identity' as const } : { linkVerification: 'unverified' as const }),
             contract: 'bitbucket-dc-rest-10.5' as const, observedAt } }];
       });
       if (category === 'merged') items.sort((a, b) => (b.closedAt ?? '').localeCompare(a.closedAt ?? '') || b.id - a.id);

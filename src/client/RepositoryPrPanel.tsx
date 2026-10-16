@@ -80,10 +80,12 @@ export function RepositoryPrPanel({ client = defaultClient }: { client?: Reposit
           {!batch.items.length ? <p>현재 조회 페이지에 해당 PR이 없습니다.</p> : null}
           <div className="repo-pr-items">{batch.items.map(item => <article className="core-job-card repo-pr-item" key={item.id}>
             <h4>#{item.id} {item.title}</h4><p>{item.state === 'MERGED' ? '병합됨' : '열림'} · PR v{item.version}</p>
-            <a href={item.source.webUrl} target="_blank" rel="noopener noreferrer">검증된 PR 열기 ↗</a>
+            {item.source.webUrl && item.source.linkVerification === 'api-identity'
+              ? <a href={item.source.webUrl} target="_blank" rel="noopener noreferrer">PR 열기 · API 주소 확인 ↗</a>
+              : <p>PR 웹주소 미검증</p>}
             <details><summary>revision · 출처 보기</summary><dl>
               <dt>source commit</dt><dd><code>{item.sourceCommit}</code></dd><dt>target commit</dt><dd><code>{item.targetCommit}</code></dd>
-              <dt>조회 출처</dt><dd>{item.source.apiUrl}</dd><dt>확인 기준</dt><dd>API 저장소·PR identity 대조 · {item.source.observedAt}</dd>
+              <dt>조회 출처</dt><dd>{item.source.apiUrl}</dd><dt>확인 기준</dt><dd>API 저장소·PR identity 대조 · 웹주소 {item.source.linkVerification === 'api-identity' ? 'self 주소 대조' : '미검증'} · {item.source.observedAt}</dd>
             </dl></details>
           </article>)}</div>
           {batch.nextStart !== undefined ? <button type="button" disabled={busy} onClick={() => run({ ...starts, [batch.repository.id]: batch.nextStart! })}>{batch.repository.label} 다음 페이지</button> : null}
