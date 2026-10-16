@@ -1,5 +1,5 @@
 import type { AgentJob, AgentJobMode, AgentJobScope, AgentJobListPageRequest, AgentJobListPage } from './agent-job-store.js';
-import { AgentJobStore } from './agent-job-store.js';
+import { AgentJobStore, AgentJobIdempotentReplayError, AgentJobIdempotencyConflictError } from './agent-job-store.js';
 import { CoreApprovalRecoveryError, type CoreApprovalIdentity, type CoreApprovalDecision,
   type CoreApprovalDecisionResult } from './core-approval-recovery.js';
 import type { CoreResultOrigin } from './core-result-publication.js';
@@ -148,6 +148,19 @@ type ProgressState = {
   onProgress?: ProgressListener;
 };
 
+export type AgentExecutionSettlement = Readonly<{
+  job: AgentJob;
+  execution: 'settled' | 'unverified';
+  cleanup: 'verified' | 'unverified';
+}>;
+type LocalSettlementProof = Pick<AgentExecutionSettlement, 'execution' | 'cleanup'>;
+type LocalSettlement = {
+  executionFinished: boolean;
+  cleanup: 'pending' | 'verified' | 'unverified';
+  ready: Promise<LocalSettlementProof>;
+  resolve(proof: LocalSettlementProof): void;
+};
+
 export class AgentService {
   private readonly executionPolicy: AgentExecutionPolicy;
   private readonly admissionController: AgentAdmissionController;
@@ -199,6 +212,8 @@ export class AgentService {
   private readonly admissionLeases = new Map<string, AgentAdmissionLease>();
   private readonly executions = new Set<Promise<void>>();
   private readonly executionByJob = new Map<string, Promise<void>>();
+  private readonly localSettlements = new Map<string, LocalSettlement>();
+  private readonly idempotentSubmissions = new Map<string, Promise<void>>();
   private readonly reconciliation = new Map<string, ReconciliationState>();
   private pendingSubmissions = 0;
   private readonly submissionDrainWaiters = new Set<() => void>();
@@ -274,6 +289,18 @@ export class AgentService {
     reasoningEffort?: CoreCodexReasoningEffort;
     catalogRevision?: string;
   }): Promise<AgentJob> {
+    input = { ...input, scope: { ...input.scope } };
+    if (!input.idempotencyKey) return this.submitOnce(input);
+    const key = JSON.stringify([input.scope.tenantId, input.scope.requesterId, input.scope.conversationId, input.idempotencyKey]);
+    const previous = this.idempotentSubmissions.get(key) ?? Promise.resolve();
+    const operation = previous.then(() => this.submitOnce(input));
+    const complete = operation.then(() => undefined, () => undefined);
+    this.idempotentSubmissions.set(key, complete);
+    try { return await operation; }
+    finally { if (this.idempotentSubmissions.get(key) === complete) this.idempotentSubmissions.delete(key); }
+  }
+
+  private async submitOnce(input: Parameters<AgentService['submit']>[0]): Promise<AgentJob> {
     const prompt = normalizeAgentPrompt(input.prompt);
     const provider = input.provider ?? this.defaultProvider;
     if (!this.options.executionDispatcher) this.runnerFor(provider);
@@ -281,6 +308,21 @@ export class AgentService {
       this.assertMutationAllowed(input.scope);
     } else {
       this.assertReadAllowed(input.scope);
+    }
+    const replay = this.store.findIdempotent(input.scope, input.idempotencyKey, input.requestHash);
+    if (replay) {
+      assertHistoricalCliPolicy(replay);
+      assertTeamsCliAgentProvider(provider);
+      assertTeamsCliAgentSelection(input);
+      const selected = [input.model, input.reasoningEffort, input.catalogRevision].filter(value => value !== undefined).length;
+      if (selected !== 0 && selected !== 3) throw new TeamsCliAgentPolicyError('Incomplete model selection is refused.');
+      if (selected === 3) assertSafeCodexModelSelection(input as CoreCodexModelSelection);
+      if (replay.prompt !== prompt || replay.mode !== input.mode || replay.provider !== provider
+        || replay.parentJobId !== input.parentJobId || (input.threadId !== undefined && replay.threadId !== input.threadId)
+        || (selected === 3 && (replay.model !== input.model || replay.reasoningEffort !== input.reasoningEffort || replay.catalogRevision !== input.catalogRevision))) {
+        throw new AgentJobIdempotencyConflictError(input.idempotencyKey!);
+      }
+      throw new AgentJobIdempotentReplayError(replay);
     }
     const selection = await this.resolveModelSelection(provider, input);
     const admission = await this.admissionController.tryAcquire(input.scope);
@@ -403,6 +445,28 @@ export class AgentService {
     const job = this.store.get(id, scope);
     if (!job) throw new Error(`작업 ${id}을 찾을 수 없습니다.`);
     return job;
+  }
+
+  /** Local execution proof, including resource cleanup. Terminal store status
+   * alone (including records restored after restart) never authorizes success. */
+  async waitForExecutionSettlement(id: string, scope: AgentJobScope, timeoutMs = 10 * 60 * 1000): Promise<AgentExecutionSettlement> {
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 10 * 60 * 1000) throw new Error('Invalid execution settlement timeout');
+    const initial = this.store.get(id, scope);
+    if (!initial) throw new Error('Execution settlement job was not found in the requested scope.');
+    const state = this.localSettlements.get(id);
+    let proof: LocalSettlementProof = { execution: 'unverified', cleanup: 'unverified' };
+    if (state && !this.options.executionDispatcher) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        proof = await Promise.race([state.ready, new Promise<LocalSettlementProof>(resolve => {
+          timer = setTimeout(() => resolve({ execution: state.executionFinished ? 'settled' : 'unverified', cleanup: 'unverified' }), timeoutMs);
+        })]);
+      } finally { if (timer) clearTimeout(timer); }
+    }
+    const job = this.store.get(id, scope);
+    if (!job) throw new Error('Execution settlement job was not found in the requested scope.');
+    if (state?.cleanup === 'unverified') proof = { ...proof, cleanup: 'unverified' };
+    return { job, ...proof };
   }
 
   async approve(id: string, scope: AgentJobScope): Promise<AgentJob | undefined> {
@@ -975,8 +1039,19 @@ export class AgentService {
   }
 
   private launchExecution(job: AgentJob, shouldNotify: boolean, onProgress?: ProgressListener): void {
+    let resolve!: (proof: LocalSettlementProof) => void;
+    const state: LocalSettlement = { executionFinished: false, cleanup: 'pending',
+      ready: new Promise<LocalSettlementProof>(done => { resolve = done; }), resolve: proof => resolve(proof) };
+    this.localSettlements.set(job.id, state);
     const execution = this.execute(job, shouldNotify, onProgress).catch((error) => {
+      state.cleanup = 'unverified';
       console.error(`Agent execution cleanup failed for ${job.id}`, error);
+    }).then(() => {
+      state.executionFinished = true;
+      // Cancellation performs final cleanup after awaiting this execution.
+      const scope = scopeForJob(job);
+      if (state.cleanup === 'pending' && (!scope || this.store.get(job.id, scope)?.status !== 'cancelled')) state.cleanup = 'unverified';
+      this.resolveLocalSettlement(job.id);
     });
     this.executions.add(execution);
     this.executionByJob.set(job.id, execution);
@@ -984,6 +1059,18 @@ export class AgentService {
       this.executions.delete(execution);
       if (this.executionByJob.get(job.id) === execution) this.executionByJob.delete(job.id);
     });
+  }
+
+  private resolveLocalSettlement(id: string): void {
+    const state = this.localSettlements.get(id);
+    if (state?.executionFinished && state.cleanup !== 'pending') state.resolve({ execution: 'settled', cleanup: state.cleanup });
+  }
+
+  private recordLocalCleanup(id: string, result: 'verified' | 'unverified'): void {
+    const state = this.localSettlements.get(id);
+    if (!state) return;
+    if (state.cleanup !== 'unverified') state.cleanup = result;
+    this.resolveLocalSettlement(id);
   }
 
   private async executeUnlocked(job: AgentJob, shouldNotify: boolean, onProgress?: ProgressListener): Promise<void> {
@@ -1208,13 +1295,16 @@ export class AgentService {
       // releaseJob atomically releases any reconstructed reservation or is a no-op.
       if (!lease && !this.executionWorkspaces.has(job.id)) {
         await this.admissionController.releaseJob(job.id);
+        this.recordLocalCleanup(job.id, 'verified');
         return;
       }
       if (lease) await lease.markTerminalPending();
       else await this.admissionController.markTerminalPending(job.id);
       await this.releaseExecutionWorkspace(job.id);
       await this.releaseAdmission(job.id);
+      this.recordLocalCleanup(job.id, 'verified');
     } catch (error) {
+      this.recordLocalCleanup(job.id, 'unverified');
       const failureCode = error instanceof Error && error.name ? error.name : 'CLEANUP_FAILED';
       const lease = this.admissionLeases.get(job.id);
       if (lease) await lease.markUnresolved(failureCode).catch(() => undefined);
@@ -1227,6 +1317,7 @@ export class AgentService {
   }
 
   private async markReconciliationRequired(job: AgentJob, scope: AgentJobScope, failure: unknown): Promise<void> {
+    this.recordLocalCleanup(job.id, 'unverified');
     const state: ReconciliationState = {
       jobId: job.id,
       attempts: 0,

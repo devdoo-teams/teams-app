@@ -35,7 +35,7 @@
 ### Task 2: Mac connector and existing policy adapter
 
 **Files:** create src/server/mac-pull-worker.ts; extend portable-worker-test.ts and AgentExecutionDispatcher kind.
-**Interfaces:** MacPullWorker.step consumes an authenticated transport and a trusted executor; createAgentServiceMacExecutor reuses submit/get/cancelStrict and existing policy.
+**Interfaces:** MacPullWorker.step consumes an authenticated transport and a trusted executor; createAgentServiceMacExecutor reuses submit/waitForExecutionSettlement/cancelStrict and existing policy.
 
 - [ ] Write failing tests for repeated delivery, lost replies, disconnect cleanup and local isolation/approval rejection.
 - [ ] Implement bounded outbound transport and connector, preserving task identity/model and idempotency.
@@ -45,7 +45,14 @@
 
 **Files:** package.json, package-lock.json, appPackage/manifest.json, Core test inventory/contract, docs/portable-http-mac.md.
 
-- [ ] Register focused tests in Core, set candidate 1.0.156 consistently and document opt-in composition/remaining host gates.
+- [ ] Register focused tests in Core, set candidate 1.0.157 consistently and document opt-in composition/remaining host gates.
 - [ ] Commit, then run exact-commit strict typecheck, Core tests/build, manifest, bundle determinism and ZIP read-back with bounded logs.
 - [ ] Record source/build/package identities, preserved original server/ledger and exact-SHA CI pending status.
 - [ ] Prepare diff and evidence for Astra; keep final operational promotion pending review.
+
+### Astra review corrections
+
+- [ ] Reproduce real AgentService delayed/failed cleanup and use explicit lifecycle proof before remote completion.
+- [ ] Resolve owner/key/hash replay before new admission; serialize concurrent identical submissions.
+- [ ] Reject empty/whitespace completed results before durable persistence and verify corrected retries.
+- [ ] Register the actual-service suite in Core, commit candidate 1.0.157 and rerun every local gate on that SHA.

@@ -46,6 +46,18 @@ than translating remote approval/session state into local execution authority.
 5. Heartbeats carry cancellation requests. Terminal cancellation requires local cleanup.
 6. Finish is durable and replayable, including a lost acknowledgement.
 
+The Mac adapter waits for `AgentService.waitForExecutionSettlement()`: execution
+must have finished and isolation, projected workspace and admission cleanup must
+be explicitly verified. A terminal job status or an error message does not prove
+cleanup. Process-local proof is intentionally not reconstructed from terminal
+records after restart; those records remain unverified for remote publication.
+An authorized replay checks owner, idempotency key/hash and immutable request
+fields before acquiring another admission slot. Concurrent identical submissions
+serialize through that lookup and attach to one execution, including after the
+runner records its observed thread ID. Completed receipts with an empty or
+whitespace-only result fail validation before durable persistence, so a valid
+retry can still succeed.
+
 An unstarted expired claim can be reissued. A started expired job is quarantined
 and blocks further work for that worker. It is never automatically reassigned.
 Uncertain local start, failed cleanup, stale source, changed owner/model or ambiguous
@@ -77,10 +89,14 @@ invented. There is no arbitrary cross-machine exactly-once guarantee.
 
 Focused synthetic tests are registered in Core, including actual loopback HTTP,
 durable replay/restart, lost replies, disconnect/cancel cleanup, ownership/model
-tampering and the real AgentService isolation rejection. They do not execute a
+tampering and the real AgentService isolation rejection. Additional real-service
+regressions cover delayed/failed cleanup, cancellation, restart without lifecycle
+proof, active/concurrent replay at a one-requester limit and blank result retries.
+Only the runner and isolation boundary in those service fixtures are synthetic.
+The tests do not execute a
 real CLI or use a login, real Teams data or external provider.
 
-The implementation branch prepares version 1.0.156 after confirming its tag is
+The implementation branch prepares version 1.0.157 after confirming its tag is
 unused. Frozen 1.0.154/ea17384 tag/draft/run and public 1.0.152/8dcc remain preserved.
 Local exact-commit build/package evidence is separate from remote exact-SHA CI,
 new hosting HTTPS, Bot/SSO round-trip, installation and Teams web/Mac/iPhone gates.

@@ -13,7 +13,6 @@ export type MacExecution = Readonly<{ result: Promise<PullResult>; cancel(): Pro
 export type MacExecutionPort = Readonly<{ start(task: PullTask): Promise<MacExecution> }>;
 const hash = (value: unknown) => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 function terminalResult(job: AgentJob): PullResult {
-  if (/CLEANUP|RECONCILIATION_REQUIRED|UNVERIFIED/u.test(job.error ?? '')) throw new PullWorkerError('unavailable', 'Mac cleanup unverified');
   return pullResultSchema.parse({ status: job.status,
     ...(job.result === undefined ? {} : { result: job.result }),
     ...(job.error === undefined ? {} : { error: job.error }),
@@ -21,7 +20,7 @@ function terminalResult(job: AgentJob): PullResult {
 }
 
 /** Reuses the existing local AgentService; no direct CLI spawn, approval or model override. */
-export function createAgentServiceMacExecutor(service: Pick<AgentService, 'submit' | 'waitForTerminal' | 'cancelStrict'>): MacExecutionPort {
+export function createAgentServiceMacExecutor(service: Pick<AgentService, 'submit' | 'waitForExecutionSettlement' | 'cancelStrict'>): MacExecutionPort {
   return {
     async start(input) {
       const task = pullTaskSchema.parse(input);
@@ -43,13 +42,18 @@ export function createAgentServiceMacExecutor(service: Pick<AgentService, 'submi
         || job.reasoningEffort !== task.selection.reasoningEffort || job.catalogRevision !== task.selection.catalogRevision) {
         throw new PullWorkerError('conflict', 'local execution identity conflict');
       }
-      const result = service.waitForTerminal(job.id, task.scope).then(terminalResult);
+      const settled = async () => {
+        const receipt = await service.waitForExecutionSettlement(job.id, task.scope);
+        if (receipt.execution !== 'settled' || receipt.cleanup !== 'verified') throw new PullWorkerError('unavailable', 'Mac execution/cleanup unverified');
+        return receipt.job;
+      };
+      const result = settled().then(terminalResult);
       // A caller may still be acknowledging begin when an immediate policy/runtime failure arrives.
       void result.catch(() => undefined);
       return { result, async cancel() {
         const stopped = await service.cancelStrict(job.id, task.scope, { notify: false, provider: task.provider });
         if (!stopped || stopped.status !== 'cancelled') throw new PullWorkerError('unavailable', 'Mac cancellation cleanup unverified');
-        terminalResult(stopped);
+        terminalResult(await settled());
       } };
     },
   };

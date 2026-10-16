@@ -20,7 +20,7 @@ export const pullClaimSchema = pullLeaseSchema.extend({ task: pullTaskSchema }).
 export const pullResultSchema = z.object({ status: z.enum(['completed', 'failed', 'cancelled']),
   result: z.string().max(20000).optional(), error: z.string().max(10000).optional(),
   providerExecutionId: identifier.optional() }).strict().superRefine((value, ctx) => {
-  if (value.status === 'completed' && (value.result === undefined || !value.providerExecutionId)) {
+  if (value.status === 'completed' && (!value.result?.trim() || !value.providerExecutionId)) {
     ctx.addIssue({ code: 'custom', message: 'completed result and execution identity are required' });
   }
 });

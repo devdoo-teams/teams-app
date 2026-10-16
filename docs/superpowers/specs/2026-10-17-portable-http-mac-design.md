@@ -26,13 +26,20 @@ prepare an exact-source local candidate, then obtain Astra review before promoti
   Cancellation is cooperative and terminal only after the worker reports cleanup.
 - Mac execution reuses AgentService, including its admission, isolation and model
   checks. Local idempotency keys prevent repeated HTTP delivery from spawning again.
+- Remote completion requires an explicit AgentService result proving execution
+  and isolation/workspace/admission cleanup settled. Terminal status or error text
+  is insufficient; restored records without local proof remain unverified.
+- Authorized owner/key/hash replay precedes new admission and serializes concurrent
+  duplicates. A runner-observed thread ID does not change a fresh request's identity.
+- Empty or whitespace-only completed results are rejected before persistence;
+  a corrected nonempty result can then be submitted on the same lease.
 - A disconnect stops accepting work and cancels owned execution; uncertain cleanup
   remains blocked. No exactly-once claim across arbitrary process crashes is made.
 
 ## Evidence and promotion
 
 Tests use synthetic jobs and loopback HTTP only, never real Codex or Teams data.
-New candidate identity is 1.0.156 on the implementation branch, leaving the frozen
+New candidate identity is 1.0.157 on the implementation branch, leaving the frozen
 1.0.154 tag/draft/run intact. Strict typecheck, focused tests, Core build/tests,
 manifest, server determinism and ZIP read-back are local gates. Exact-SHA remote CI,
 provider HTTPS, installation and real Teams web/desktop/iPhone are separate gates.

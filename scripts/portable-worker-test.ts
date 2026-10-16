@@ -264,7 +264,9 @@ test('local durable AgentJobStore replay attaches to one synthetic execution acr
       const created = await store.create({ ...input, executionEnvironment: 'local-macos' }); starts++;
       return (await store.update(created.id, input.scope, { status: 'completed', result: 'fixture', threadId: 'fixture-id' }))!;
     },
-    async waitForTerminal(id: string, requestScope: AgentJobScope) { return store.get(id, requestScope)!; },
+    async waitForExecutionSettlement(id: string, requestScope: AgentJobScope) {
+      return { job: store.get(id, requestScope)!, execution: 'settled' as const, cleanup: 'verified' as const };
+    },
     async cancelStrict(id: string, requestScope: AgentJobScope) { return (await store.update(id, requestScope, { status: 'cancelled' }))!; },
   };
   try {

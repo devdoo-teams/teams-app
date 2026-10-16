@@ -61,6 +61,7 @@ const runtimeTests = [
 ];
 const tsTests = [
   'scripts/portable-worker-test.ts',
+  'scripts/portable-worker-service-test.ts',
   'scripts/core-approval-recovery-test.ts',
   'scripts/agent-approval-expiry-test.ts',
   'scripts/core-result-publication-test.ts',

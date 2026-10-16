@@ -328,6 +328,16 @@ export class AgentJobStore {
     return job ? cloneAgentJob(job) : undefined;
   }
 
+  /** Owner-scoped replay lookup. Callers must authorize the scope first. */
+  findIdempotent(scope: AgentJobScope, idempotencyKey?: string, requestHash?: string): AgentJob | undefined {
+    if (!this.initialized) throw new Error('AgentJobStore.initialize() must complete before replay lookup.');
+    validateIdempotencyInput(idempotencyKey, requestHash);
+    if (!idempotencyKey) return undefined;
+    const existing = this.jobs.find(candidate => matchesScope(candidate, scope) && candidate.idempotencyKey === idempotencyKey);
+    if (existing && existing.requestHash !== requestHash) throw new AgentJobIdempotencyConflictError(idempotencyKey);
+    return existing ? cloneAgentJob(existing) : undefined;
+  }
+
   /**
    * Resolve a job for an authenticated REST principal without accepting a
    * client-selected conversation ID. The caller must still pass the returned

@@ -1,6 +1,6 @@
 {
   "name": "teams-sdk-mvp",
-  "version": "1.0.156",
+  "version": "1.0.157",
   "private": true,
   "type": "module",
   "scripts": {
@@ -242,7 +242,8 @@
     "test:api-free": "node scripts/api-free-test-runner.mjs",
     "test:api-free-runner": "node scripts/api-free-runner-contract-test.mjs",
     "test": "npm run test:api-free-runner && npm run test:api-free",
-    "test:portable-worker": "tsx scripts/portable-worker-test.ts"
+    "test:portable-worker": "tsx scripts/portable-worker-test.ts",
+    "test:portable-worker-service": "tsx scripts/portable-worker-service-test.ts"
   },
   "dependencies": {
     "@azure/cosmos": "^4.10.0",
