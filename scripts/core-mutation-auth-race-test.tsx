@@ -104,10 +104,10 @@ test('an uncertain key survives a later definitive retry failure until a confirm
 
 test('bounded pending-key storage never evicts an unresolved request', () => {
   let seq = 0; const keys = createSubmissionIdempotencyController(() => `bounded-${++seq}`);
-  const first = keys.keyFor(identity);
-  for (let i = 1; i < 64; i++) keys.keyFor({ ...identity, prompt: `synthetic-${i}` });
-  assert.throws(() => keys.keyFor({ ...identity, prompt: 'overflow' }), /미확인/);
-  assert.equal(keys.keyFor(identity), first);
+  const owner = 'a'.repeat(64), first = keys.keyFor(identity, owner);
+  for (let i = 1; i < 64; i++) keys.keyFor({ ...identity, prompt: `synthetic-${i}` }, owner);
+  assert.throws(() => keys.keyFor({ ...identity, prompt: 'overflow' }, owner), /미확인/);
+  assert.equal(keys.keyFor(identity, owner), first);
 });
 
 test('catalog refresh cannot silently rotate an uncertain submission with the same visible input', () => {

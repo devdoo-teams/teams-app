@@ -76,6 +76,8 @@ async function assertProcessReaped(pid, label, timeoutMs = 2_000) {
   }
   assert.ok(invocations.some(({ args }) => args.includes('scripts/core-mutation-auth-race-test.tsx')),
     'Core CI must exercise sent mutation/auth races and scope-bound idempotent recovery');
+  assert.ok(invocations.some(({ args }) => args.includes('scripts/core-principal-scope-recovery-test.tsx')),
+    'Core CI must block unknown-scope duplicate submissions and actual HTTP redirects');
   assert.ok(invocations.some(({ args }) => args.includes('scripts/portable-worker-build-test.mjs')),
     'Core CI must prove the opt-in handoff runtime is included in the exact server tree');
   assert.ok(invocations.some(({ args }) => args.includes('scripts/local-exposure-test.mjs')),

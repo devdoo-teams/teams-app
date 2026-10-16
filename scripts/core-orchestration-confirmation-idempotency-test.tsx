@@ -20,22 +20,23 @@ const request = {
   mode: 'read-only' as const,
 };
 const issued: string[] = [];
+const owner = 'a'.repeat(64);
 const keys = createSubmissionIdempotencyController(() => {
   const key = `stable-key-${issued.length + 1}`;
   issued.push(key);
   return key;
 });
 
-const firstKey = keys.keyFor(request);
-assert.equal(keys.keyFor(request), firstKey, 'an ambiguous response-loss retry reuses the same logical request key');
+const firstKey = keys.keyFor(request, owner);
+assert.equal(keys.keyFor(request, owner), firstKey, 'an ambiguous response-loss retry reuses the same logical request key');
 assert.equal(issued.length, 1, 'retry does not allocate a second key');
 
-const changedKey = keys.keyFor({ ...request, prompt: '배포 상태와 로그를 점검해줘' });
+const changedKey = keys.keyFor({ ...request, prompt: '배포 상태와 로그를 점검해줘' }, owner);
 assert.notEqual(changedKey, firstKey, 'a material prompt change rotates the logical request key');
-assert.equal(keys.keyFor({ ...request, prompt: '  배포 상태와 로그를 점검해줘  ' }), changedKey, 'trim-only edits preserve the logical request key');
+assert.equal(keys.keyFor({ ...request, prompt: '  배포 상태와 로그를 점검해줘  ' }, owner), changedKey, 'trim-only edits preserve the logical request key');
 
-keys.complete({ ...request, prompt: '배포 상태와 로그를 점검해줘' }, changedKey);
-assert.notEqual(keys.keyFor({ ...request, prompt: '배포 상태와 로그를 점검해줘' }), changedKey, 'a definitive outcome rotates the next submission key');
+keys.complete({ ...request, prompt: '배포 상태와 로그를 점검해줘' }, changedKey, owner);
+assert.notEqual(keys.keyFor({ ...request, prompt: '배포 상태와 로그를 점검해줘' }, owner), changedKey, 'a definitive outcome rotates the next submission key');
 
 {
   const busy = createOrchestrationBusyController();

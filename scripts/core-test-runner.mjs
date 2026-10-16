@@ -61,6 +61,7 @@ const runtimeTests = [
 ];
 const tsTests = [
   'scripts/core-mutation-auth-race-test.tsx',
+  'scripts/core-principal-scope-recovery-test.tsx',
   'scripts/repository-pr-test.ts',
   'scripts/repository-pr-route-test.ts',
   'scripts/repository-pr-client-test.ts',

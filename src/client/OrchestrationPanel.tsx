@@ -12,6 +12,7 @@ import type { WorkOutputPtyCapability, WorkOutputPtyClient } from './work-output
 import { normalizeOutputMonitorSlots, type OutputMonitorSlots } from './work-output-monitor.js';
 import { isConversationHistoryAccessFailure, loadJobConversation, refreshVisibleJobConversation } from './job-conversation.js';
 import { isApiAuthError, isApiMutationUncertainError, getApiPrincipalScopeKey, subscribeApiAuthentication } from './auth.js';
+import { isPrincipalScopeKey } from '../shared/api-principal-scope.js';
 import { createLatestDetailRequestController } from './latest-detail-request.js';
 import { projectReceiptFacts } from '../shared/receipt-presentation.js';
 export { createLatestDetailRequestController } from './latest-detail-request.js';
@@ -152,18 +153,19 @@ function submissionFingerprint(input: SubmissionIdentity): string {
 }
 
 export type SubmissionIdempotencyController = {
-  keyFor: (input: SubmissionIdentity, ownerScope?: string) => string;
-  complete: (input: SubmissionIdentity, key: string, ownerScope?: string) => void;
-  settle: (input: SubmissionIdentity, key: string, outcome: 'success' | 'definitive-failure' | 'ambiguous-failure' | 'ignored', ownerScope?: string) => void;
+  keyFor: (input: SubmissionIdentity, ownerScope: string | undefined) => string;
+  complete: (input: SubmissionIdentity, key: string, ownerScope: string | undefined) => void;
+  settle: (input: SubmissionIdentity, key: string, outcome: 'success' | 'definitive-failure' | 'ambiguous-failure' | 'ignored', ownerScope: string | undefined) => void;
 };
 
 export function createSubmissionIdempotencyController(
   issueKey: () => string = () => nextIdempotencyKey('teams-tab-submit'),
 ): SubmissionIdempotencyController {
   const pending = new Map<string, { key: string; uncertain: boolean; intent: string }>();
-  const fingerprint = (input: SubmissionIdentity, ownerScope?: string) => JSON.stringify([ownerScope ?? 'unverified-client-session', submissionFingerprint(input)]);
+  const fingerprint = (input: SubmissionIdentity, ownerScope: string) => JSON.stringify([ownerScope, submissionFingerprint(input)]);
   return {
     keyFor(input, ownerScope) {
+      if (!isPrincipalScopeKey(ownerScope)) throw new Error('인증 범위를 확인하지 못했습니다. 새로고침한 뒤 다시 제출하세요.');
       const identity = fingerprint(input, ownerScope); const existing = pending.get(identity);
       if (existing) return existing.key;
       const intent = fingerprint({ ...input, catalogRevision: undefined }, ownerScope);
@@ -174,10 +176,12 @@ export function createSubmissionIdempotencyController(
       const entry = { key: issueKey(), uncertain: false, intent }; pending.set(identity, entry); return entry.key;
     },
     complete(input, key, ownerScope) {
+      if (!isPrincipalScopeKey(ownerScope)) return;
       const identity = fingerprint(input, ownerScope);
       if (pending.get(identity)?.key === key) pending.delete(identity);
     },
     settle(input, key, outcome, ownerScope) {
+      if (!isPrincipalScopeKey(ownerScope)) return;
       const identity = fingerprint(input, ownerScope), entry = pending.get(identity);
       if (!entry || entry.key !== key) return;
       if (outcome === 'success' || outcome === 'definitive-failure' && !entry.uncertain) pending.delete(identity);

@@ -35,6 +35,11 @@ An opaque token change alone establishes no principal identity. Missing/malforme
 scope leaves a changed-credential receipt uncertain; different scope withholds it.
 Old responses never replace the current scope observation.
 
+A missing/malformed header on an error (for example a headerless503 from a proxy)
+does not erase the last valid scope in the same credential generation. A credential
+change, reset or401/403 still clears it. A different valid scope, including a
+conversation change with the same token, invalidates private views and late bodies.
+
 Core JSON mutations send the previously observed scope in
 `X-Teams-Expected-Principal-Scope` when available. The server compares it with
 the authenticated scope before service admission; mismatch is409
@@ -50,6 +55,13 @@ prompt or switching owner does not evict another unresolved key. Returning to th
 same owner/input reuses it. Unknown outcomes, including a view-generation change,
 keep the key. A later failed recovery/auth attempt cannot erase earlier uncertainty;
 only a confirmed receipt settles that uncertain key.
+
+Unknown/malformed scope cannot allocate a submission key or dispatch a new UI
+submission. The user must refresh to obtain a valid server scope first. There is
+no fallback bucket for an unverified client session. If scope becomes unknown
+after a credential change, pending keys remain in memory under their original
+verified owner; restoring that owner allows the same-key recovery. Unknown scope
+cannot settle/delete them or migrate them to another account/conversation.
 
 If a catalog refresh changes only execution metadata for the same visible input
 while a prior request is uncertain, a fresh key is blocked until the original
@@ -70,6 +82,9 @@ handlers. Only synthetic token validation/provider observations are used; the
 execution port creates test store rows and never launches an agent or real CLI.
 It covers201/auth races, same-owner renewal vs account/tenant change, response/body
 loss, GET/POST boundaries, scope mismatch, sticky/bounded keys and UI replay.
+`npm run test:principal-scope` adds unknown-to-known and known-to-unknown mounted
+React recovery, headerless503 retention, same-token conversation changes, and real
+HTTP307 redirect refusal with no requests reaching the redirect destination.
 
 These are local contracts and synthetic results, not a live Teams/Entra/DC test.
 Keys are not persisted across page/app restart; durable server job read-back is

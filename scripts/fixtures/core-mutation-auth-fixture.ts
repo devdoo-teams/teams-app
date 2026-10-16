@@ -14,6 +14,7 @@ import { observeTeamsCliTestCatalog } from './teams-cli-agent-policy-fixture.js'
 export async function createCoreMutationAuthFixture() {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'teams-core-mutation-auth-'));
   const store = new AgentJobStore(path.join(directory, 'jobs.json')); await store.initialize();
+  let conversationId = 'synthetic-core-personal';
   let creations = 0, token = 'synthetic-A1', signOut = false, stripScope = false;
   const scopes = new Map([
     ['synthetic-A1', { tenantId: 'synthetic-tenant', requesterId: 'A' }],
@@ -38,7 +39,7 @@ export async function createCoreMutationAuthFixture() {
       logger: { warn() {} } }),
     resolveAuthenticatedScope: (_request, response) => {
       const user = response.locals.user;
-      return user ? { tenantId: user.tid, requesterId: user.requesterId, conversationId: 'synthetic-core-personal' } : undefined;
+      return user ? { tenantId: user.tid, requesterId: user.requesterId, conversationId } : undefined;
     },
   }));
   const server = http.createServer(app); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -71,6 +72,7 @@ export async function createCoreMutationAuthFixture() {
   resetAuthStateForTest(); markTeamsHostReady(); setAuthRequired(true);
   setAuthTokenProviderForTest(async () => { if (signOut) throw new Error('synthetic signed out'); return token; });
   return {
+    setConversation(value: string) { conversationId = value; },
     store, held, requests, get creations() { return creations; },
     useToken(value: string) { assert.ok(scopes.has(value)); token = value; },
     signOut(value = true) { signOut = value; },

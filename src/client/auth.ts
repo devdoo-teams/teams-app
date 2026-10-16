@@ -462,7 +462,18 @@ export async function runApiOperation<T>(
       scope.assertActive();
       const ownerHeader = coreSameOrigin ? response.headers.get(API_PRINCIPAL_SCOPE_HEADER) : undefined;
       const owner = isPrincipalScopeKey(ownerHeader) ? ownerHeader : undefined;
-      if (authGeneration === authenticationGeneration && coreSameOrigin && response.status !== 401 && response.status !== 403) principalScopeKey = owner;
+      if (authGeneration === authenticationGeneration && owner && response.status !== 401 && response.status !== 403) {
+        // A headerless proxy/error response cannot revoke an earlier proof in
+        // this credential generation. Credential invalidation still clears it.
+        const changed = principalScopeKey !== undefined && principalScopeKey !== owner;
+        principalScopeKey = owner;
+        if (changed) {
+          // A conversation can change while the opaque credential stays the
+          // same. Invalidate old private views/bodies before exposing this one.
+          authGeneration = ++authenticationGeneration;
+          for (const listener of authenticationListeners) listener();
+        }
+      }
       const facts = { generation: authGeneration, mutation, owner };
       responseFacts.set(response, facts);
       assertResponseScope(facts, response.status);
