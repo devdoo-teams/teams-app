@@ -45,7 +45,7 @@
 
 **Files:** package.json, package-lock.json, appPackage/manifest.json, Core test inventory/contract, docs/portable-http-mac.md.
 
-- [ ] Register focused tests in Core, set candidate 1.0.155 consistently and document opt-in composition/remaining host gates.
+- [ ] Register focused tests in Core, set candidate 1.0.156 consistently and document opt-in composition/remaining host gates.
 - [ ] Commit, then run exact-commit strict typecheck, Core tests/build, manifest, bundle determinism and ZIP read-back with bounded logs.
 - [ ] Record source/build/package identities, preserved original server/ledger and exact-SHA CI pending status.
 - [ ] Prepare diff and evidence for Astra; keep final operational promotion pending review.

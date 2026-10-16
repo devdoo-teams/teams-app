@@ -80,7 +80,7 @@ durable replay/restart, lost replies, disconnect/cancel cleanup, ownership/model
 tampering and the real AgentService isolation rejection. They do not execute a
 real CLI or use a login, real Teams data or external provider.
 
-The implementation branch prepares version 1.0.155 after confirming its tag is
+The implementation branch prepares version 1.0.156 after confirming its tag is
 unused. Frozen 1.0.154/ea17384 tag/draft/run and public 1.0.152/8dcc remain preserved.
 Local exact-commit build/package evidence is separate from remote exact-SHA CI,
 new hosting HTTPS, Bot/SSO round-trip, installation and Teams web/Mac/iPhone gates.

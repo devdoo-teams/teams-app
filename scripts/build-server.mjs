@@ -193,7 +193,7 @@ try {
         ]
         : optionalExternalPackages,
       outdir: temporaryDir,
-      entryNames: 'index',
+      entryNames: '[name]',
       // Keep optional provider chunks lazy as well. The default production
       // startup must not parse the large optional graph before listen().
       splitting: true,

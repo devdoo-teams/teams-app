@@ -32,7 +32,7 @@ prepare an exact-source local candidate, then obtain Astra review before promoti
 ## Evidence and promotion
 
 Tests use synthetic jobs and loopback HTTP only, never real Codex or Teams data.
-New candidate identity is 1.0.155 on the implementation branch, leaving the frozen
+New candidate identity is 1.0.156 on the implementation branch, leaving the frozen
 1.0.154 tag/draft/run intact. Strict typecheck, focused tests, Core build/tests,
 manifest, server determinism and ZIP read-back are local gates. Exact-SHA remote CI,
 provider HTTPS, installation and real Teams web/desktop/iPhone are separate gates.
