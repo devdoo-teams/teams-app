@@ -56,6 +56,8 @@ async function findReusableServerBundle() {
       fs.readFile(entryPath),
       fs.readFile(markerPath, 'utf8'),
     ]);
+    const portableStat = await fs.stat(path.join(outputDir, 'portable-worker-runtime.js'));
+    if (!portableStat.isFile() || portableStat.size <= 0) return null;
     if (entryStat.size <= 0 || (Number.isInteger(entryStat.blocks) && entryStat.blocks === 0)) return null;
     const marker = parseServerBuildMarker(markerRaw);
     if (!marker) return null;
@@ -152,7 +154,9 @@ try {
       outputDir,
       buildImplementation: (temporaryDir) => buildWithBoundedRetry(build, {
       absWorkingDir: materializedSource?.sourceRoot ?? root,
-      entryPoints: [materializedSource?.entryPointRelative ?? 'src/server/index.ts'],
+      entryPoints: materializedSource
+        ? [materializedSource.entryPointRelative, 'server/portable-worker-runtime.ts']
+        : ['src/server/index.ts', 'src/server/portable-worker-runtime.ts'],
       bundle: true,
       format: 'esm',
       platform: 'node',

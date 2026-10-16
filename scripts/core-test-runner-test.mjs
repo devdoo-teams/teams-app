@@ -66,6 +66,10 @@ async function assertProcessReaped(pid, label, timeoutMs = 2_000) {
     env: HOSTILE_PARENT_ENV,
   });
   assert.ok(invocations.length > 2);
+  assert.ok(invocations.some(({ args }) => args.includes('scripts/portable-worker-test.ts')),
+    'Core CI must exercise provider-independent handoff and Mac policy regressions');
+  assert.ok(invocations.some(({ args }) => args.includes('scripts/portable-worker-build-test.mjs')),
+    'Core CI must prove the opt-in handoff runtime is included in the exact server tree');
   assert.ok(invocations.some(({ args }) => args.includes('scripts/local-exposure-test.mjs')),
     'Core CI must include local server/tunnel regression tests without requiring external providers');
   for (const invocation of invocations) {

@@ -137,6 +137,15 @@ test('authenticated loopback HTTP preserves dispatch/begin/result and rejects bo
     assert.deepEqual((await transport.begin(claim)).task.selection, selection);
     await transport.finish(claim, { status: 'completed', result: 'synthetic HTTP result', providerExecutionId: 'fixture-native-id' });
     assert.equal((await f.host.dispatcher.observe(job()))?.result, 'synthetic HTTP result');
+    const { MacPullWorker } = await import('../src/server/mac-pull-worker.js');
+    const executor = controlledExecutor();
+    const connector = new MacPullWorker({ transport, executor, principal: scope, sourceCommit: commit });
+    try {
+      await f.host.dispatcher.dispatch(job({ id: 'http-mac-job' })); await connector.step(); executor.complete();
+      await Promise.resolve(); assert.equal(await connector.step(), 'settled');
+      assert.equal(executor.starts, 1);
+      assert.equal((await f.host.dispatcher.observe(job({ id: 'http-mac-job' })))?.status, 'completed');
+    } finally { await connector.close(); }
   } finally { await new Promise<void>(resolve => server ? server.close(() => resolve()) : resolve()); await f.close(); }
 });
 
@@ -293,4 +302,27 @@ test('failed native cleanup keeps the connector blocked and prevents reassignmen
     f.advance(1001); assert.equal(await f.host.claim(worker), undefined); assert.equal(starts, 1);
     assert.equal(await connector.close(), false);
   } finally { await connector.close(); await f.close(); }
+});
+
+test('stalled start is bounded and a late execution is cancelled before reconnect', async () => {
+  const { MacPullWorker } = await import('../src/server/mac-pull-worker.js');
+  const f = await fixture(); let starts = 0, cancels = 0;
+  let sawStart!: () => void; const started = new Promise<void>(resolve => { sawStart = resolve; });
+  let release!: (value: import('../src/server/mac-pull-worker.js').MacExecution) => void;
+  const connector = new MacPullWorker({ principal: scope, sourceCommit: commit, cleanupTimeoutMs: 100,
+    transport: localTransport(f.host), executor: { async start() { starts++; sawStart(); return new Promise(r => { release = r; }); } } });
+  try {
+    await f.host.dispatcher.dispatch(job());
+    const step = connector.step(); await started;
+    const observed = await Promise.race([step, new Promise<string>(resolve => setTimeout(() => resolve('hung'), 300))]);
+    assert.equal(observed, 'blocked'); assert.throws(() => connector.reconnect(), /reconciliation/);
+    let resolveResult!: (value: import('../src/server/pull-worker.js').PullResult) => void;
+    release({ result: new Promise(r => { resolveResult = r; }), async cancel() { cancels++; resolveResult({ status: 'cancelled' }); } });
+    await new Promise(resolve => setTimeout(resolve, 20)); connector.reconnect(); await connector.step();
+    assert.equal(cancels, 1); assert.equal(starts, 1);
+    assert.equal((await f.host.dispatcher.observe(job()))?.status, 'cancelled');
+  } finally {
+    release?.({ result: Promise.resolve({ status: 'cancelled' }), async cancel() {} });
+    await connector.close(); await f.close();
+  }
 });

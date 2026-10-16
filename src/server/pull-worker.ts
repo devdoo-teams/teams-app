@@ -48,6 +48,7 @@ export type PullWorkerHost = Awaited<ReturnType<typeof createPullWorkerHost>>;
 export async function createPullWorkerHost(options: Readonly<{
   file: string; workerId: string; sourceCommit: string; leaseMs?: number; now?: () => number;
 }>) {
+  options = { ...options };
   identifier.parse(options.workerId);
   if (!/^[0-9a-f]{40}$/.test(options.sourceCommit)) throw new PullWorkerError('invalid', 'full source commit required');
   const leaseMs = options.leaseMs ?? 30000;

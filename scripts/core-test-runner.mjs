@@ -13,6 +13,7 @@ const coreBuildSteps = [
   ['scripts/build-server.mjs', '--core'],
 ];
 const plainTests = [
+  'scripts/portable-worker-build-test.mjs',
   'scripts/run-module-test-test.mjs',
   'scripts/independent-release-identity-test.mjs',
   'scripts/channels-renderer-build-test.mjs',
@@ -59,6 +60,7 @@ const runtimeTests = [
   'scripts/core-orchestration-confirmation-chat-runtime-test.ts',
 ];
 const tsTests = [
+  'scripts/portable-worker-test.ts',
   'scripts/core-approval-recovery-test.ts',
   'scripts/agent-approval-expiry-test.ts',
   'scripts/core-result-publication-test.ts',

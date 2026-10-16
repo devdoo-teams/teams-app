@@ -68,6 +68,7 @@ export class MacPullWorker {
     principal: Readonly<{ tenantId: string; requesterId: string }>;
     sourceCommit: string; cleanupTimeoutMs?: number;
   }>) {
+    this.options = { ...options, principal: { ...options.principal } };
     if (!/^[0-9a-f]{40}$/.test(options.sourceCommit) || !options.principal.tenantId || !options.principal.requesterId) throw new PullWorkerError('invalid');
     this.cleanupTimeoutMs = options.cleanupTimeoutMs ?? 15000;
     if (!Number.isSafeInteger(this.cleanupTimeoutMs) || this.cleanupTimeoutMs < 100 || this.cleanupTimeoutMs > 30000) throw new PullWorkerError('invalid');
@@ -104,6 +105,25 @@ export class MacPullWorker {
       active.outcome = pullResultSchema.parse(result); active.cleanupVerified = true;
     } finally { if (timer) clearTimeout(timer); }
   }
+  private async startBounded(claim: PullClaim): Promise<MacExecution> {
+    const pending = this.options.executor.start(structuredClone(claim.task));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+    try {
+      return await Promise.race([pending, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => { timedOut = true; reject(new PullWorkerError('unavailable', 'start timeout')); }, this.cleanupTimeoutMs);
+      })]);
+    } catch (error) {
+      if (timedOut) void pending.then(async execution => {
+        // A start may succeed after its caller timed out. Retain ownership and
+        // stop it; never turn a late handle into another accepted execution.
+        this.active = { claim, execution };
+        try { await this.stopOwned(); this.uncertainStart = false; }
+        catch { /* retained as uncertain; operator reconciliation is required */ }
+      }, () => undefined);
+      throw error;
+    } finally { if (timer) clearTimeout(timer); }
+  }
   private async stepOnce(): Promise<'idle' | 'running' | 'settled' | 'blocked'> {
     if (this.closed || this.blocked) return 'blocked';
     try {
@@ -126,7 +146,7 @@ export class MacPullWorker {
       const begun = this.validate(await this.options.transport.begin(claim));
       if (hash(claim) !== hash(begun)) throw new PullWorkerError('conflict', 'begin identity changed');
       this.uncertainStart = true;
-      const execution = await this.options.executor.start(structuredClone(begun.task));
+      const execution = await this.startBounded(begun);
       const active: Active = { claim: begun, execution };
       this.active = active; this.uncertainStart = false;
       void execution.result.then(value => {
