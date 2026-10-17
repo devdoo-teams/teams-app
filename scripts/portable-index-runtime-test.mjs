@@ -76,9 +76,14 @@ try {
   assert.equal(second.sourceCommit, first.sourceCommit); assert.equal(second.serverBundleSha256, first.serverBundleSha256);
   assert.equal(await fs.readFile(path.join(state, 'synthetic-preservation.json'), 'utf8'), 'synthetic persistent fixture');
   for (const name of ['items.json', 'work-items.json', 'collaboration.json', 'agent-jobs.json', 'a2a.json', 'a2a-outbound.json',
-    'genui-actions.json', 'response-modes.json', 'execution-presentation.json', 'core-job-card-pages.json']) {
+    'genui-actions.json', 'response-modes.json', 'execution-presentation.json']) {
     const stat = await fs.stat(path.join(state, name)); assert.equal(stat.mode & 0o077, 0, `private state ${name}`);
   }
+  // CoreJobCardPages keeps an unused empty store absent until the first card publication.
+  // Its existing process lease still proves this configured path is privately reserved.
+  await assert.rejects(fs.stat(path.join(state, 'core-job-card-pages.json')), { code: 'ENOENT' });
+  const pageLease = await fs.stat(path.join(state, '.core-job-card-pages.json.teams-sdk-store-lease', 'owner.json'));
+  assert.equal(pageLease.mode & 0o077, 0);
   console.log(JSON.stringify({ result: 'PASS', sourceCommit: first.sourceCommit, version: first.version,
     serverBundleSha256: first.serverBundleSha256, nativeExecution: 'NOT_RUN', liveAuthentication: 'NOT_RUN', restart: 'PASS' }));
 } finally { await stop(); await fs.rm(temporary, { recursive: true, force: true }); }
