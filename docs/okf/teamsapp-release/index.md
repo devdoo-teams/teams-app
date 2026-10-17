@@ -8,7 +8,7 @@ okf_version: 0.2
 
 ## Concepts
 
-- [Portable HTTP / existing Mac execution](../../portable-http-mac.md) - opt-in durable handoff, authenticated HTTP and Mac policy adapter; deployment binding and real host gates remain pending review
+- [Portable HTTP / existing Mac execution](../../portable-http-mac.md) - opt-in production HTTP/Mac composition, private state and existing delegated provider; live binding, deployment and host gates remain pending review
 
 - [Local server and tunnel choices](../../local-server-options.md) - independent server/provider plans, bounded loopback checks and separate external-domain/Teams approval gates
 

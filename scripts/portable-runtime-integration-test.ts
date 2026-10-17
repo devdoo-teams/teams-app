@@ -57,7 +57,7 @@ async function fixture(dispose: () => Promise<void> = async () => undefined) {
   const config = runtime.resolvePortableHostConfig({ TEAMS_AGENT_DISPATCH_MODE: 'pull-worker',
     TEAMS_PULL_STATE_DIR: path.join(root, 'cloud'), TEAMS_PULL_WORKER_BINDING: JSON.stringify(binding) })!;
   let host!: Awaited<ReturnType<typeof runtime.createPortableHostRuntime>>, cloud!: AgentService, server!: Server, port = 0;
-  let dropFinish = false, validAuthorization = true;
+  let dropFinish = false, validAuthorization = true, observations = 0;
   async function startCloud() {
     host = await runtime.createPortableHostRuntime({ config, sourceCommit, acceptedAudiences: [audience], logger: { warn() {} },
       validator: { validateAccessToken: async token => token === 'synthetic-runtime-token'
@@ -80,12 +80,12 @@ async function fixture(dispose: () => Promise<void> = async () => undefined) {
   await startCloud();
   const mac = runtime.createMacPullRuntime({ baseUrl: `http://127.0.0.1:${port}`, testLoopback: true,
     sourceCommit, binding, service: macService, pollIntervalMs: 100, requestTimeoutMs: 1000,
-    authorization: async () => validAuthorization ? 'Bearer synthetic-runtime-token' : 'Bearer synthetic-denied', observe: async () => ({ sourceCommit, catalog: teamsCliTestCatalog,
+    authorization: async () => validAuthorization ? 'Bearer synthetic-runtime-token' : 'Bearer synthetic-denied', observe: async () => (observations++, { sourceCommit, catalog: teamsCliTestCatalog,
       providerFact: { provider: 'codex', availability: 'available', capabilities: ['submit', 'cancel'],
         source: 'runtime-probe', observedAt: new Date().toISOString(), readiness: { configured: 'configured', executable: 'present',
           authentication: 'authenticated', entitlement: 'allowed', probe: 'passed', reason: 'verified' } } }) });
   return { runner, admission, macService, mac, get cloud() { return cloud; }, get host() { return host; }, get port() { return port; },
-    get cleanupEntered() { return cleanupEntered; }, setAuthorization(valid: boolean) { validAuthorization = valid; }, dropNextFinish() { dropFinish = true; },
+    get cleanupEntered() { return cleanupEntered; }, get observations() { return observations; }, setAuthorization(valid: boolean) { validAuthorization = valid; }, dropNextFinish() { dropFinish = true; },
     async restartCloud() { await cloud.close(); await new Promise<void>(resolve => server.close(() => resolve())); await startCloud(); },
     async close() { runner.cancel(); await mac.close(); await macService.close(); await cloud.close();
       await new Promise<void>(resolve => server.close(() => resolve())); await fs.rm(root, { recursive: true, force: true }); } };
@@ -189,5 +189,17 @@ test('bounded scheduler drives the composed HTTP service and close cancels only 
     assert.equal(await f.mac.close(), true); assert.equal(f.mac.status(), 'closed');
     assert.equal(f.macService.listLocalOnly()[0].status, 'cancelled'); assert.equal(f.admission.snapshot().global, 0);
     await wait(250); assert.equal(f.runner.starts, 1); assert.throws(() => f.mac.start());
+  } finally { await f.close(); }
+});
+
+
+test('explicit reconnect can restart a scheduler that stopped after rejected authentication', { skip: process.platform !== 'darwin' }, async () => {
+  const f = await fixture();
+  try {
+    f.mac.start(); await until(() => f.observations >= 1, 'initial scheduler cycle');
+    f.setAuthorization(false); await until(() => f.mac.status() === 'blocked', 'scheduler auth denial');
+    const observed = f.observations; f.setAuthorization(true); f.mac.reconnect(); f.mac.start();
+    await until(() => f.observations > observed, 'explicitly restarted scheduler');
+    assert.equal(f.runner.starts, 0);
   } finally { await f.close(); }
 });

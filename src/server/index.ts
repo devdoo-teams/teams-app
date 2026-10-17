@@ -7,6 +7,9 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 import express from 'express';
+import { resolvePortableHostConfig, resolvePortableMacConfig } from './portable-runtime-config.js';
+import { createPortableHostRuntime } from './portable-host-runtime.js';
+import { createExistingDelegatedAuthorization, createMacPullRuntime } from './portable-mac-runtime.js';
 import type { IMessageActivity, IMessageActivityInput } from '@microsoft/teams.api';
 
 import { createUserAuthMiddleware, parseAcceptedAudiences } from './user-auth.js';
@@ -317,22 +320,27 @@ const runtimeDistRoot = process.env.TEAMS_RUNTIME_DIST_DIR?.trim()
   ? path.resolve(process.env.TEAMS_RUNTIME_DIST_DIR)
   : path.resolve(process.cwd(), 'dist');
 const clientDist = path.join(runtimeDistRoot, 'client');
-const itemStorePath = process.env.ITEM_STORE_PATH ?? path.resolve(process.cwd(), 'data/items.json');
-const workItemStorePath = process.env.WORK_ITEM_STORE_PATH ?? path.resolve(process.cwd(), 'data/work-items.json');
-const collaborationStorePath = process.env.COLLABORATION_STORE_PATH ?? path.resolve(process.cwd(), 'data/collaboration.json');
-const agentJobStorePath = process.env.AGENT_JOB_STORE_PATH ?? path.resolve(process.cwd(), 'data/agent-jobs.json');
+const portableHostConfig = resolvePortableHostConfig(process.env);
+const portableMacConfig = resolvePortableMacConfig(process.env);
+const fileStorePath = (key: string, fileName: string): string => portableHostConfig
+  ? portableHostConfig.storePath(key, fileName)
+  : process.env[key] ?? path.resolve(process.cwd(), 'data', fileName);
+const itemStorePath = fileStorePath('ITEM_STORE_PATH', 'items.json');
+const workItemStorePath = fileStorePath('WORK_ITEM_STORE_PATH', 'work-items.json');
+const collaborationStorePath = fileStorePath('COLLABORATION_STORE_PATH', 'collaboration.json');
+const agentJobStorePath = fileStorePath('AGENT_JOB_STORE_PATH', 'agent-jobs.json');
 const coreJobCardPageStorePath = path.join(path.dirname(agentJobStorePath), 'core-job-card-pages.json');
 const teamsJobProgressStorePath = path.join(path.dirname(agentJobStorePath), 'teams-job-progress.json');
 let coreJobCardPages: CoreJobCardPages | undefined;
-const a2aStorePath = process.env.A2A_STORE_PATH ?? path.resolve(process.cwd(), 'data/a2a.json');
-const a2aOutboundStorePath = process.env.A2A_OUTBOUND_STORE_PATH ?? path.resolve(process.cwd(), 'data/a2a-outbound.json');
-const agentAdmissionJournalPath = process.env.AGENT_ADMISSION_JOURNAL_PATH ?? path.resolve(process.cwd(), 'data/agent-admission.json');
-const genUiActionStorePath = process.env.GENUI_ACTION_STORE_PATH ?? path.resolve(process.cwd(), 'data/genui-actions.json');
-const responseModeStorePath = process.env.RESPONSE_MODE_STORE_PATH ?? path.resolve(process.cwd(), 'data/response-modes.json');
+const a2aStorePath = fileStorePath('A2A_STORE_PATH', 'a2a.json');
+const a2aOutboundStorePath = fileStorePath('A2A_OUTBOUND_STORE_PATH', 'a2a-outbound.json');
+const agentAdmissionJournalPath = fileStorePath('AGENT_ADMISSION_JOURNAL_PATH', 'agent-admission.json');
+const genUiActionStorePath = fileStorePath('GENUI_ACTION_STORE_PATH', 'genui-actions.json');
+const responseModeStorePath = fileStorePath('RESPONSE_MODE_STORE_PATH', 'response-modes.json');
 const executionPresentationStorePath = path.join(path.dirname(agentJobStorePath), 'execution-presentation.json');
 const executionPresentationStore = new ExecutionPresentationStore(executionPresentationStorePath);
-const providerMutationReplayStorePath = process.env.PROVIDER_MUTATION_REPLAY_STORE_PATH ?? path.resolve(process.cwd(), 'data/provider-mutation-replay.json');
-const providerLifecycleStorePath = process.env.PROVIDER_LIFECYCLE_STORE_PATH ?? path.resolve(process.cwd(), 'data/provider-lifecycle.json');
+const providerMutationReplayStorePath = fileStorePath('PROVIDER_MUTATION_REPLAY_STORE_PATH', 'provider-mutation-replay.json');
+const providerLifecycleStorePath = fileStorePath('PROVIDER_LIFECYCLE_STORE_PATH', 'provider-lifecycle.json');
 const remoteA2ARoster = parseA2ARemotePeerRoster(process.env.TEAMS_A2A_REMOTE_AGENTS);
 const hermesA2ARoster = Object.freeze(remoteA2ARoster.filter((peer) => peer.kind === 'hermes'));
 const configuredAgentProvider = process.env.TEAMS_AGENT_CLI_PROVIDER?.trim() || 'codex';
@@ -343,10 +351,11 @@ const agentProvider = configuredAgentProvider;
 const agentLabel = agentProvider === 'copilot' ? 'GitHub Copilot CLI' : 'Codex CLI';
 const storageBackend = process.env.TEAMS_STORAGE_BACKEND?.trim().toLowerCase() || 'file';
 const agentDispatchMode = process.env.TEAMS_AGENT_DISPATCH_MODE?.trim() || 'local';
-if (agentDispatchMode !== 'local' && agentDispatchMode !== 'azure-queue') {
-  throw new Error('TEAMS_AGENT_DISPATCH_MODE must be either local or azure-queue.');
+if (agentDispatchMode !== 'local' && agentDispatchMode !== 'azure-queue' && agentDispatchMode !== 'pull-worker') {
+  throw new Error('TEAMS_AGENT_DISPATCH_MODE must be local, azure-queue or pull-worker.');
 }
 const azureQueueDispatch = agentDispatchMode === 'azure-queue';
+const externalDispatch = azureQueueDispatch || Boolean(portableHostConfig);
 const optionalRuntimeRequested = process.env.TEAMS_CORE_BUILD !== 'true'
   && process.env.TEAMS_OPTIONAL_RUNTIME === 'true';
 const itemStore = new ItemStore(
@@ -404,7 +413,7 @@ const a2aOutboundStore = new TeamsA2AOutboundStore(a2aOutboundStorePath);
 const providerLifecycleStore = hermesA2ARoster.length > 0 || optionalRuntimeRequested
   ? new FileProviderLifecycleStore(providerLifecycleStorePath)
   : undefined;
-const codexRunner = azureQueueDispatch
+const codexRunner = externalDispatch
   ? undefined
   : new ProviderNeutralAgentRunner({ provider: agentProvider });
 const a2aAgentProviders = parseAgentProviders(
@@ -414,7 +423,7 @@ const a2aAgentProviders = parseAgentProviders(
 const providerRunners: Partial<Record<CliAgentProvider, ProviderNeutralAgentRunner>> = {
   ...(codexRunner ? { [agentProvider]: codexRunner } : {}),
 };
-for (const configuredAgent of azureQueueDispatch ? [] : a2aAgentProviders) {
+for (const configuredAgent of externalDispatch ? [] : a2aAgentProviders) {
   if (!providerRunners[configuredAgent.provider]) {
     providerRunners[configuredAgent.provider] = new ProviderNeutralAgentRunner({ provider: configuredAgent.provider });
   }
@@ -448,7 +457,7 @@ const operatorAllowlist = parseOperatorAllowlist(
 const unsafeTestProcessIsolation = safeLocal
   && process.env.NODE_ENV === 'test'
   && process.env.TEAMS_TEST_PROCESS_ISOLATION === 'true';
-const agentExecutionPolicy = azureQueueDispatch
+const agentExecutionPolicy = externalDispatch
   ? new AgentExecutionPolicy(agentWorkspace, {
       canMutateScope: (scope) => isOperator(scope),
       canReadScope: (scope) => isOperator(scope),
@@ -509,13 +518,13 @@ async function runA2ANativePreflight(policy: AgentExecutionPolicy): Promise<A2AW
   }
 }
 
-const nativeExecutionPreflight = !azureQueueDispatch
+const nativeExecutionPreflight = !externalDispatch
   && baseExecutionReadiness.state === 'configured'
   && isProduction
   ? await runA2ANativePreflight(agentExecutionPolicy)
   : undefined;
 const nativeExecutionVerified = nativeExecutionPreflight?.state === 'configured';
-const legacyExecutionReadiness = azureQueueDispatch
+const legacyExecutionReadiness = externalDispatch
   ? { state: 'unavailable' as const, reason: 'external-worker-dispatch' as const }
   : nativeExecutionPreflight?.state === 'unavailable'
   ? { state: 'unavailable' as const, reason: 'isolation-unavailable' as const }
@@ -532,7 +541,7 @@ const a2aCodexOrdinals = Object.freeze([
 ]);
 const a2aCodexProfileByOrdinal = new Map<number, A2ACodexExecutionProfile>();
 const a2aCodexProfileErrors = new Map<number, string>();
-if (!azureQueueDispatch && isProduction && a2aCodexOrdinals.length > 0) {
+if (!externalDispatch && isProduction && a2aCodexOrdinals.length > 0) {
   const resolvedProfiles = await Promise.all(a2aCodexOrdinals.map(async (ordinal) => {
     try {
       const [profile] = await createA2ACodexExecutionProfiles({ ordinals: [ordinal] });
@@ -573,7 +582,7 @@ for (const configuredAgent of a2aAgentProviders) {
   let policy: AgentExecutionPolicy | undefined;
   let unavailableReason: string | undefined;
 
-  if (azureQueueDispatch) {
+  if (externalDispatch) {
     unavailableReason = 'external-worker-dispatch';
   } else if (!isProduction && unsafeTestProcessIsolation) {
     policy = new AgentExecutionPolicy(agentWorkspace, {
@@ -911,6 +920,8 @@ agentJobStore = new AgentJobStore(
   { legacyProvider: agentProvider, durableLedger: agentJobDurableLedger },
 );
 let agentExecutionDispatcher: AgentExecutionDispatcher | undefined;
+let portableHostRuntime: Awaited<ReturnType<typeof createPortableHostRuntime>> | undefined;
+let portableMacRuntime: ReturnType<typeof createMacPullRuntime> | undefined;
 let azureAgentDispatchQueue: AzureAgentDispatchQueue | undefined;
 if (azureQueueDispatch) {
   if (storageBackend !== 'cosmos') {
@@ -1209,7 +1220,7 @@ function envelopeText(envelope: GenUiEnvelopeV1): string {
 }
 
 async function buildStatusEnvelope(): Promise<GenUiEnvelopeV1> {
-  const capabilities = azureQueueDispatch || !coreProviderCapabilities
+  const capabilities = externalDispatch || !coreProviderCapabilities
     ? unknownCliCapabilities()
     : verifiedCoreCliCapabilities(coreProviderCapabilities);
   return genUi.status({
@@ -1577,6 +1588,16 @@ if (authenticatedMcpRequested && !coreBuild && !authenticatedMcpConfig.enabled) 
 }
 const mcpEnabled = !coreBuild && (safeLocal || authenticatedMcpConfig.enabled);
 
+if (portableHostConfig) {
+  if (skipAuth || !userAuthConfigured || !userAuthValidator || configuredTenantId !== portableHostConfig.binding.tenantId
+    || !isOperator(portableHostConfig.binding)) {
+    throw new Error('Portable host requires the existing verified Entra validator and matching tenant.');
+  }
+  portableHostRuntime = await createPortableHostRuntime({ config: portableHostConfig,
+    sourceCommit: serverBuildIdentity.sourceCommit, validator: userAuthValidator, acceptedAudiences: acceptedUserAudiences });
+  agentExecutionDispatcher = portableHostRuntime.dispatcher;
+}
+
 // Keep the tab embeddable in Teams while applying response-level security
 // headers. The SDK adapter wraps an Express application and exposes the
 // middleware surface, but its wrapped app is intentionally not public in the
@@ -1854,7 +1875,8 @@ http.use((request: any, response: any, next: any) => {
   // the process-wide parser reject malformed JSON before the Teams identity
   // middleware can establish the authenticated scope.
   if (requestPath === '/api/core-orchestration' || requestPath.startsWith('/api/core-orchestration/')
-    || requestPath === '/api/repository-pr' || requestPath.startsWith('/api/repository-pr/')) {
+    || requestPath === '/api/repository-pr' || requestPath.startsWith('/api/repository-pr/')
+    || requestPath === '/api/pull-worker' || requestPath.startsWith('/api/pull-worker/')) {
     next();
     return;
   }
@@ -1864,7 +1886,7 @@ http.use((request: any, response: any, next: any) => {
 http.get('/api/health', async (_request: any, response: any) => {
   let cliCapabilities: CliCapabilities;
   try {
-    if (azureQueueDispatch) throw new Error('CLI probing belongs to the external Linux worker.');
+    if (externalDispatch) throw new Error('CLI probing belongs to the external worker.');
     cliCapabilities = verifiedCoreCliCapabilities(await probeCliCapabilities());
   } catch {
     // A capability probe is diagnostic only. If the runner itself fails, keep
@@ -1878,6 +1900,14 @@ http.get('/api/health', async (_request: any, response: any) => {
           .filter((job) => Boolean(job.tenantId))
           .map(createAgentDispatchTaskReferenceFromJob)[0],
       })
+    : portableHostRuntime ? {
+        liveness: { state: 'alive' as const }, configuration: { state: 'configured' as const },
+        dependencies: { state: { state: 'reachable' as const } },
+        workerHeartbeat: { state: portableHostRuntime.providerFacts()[0]?.availability === 'unknown' ? 'unverified' : 'observed',
+          source: 'authenticated-mac-observation' },
+        readiness: { state: portableHostRuntime.providerFacts()[0]?.availability === 'available' ? 'ready' : 'unverified' },
+        executionBoundary: 'portable-mac',
+      }
     : {
         liveness: { state: 'alive' as const },
         configuration: { state: 'configured' as const },
@@ -1912,6 +1942,7 @@ http.get('/api/health', async (_request: any, response: any) => {
     cliCapabilities,
     storage: {
       backend: storageBackend === 'cosmos' ? 'cosmos-configured' : 'file-json-single-process',
+      ...(portableHostConfig ? { persistentRoot: 'explicit-private-directory', providerVolume: 'unverified' } : {}),
       agentJobs: {
         backend: azureQueueDispatch ? 'cosmos-runtime-store' : 'file-json-single-process',
         migration: azureQueueDispatch ? 'durable-ledger-active' : 'not-migrated',
@@ -1939,7 +1970,7 @@ http.get('/api/health', async (_request: any, response: any) => {
     },
     dispatch: {
       mode: agentDispatchMode,
-      localCli: !azureQueueDispatch,
+      localCli: !externalDispatch,
       ...dispatchHealth,
     },
     copilotKit: optionalRuntimeEnabled ? 'enabled' : 'disabled',
@@ -2795,8 +2826,8 @@ agentService = new AgentService(
   notifyConversation,
   gitService,
   {
-    canMutateScope: (scope) => isOperator(scope),
-    canReadScope: (scope) => isOperator(scope),
+    canMutateScope: (scope) => isOperator(scope) && (!portableHostRuntime || portableHostRuntime.boundScope(scope)),
+    canReadScope: (scope) => isOperator(scope) && (!portableHostRuntime || portableHostRuntime.boundScope(scope)),
     executionPolicy: agentExecutionPolicy,
     admissionController: agentAdmissionController,
     agentLabel,
@@ -2810,7 +2841,7 @@ await agentService.initialize();
 await teamsJobProgressCoordinator.recover();
 await personalNotifications.recoverTerminalJobs(agentJobStore.listLocalOnly(4096));
 
-const coreProviderCapabilities = !azureQueueDispatch
+const coreProviderCapabilities = !externalDispatch
   ? await probeCliCapabilities().catch(() => unknownCliCapabilities())
   : undefined;
 
@@ -3005,6 +3036,7 @@ async function observeAzureCoreProviderFact(input: Readonly<{
 }
 
 function observeCoreProviderFacts(): CoreProviderFact[] {
+  if (portableHostRuntime) return portableHostRuntime.providerFacts();
   if (azureQueueDispatch) return [currentAzureCoreProviderFact()];
   const capabilities = coreProviderCapabilities
     ? verifiedCoreCliCapabilities(coreProviderCapabilities)
@@ -3026,6 +3058,7 @@ function observeCoreProviderFacts(): CoreProviderFact[] {
 }
 
 async function observeCoreCodexModelCatalog() {
+  if (portableHostRuntime) return portableHostRuntime.modelCatalog();
   if (codexWorkerCatalogPort) return codexWorkerCatalogPort.read();
   if (agentProvider !== 'codex') return undefined;
   const executable = process.env.CODEX_BIN?.trim();
@@ -3038,6 +3071,30 @@ async function observeCoreCodexModelCatalog() {
     localCodexModelCatalog = undefined;
     return undefined;
   }
+}
+
+if (portableMacConfig) {
+  if (!isProduction || process.platform !== 'darwin' || !nativeExecutionVerified
+    || configuredTenantId !== portableMacConfig.binding.tenantId || !isOperator(portableMacConfig.binding)) {
+    throw new Error('Mac pull requires the existing production operator and verified native read-only boundary.');
+  }
+  // Only this explicitly selected, already signed-in provider is permitted. No credential chain or login.
+  const { AzureCliCredential } = await import('@azure/identity');
+  const authorization = createExistingDelegatedAuthorization({ resource: portableMacConfig.resource,
+    credential: new AzureCliCredential({ tenantId: portableMacConfig.binding.tenantId, processTimeoutInMs: 3000 }) });
+  portableMacRuntime = createMacPullRuntime({ ...portableMacConfig, sourceCommit: serverBuildIdentity.sourceCommit,
+    authorization, service: agentService, observe: async signal => {
+      const capability = verifiedCoreCliCapabilities(await probeCliCapabilities({ timeoutMs: 2000, ghcpCapabilityProbe: false })).codex;
+      signal.throwIfAborted();
+      const catalog = await observeCoreCodexModelCatalog();
+      signal.throwIfAborted();
+      return { sourceCommit: serverBuildIdentity.sourceCommit, ...(catalog ? { catalog } : {}), providerFact: {
+        provider: 'codex', availability: capability.state, capabilities: capability.state === 'available'
+          && providerRunners.codex && typeof agentService.cancelStrict === 'function' ? ['submit', 'cancel'] : [],
+        observedAt: new Date().toISOString(), source: 'runtime-probe', readiness: cliProviderReadiness(capability),
+      } };
+    } });
+  portableMacRuntime.start();
 }
 
 const coreOrchestrationService = new CoreOrchestrationService({
@@ -3055,6 +3112,7 @@ coreJobCardPages = new CoreJobCardPages(coreJobCardPageStorePath, {
   update: async () => { throw new Error('CARD_PAGE_UPDATE_REQUIRES_AUTHENTICATED_ACTIVITY'); },
 });
 await coreJobCardPages.initialize();
+if (portableHostRuntime) http.use('/api/pull-worker', portableHostRuntime.router);
 mountCoreOrchestrationRoutes(http, {
   observeNotificationDelivery: (jobId, principal) => personalNotifications.status(jobId, principal),
   service: coreOrchestrationService,
@@ -3266,6 +3324,7 @@ const handleSignal = (signal: NodeJS.Signals): void => {
   shutdownPromise = (async () => {
     try {
       clearInterval(personalNotificationTimer);
+      if (portableMacRuntime && !await portableMacRuntime.close()) console.error('Portable Mac cleanup remains unverified.');
       await Promise.allSettled(
         [...a2aAgentServices.values()].map((service) => service.close({ closeAdmission: false })),
       );

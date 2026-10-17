@@ -51,6 +51,7 @@ const plainTests = [
   'scripts/client-build-jsx-runtime-test.mjs',
 ];
 const runtimeTests = [
+  'scripts/portable-index-runtime-test.mjs',
   'scripts/teams-core-chat-regression-test.ts',
   'scripts/response-mode-api-test.ts',
   'scripts/teams-a2a-chat-regression-test.ts',
@@ -70,6 +71,8 @@ const tsTests = [
   'scripts/repository-pr-panel-test.tsx',
   'scripts/portable-worker-test.ts',
   'scripts/portable-worker-service-test.ts',
+  'scripts/portable-runtime-composition-test.ts',
+  'scripts/portable-runtime-integration-test.ts',
   'scripts/core-approval-recovery-test.ts',
   'scripts/agent-approval-expiry-test.ts',
   'scripts/core-result-publication-test.ts',

@@ -70,6 +70,10 @@ async function assertProcessReaped(pid, label, timeoutMs = 2_000) {
     'Core CI must exercise provider-independent handoff and Mac policy regressions');
   assert.ok(invocations.some(({ args }) => args.includes('scripts/portable-worker-service-test.ts')),
     'Core CI must exercise actual AgentService cleanup and replay boundaries');
+  for (const file of ['scripts/portable-runtime-composition-test.ts', 'scripts/portable-runtime-integration-test.ts',
+    'scripts/portable-index-runtime-test.mjs']) {
+    assert.ok(invocations.some(({ args }) => args.includes(file)), `Core must verify portable production composition: ${file}`);
+  }
   for (const file of ['scripts/repository-pr-test.ts', 'scripts/repository-pr-route-test.ts',
     'scripts/repository-pr-client-test.ts', 'scripts/repository-pr-view-test.tsx', 'scripts/repository-pr-panel-test.tsx']) {
     assert.ok(invocations.some(({ args }) => args.includes(file)), `Core must include deterministic repository PR reading: ${file}`);

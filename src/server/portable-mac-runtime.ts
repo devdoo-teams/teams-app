@@ -75,7 +75,10 @@ export function createMacPullRuntime(options: Readonly<{
   return {
     step,
     start() { if (closed || status === 'blocked') throw new PullWorkerError('unavailable'); if (!scheduled) { scheduled = true; schedule(); } },
-    reconnect() { if (closed) throw new PullWorkerError('unavailable'); worker.reconnect(); status = 'idle'; },
+    reconnect() {
+      if (closed) throw new PullWorkerError('unavailable');
+      worker.reconnect(); scheduled = false; if (timer) clearTimeout(timer); timer = undefined; status = 'idle';
+    },
     status: () => status,
     async close(): Promise<boolean> {
       closed = true; scheduled = false; if (timer) clearTimeout(timer);
