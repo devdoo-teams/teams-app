@@ -14,7 +14,7 @@ Astra review precedes push/deployment.
   and an old receipt do not constitute executable readiness.
 - Test real HTTP/auth, durable host/AgentService and connector lifecycle. Only
   credentials/token validation and native execution/isolation are synthetic.
-- Preserve main,74 user files,19 artifacts and server152. No push/deploy/full CI.
+- Preserve main,74 user files,19 artifacts and server152. No push/deploy/remote CI.
 
 ## Tasks
 1. RED/GREEN explicit durable configuration and verified worker binding.
@@ -31,3 +31,8 @@ Astra review precedes push/deployment.
 - Read-only fresh jobs, fixed Luna/xhigh, admission/isolation and explicit cleanup
   proof remain authoritative. Persistent JSON requires one writer and a volume;
   shared SQL/provider-volume/live-auth configuration are not claimed.
+
+## Astra163 P2 follow-up
+- Preserve the original cached-probe start timestamp; expire admission30seconds after that measurement, and accept recovery only after a new probe.
+- Process active heartbeat before diagnostics, proving reported and accepted worst-case timing budgets plus genuine expiry/owned cleanup.
+- Run the full local Core and boundary regressions at the fix SHA. No new feature scope, credentials, push or deployment.

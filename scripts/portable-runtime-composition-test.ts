@@ -5,6 +5,8 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import express from 'express';
 import type { Server } from 'node:http';
+import type { AgentService } from '../src/server/agent-service.js';
+import type { AgentJob } from '../src/server/agent-job-store.js';
 
 const binding = {
   workerId: 'synthetic-mac',
@@ -256,4 +258,83 @@ test('actual index cached capability report expires 30 seconds after its origina
     assert.equal(fresh.providerFact.observedAt, new Date(now).toISOString());
     assert.equal((await report(fresh)).status, 200); assert.equal(f.host.providerFacts()[0].availability, 'available');
   } finally { Object.defineProperty(globalThis, 'Date', { value: RealDate, configurable: true, writable: true }); await f.close(); }
+});
+
+
+async function leaseBoundary(timing: Readonly<{ beginReply: number; start: number; poll: number; observation: number; observationHttp: number; heartbeat: number }>, expire = false) {
+  const { createMacPullRuntime } = await import('../src/server/portable-worker-runtime.js');
+  const { teamsCliTestCatalog, teamsCliTestSelection } = await import('./fixtures/teams-cli-agent-policy-fixture.js');
+  const RealDate = globalThis.Date, realFetch = globalThis.fetch; let now = RealDate.now(), slow = false;
+  class ClockDate extends RealDate { constructor(value?: string | number) { super(value === undefined ? now : value); } static now() { return now; } }
+  const f = await boundaryHost(() => now); let mac: ReturnType<typeof createMacPullRuntime> | undefined;
+  let localJob: AgentJob | undefined, cancelCount = 0, cleanupVerified = false;
+  let settle!: (value: Awaited<ReturnType<AgentService['waitForExecutionSettlement']>>) => void;
+  const settlement = new Promise<Awaited<ReturnType<AgentService['waitForExecutionSettlement']>>>(resolve => { settle = resolve; });
+  const scope = { tenantId: binding.tenantId, requesterId: binding.requesterId, conversationId: 'synthetic-boundary-session' };
+  const job: AgentJob = { id: 'synthetic-boundary-job', ...scope, provider: 'codex', mode: 'read-only',
+    prompt: 'Synthetic accepted lease latency', ...teamsCliTestSelection, status: 'queued', progress: [], createdAt: new Date().toISOString() };
+  const service = {
+    async submit(input: Parameters<AgentService['submit']>[0]): Promise<AgentJob> {
+      now += timing.start; localJob = { id: 'synthetic-boundary-local', ...input, ...input.scope,
+        executionEnvironment: 'local-macos', status: 'running', progress: [], createdAt: new Date().toISOString() }; return localJob;
+    },
+    async waitForExecutionSettlement() { const receipt = await settlement; cleanupVerified = receipt.execution === 'settled' && receipt.cleanup === 'verified'; return receipt; },
+    async cancelStrict() { assert.ok(localJob); cancelCount++; localJob = { ...localJob, status: 'cancelled' };
+      settle({ execution: 'settled', cleanup: 'verified', job: localJob }); return localJob; },
+  };
+  try {
+    Object.defineProperty(globalThis, 'Date', { value: ClockDate, configurable: true, writable: true });
+    // Advance a synthetic clock at actual protocol boundaries; HTTP/auth/host/worker code is unchanged.
+    globalThis.fetch = async (input, init) => {
+      const operation = String(input).split('/').at(-1);
+      if (slow && operation === 'heartbeat') now += timing.heartbeat;
+      const response = await realFetch(input, init);
+      if (operation === 'begin') now += timing.beginReply;
+      if (slow && operation === 'observe') now += timing.observationHttp;
+      return response;
+    };
+    mac = createMacPullRuntime({ baseUrl: f.origin, testLoopback: true, binding, sourceCommit, service,
+      pollIntervalMs: timing.poll, requestTimeoutMs: 5000, authorization: () => 'Bearer synthetic-worker',
+      observe: async () => {
+        if (slow) now += timing.observation;
+        return { sourceCommit, catalog: teamsCliTestCatalog, providerFact: { provider: 'codex', availability: 'available',
+          capabilities: ['submit', 'cancel'], observedAt: new Date().toISOString(), source: 'runtime-probe',
+          readiness: { configured: 'configured', executable: 'present', authentication: 'authenticated', entitlement: 'allowed', probe: 'passed', reason: 'verified' } } };
+      } });
+    assert.equal(await mac.step(), 'idle'); await f.host.dispatcher.dispatch(job);
+    const begin = now; assert.equal(await mac.step(), 'running'); now += expire ? 31000 : timing.poll; slow = true;
+    const status = await mac.step(); const remote = await f.host.dispatcher.observe(job);
+    const observed = { status, remoteStatus: remote?.status, cancelCount, cleanupVerified, localStatus: localJob?.status, elapsed: now - begin };
+    if (!expire && status === 'running') {
+      // Include response delay from the prior heartbeat, then every accepted steady-cycle maximum.
+      now += 5000 + timing.poll; assert.equal(await mac.step(), 'running');
+      assert.equal((await f.host.dispatcher.observe(job))?.status, 'running'); assert.equal(cancelCount, 0);
+    } else if (expire) {
+      assert.equal(await mac.step(), 'blocked'); assert.equal(cancelCount, 1, 'no duplicate cleanup or automatic reassignment');
+      assert.equal(await f.host.host.claim({ id: binding.workerId, ...scope }), undefined);
+    }
+    assert.equal(await mac.close(), true); mac = undefined;
+    return observed;
+  } finally {
+    if (mac) await mac.close(); globalThis.fetch = realFetch;
+    Object.defineProperty(globalThis, 'Date', { value: RealDate, configurable: true, writable: true }); await f.close();
+  }
+}
+
+test('active heartbeat survives the reported aggregate latency and accepted maximum budgets before slow observations', async () => {
+  for (const timing of [
+    { beginReply: 2000, start: 14500, poll: 3000, observation: 4500, observationHttp: 4500, heartbeat: 2500 },
+    { beginReply: 5000, start: 14900, poll: 3000, observation: 4990, observationHttp: 4990, heartbeat: 4990 },
+  ]) {
+    const result = await leaseBoundary(timing);
+    assert.ok(result.elapsed >= 31000, 'the total path still covers the reproduced lease-expiry boundary');
+    assert.equal(result.status, 'running', JSON.stringify({ timing, result })); assert.equal(result.remoteStatus, 'running');
+    assert.equal(result.cancelCount, 0, 'accepted latency cannot cancel the owned execution');
+  }
+});
+
+test('genuine lease expiry still quarantines work and verifies owned cleanup once without reassignment', async () => {
+  const result = await leaseBoundary({ beginReply: 0, start: 0, poll: 100, observation: 0, observationHttp: 0, heartbeat: 0 }, true);
+  assert.equal(result.status, 'blocked'); assert.equal(result.remoteStatus, 'quarantined');
+  assert.equal(result.localStatus, 'cancelled'); assert.equal(result.cancelCount, 1); assert.equal(result.cleanupVerified, true);
 });

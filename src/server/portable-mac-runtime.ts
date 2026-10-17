@@ -56,12 +56,19 @@ export function createMacPullRuntime(options: Readonly<{
       const abort = new AbortController();
       let observationTimer: ReturnType<typeof setTimeout> | undefined;
       try {
+        // Renew active ownership before diagnostics; their combined allowed delays
+        // must not consume the remaining lease after begin and a bounded local start.
+        const active = status === 'running';
+        if (active) {
+          status = await worker.step();
+          if (status === 'blocked') return status;
+        }
         const observation = await Promise.race([options.observe(abort.signal), new Promise<never>((_resolve, reject) => {
           observationTimer = setTimeout(() => { abort.abort(); reject(new PullWorkerError('unavailable')); }, 5000);
         })]);
         abort.signal.throwIfAborted();
         await transport.observe(validatePortableObservation(observation, options.sourceCommit, Date.now()));
-        status = await worker.step();
+        if (!active) status = await worker.step();
       } catch { await worker.disconnect(); status = 'blocked'; }
       finally { if (observationTimer) clearTimeout(observationTimer); }
       return status;

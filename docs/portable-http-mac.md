@@ -107,14 +107,21 @@ is retained for strict cancellation.
    catalog and existing runtime readiness dimensions. Catalog revision and fixed
    model selection are revalidated; configuration alone is never available.
 2. Core admission requires a fresh available observation. The30-second receipt
-   budget also checks the original probe timestamp. Server restart begins unknown;
+   budget also checks the original probe-start timestamp. The existing15-second
+   capability cache retains that timestamp on every report; reading its cached
+   result cannot renew the original30-second lifetime. Server restart begins unknown;
    stored jobs or an old ready receipt cannot restore readiness.
 3. Existing cloud AgentService submits an owner's fresh read-only Codex job.
    Durable claim and begin precede local execution. A local stable owner/job key
    and immutable request hash identify one request, including concurrent replay.
 4. Default scheduler polls every1second. Requests include credential acquisition
-   in a3-second total deadline; observations have a5-second bound. Accepted
-   interval/request maxima fit the host's30-second lease. Cycles do not overlap.
+   in a3-second total deadline; local observation has a5-second bound and its POST
+   has the same request bound. Active work renews/finishes before observation.
+   With the accepted maxima, begin reply5s + start15s + poll3s + next heartbeat5s
+   is28s. A steady cycle includes prior heartbeat reply5s + local observation5s +
+   observation POST5s + poll3s + next heartbeat5s, at most23s. Both retain margin
+   within the30-second lease. Cycles do not overlap; an actual longer pause/expiry
+   still blocks, cancels only owned work and requires verified cleanup.
 5. Heartbeats carry cancellation. Finish is durable and replayable after a lost
    reply. Strict cancellation waits for owned process, projection, isolation and
    admission cleanup. A terminal status or a delivered signal is insufficient.
