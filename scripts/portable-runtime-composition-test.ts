@@ -201,3 +201,59 @@ test('Mac startup is separately opt-in and requires the existing delegated provi
     assert.throws(() => runtime.resolvePortableMacConfig({ ...env, ...override }));
   }
 });
+
+
+async function boundaryHost(now?: () => number) {
+  const runtime = await import('../src/server/portable-worker-runtime.js');
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-boundary-'));
+  const config = runtime.resolvePortableHostConfig({ TEAMS_AGENT_DISPATCH_MODE: 'pull-worker', TEAMS_PULL_STATE_DIR: directory,
+    TEAMS_PULL_WORKER_BINDING: JSON.stringify(binding) })!;
+  const host = await runtime.createPortableHostRuntime({ config, sourceCommit, now, acceptedAudiences: [audience],
+    validator: { validateAccessToken: async token => syntheticClaims[token] ?? null }, logger: { warn() {} } });
+  const app = express(); app.use('/api/pull-worker', host.router);
+  const server = await new Promise<Server>((resolve, reject) => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); listener.once('error', reject); });
+  const address = server.address(); assert.ok(address && typeof address !== 'string');
+  return { host, origin: `http://127.0.0.1:${address.port}`,
+    async close() { await new Promise<void>(resolve => server.close(() => resolve())); await host.close(); await fs.rm(directory, { recursive: true, force: true }); } };
+}
+
+test('actual index cached capability report expires 30 seconds after its original probe, and a new probe restores readiness', async () => {
+  const { probeCliCapabilities, promoteVerifiedCodexCapability } = await import('../src/server/codex-capability.js');
+  const { teamsCliTestCatalog, teamsCliTestSelection } = await import('./fixtures/teams-cli-agent-policy-fixture.js');
+  // The index callback is not exported. Use it unchanged, with only CLI/catalog boundaries and the clock synthetic.
+  const source = await fs.readFile(path.resolve('src/server/index.ts'), 'utf8');
+  const start = source.indexOf('observe: async signal => {', source.indexOf('if (portableMacConfig) {'));
+  assert.ok(start >= 0, 'production Mac observation callback must be exercised');
+  const callback = source.slice(start + 'observe: '.length, source.indexOf('\n    } });', start) + 6);
+  const readinessStart = source.indexOf('function cliProviderReadiness(');
+  const bodyStart = source.indexOf('{', readinessStart);
+  const readiness = new Function('capability', source.slice(bodyStart + 1, source.indexOf('\n}\n', bodyStart)));
+  const RealDate = globalThis.Date; let now = RealDate.now(), probeCalls = 0; const original = now;
+  class ClockDate extends RealDate { constructor(value?: string | number) { super(value === undefined ? now : value); } static now() { return now; } }
+  const command = async () => { probeCalls++; return { outcome: 'success' as const, stdout: 'Logged in using ChatGPT' }; };
+  const productionObserve = new Function('probeCliCapabilities', 'verifiedCoreCliCapabilities', 'observeCoreCodexModelCatalog',
+    'serverBuildIdentity', 'providerRunners', 'agentService', 'cliProviderReadiness', `return (${callback});`)(
+      (options: Parameters<typeof probeCliCapabilities>[0]) => probeCliCapabilities({ ...options,
+        environment: { CODEX_BIN: 'synthetic-boundary-no-spawn' }, runCommand: command, now: () => now }),
+      (capabilities: Awaited<ReturnType<typeof probeCliCapabilities>>) => ({ ...capabilities, codex: promoteVerifiedCodexCapability(capabilities.codex, true) }),
+      async () => teamsCliTestCatalog, { sourceCommit }, { codex: {} }, { cancelStrict() {} }, readiness);
+  const f = await boundaryHost(() => now);
+  const report = (value: unknown) => fetch(`${f.origin}/api/pull-worker/observe`, { method: 'POST',
+    headers: { authorization: 'Bearer synthetic-worker', 'content-type': 'application/json' }, body: JSON.stringify(value) });
+  try {
+    Object.defineProperty(globalThis, 'Date', { value: ClockDate, configurable: true, writable: true });
+    const first = await productionObserve(new AbortController().signal); now = original + 14000;
+    const cached = await productionObserve(new AbortController().signal); assert.equal(probeCalls, 1);
+    assert.equal((await report(cached)).status, 200);
+    now = original + 31000;
+    assert.notEqual(f.host.providerFacts()[0].availability, 'available', 'cached reports must not extend the original probe lifetime');
+    assert.equal(cached.providerFact.observedAt, first.providerFact.observedAt); assert.equal(f.host.modelCatalog(), undefined);
+    await assert.rejects(f.host.dispatcher.dispatch({ id: 'stale-probe-job', ...binding, conversationId: 'boundary-session',
+      prompt: 'Synthetic stale readiness', mode: 'read-only', provider: 'codex', status: 'queued', progress: [],
+      createdAt: new Date().toISOString(), ...teamsCliTestSelection }), /fresh worker observation/);
+    assert.equal((await report(cached)).status, 400);
+    const fresh = await productionObserve(new AbortController().signal); assert.equal(probeCalls, 2);
+    assert.equal(fresh.providerFact.observedAt, new Date(now).toISOString());
+    assert.equal((await report(fresh)).status, 200); assert.equal(f.host.providerFacts()[0].availability, 'available');
+  } finally { Object.defineProperty(globalThis, 'Date', { value: RealDate, configurable: true, writable: true }); await f.close(); }
+});

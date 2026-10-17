@@ -102,6 +102,8 @@ export type ProbeCliCapabilitiesOptions = Readonly<{
   runCommand?: CliCommandRunner;
   timeoutMs?: number;
   now?: () => number;
+  /** Original probe start, also on a cache hit; never the read/report time. */
+  onObservedAt?: (observedAt: string) => void;
 }>;
 
 type ExecFileFailure = Error & {
@@ -325,6 +327,7 @@ export function unknownCliCapabilities(): CliCapabilities {
 }
 
 type CapabilityCacheEntry = Readonly<{
+  observedAt: string;
   expiresAt: number;
   promise: Promise<CliCapabilities>;
 }>;
@@ -440,14 +443,21 @@ export async function probeCliCapabilities(options: ProbeCliCapabilitiesOptions 
   });
   const currentTime = now();
   const cached = capabilityCache.get(key);
-  if (cached && cached.expiresAt > currentTime) return cached.promise;
+  if (cached && cached.expiresAt > currentTime) {
+    const capabilities = await cached.promise;
+    options.onObservedAt?.(cached.observedAt);
+    return capabilities;
+  }
   if (cached) capabilityCache.delete(key);
 
   const promise = probeCliCapabilitiesUncached(options);
-  capabilityCache.set(key, { expiresAt: currentTime + CAPABILITY_CACHE_TTL_MS, promise });
+  const observedAt = new Date(currentTime).toISOString();
+  capabilityCache.set(key, { observedAt, expiresAt: currentTime + CAPABILITY_CACHE_TTL_MS, promise });
   void promise.catch(() => {
     const current = capabilityCache.get(key);
     if (current?.promise === promise) capabilityCache.delete(key);
   });
-  return promise;
+  const capabilities = await promise;
+  options.onObservedAt?.(observedAt);
+  return capabilities;
 }

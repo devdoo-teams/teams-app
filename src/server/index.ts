@@ -3084,14 +3084,17 @@ if (portableMacConfig) {
     credential: new AzureCliCredential({ tenantId: portableMacConfig.binding.tenantId, processTimeoutInMs: 3000 }) });
   portableMacRuntime = createMacPullRuntime({ ...portableMacConfig, sourceCommit: serverBuildIdentity.sourceCommit,
     authorization, service: agentService, observe: async signal => {
-      const capability = verifiedCoreCliCapabilities(await probeCliCapabilities({ timeoutMs: 2000, ghcpCapabilityProbe: false })).codex;
+      let observedAt = '';
+      const capability = verifiedCoreCliCapabilities(await probeCliCapabilities({ timeoutMs: 2000, ghcpCapabilityProbe: false,
+        onObservedAt: value => { observedAt = value; } })).codex;
+      if (!observedAt) throw new Error('Original CLI probe observation time is required.');
       signal.throwIfAborted();
       const catalog = await observeCoreCodexModelCatalog();
       signal.throwIfAborted();
       return { sourceCommit: serverBuildIdentity.sourceCommit, ...(catalog ? { catalog } : {}), providerFact: {
         provider: 'codex', availability: capability.state, capabilities: capability.state === 'available'
           && providerRunners.codex && typeof agentService.cancelStrict === 'function' ? ['submit', 'cancel'] : [],
-        observedAt: new Date().toISOString(), source: 'runtime-probe', readiness: cliProviderReadiness(capability),
+        observedAt, source: 'runtime-probe', readiness: cliProviderReadiness(capability),
       } };
     } });
   portableMacRuntime.start();
