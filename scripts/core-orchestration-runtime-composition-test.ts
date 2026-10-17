@@ -287,7 +287,7 @@ async function withRuntime(
   const sourcePath = path.join(root, 'src/server/index.ts');
   let source = await fs.readFile(sourcePath, 'utf8');
   if (options.measuredInputRuntime) {
-    const marker = 'const coreProviderCapabilities = !azureQueueDispatch';
+    const marker = 'const coreProviderCapabilities = !externalDispatch';
     assert.ok(source.includes(marker), 'runtime fixture insertion point must remain stable');
     source = source.replace(marker, `
 for (const runtime of Object.values(providerRunners)) {

@@ -2,7 +2,9 @@
 
 Base: reviewed1.0.162 / 9a329812cd51f67f3de3eb8ace4a8e0d977c80cc.
 Authority: user-approved diagnosed HTTP/Mac connection and synthetic tests;
-Astra review precedes push/deployment.
+The user waived a further Astra review on2026-10-17T18:30:56Z until requested
+again. Verified ordinary push and exact-SHA CI follow the existing approval;
+new targets/credentials/cost/security changes remain separately gated.
 
 ## Scope and seams
 - Reuse durable pull host/router/transport and existing Mac AgentService.
@@ -14,7 +16,9 @@ Astra review precedes push/deployment.
   and an old receipt do not constitute executable readiness.
 - Test real HTTP/auth, durable host/AgentService and connector lifecycle. Only
   credentials/token validation and native execution/isolation are synthetic.
-- Preserve main,74 user files,19 artifacts and server152. No push/deploy/remote CI.
+- Preserve the original worktree,74 user files,19 artifacts and server152.
+  Synchronize only verified source under existing ordinary-push/CI approval;
+  do not switch the operating process or create a deployment target.
 
 ## Tasks
 1. RED/GREEN explicit durable configuration and verified worker binding.

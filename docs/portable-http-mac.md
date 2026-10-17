@@ -29,7 +29,8 @@ stale_after: "2026-10-24T18:01:59Z"
 # Portable HTTP / existing Mac execution
 
 Local candidate1.0.163 completes the opt-in composition missing from reviewed
-1.0.162/9a329812. It awaits parent/Astra review. The existing3978 production
+1.0.162/9a329812. On2026-10-17 the user waived another Astra review until
+requested again; verified source synchronization and CI use the existing approval. The existing3978 production
 server152, main154, remote reviewed162 and their artifacts remain separate.
 This document does not claim a cloud deployment, live delegated authorization,
 real Codex execution or a Teams web/Mac/iPhone pass.
@@ -152,4 +153,5 @@ Exact-commit local source/strict/Core/build/package receipts belong to the new
 candidate only when generated after its commit. Prior remote8/8 CI at9a329812
 is solely evidence for reviewed162. New remote CI, push, release/tag, cloud
 volume/HTTPS/worker authorization, Bot/SSO round-trip, installation and all Teams
-host screenshots remain separate gates after parent/Astra review.
+host screenshots remain separate deployment gates. The review waiver does not
+change the approval boundary for a new target, credential, cost or security setting.
