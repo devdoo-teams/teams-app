@@ -3,3 +3,5 @@
 export { createPullWorkerHost } from './pull-worker.js';
 export { createPullWorkerRouter, createAuthenticatedPullTransport } from './pull-worker-http.js';
 export { MacPullWorker, createAgentServiceMacExecutor } from './mac-pull-worker.js';
+export { resolvePortableHostConfig } from './portable-runtime-config.js';
+export { createPortableHostRuntime } from './portable-host-runtime.js';
