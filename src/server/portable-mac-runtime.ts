@@ -71,7 +71,7 @@ export function createMacPullRuntime(options: Readonly<{
         if (!active) status = await worker.step();
       } catch { await worker.disconnect(); status = 'blocked'; }
       finally { if (observationTimer) clearTimeout(observationTimer); }
-      return status;
+      return status === 'closed' ? 'blocked' : status;
     });
     chain = operation.catch(() => undefined); return operation;
   }
