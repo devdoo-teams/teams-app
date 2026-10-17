@@ -68,7 +68,7 @@ test('mounted worker routes require verified tenant, owner and authorized client
   let server: Server | undefined;
   try {
     const app = express(); app.use('/api/pull-worker', host.router);
-    server = await new Promise<Server>(resolve => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); });
+    server = await new Promise<Server>((resolve, reject) => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); listener.once('error', reject); });
     const address = server.address(); assert.ok(address && typeof address !== 'string');
     const endpoint = `http://127.0.0.1:${address.port}/api/pull-worker/claim`;
     for (const [token, expected] of [['', 401], ['forged', 401], ['synthetic-other-tenant', 401],
@@ -84,7 +84,120 @@ test('mounted worker routes require verified tenant, owner and authorized client
       authorization: 'Bearer synthetic-worker' }, body: JSON.stringify({ workerId: 'forged' }) });
     assert.equal(injected.status, 400);
   } finally {
-    if (server) await new Promise<void>((resolve, reject) => server!.close(error => error ? reject(error) : resolve()));
+    if (server?.listening) await new Promise<void>((resolve, reject) => server!.close(error => error ? reject(error) : resolve()));
     await host.close(); await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('worker authorization reuses an existing delegated credential with the exact API scope and rejects unusable receipts', async () => {
+  const runtime = await import('../src/server/portable-worker-runtime.js');
+  assert.equal(typeof runtime.createExistingDelegatedAuthorization, 'function', 'existing credential adapter is missing');
+  const resource = `api://synthetic-worker.example/botid-${binding.clientId}`;
+  const scopes: unknown[] = [];
+  const authorization = runtime.createExistingDelegatedAuthorization({ resource,
+    credential: { async getToken(scope) { scopes.push(scope); return { token: 'synthetic-delegated-token', expiresOnTimestamp: Date.now() + 60000 }; } } });
+  assert.equal(await authorization(new AbortController().signal), 'Bearer synthetic-delegated-token');
+  assert.deepEqual(scopes, [resource + '/.default']);
+  for (const receipt of [null, { token: 'expired-synthetic', expiresOnTimestamp: Date.now() - 1000 },
+    { token: 'synthetic\r\ninjection', expiresOnTimestamp: Date.now() + 60000 }]) {
+    const invalid = runtime.createExistingDelegatedAuthorization({ resource, credential: { async getToken() { return receipt; } } });
+    await assert.rejects(invalid(new AbortController().signal));
+  }
+  assert.throws(() => runtime.createExistingDelegatedAuthorization({ resource: 'https://unrelated.example/',
+    credential: { async getToken() { return null; } } }));
+});
+
+
+test('outbound HTTP awaits the existing asynchronous authorization supplier', async () => {
+  const { createAuthenticatedPullTransport } = await import('../src/server/portable-worker-runtime.js');
+  const app = express(); app.post('/api/pull-worker/claim', (req, res) => {
+    if (req.headers.authorization !== 'Bearer synthetic-async') { res.sendStatus(401); return; }
+    res.json({ claim: null });
+  });
+  const server = await new Promise<Server>((resolve, reject) => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); listener.once('error', reject); });
+  try {
+    const address = server.address(); assert.ok(address && typeof address !== 'string');
+    const transport = createAuthenticatedPullTransport({ baseUrl: `http://127.0.0.1:${address.port}`, testLoopback: true,
+      authorization: async () => 'Bearer synthetic-async' });
+    assert.equal(await transport.claim(), undefined);
+  } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
+});
+
+test('authorization is included in the request deadline and a late credential cannot cause an HTTP call', async () => {
+  const { createAuthenticatedPullTransport } = await import('../src/server/portable-worker-runtime.js');
+  let requests = 0, resolveCredential!: (value: string) => void;
+  const credential = new Promise<string>(resolve => { resolveCredential = resolve; });
+  const app = express(); app.post('/api/pull-worker/claim', (_req, res) => { requests++; res.json({ claim: null }); });
+  const server = await new Promise<Server>((resolve, reject) => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); listener.once('error', reject); });
+  try {
+    const address = server.address(); assert.ok(address && typeof address !== 'string');
+    const transport = createAuthenticatedPullTransport({ baseUrl: `http://127.0.0.1:${address.port}`, testLoopback: true,
+      requestTimeoutMs: 100, authorization: () => credential });
+    const started = Date.now();
+    await assert.rejects(transport.claim());
+    assert.ok(Date.now() - started >= 80, 'deadline must cover the pending credential');
+    assert.ok(Date.now() - started < 1500, 'credential acquisition is bounded');
+    assert.equal(requests, 0); resolveCredential('Bearer synthetic-late');
+    await new Promise(resolve => setTimeout(resolve, 25)); assert.equal(requests, 0);
+  } finally { resolveCredential('Bearer synthetic-teardown'); await new Promise<void>(resolve => server.close(() => resolve())); }
+});
+
+
+test('host requires a fresh authenticated worker observation; readiness is not configuration or a stored receipt', async () => {
+  const runtime = await import('../src/server/portable-worker-runtime.js');
+  const { teamsCliTestCatalog } = await import('./fixtures/teams-cli-agent-policy-fixture.js');
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'portable-observation-'));
+  const config = runtime.resolvePortableHostConfig({ TEAMS_AGENT_DISPATCH_MODE: 'pull-worker', TEAMS_PULL_STATE_DIR: directory,
+    TEAMS_PULL_WORKER_BINDING: JSON.stringify(binding) })!;
+  let now = Date.now();
+  const create = () => runtime.createPortableHostRuntime({ config, sourceCommit, acceptedAudiences: [audience],
+    validator: { validateAccessToken: async token => syntheticClaims[token] ?? null }, logger: { warn() {} }, now: () => now });
+  let host = await create(); let server: Server | undefined;
+  try {
+    const app = express(); app.use('/api/pull-worker', host.router);
+    server = await new Promise<Server>((resolve, reject) => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); listener.once('error', reject); });
+    const address = server.address(); assert.ok(address && typeof address !== 'string');
+    const observation = { sourceCommit, catalog: teamsCliTestCatalog, providerFact: { provider: 'codex', availability: 'available',
+      capabilities: ['submit', 'cancel'], observedAt: new Date(now).toISOString(), source: 'runtime-probe',
+      readiness: { configured: 'configured', executable: 'present', authentication: 'authenticated', entitlement: 'allowed', probe: 'passed', reason: 'verified' } } };
+    const report = (body: unknown, token = 'synthetic-worker') => fetch(`http://127.0.0.1:${address.port}/api/pull-worker/observe`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    assert.equal((await report(observation, 'synthetic-teams-client')).status, 403);
+    assert.equal((await report({ ...observation, sourceCommit: 'b'.repeat(40) })).status, 400);
+    assert.equal((await report({ ...observation, catalog: { ...teamsCliTestCatalog, revision: '0'.repeat(64) } })).status, 400);
+    assert.equal((await report({ ...observation, providerFact: { ...observation.providerFact, readiness: undefined } })).status, 400);
+    assert.equal(host.modelCatalog(), undefined); assert.equal(host.providerFacts()[0].availability, 'unknown');
+    assert.equal((await report(observation)).status, 200);
+    assert.equal(host.modelCatalog()?.revision, teamsCliTestCatalog.revision);
+    assert.deepEqual(host.providerFacts()[0].capabilities, ['submit', 'cancel']);
+    now += 30001;
+    assert.equal(host.modelCatalog(), undefined); assert.equal(host.providerFacts()[0].availability, 'unavailable');
+    assert.equal((await report(observation)).status, 400, 'old probe cannot refresh readiness');
+    await new Promise<void>(resolve => server!.close(() => resolve())); server = undefined;
+    await host.close(); host = await create();
+    assert.equal(host.modelCatalog(), undefined); assert.equal(host.providerFacts()[0].availability, 'unknown');
+  } finally {
+    if (server?.listening) await new Promise<void>(resolve => server!.close(() => resolve()));
+    await host.close(); await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+
+test('Mac startup is separately opt-in and requires the existing delegated provider and matching HTTPS API origin', async () => {
+  const runtime = await import('../src/server/portable-worker-runtime.js');
+  assert.equal(typeof runtime.resolvePortableMacConfig, 'function');
+  assert.equal(runtime.resolvePortableMacConfig({}), undefined);
+  assert.throws(() => runtime.resolvePortableMacConfig({ TEAMS_PULL_MAC_ENABLED: 'true' }));
+  const origin = 'https://synthetic-worker.example';
+  const env = { TEAMS_PULL_MAC_ENABLED: 'true', TEAMS_PULL_CREDENTIAL_PROVIDER: 'azure-cli', TEAMS_PULL_SERVER_ORIGIN: origin,
+    TEAMS_PULL_RESOURCE_URI: `api://synthetic-worker.example/botid-${binding.clientId}`, TEAMS_PULL_WORKER_BINDING: JSON.stringify(binding) };
+  const config = runtime.resolvePortableMacConfig(env)!;
+  assert.equal(config.baseUrl, origin); assert.deepEqual(config.binding, binding);
+  for (const override of [{ TEAMS_AGENT_DISPATCH_MODE: 'pull-worker' }, { TEAMS_AGENT_DISPATCH_MODE: 'azure-queue' },
+    { TEAMS_PULL_CREDENTIAL_PROVIDER: 'default-chain' }, { TEAMS_PULL_SERVER_ORIGIN: 'http://127.0.0.1:9000' },
+    { TEAMS_PULL_SERVER_ORIGIN: 'https://synthetic-worker.example/path' },
+    { TEAMS_PULL_RESOURCE_URI: `api://other.example/botid-${binding.clientId}` },
+    { TEAMS_AGENT_CLI_PROVIDER: 'copilot' }, { TEAMS_PULL_SERVER_ORIGIN: 'https://dxshc7dx-3978.jpe1.devtunnels.ms' }]) {
+    assert.throws(() => runtime.resolvePortableMacConfig({ ...env, ...override }));
   }
 });

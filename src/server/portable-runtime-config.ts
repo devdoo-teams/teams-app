@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { z } from 'zod';
+import { isValidPublicHostname } from '../shared/public-hostname.js';
 import { PullWorkerError } from './pull-worker.js';
 
 export const portableWorkerBindingSchema = z.object({
@@ -37,4 +38,26 @@ export function resolvePortableHostConfig(environment: Readonly<Record<string, s
       },
     });
   } catch { throw new PullWorkerError('invalid', 'portable host requires an explicit state directory and verified worker binding'); }
+}
+
+
+export type PortableMacConfig = Readonly<{
+  baseUrl: string; resource: string; binding: PortableWorkerBinding;
+}>;
+export function resolvePortableMacConfig(environment: Readonly<Record<string, string | undefined>>): PortableMacConfig | undefined {
+  if (environment.TEAMS_PULL_MAC_ENABLED !== 'true') return undefined;
+  try {
+    if ((environment.TEAMS_AGENT_DISPATCH_MODE?.trim() || 'local') !== 'local'
+      || (environment.TEAMS_AGENT_CLI_PROVIDER?.trim() || 'codex') !== 'codex'
+      || environment.TEAMS_PULL_CREDENTIAL_PROVIDER !== 'azure-cli') throw new Error();
+    const origin = new URL(environment.TEAMS_PULL_SERVER_ORIGIN ?? '');
+    const resource = environment.TEAMS_PULL_RESOURCE_URI?.trim() ?? '';
+    const uri = new URL(resource);
+    if (origin.protocol !== 'https:' || !isValidPublicHostname(origin.hostname) || origin.hostname.endsWith('.devtunnels.ms')
+      || origin.username || origin.password || origin.search || origin.hash || origin.pathname !== '/'
+      || uri.protocol !== 'api:' || uri.hostname !== origin.hostname || uri.port || uri.username || uri.password || uri.search || uri.hash
+      || !/^\/botid-[0-9a-f-]{36}$/iu.test(uri.pathname)) throw new Error();
+    const binding = Object.freeze(portableWorkerBindingSchema.parse(JSON.parse(environment.TEAMS_PULL_WORKER_BINDING ?? '')));
+    return Object.freeze({ baseUrl: origin.origin, resource, binding });
+  } catch { throw new PullWorkerError('invalid', 'Mac pull requires a matching HTTPS API, existing delegated provider and explicit worker binding'); }
 }

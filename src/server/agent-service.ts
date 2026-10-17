@@ -309,6 +309,10 @@ export class AgentService {
     } else {
       this.assertReadAllowed(input.scope);
     }
+    if (this.options.executionDispatcher?.kind === 'pull-worker'
+      && (provider !== 'codex' || input.mode !== 'read-only' || input.parentJobId || input.threadId)) {
+      throw new AgentExecutionUnavailableError('provider-rejected-request', 'Portable dispatch accepts only fresh read-only Codex requests.');
+    }
     const replay = this.store.findIdempotent(input.scope, input.idempotencyKey, input.requestHash);
     if (replay) {
       assertHistoricalCliPolicy(replay);

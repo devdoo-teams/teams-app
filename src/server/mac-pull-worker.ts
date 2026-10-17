@@ -163,6 +163,14 @@ export class MacPullWorker {
       return 'blocked';
     }
   }
+  /** A failed authenticated observation also disconnects this connector. */
+  disconnect(): Promise<boolean> {
+    this.blocked = true;
+    const operation = this.chain.then(async () => {
+      try { await this.stopOwned(); return !this.uncertainStart; } catch { return false; }
+    });
+    this.chain = operation.catch(() => undefined); return operation;
+  }
   /** Stops only this connector's execution; does not close shared AgentService/server. */
   close(): Promise<boolean> {
     this.closed = true;

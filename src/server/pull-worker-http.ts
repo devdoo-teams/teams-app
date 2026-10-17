@@ -1,5 +1,6 @@
 import express, { type Request, type Response, type RequestHandler } from 'express';
 import { z } from 'zod';
+import type { PortableWorkerObservation } from './portable-observation.js';
 import { isValidPublicHostname } from '../shared/public-hostname.js';
 import { PullWorkerError, pullClaimSchema, pullLeaseSchema, pullResultSchema,
   type PullWorkerHost, type PullWorkerIdentity, type PullLease, type PullResult } from './pull-worker.js';
@@ -51,10 +52,10 @@ export type PullTransport = Readonly<{
   finish(lease: PullLease, result: PullResult): Promise<void>;
 }>;
 /** The caller supplies an existing in-memory delegated authorization value.
- * This client cannot log in, refresh credentials, follow redirects or expose a Mac port. */
+ * This client cannot log in, store credentials, follow redirects or expose a Mac port. */
 export function createAuthenticatedPullTransport(options: Readonly<{
-  baseUrl: string; authorization(): string; requestTimeoutMs?: number; testLoopback?: boolean;
-}>): PullTransport {
+  baseUrl: string; authorization(signal: AbortSignal): string | Promise<string>; requestTimeoutMs?: number; testLoopback?: boolean;
+}>): PullTransport & Readonly<{ observe(observation: PortableWorkerObservation): Promise<void> }> {
   const url = new URL(options.baseUrl);
   if (url.username || url.password || url.search || url.hash || url.pathname !== '/') throw new PullWorkerError('invalid', 'plain HTTPS origin required');
   if (url.hostname.endsWith('.devtunnels.ms')) throw new PullWorkerError('invalid', 'DevTunnel relay is not a cloud/Mac split');
@@ -63,11 +64,15 @@ export function createAuthenticatedPullTransport(options: Readonly<{
   const timeout = options.requestTimeoutMs ?? 5000;
   if (!Number.isSafeInteger(timeout) || timeout < 100 || timeout > 30000) throw new PullWorkerError('invalid');
   async function post(operation: string, body: unknown): Promise<unknown> {
-    const authorization = options.authorization();
-    if (!authorization || /[\r\n]/.test(authorization)) throw new PullWorkerError('unavailable', 'existing authorization required');
     const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(), timeout);
-    try {
+    let timer: ReturnType<typeof setTimeout>;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => { abort.abort(); reject(new PullWorkerError('unavailable', 'PULL_WORKER_DISCONNECTED')); }, timeout);
+    });
+    const perform = async () => {
+      const authorization = await options.authorization(abort.signal);
+      abort.signal.throwIfAborted();
+      if (!authorization || /[\r\n]/.test(authorization)) throw new PullWorkerError('unavailable', 'existing authorization required');
       const response = await fetch(`${url.origin}/api/pull-worker/${operation}`, { method: 'POST',
         headers: { authorization, 'content-type': 'application/json' }, body: JSON.stringify(body),
         redirect: 'error', signal: abort.signal, cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer' });
@@ -83,13 +88,15 @@ export function createAuthenticatedPullTransport(options: Readonly<{
         }
       } finally { reader.releaseLock(); }
       return JSON.parse(Buffer.concat(chunks).toString('utf8'));
-    } catch (error) {
+    };
+    try { return await Promise.race([perform(), deadline]); } catch (error) {
       if (error instanceof PullWorkerError) throw error;
       throw new PullWorkerError('unavailable', 'PULL_WORKER_DISCONNECTED');
-    } finally { clearTimeout(timer); }
+    } finally { clearTimeout(timer!); }
   }
   const reference = (lease: PullLease) => pullLeaseSchema.parse({ jobId: lease.jobId, leaseId: lease.leaseId });
   return {
+    async observe(observation) { z.object({ accepted: z.literal(true) }).strict().parse(await post('observe', observation)); },
     async claim() { const value = z.object({ claim: pullClaimSchema.nullable() }).strict().parse(await post('claim', {})); return value.claim ?? undefined; },
     async begin(lease) { return pullClaimSchema.parse(await post('begin', reference(lease))); },
     async heartbeat(lease) { return heartbeatSchema.parse(await post('heartbeat', reference(lease))); },
