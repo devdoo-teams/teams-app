@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:devdoo:ci-evidence-result:1.1.0",
+  "$id": "urn:devdoo:ci-evidence-result:1.2.0",
   "title": "Teams and iPhone normalized CI evidence record (P0)",
   "description": "Structural/consistency contract only. This document does not authenticate producer claims or admit a release.",
   "type": "object",
@@ -9,7 +9,8 @@
     "schemaVersion": {
       "enum": [
         "1.0.0",
-        "1.1.0"
+        "1.1.0",
+        "1.2.0"
       ]
     },
     "policyVersion": {
@@ -99,6 +100,16 @@
           "anyOf": [
             {
               "$ref": "#/$defs/sha"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runNumber": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/id"
             },
             {
               "type": "null"
@@ -845,6 +856,9 @@
             "invocationId": {
               "type": "string",
               "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/ -]{0,159}$"
+            },
+            "runNumber": {
+              "$ref": "#/$defs/id"
             }
           },
           "required": [
@@ -1040,6 +1054,15 @@
             "unobservedPaths",
             "observedModelCalls",
             "blockedModelAttempts"
+          ]
+        },
+        "sourceEvidenceDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "evidenceKind": {
+          "enum": [
+            "FIXTURE",
+            "OBSERVATION"
           ]
         }
       },

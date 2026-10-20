@@ -14,7 +14,7 @@ function unchanged(fd, before, bytes) {
   const after = fstatSync(fd);
   if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || bytes !== before.size) throw new Error('SOURCE_CHANGED_DURING_READ');
 }
-export function readJsonFile(path, maxBytes = MAX_JSON_BYTES) {
+export function readTextFile(path, maxBytes = MAX_JSON_BYTES) {
   const { fd, stat } = openRegular(path, maxBytes);
   try {
     const buffer = Buffer.alloc(maxBytes + 1); let length = 0;
@@ -25,9 +25,13 @@ export function readJsonFile(path, maxBytes = MAX_JSON_BYTES) {
     if (length > maxBytes) throw new Error('INPUT_BOUNDARY');
     unchanged(fd, stat, length);
     const bytes = buffer.subarray(0, length);
-    const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+    const value = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
     return { value, bytes: length, sha256: createHash('sha256').update(bytes).digest('hex') };
   } finally { closeSync(fd); }
+}
+export function readJsonFile(path, maxBytes = MAX_JSON_BYTES) {
+  const source = readTextFile(path, maxBytes);
+  return { ...source, value: JSON.parse(source.value) };
 }
 export function hashRegularFile(path, maxBytes = 64 * 1024 * 1024) {
   const { fd, stat } = openRegular(path, maxBytes);

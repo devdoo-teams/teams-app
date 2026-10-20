@@ -17,11 +17,11 @@ const workflow = { type: 'string', pattern: '^\\.github/workflows/[A-Za-z0-9_-]+
 
 export const schema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
-  $id: 'urn:devdoo:ci-evidence-result:1.1.0',
+  $id: 'urn:devdoo:ci-evidence-result:1.2.0',
   title: 'Teams and iPhone normalized CI evidence record (P0)',
   description: 'Structural/consistency contract only. This document does not authenticate producer claims or admit a release.',
   ...object({
-    schemaVersion: choices('1.0.0', '1.1.0'), policyVersion: { const: 'ci-contract-p0/1' },
+    schemaVersion: choices('1.0.0', '1.1.0', '1.2.0'), policyVersion: { const: 'ci-contract-p0/1' },
     evidenceKind: choices('FIXTURE', 'OBSERVATION'),
     identity: object({
       repository, workflow, runId: ref('id'), attempt,
@@ -89,6 +89,10 @@ export const schema = {
 };
 // Optional additions preserve acceptance of existing 1.0 records.
 schema.properties.identity.properties.runHeadSha = nullable(ref('sha'));
+schema.properties.identity.properties.runNumber = nullable(ref('id'));
 schema.properties.observation.properties.responseDigestKind = choices('RAW_BODY', 'PAGE_MANIFEST');
 schema.properties.jobs.items.properties.keySource = choices('WORKFLOW_JOB_KEY', 'POLICY', 'API_ID');
 schema.properties.evidenceIssues = array(choices('ARTIFACT_DIGEST_MISMATCH', 'LEGACY_RELEASE_IDENTITY_MISMATCH', 'RECEIPT_TESTED_SHA_CONFLICT'), 32);
+schema.$defs.receipt.properties.producer.properties.runNumber = ref('id');
+schema.$defs.receipt.properties.sourceEvidenceDigest = ref('digest');
+schema.$defs.receipt.properties.evidenceKind = choices('FIXTURE', 'OBSERVATION');

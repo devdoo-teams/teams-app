@@ -1,12 +1,13 @@
-# Common CI evidence contract — P0/P1
+# Common CI evidence contract
 
 This directory is an independent, private Node package for the Teams and iPhone
 projects. It implements the common result schema, record consistency checks,
 notification template, synthetic regression fixtures and bounded local CLIs.
 It does not change either application's runtime or its existing CI workflow.
 
-Package/result schema 1.1.0 adds a [local GitHub result reader](README-github-reader.md).
-Existing 1.0.0 result records remain accepted. The reader converts captured REST
+Package/result schema 1.2.0 adds a [local receipt producer](README-producer.md),
+following the 1.1.0 [GitHub result reader](README-github-reader.md).
+Existing 1.0.0/1.1.0 result records remain accepted. The reader converts captured REST
 responses and hashes local artifact bytes; it preserves absent producer identity,
 inputs and counts as unknown. It performs no network requests itself.
 
@@ -62,7 +63,9 @@ The index and report always preserve `producerAuthenticity/releaseAdmission` as
 Do not use this package alone for release admission or proof of zero model use.
 
 P1 adds local captured-response normalization and artifact byte hash read-back.
-Source authentication, automatic collection, producer receipt generation,
+The local producer serializes original structured job/step observations into
+receipts with source and artifact hashes. Source authentication, automatic
+collection, prospective live runner observation capture and CI integration,
 instrumentation verification, authenticated delivery and ACK verification remain
 separate work. No GitHub run, rerun, webhook, schedule, service, credential or persistent
 access is created by this package. It imports only Node builtins and the pinned

@@ -50,7 +50,8 @@ function assessJob(document, job) {
   if (job.apiConclusion === 'timed_out') result.failureClass = 'TIMEOUT';
   const expectedComplete = Object.values(job.expectedInputs).every((value) => value !== null)
     && job.expectedDependencyDigests !== null && job.matrixDigest !== null
-    && job.listedAttempt !== null && job.keySource !== 'API_ID' && job.kind !== 'UNKNOWN' && document.identity.testedSha !== null;
+    && job.listedAttempt !== null && job.keySource !== 'API_ID' && job.kind !== 'UNKNOWN' && document.identity.testedSha !== null
+    && (job.receipt?.producer.runNumber === undefined || document.identity.runNumber != null);
   if (!expectedComplete) unknown('EXPECTED_EXECUTION_IDENTITY_UNKNOWN');
   if (job.listedAttempt !== null && job.listedAttempt !== document.identity.attempt) block('LISTED_ATTEMPT_MISMATCH');
   if (job.expectedInputs.testedSha !== null && document.identity.testedSha !== null && job.expectedInputs.testedSha !== document.identity.testedSha) block('TESTED_SHA_MISMATCH');
@@ -63,7 +64,9 @@ function assessJob(document, job) {
     return result;
   }
   if (job.receiptDigest !== digest(receipt)) block('RECEIPT_DIGEST_MISMATCH');
+  if (receipt.evidenceKind === 'FIXTURE' && document.evidenceKind === 'OBSERVATION') block('FIXTURE_RECEIPT_IN_OBSERVATION');
   const producer = receipt.producer;
+  if (producer.runNumber !== undefined && document.identity.runNumber != null && producer.runNumber !== document.identity.runNumber) block('RUN_NUMBER_MISMATCH');
   if (producer.repository !== document.identity.repository || producer.workflow !== document.identity.workflow
       || producer.runId !== document.identity.runId || (job.keySource !== 'API_ID' && producer.jobKey !== job.key)
       || (job.matrixDigest !== null && producer.matrixDigest !== job.matrixDigest)) block('PRODUCER_IDENTITY_MISMATCH');

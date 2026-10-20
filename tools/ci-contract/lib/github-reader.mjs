@@ -147,7 +147,7 @@ export function readGithubCapture(captureDirectory, policyFile) {
   const currentResponses = capture.jobPages.map((page) => ({ page: page.page, file: page.file, sha256: sourceFiles.find((file) => file.file === page.file).sha256 })).sort((a, b) => a.page - b.page);
   const result = {
     schemaVersion: '1.1.0', policyVersion: 'ci-contract-p0/1', evidenceKind: capture.evidenceKind,
-    identity: { repository: capture.repository, workflow: policy.workflow, runId: capture.runId, attempt: capture.attempt, profile: policy.profile,
+    identity: { repository: capture.repository, workflow: policy.workflow, runId: capture.runId, runNumber: run.run_number === undefined || run.run_number === null ? null : id(run.run_number), attempt: capture.attempt, profile: policy.profile,
       runHeadSha: run.head_sha, testedSha: tested.length === 1 ? tested[0] : null, prHeadSha: heads.length === 1 ? heads[0] : null, mergeSha: null, collectorSha: null },
     observation: { status: run.status, apiConclusion: nullable(run.conclusion), attemptStartedAt: nullable(run.run_started_at), fetchedAt: fetched,
       paginationComplete: current.complete && artifactData.complete && historyComplete,
