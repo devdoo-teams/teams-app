@@ -9,7 +9,7 @@ const attempt = { type: 'integer', minimum: 1, maximum: 10000 };
 const short = { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9_.:/ -]{0,159}$' };
 const jobKey = { type: 'string', pattern: '^[A-Za-z0-9_][A-Za-z0-9_-]{0,79}$' };
 const date = { type: 'string', format: 'date-time', maxLength: 40 };
-const status = choices('queued', 'in_progress', 'completed');
+const status = choices('queued', 'in_progress', 'completed', 'requested', 'waiting', 'pending');
 const conclusion = choices(null, 'success', 'failure', 'cancelled', 'timed_out', 'skipped', 'neutral', 'action_required', 'stale', 'startup_failure');
 const availability = choices('AVAILABLE', 'NOT_AVAILABLE_AT_READ', 'EXPIRED', 'NOT_UPLOADED', 'UNKNOWN');
 const repository = choices('devdoo-teams/teams-app', 'doosanofficial-ui/WebDashboard');
@@ -17,16 +17,16 @@ const workflow = { type: 'string', pattern: '^\\.github/workflows/[A-Za-z0-9_-]+
 
 export const schema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
-  $id: 'urn:devdoo:ci-evidence-result:1.0.0',
+  $id: 'urn:devdoo:ci-evidence-result:1.1.0',
   title: 'Teams and iPhone normalized CI evidence record (P0)',
   description: 'Structural/consistency contract only. This document does not authenticate producer claims or admit a release.',
   ...object({
-    schemaVersion: { const: '1.0.0' }, policyVersion: { const: 'ci-contract-p0/1' },
+    schemaVersion: choices('1.0.0', '1.1.0'), policyVersion: { const: 'ci-contract-p0/1' },
     evidenceKind: choices('FIXTURE', 'OBSERVATION'),
     identity: object({
       repository, workflow, runId: ref('id'), attempt,
       profile: choices('core', 'optional', 'native-full', 'native-se', 'native-help', 'candidate', 'collector'),
-      testedSha: ref('sha'), prHeadSha: nullable(ref('sha')), mergeSha: nullable(ref('sha')), collectorSha: nullable(ref('sha')),
+      testedSha: nullable(ref('sha')), prHeadSha: nullable(ref('sha')), mergeSha: nullable(ref('sha')), collectorSha: nullable(ref('sha')),
     }),
     observation: object({
       status, apiConclusion: conclusion, attemptStartedAt: nullable(date), fetchedAt: date,
@@ -37,13 +37,13 @@ export const schema = {
     requirements: { ...array(object({
       scope: choices('teams-core', 'teams-optional', 'teams-a2a', 'teams-continuity', 'teams-azure', 'teams-container', 'teams-candidate', 'iphone-native-full', 'iphone-se', 'iphone-help', 'iphone-seed', 'iphone-candidate', 'collector'),
       required: { type: 'boolean' }, expectedTests: nullable(count),
-      jobs: { ...array(object({ key: jobKey, matrixDigest: ref('digest') })), minItems: 1 },
+      jobs: { ...array(object({ key: jobKey, matrixDigest: nullable(ref('digest')) })), minItems: 1 },
     }), 32), minItems: 1 },
     jobs: array(object({
-      key: jobKey, matrixDigest: ref('digest'), kind: choices('TEST', 'BUILD', 'SEED', 'COLLECTOR'),
-      listedJobId: ref('id'), listedAttempt: attempt, status, apiConclusion: conclusion,
+      key: jobKey, matrixDigest: nullable(ref('digest')), kind: choices('TEST', 'BUILD', 'SEED', 'COLLECTOR', 'UNKNOWN'),
+      listedJobId: ref('id'), listedAttempt: nullable(attempt), status, apiConclusion: conclusion,
       startedAt: nullable(date), completedAt: nullable(date), receiptAvailability: availability,
-      expectedInputs: ref('inputs'), expectedDependencyDigests: { ...array(ref('digest'), 200), uniqueItems: true },
+      expectedInputs: ref('inputs'), expectedDependencyDigests: nullable({ ...array(ref('digest'), 200), uniqueItems: true }),
       receiptDigest: nullable(ref('digest')), receipt: nullable(ref('receipt')),
       candidateOrigins: array(ref('origin'), 32), carriedForwardFrom: nullable(ref('origin')),
       reuseProof: nullable(object({
@@ -69,8 +69,8 @@ export const schema = {
     digest: { type: 'string', pattern: '^[a-f0-9]{64}$' },
     sha: { type: 'string', pattern: '^[a-f0-9]{40}$' },
     id: { type: 'string', pattern: '^[1-9][0-9]{0,19}$' },
-    inputs: object({ testedSha: ref('sha'), toolchainDigest: ref('digest'), suiteDigest: ref('digest'), inputDigest: ref('digest'), profileDigest: ref('digest') }),
-    origin: object({ runId: ref('id'), attempt, jobKey, matrixDigest: ref('digest'), receiptDigest: ref('digest') }),
+    inputs: object({ testedSha: nullable(ref('sha')), toolchainDigest: nullable(ref('digest')), suiteDigest: nullable(ref('digest')), inputDigest: nullable(ref('digest')), profileDigest: nullable(ref('digest')) }),
+    origin: object({ runId: ref('id'), attempt, jobKey, matrixDigest: nullable(ref('digest')), receiptDigest: nullable(ref('digest')) }),
     receipt: object({
       producer: object({ repository, workflow, runId: ref('id'), attempt, jobKey, matrixDigest: ref('digest'), invocationId: short }),
       inputs: ref('inputs'), startedAt: date, completedAt: date, exitCode: { type: 'integer', minimum: 0, maximum: 255 },
@@ -87,3 +87,8 @@ export const schema = {
     }),
   },
 };
+// Optional additions preserve acceptance of existing 1.0 records.
+schema.properties.identity.properties.runHeadSha = nullable(ref('sha'));
+schema.properties.observation.properties.responseDigestKind = choices('RAW_BODY', 'PAGE_MANIFEST');
+schema.properties.jobs.items.properties.keySource = choices('WORKFLOW_JOB_KEY', 'POLICY', 'API_ID');
+schema.properties.evidenceIssues = array(choices('ARTIFACT_DIGEST_MISMATCH', 'LEGACY_RELEASE_IDENTITY_MISMATCH', 'RECEIPT_TESTED_SHA_CONFLICT'), 32);

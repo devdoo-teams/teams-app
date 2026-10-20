@@ -222,3 +222,28 @@ test('generated portable JSON Schema cannot drift from its source', () => {
 test('notification comparison rejects malformed envelopes', () => {
   assert.throws(() => compareNotifications({}, {}), /INVALID_NOTIFICATION/);
 });
+
+test('unknown job kind cannot pass or turn unclassified work into zero tests', () => {
+  const x = complete(); x.schemaVersion = '1.1.0'; x.jobs[0].kind = 'UNKNOWN';
+  x.requirements[0].expectedTests = null;
+  const result = assessResult(x);
+  assert.equal(result.evidenceGate, 'UNKNOWN'); assert.equal(result.requiredScopesGate, 'UNKNOWN');
+  assert.equal(result.jobs[0].executionRelation, 'UNKNOWN');
+  assert.equal(result.scopes[0].verifiedExecutedTests, null);
+  assert.equal(result.newExecutionTests, null); assert.equal(result.carriedForwardTests, null);
+  assert.equal(result.newExecutionSeconds, null); assert.equal(result.executionCountComplete, false);
+  assert.equal(result.observedModelCalls, null);
+});
+
+test('a known future producer attempt blocks even when expected or receipt inputs are unknown', () => {
+  for (const boundary of ['expectedInputs', 'receipt']) {
+    const x = complete(); x.schemaVersion = '1.1.0'; x.jobs[0].receipt.producer.attempt = 2;
+    if (boundary === 'expectedInputs') x.jobs[0].expectedInputs.toolchainDigest = null;
+    else x.jobs[0].receipt.inputs.toolchainDigest = null;
+    reseal(x.jobs[0]);
+    const result = assessResult(x);
+    assert.equal(result.evidenceGate, 'BLOCKED', boundary);
+    assert.ok(result.jobs[0].issues.includes('FUTURE_PRODUCER_ATTEMPT'), boundary);
+    assert.equal(x.jobs[0].receipt.producer.attempt, 2);
+  }
+});

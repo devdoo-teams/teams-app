@@ -1,13 +1,16 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:devdoo:ci-evidence-result:1.0.0",
+  "$id": "urn:devdoo:ci-evidence-result:1.1.0",
   "title": "Teams and iPhone normalized CI evidence record (P0)",
   "description": "Structural/consistency contract only. This document does not authenticate producer claims or admit a release.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
     "schemaVersion": {
-      "const": "1.0.0"
+      "enum": [
+        "1.0.0",
+        "1.1.0"
+      ]
     },
     "policyVersion": {
       "const": "ci-contract-p0/1"
@@ -53,7 +56,14 @@
           ]
         },
         "testedSha": {
-          "$ref": "#/$defs/sha"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "prHeadSha": {
           "anyOf": [
@@ -84,6 +94,16 @@
               "type": "null"
             }
           ]
+        },
+        "runHeadSha": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -106,7 +126,10 @@
           "enum": [
             "queued",
             "in_progress",
-            "completed"
+            "completed",
+            "requested",
+            "waiting",
+            "pending"
           ]
         },
         "apiConclusion": {
@@ -150,6 +173,12 @@
         },
         "responseDigest": {
           "$ref": "#/$defs/digest"
+        },
+        "responseDigestKind": {
+          "enum": [
+            "RAW_BODY",
+            "PAGE_MANIFEST"
+          ]
         }
       },
       "required": [
@@ -211,7 +240,14 @@
                   "pattern": "^[A-Za-z0-9_][A-Za-z0-9_-]{0,79}$"
                 },
                 "matrixDigest": {
-                  "$ref": "#/$defs/digest"
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/digest"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
@@ -244,29 +280,47 @@
             "pattern": "^[A-Za-z0-9_][A-Za-z0-9_-]{0,79}$"
           },
           "matrixDigest": {
-            "$ref": "#/$defs/digest"
+            "anyOf": [
+              {
+                "$ref": "#/$defs/digest"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "kind": {
             "enum": [
               "TEST",
               "BUILD",
               "SEED",
-              "COLLECTOR"
+              "COLLECTOR",
+              "UNKNOWN"
             ]
           },
           "listedJobId": {
             "$ref": "#/$defs/id"
           },
           "listedAttempt": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 10000
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "status": {
             "enum": [
               "queued",
               "in_progress",
-              "completed"
+              "completed",
+              "requested",
+              "waiting",
+              "pending"
             ]
           },
           "apiConclusion": {
@@ -320,12 +374,19 @@
             "$ref": "#/$defs/inputs"
           },
           "expectedDependencyDigests": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/digest"
-            },
-            "maxItems": 200,
-            "uniqueItems": true
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/digest"
+                },
+                "maxItems": 200,
+                "uniqueItems": true
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "receiptDigest": {
             "anyOf": [
@@ -398,6 +459,13 @@
               {
                 "type": "null"
               }
+            ]
+          },
+          "keySource": {
+            "enum": [
+              "WORKFLOW_JOB_KEY",
+              "POLICY",
+              "API_ID"
             ]
           }
         },
@@ -593,6 +661,17 @@
         "sequence",
         "previousNotificationId"
       ]
+    },
+    "evidenceIssues": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "ARTIFACT_DIGEST_MISMATCH",
+          "LEGACY_RELEASE_IDENTITY_MISMATCH",
+          "RECEIPT_TESTED_SHA_CONFLICT"
+        ]
+      },
+      "maxItems": 32
     }
   },
   "required": [
@@ -626,19 +705,54 @@
       "additionalProperties": false,
       "properties": {
         "testedSha": {
-          "$ref": "#/$defs/sha"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "toolchainDigest": {
-          "$ref": "#/$defs/digest"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "suiteDigest": {
-          "$ref": "#/$defs/digest"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "inputDigest": {
-          "$ref": "#/$defs/digest"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "profileDigest": {
-          "$ref": "#/$defs/digest"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -666,10 +780,24 @@
           "pattern": "^[A-Za-z0-9_][A-Za-z0-9_-]{0,79}$"
         },
         "matrixDigest": {
-          "$ref": "#/$defs/digest"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "receiptDigest": {
-          "$ref": "#/$defs/digest"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [

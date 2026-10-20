@@ -6,7 +6,10 @@ import addFormats from 'ajv-formats';
 const root = new URL('../', import.meta.url);
 const ajv = new Ajv2020({ strict: true, allErrors: true, ownProperties: true });
 addFormats(ajv);
-const validate = ajv.compile(JSON.parse(readFileSync(new URL('ci-result.schema.json', root))));
+const resultSchema = JSON.parse(readFileSync(new URL('ci-result.schema.json', root)));
+const validate = ajv.compile(resultSchema);
+const receiptValidator = ajv.getSchema(`${resultSchema.$id}#/$defs/receipt`);
+export const validateReceipt = (value) => receiptValidator(value);
 const sha256 = (text) => createHash('sha256').update(text).digest('hex');
 export function canonical(value) {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
@@ -45,8 +48,12 @@ function assessJob(document, job) {
   // API outcome classification is available even when upload/receipts are absent.
   if (job.apiConclusion === 'cancelled') result.failureClass = 'CANCELLED';
   if (job.apiConclusion === 'timed_out') result.failureClass = 'TIMEOUT';
-  if (job.listedAttempt !== document.identity.attempt) block('LISTED_ATTEMPT_MISMATCH');
-  if (job.expectedInputs.testedSha !== document.identity.testedSha) block('TESTED_SHA_MISMATCH');
+  const expectedComplete = Object.values(job.expectedInputs).every((value) => value !== null)
+    && job.expectedDependencyDigests !== null && job.matrixDigest !== null
+    && job.listedAttempt !== null && job.keySource !== 'API_ID' && job.kind !== 'UNKNOWN' && document.identity.testedSha !== null;
+  if (!expectedComplete) unknown('EXPECTED_EXECUTION_IDENTITY_UNKNOWN');
+  if (job.listedAttempt !== null && job.listedAttempt !== document.identity.attempt) block('LISTED_ATTEMPT_MISMATCH');
+  if (job.expectedInputs.testedSha !== null && document.identity.testedSha !== null && job.expectedInputs.testedSha !== document.identity.testedSha) block('TESTED_SHA_MISMATCH');
   const attemptStart = time(document.observation.attemptStartedAt);
   const apiStart = time(job.startedAt);
   const receipt = job.receipt;
@@ -58,12 +65,19 @@ function assessJob(document, job) {
   if (job.receiptDigest !== digest(receipt)) block('RECEIPT_DIGEST_MISMATCH');
   const producer = receipt.producer;
   if (producer.repository !== document.identity.repository || producer.workflow !== document.identity.workflow
-      || producer.runId !== document.identity.runId || producer.jobKey !== job.key || producer.matrixDigest !== job.matrixDigest) block('PRODUCER_IDENTITY_MISMATCH');
-  if (!equal(receipt.inputs, job.expectedInputs)) block('INPUT_COMPATIBILITY_MISMATCH');
-  if (!sameSet(receipt.consumedArtifactDigests, job.expectedDependencyDigests)) block('DEPENDENCY_CONSUMPTION_MISMATCH');
+      || producer.runId !== document.identity.runId || (job.keySource !== 'API_ID' && producer.jobKey !== job.key)
+      || (job.matrixDigest !== null && producer.matrixDigest !== job.matrixDigest)) block('PRODUCER_IDENTITY_MISMATCH');
+  if (producer.attempt > document.identity.attempt) block('FUTURE_PRODUCER_ATTEMPT');
+  if (Object.keys(job.expectedInputs).some((key) => receipt.inputs[key] !== null && job.expectedInputs[key] !== null && receipt.inputs[key] !== job.expectedInputs[key])) block('INPUT_COMPATIBILITY_MISMATCH');
+  if (job.expectedDependencyDigests !== null && !sameSet(receipt.consumedArtifactDigests, job.expectedDependencyDigests)) block('DEPENDENCY_CONSUMPTION_MISMATCH');
   const started = time(receipt.startedAt); const completed = time(receipt.completedAt);
   if (completed < started || started !== apiStart || completed !== time(job.completedAt)) block('EXECUTION_TIME_MISMATCH');
   if (result.gate === 'BLOCKED') return result;
+  if (!expectedComplete || Object.values(receipt.inputs).some((value) => value === null)) {
+    unknown('EXECUTION_INPUTS_UNKNOWN');
+    if (producer.attempt < document.identity.attempt) result.executionRelation = 'CARRY_FORWARD_CANDIDATE';
+    return result;
+  }
   if (producer.attempt === document.identity.attempt) {
     if (attemptStart === null) unknown('ATTEMPT_START_UNKNOWN');
     else if (started < attemptStart || job.carriedForwardFrom !== null || job.reuseProof !== null) block('CURRENT_EXECUTION_CONFLICT');
@@ -119,7 +133,7 @@ function assessJob(document, job) {
 
 function assessBase(document) {
   if (!validateResult(document).valid) throw new TypeError('INVALID_CI_RESULT');
-  const issues = []; const identity = document.identity;
+  const issues = [...(document.evidenceIssues ?? [])]; const identity = document.identity;
   const endpoint = `/repos/${identity.repository}/actions/runs/${identity.runId}/attempts/${identity.attempt}/jobs`;
   if (document.observation.endpoint !== endpoint) issues.push('OBSERVATION_IDENTITY_MISMATCH');
   const seenSlots = new Set(); const seenIds = new Set(); const seenInvocations = new Set();
@@ -151,7 +165,7 @@ function assessBase(document) {
     const selected = expectedSlots.map((key) => bySlot.get(key)); let gate = combine(selected.map((job) => job?.gate ?? 'UNKNOWN'));
     if (selected.some((job) => !job)) issues.push(`MISSING_JOB:${requirement.scope}`);
     const countable = selected.filter((job) => job?.kind === 'TEST');
-    const executed = selected.some((job) => !job) || countable.some((job) => job.verifiedTests === null)
+    const executed = selected.some((job) => !job || job.kind === 'UNKNOWN') || countable.some((job) => job.verifiedTests === null)
       ? null : countable.reduce((total, job) => total + job.verifiedTests, 0);
     if (requirement.expectedTests !== null && executed !== null && executed !== requirement.expectedTests) gate = 'BLOCKED';
     if (document.observation.status !== 'completed' || !document.observation.paginationComplete) gate = combine([gate, 'UNKNOWN']);
@@ -167,11 +181,12 @@ function assessBase(document) {
   const produced = document.jobs.flatMap((job) => job.receipt?.producedArtifactDigests ?? []);
   const artifactIncomplete = document.artifacts.length === 0 || document.artifacts.some((artifact) => artifact.availability !== 'AVAILABLE' || !artifact.digestVerified || artifact.digest === null) || produced.some((hash) => !available.has(hash));
   if (artifactIncomplete) issues.push('ARTIFACT_EVIDENCE_UNAVAILABLE');
-  const integrityBlocked = issues.some((code) => /^(DUPLICATE_|OBSERVATION_IDENTITY|SCOPE_POLICY|MISSING_PRIMARY_SCOPE)/.test(code));
+  const integrityBlocked = issues.some((code) => /^(DUPLICATE_|OBSERVATION_IDENTITY|SCOPE_POLICY|MISSING_PRIMARY_SCOPE|ARTIFACT_DIGEST_MISMATCH|LEGACY_RELEASE_IDENTITY_MISMATCH|RECEIPT_TESTED_SHA_CONFLICT)/.test(code));
   const evidenceGate = integrityBlocked || jobs.some((job) => job.gate === 'BLOCKED') || scopes.some((scope) => scope.gate === 'BLOCKED')
     ? 'BLOCKED' : artifactIncomplete || issues.length > 0 || jobs.some((job) => job.gate === 'UNKNOWN') ? 'UNKNOWN' : 'CONSISTENT';
   const current = jobs.filter((job) => job.executionRelation === 'CURRENT_EXECUTION_VERIFIED');
   const carried = jobs.filter((job) => job.executionRelation === 'CARRY_FORWARD_VERIFIED');
+  const unknownKind = jobs.some((job) => job.kind === 'UNKNOWN');
   const unknownExecution = jobs.some((job) => !job.executionRelation.endsWith('_VERIFIED')) || issues.some((code) => /^(MISSING_JOB|PARTIAL_RESULT|PAGINATION)/.test(code));
   const sumTests = (values) => values.some((job) => job.kind === 'TEST' && job.verifiedTests === null) ? null : values.reduce((total, job) => total + (job.verifiedTests ?? 0), 0);
   const measurementComplete = !integrityBlocked && !unknownExecution && current.length > 0 && current.every((job) => job.modelMeasurement?.complete);
@@ -179,8 +194,8 @@ function assessBase(document) {
     apiConclusion: document.observation.apiConclusion, evidenceGate, releaseAdmission: 'UNVERIFIED',
     requiredScopesGate: integrityBlocked ? 'BLOCKED' : issues.includes('NO_REQUIRED_SCOPE') ? 'UNKNOWN' : combine(scopes.filter((scope) => scope.required).map((scope) => scope.gate)),
     jobs, scopes, issues: [...new Set(issues)].sort(), executionCountComplete: !integrityBlocked && !unknownExecution,
-    newExecutionTests: integrityBlocked ? null : sumTests(current.filter((job) => job.kind === 'TEST')), carriedForwardTests: integrityBlocked ? null : sumTests(carried),
-    newExecutionSeconds: integrityBlocked ? null : current.reduce((total, job) => total + (job.verifiedSeconds ?? 0), 0),
+    newExecutionTests: integrityBlocked || unknownKind ? null : sumTests(current.filter((job) => job.kind === 'TEST')), carriedForwardTests: integrityBlocked || unknownKind ? null : sumTests(carried),
+    newExecutionSeconds: integrityBlocked || unknownKind ? null : current.reduce((total, job) => total + (job.verifiedSeconds ?? 0), 0),
     observedModelCalls: measurementComplete ? current.reduce((total, job) => total + job.modelMeasurement.observedModelCalls, 0) : null,
     blockedModelAttempts: current.some((job) => job.modelMeasurement?.blockedModelAttempts > 0)
       ? current.reduce((total, job) => total + (job.modelMeasurement?.blockedModelAttempts ?? 0), 0) : measurementComplete ? 0 : null,
@@ -196,6 +211,7 @@ function notificationFrom(document, assessment) {
   const evidence = structuredClone(document);
   delete evidence.delivery; delete evidence.revision;
   delete evidence.observation.fetchedAt; delete evidence.observation.responseDigest;
+  delete evidence.observation.responseDigestKind;
   // These are sets in the contract. Receipt internals retain their original
   // array order because their canonical digest binds those bytes separately.
   const sortBy = (values, key) => values.sort((a, b) => lexical(key(a), key(b)));
@@ -203,7 +219,7 @@ function notificationFrom(document, assessment) {
   sortBy(evidence.artifacts, (row) => row.id); sortBy(evidence.liveGates, (row) => row.surface);
   for (const row of evidence.requirements) sortBy(row.jobs, slot);
   for (const job of evidence.jobs) {
-    job.expectedDependencyDigests.sort(); sortBy(job.candidateOrigins, canonical);
+    if (job.expectedDependencyDigests !== null) job.expectedDependencyDigests.sort(); sortBy(job.candidateOrigins, canonical);
     if (job.reuseProof) job.reuseProof.consumedArtifactDigests.sort();
   }
   const resultRevision = digest({ contractDigest: contractDigest(), evidence, assessment });
@@ -236,7 +252,7 @@ export function compareNotifications(previous, next) {
 }
 
 export function contractDigest() {
-  const files = ['ci-result.schema.json', 'lib/contract.mjs', 'templates/notification.md', 'package.json', 'package-lock.json', 'cli.mjs'];
+  const files = ['ci-result.schema.json', 'lib/contract.mjs', 'lib/io.mjs', 'lib/packet.mjs', 'templates/notification.md', 'package.json', 'package-lock.json', 'cli.mjs'];
   return digest(files.sort().map((name) => ({ name, sha256: sha256(readFileSync(new URL(name, root))) })));
 }
 const display = (value) => value === null ? 'unknown' : String(value).replace(/[\\`*_[\]<>|]/g, '\\$&').replace(/[\r\n\u0000-\u001f]/g, ' ');
@@ -248,7 +264,7 @@ export function renderNotification(document) {
   const fields = {
     evidenceKind: document.evidenceKind,
     identity: `${id.repository} · ${id.workflow} · run ${id.runId} / attempt ${id.attempt} · profile ${id.profile}\n\nhttps://github.com/${id.repository}/actions/runs/${id.runId}/attempts/${id.attempt}`,
-    sourceIdentity: `Tested SHA: ${id.testedSha}\n\nPR head SHA: ${display(id.prHeadSha)}\n\nMerge SHA: ${display(id.mergeSha)}\n\nCollector SHA: ${display(id.collectorSha)}`,
+    sourceIdentity: `Tested SHA: ${display(id.testedSha)}\n\nAPI run head SHA: ${display(id.runHeadSha ?? null)}\n\nPR head SHA: ${display(id.prHeadSha)}\n\nMerge SHA: ${display(id.mergeSha)}\n\nCollector SHA: ${display(id.collectorSha)}`,
     gates: `API conclusion: ${result.apiConclusion ?? 'unknown'} · record evidence: ${result.evidenceGate} · required scope receipts: ${result.requiredScopesGate} · release: UNVERIFIED`,
     scopeTable: `| Scope | Required | Receipt gate | Verified tests / expected |\n| --- | --- | --- | --- |\n${rows}`,
     jobTable: `| Job | API | Execution relation | Receipt gate | Failure class |\n| --- | --- | --- | --- | --- |\n${jobRows}`,

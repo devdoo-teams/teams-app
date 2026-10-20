@@ -1,9 +1,14 @@
-# Common CI evidence contract — P0
+# Common CI evidence contract — P0/P1
 
 This directory is an independent, private Node package for the Teams and iPhone
 projects. It implements the common result schema, record consistency checks,
-notification template, synthetic regression fixtures and a bounded local CLI.
+notification template, synthetic regression fixtures and bounded local CLIs.
 It does not change either application's runtime or its existing CI workflow.
+
+Package/result schema 1.1.0 adds a [local GitHub result reader](README-github-reader.md).
+Existing 1.0.0 result records remain accepted. The reader converts captured REST
+responses and hashes local artifact bytes; it preserves absent producer identity,
+inputs and counts as unknown. It performs no network requests itself.
 
 ## Use
 
@@ -33,6 +38,10 @@ A packet contains:
 | `evidence-index.json` | Identity, consistency assessment, notification candidate, contract digest and content hashes |
 | `SHA256SUMS` | Hashes of the three files above; no self-referential manifest hash |
 
+The GitHub reader also emits `source-provenance.json`; the index and `SHA256SUMS`
+bind that fourth content file. Its usage and capture/policy formats are documented
+in the reader guide.
+
 Exit 0 means the packet was generated. It does **not** mean the producer's CI,
 deployment or installation passed. Exit 2 means the input/output boundary was
 rejected. Callers must inspect `assessment`, rather than treating the CLI's exit
@@ -40,7 +49,7 @@ code as a required CI check result.
 
 ## Trust boundary
 
-P0 validates structure and internal consistency of a normalized record. An input
+The contract validates structure and internal consistency of a normalized record. An input
 receipt, compatibility proof, artifact hash-check flag, measurement-coverage flag
 or ACK is still supplied data. P0 does not fetch its producer or authenticate those
 claims. `*_VERIFIED` execution relations refer to the consistency checks described
@@ -52,9 +61,10 @@ The index and report always preserve `producerAuthenticity/releaseAdmission` as
 `UNVERIFIED`. Host gates remain `UNVERIFIED` even if an input declares PASS.
 Do not use this package alone for release admission or proof of zero model use.
 
-The real collector, producer receipt generation, actual hash read-back,
-instrumentation verification, authenticated delivery and ACK verification belong
-to P1/P2. No GitHub run, rerun, webhook, schedule, service, credential or persistent
+P1 adds local captured-response normalization and artifact byte hash read-back.
+Source authentication, automatic collection, producer receipt generation,
+instrumentation verification, authenticated delivery and ACK verification remain
+separate work. No GitHub run, rerun, webhook, schedule, service, credential or persistent
 access is created by this package. It imports only Node builtins and the pinned
 MIT-licensed Ajv validation dependencies. Input records cannot select modules,
 commands, URLs to fetch, notification destinations or output filenames.
@@ -66,7 +76,7 @@ after editing it. `ci-result.schema.json` is the portable JSON Schema 2020-12 ex
 Schema objects reject additional properties; all unknown counts use explicit null.
 GitHub IDs are decimal strings so they are not truncated to JavaScript numbers.
 
-The contract separates tested, PR-head, merge and collector SHAs; a run/attempt,
+The contract separates tested, API run-head, PR-head, merge and collector SHAs; a run/attempt,
 profile and workflow never collapse into a SHA-only lookup key. Both repository
 names are explicit in the v1 allowlist. A future repository needs a reviewed
 contract change. Native full/SE/Help scope expectations remain 31/2/4 in policy v1;
@@ -82,6 +92,7 @@ Seed and successful auxiliary jobs cannot substitute for that primary scope.
 | --- | --- |
 | API outcome | Preserve exactly, including success with absent evidence |
 | Missing receipt/artifact/page/matrix | UNKNOWN; no invented test count or success |
+| Unknown job kind | UNKNOWN; unclassified work keeps test totals null |
 | Current execution | Matching run, attempt, producer job/matrix, source/input/toolchain/suite/profile, timestamps and canonical receipt digest |
 | Carry candidate | Earlier API time or candidate origins is only a clue |
 | Carry consistency | Explicit unique origin receipt, earlier attempt, policy, input compatibility and actual recorded dependency consumption must agree; v1 does not reuse across run IDs |
@@ -100,8 +111,9 @@ caller; P1 must bind it to a trusted, versioned policy rather than PR-controlled
 `newExecutionTests`, `carriedForwardTests` and `newExecutionSeconds` count only
 receipts attributed by the policy. They are not total actual execution when
 `executionCountComplete=false`. A zero in that subtotal never fills in the missing
-job's actual count. Missing or incomplete TEST counters remain null. Runner/storage
-costs are unknown. Measurement fields describe a normalized receipt's declared
+job's actual count. Missing or incomplete TEST counters remain null. Unclassified
+job kinds also keep execution subtotals null. Runner/storage costs are unknown.
+Measurement fields describe a normalized receipt's declared
 instrumentation; this local tool does not independently instrument CI or all of its
 descendants.
 
@@ -158,7 +170,7 @@ The user's 2026-10-21 directive supersedes the original design's Astra assignmen
 template, CLI and exact package/lockfile bytes. Both product integrations must
 compare this digest before consuming records. This repository contains the common
 package and both products' fixtures. Installing/wiring it into the iPhone repository
-is a separate integration step; this P0 change does not modify that repository.
+is a separate integration step; these P0/P1 changes do not modify that repository.
 
 ## Official contracts checked 2026-10-21 KST
 
