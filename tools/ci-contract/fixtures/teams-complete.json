@@ -1,0 +1,161 @@
+{
+  "schemaVersion": "1.0.0",
+  "policyVersion": "ci-contract-p0/1",
+  "evidenceKind": "FIXTURE",
+  "identity": {
+    "repository": "devdoo-teams/teams-app",
+    "workflow": ".github/workflows/core-ci.yml",
+    "runId": "1001",
+    "attempt": 1,
+    "profile": "core",
+    "testedSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "prHeadSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "mergeSha": "cccccccccccccccccccccccccccccccccccccccc",
+    "collectorSha": "dddddddddddddddddddddddddddddddddddddddd"
+  },
+  "observation": {
+    "status": "completed",
+    "apiConclusion": "success",
+    "attemptStartedAt": "2026-10-20T00:00:00Z",
+    "fetchedAt": "2026-10-20T00:03:00Z",
+    "paginationComplete": true,
+    "endpoint": "/repos/devdoo-teams/teams-app/actions/runs/1001/attempts/1/jobs",
+    "responseDigest": "e8864e23bdd0eac48377606608b16d1d17a84f5db076de23856c1680ab920e80"
+  },
+  "requirements": [
+    {
+      "scope": "teams-core",
+      "required": true,
+      "expectedTests": 12,
+      "jobs": [
+        {
+          "key": "core",
+          "matrixDigest": "57e1d92f1f8bef2fcf162b801ca557f06de2739b94205a937feee9944db53231"
+        }
+      ]
+    }
+  ],
+  "jobs": [
+    {
+      "key": "core",
+      "matrixDigest": "57e1d92f1f8bef2fcf162b801ca557f06de2739b94205a937feee9944db53231",
+      "kind": "TEST",
+      "listedJobId": "9001",
+      "listedAttempt": 1,
+      "status": "completed",
+      "apiConclusion": "success",
+      "startedAt": "2026-10-20T00:01:00Z",
+      "completedAt": "2026-10-20T00:02:00Z",
+      "receiptAvailability": "AVAILABLE",
+      "expectedInputs": {
+        "testedSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "toolchainDigest": "1155bb99dfe33f681567b74726fb595e9a728997f358ec09b94be1703b4502f7",
+        "suiteDigest": "0d45f5fd462b8c70bffb10021ac1bcff3f58f29b1faf7568595095427d42812c",
+        "inputDigest": "17f8454cc502920ef29db9ccf086eb7df8706daaa0f49a43917e038657cce0fb",
+        "profileDigest": "1d0683a38e1fef5e4b0d4a96dd2d335739a3e9b467cff6a8c8ca67bbf19b478e"
+      },
+      "expectedDependencyDigests": [],
+      "candidateOrigins": [],
+      "carriedForwardFrom": null,
+      "reuseProof": null,
+      "receipt": {
+        "producer": {
+          "repository": "devdoo-teams/teams-app",
+          "workflow": ".github/workflows/core-ci.yml",
+          "runId": "1001",
+          "attempt": 1,
+          "jobKey": "core",
+          "matrixDigest": "57e1d92f1f8bef2fcf162b801ca557f06de2739b94205a937feee9944db53231",
+          "invocationId": "synthetic-core-1"
+        },
+        "inputs": {
+          "testedSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "toolchainDigest": "1155bb99dfe33f681567b74726fb595e9a728997f358ec09b94be1703b4502f7",
+          "suiteDigest": "0d45f5fd462b8c70bffb10021ac1bcff3f58f29b1faf7568595095427d42812c",
+          "inputDigest": "17f8454cc502920ef29db9ccf086eb7df8706daaa0f49a43917e038657cce0fb",
+          "profileDigest": "1d0683a38e1fef5e4b0d4a96dd2d335739a3e9b467cff6a8c8ca67bbf19b478e"
+        },
+        "startedAt": "2026-10-20T00:01:00Z",
+        "completedAt": "2026-10-20T00:02:00Z",
+        "exitCode": 0,
+        "tests": {
+          "expected": 12,
+          "executed": 12,
+          "failed": 0,
+          "unexpectedSkipped": 0
+        },
+        "cleanup": "VERIFIED",
+        "producedArtifactDigests": [
+          "815f4541127fe3a1f41735f21790e6986f9883f08c35ccaeafcece2229d8f92e"
+        ],
+        "consumedArtifactDigests": [],
+        "modelMeasurement": {
+          "measurementScope": "synthetic-process-tree",
+          "instrumentationVersion": "fixture/1",
+          "coverageComplete": false,
+          "credentialIsolationVerified": false,
+          "unobservedPaths": [
+            "grandchildren"
+          ],
+          "observedModelCalls": null,
+          "blockedModelAttempts": null
+        }
+      },
+      "receiptDigest": "58ff92e0a30883e279642661d8885cd1cda159b261677728901167ee83875a3d"
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "7001",
+      "digest": "815f4541127fe3a1f41735f21790e6986f9883f08c35ccaeafcece2229d8f92e",
+      "availability": "AVAILABLE",
+      "digestVerified": true
+    }
+  ],
+  "liveGates": [
+    {
+      "surface": "server",
+      "state": "UNVERIFIED",
+      "evidenceDigest": null
+    },
+    {
+      "surface": "personal-app",
+      "state": "UNVERIFIED",
+      "evidenceDigest": null
+    },
+    {
+      "surface": "organization-catalog",
+      "state": "UNVERIFIED",
+      "evidenceDigest": null
+    },
+    {
+      "surface": "teams-web",
+      "state": "UNVERIFIED",
+      "evidenceDigest": null
+    },
+    {
+      "surface": "teams-desktop",
+      "state": "UNVERIFIED",
+      "evidenceDigest": null
+    },
+    {
+      "surface": "iphone",
+      "state": "UNVERIFIED",
+      "evidenceDigest": null
+    },
+    {
+      "surface": "carplay",
+      "state": "UNVERIFIED",
+      "evidenceDigest": null
+    }
+  ],
+  "delivery": {
+    "state": "NOT_ATTEMPTED",
+    "ack": null
+  },
+  "revision": {
+    "kind": "final",
+    "sequence": 1,
+    "previousNotificationId": null
+  }
+}

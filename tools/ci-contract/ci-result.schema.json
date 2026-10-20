@@ -1,0 +1,932 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:devdoo:ci-evidence-result:1.0.0",
+  "title": "Teams and iPhone normalized CI evidence record (P0)",
+  "description": "Structural/consistency contract only. This document does not authenticate producer claims or admit a release.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0.0"
+    },
+    "policyVersion": {
+      "const": "ci-contract-p0/1"
+    },
+    "evidenceKind": {
+      "enum": [
+        "FIXTURE",
+        "OBSERVATION"
+      ]
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {
+          "enum": [
+            "devdoo-teams/teams-app",
+            "doosanofficial-ui/WebDashboard"
+          ]
+        },
+        "workflow": {
+          "type": "string",
+          "pattern": "^\\.github/workflows/[A-Za-z0-9_-]+\\.ya?ml$",
+          "maxLength": 160
+        },
+        "runId": {
+          "$ref": "#/$defs/id"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "profile": {
+          "enum": [
+            "core",
+            "optional",
+            "native-full",
+            "native-se",
+            "native-help",
+            "candidate",
+            "collector"
+          ]
+        },
+        "testedSha": {
+          "$ref": "#/$defs/sha"
+        },
+        "prHeadSha": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mergeSha": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "collectorSha": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "repository",
+        "workflow",
+        "runId",
+        "attempt",
+        "profile",
+        "testedSha",
+        "prHeadSha",
+        "mergeSha",
+        "collectorSha"
+      ]
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "queued",
+            "in_progress",
+            "completed"
+          ]
+        },
+        "apiConclusion": {
+          "enum": [
+            null,
+            "success",
+            "failure",
+            "cancelled",
+            "timed_out",
+            "skipped",
+            "neutral",
+            "action_required",
+            "stale",
+            "startup_failure"
+          ]
+        },
+        "attemptStartedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 40
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fetchedAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 40
+        },
+        "paginationComplete": {
+          "type": "boolean"
+        },
+        "endpoint": {
+          "type": "string",
+          "pattern": "^/repos/[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+/actions/runs/[1-9][0-9]{0,19}/attempts/[1-9][0-9]{0,3}/jobs$",
+          "maxLength": 240
+        },
+        "responseDigest": {
+          "$ref": "#/$defs/digest"
+        }
+      },
+      "required": [
+        "status",
+        "apiConclusion",
+        "attemptStartedAt",
+        "fetchedAt",
+        "paginationComplete",
+        "endpoint",
+        "responseDigest"
+      ]
+    },
+    "requirements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "scope": {
+            "enum": [
+              "teams-core",
+              "teams-optional",
+              "teams-a2a",
+              "teams-continuity",
+              "teams-azure",
+              "teams-container",
+              "teams-candidate",
+              "iphone-native-full",
+              "iphone-se",
+              "iphone-help",
+              "iphone-seed",
+              "iphone-candidate",
+              "collector"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "expectedTests": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "jobs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_][A-Za-z0-9_-]{0,79}$"
+                },
+                "matrixDigest": {
+                  "$ref": "#/$defs/digest"
+                }
+              },
+              "required": [
+                "key",
+                "matrixDigest"
+              ]
+            },
+            "maxItems": 500,
+            "minItems": 1
+          }
+        },
+        "required": [
+          "scope",
+          "required",
+          "expectedTests",
+          "jobs"
+        ]
+      },
+      "maxItems": 32,
+      "minItems": 1
+    },
+    "jobs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_][A-Za-z0-9_-]{0,79}$"
+          },
+          "matrixDigest": {
+            "$ref": "#/$defs/digest"
+          },
+          "kind": {
+            "enum": [
+              "TEST",
+              "BUILD",
+              "SEED",
+              "COLLECTOR"
+            ]
+          },
+          "listedJobId": {
+            "$ref": "#/$defs/id"
+          },
+          "listedAttempt": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "in_progress",
+              "completed"
+            ]
+          },
+          "apiConclusion": {
+            "enum": [
+              null,
+              "success",
+              "failure",
+              "cancelled",
+              "timed_out",
+              "skipped",
+              "neutral",
+              "action_required",
+              "stale",
+              "startup_failure"
+            ]
+          },
+          "startedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "completedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "receiptAvailability": {
+            "enum": [
+              "AVAILABLE",
+              "NOT_AVAILABLE_AT_READ",
+              "EXPIRED",
+              "NOT_UPLOADED",
+              "UNKNOWN"
+            ]
+          },
+          "expectedInputs": {
+            "$ref": "#/$defs/inputs"
+          },
+          "expectedDependencyDigests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/digest"
+            },
+            "maxItems": 200,
+            "uniqueItems": true
+          },
+          "receiptDigest": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/digest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "receipt": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/receipt"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "candidateOrigins": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/origin"
+            },
+            "maxItems": 32
+          },
+          "carriedForwardFrom": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/origin"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reuseProof": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "policyVersion": {
+                    "const": "ci-contract-p0/1"
+                  },
+                  "originReceiptDigest": {
+                    "$ref": "#/$defs/digest"
+                  },
+                  "compatibilityDigest": {
+                    "$ref": "#/$defs/digest"
+                  },
+                  "consumedArtifactDigests": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/digest"
+                    },
+                    "maxItems": 200,
+                    "uniqueItems": true
+                  }
+                },
+                "required": [
+                  "policyVersion",
+                  "originReceiptDigest",
+                  "compatibilityDigest",
+                  "consumedArtifactDigests"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "key",
+          "matrixDigest",
+          "kind",
+          "listedJobId",
+          "listedAttempt",
+          "status",
+          "apiConclusion",
+          "startedAt",
+          "completedAt",
+          "receiptAvailability",
+          "expectedInputs",
+          "expectedDependencyDigests",
+          "receiptDigest",
+          "receipt",
+          "candidateOrigins",
+          "carriedForwardFrom",
+          "reuseProof"
+        ]
+      },
+      "maxItems": 500
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/id"
+          },
+          "digest": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/digest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "availability": {
+            "enum": [
+              "AVAILABLE",
+              "NOT_AVAILABLE_AT_READ",
+              "EXPIRED",
+              "NOT_UPLOADED",
+              "UNKNOWN"
+            ]
+          },
+          "digestVerified": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "digest",
+          "availability",
+          "digestVerified"
+        ]
+      },
+      "maxItems": 200
+    },
+    "liveGates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "surface": {
+            "enum": [
+              "server",
+              "personal-app",
+              "organization-catalog",
+              "teams-web",
+              "teams-desktop",
+              "iphone",
+              "carplay"
+            ]
+          },
+          "state": {
+            "enum": [
+              "PASS",
+              "FAIL",
+              "BLOCKED",
+              "UNVERIFIED",
+              "NOT_APPLICABLE"
+            ]
+          },
+          "evidenceDigest": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/digest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "surface",
+          "state",
+          "evidenceDigest"
+        ]
+      },
+      "maxItems": 7
+    },
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "enum": [
+            "NOT_ATTEMPTED",
+            "PENDING",
+            "ACKNOWLEDGED",
+            "UNCERTAIN",
+            "FAILED"
+          ]
+        },
+        "ack": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "notificationId": {
+                  "$ref": "#/$defs/digest"
+                },
+                "payloadDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "receiptDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "acknowledgedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "maxLength": 40
+                }
+              },
+              "required": [
+                "notificationId",
+                "payloadDigest",
+                "receiptDigest",
+                "acknowledgedAt"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "state",
+        "ack"
+      ]
+    },
+    "revision": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "partial-failure",
+            "final",
+            "evidence-update"
+          ]
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000000
+        },
+        "previousNotificationId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "sequence",
+        "previousNotificationId"
+      ]
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "policyVersion",
+    "evidenceKind",
+    "identity",
+    "observation",
+    "requirements",
+    "jobs",
+    "artifacts",
+    "liveGates",
+    "delivery",
+    "revision"
+  ],
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "sha": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,19}$"
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "testedSha": {
+          "$ref": "#/$defs/sha"
+        },
+        "toolchainDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "suiteDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "inputDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "profileDigest": {
+          "$ref": "#/$defs/digest"
+        }
+      },
+      "required": [
+        "testedSha",
+        "toolchainDigest",
+        "suiteDigest",
+        "inputDigest",
+        "profileDigest"
+      ]
+    },
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "runId": {
+          "$ref": "#/$defs/id"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "jobKey": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_-]{0,79}$"
+        },
+        "matrixDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "receiptDigest": {
+          "$ref": "#/$defs/digest"
+        }
+      },
+      "required": [
+        "runId",
+        "attempt",
+        "jobKey",
+        "matrixDigest",
+        "receiptDigest"
+      ]
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "producer": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": {
+              "enum": [
+                "devdoo-teams/teams-app",
+                "doosanofficial-ui/WebDashboard"
+              ]
+            },
+            "workflow": {
+              "type": "string",
+              "pattern": "^\\.github/workflows/[A-Za-z0-9_-]+\\.ya?ml$",
+              "maxLength": 160
+            },
+            "runId": {
+              "$ref": "#/$defs/id"
+            },
+            "attempt": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            },
+            "jobKey": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_][A-Za-z0-9_-]{0,79}$"
+            },
+            "matrixDigest": {
+              "$ref": "#/$defs/digest"
+            },
+            "invocationId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/ -]{0,159}$"
+            }
+          },
+          "required": [
+            "repository",
+            "workflow",
+            "runId",
+            "attempt",
+            "jobKey",
+            "matrixDigest",
+            "invocationId"
+          ]
+        },
+        "inputs": {
+          "$ref": "#/$defs/inputs"
+        },
+        "startedAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 40
+        },
+        "completedAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 40
+        },
+        "exitCode": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "tests": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "expected": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 1000000000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "executed": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 1000000000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "failed": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 1000000000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "unexpectedSkipped": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 1000000000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "expected",
+                "executed",
+                "failed",
+                "unexpectedSkipped"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cleanup": {
+          "enum": [
+            "VERIFIED",
+            "FAILED",
+            "UNKNOWN",
+            "NOT_REQUIRED"
+          ]
+        },
+        "producedArtifactDigests": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/digest"
+          },
+          "maxItems": 200,
+          "uniqueItems": true
+        },
+        "consumedArtifactDigests": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/digest"
+          },
+          "maxItems": 200,
+          "uniqueItems": true
+        },
+        "modelMeasurement": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "measurementScope": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/ -]{0,159}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "instrumentationVersion": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/ -]{0,159}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "coverageComplete": {
+              "type": "boolean"
+            },
+            "credentialIsolationVerified": {
+              "type": "boolean"
+            },
+            "unobservedPaths": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/ -]{0,159}$"
+              },
+              "maxItems": 100,
+              "uniqueItems": true
+            },
+            "observedModelCalls": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000000000
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "blockedModelAttempts": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000000000
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "measurementScope",
+            "instrumentationVersion",
+            "coverageComplete",
+            "credentialIsolationVerified",
+            "unobservedPaths",
+            "observedModelCalls",
+            "blockedModelAttempts"
+          ]
+        }
+      },
+      "required": [
+        "producer",
+        "inputs",
+        "startedAt",
+        "completedAt",
+        "exitCode",
+        "tests",
+        "cleanup",
+        "producedArtifactDigests",
+        "consumedArtifactDigests",
+        "modelMeasurement"
+      ]
+    }
+  }
+}
