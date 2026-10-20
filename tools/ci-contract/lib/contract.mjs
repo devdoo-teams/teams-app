@@ -51,7 +51,9 @@ function assessJob(document, job) {
   const expectedComplete = Object.values(job.expectedInputs).every((value) => value !== null)
     && job.expectedDependencyDigests !== null && job.matrixDigest !== null
     && job.listedAttempt !== null && job.keySource !== 'API_ID' && job.kind !== 'UNKNOWN' && document.identity.testedSha !== null
-    && (job.receipt?.producer.runNumber === undefined || document.identity.runNumber != null);
+    && (job.receipt?.producer.runNumber === undefined || document.identity.runNumber != null)
+    && (job.receipt?.executionBoundary !== 'RUN_SCOPES' || job.startedAt !== null && job.completedAt !== null)
+    && job.receipt?.coverageComplete !== false && job.receipt?.exitCode !== null;
   if (!expectedComplete) unknown('EXPECTED_EXECUTION_IDENTITY_UNKNOWN');
   if (job.listedAttempt !== null && job.listedAttempt !== document.identity.attempt) block('LISTED_ATTEMPT_MISMATCH');
   if (job.expectedInputs.testedSha !== null && document.identity.testedSha !== null && job.expectedInputs.testedSha !== document.identity.testedSha) block('TESTED_SHA_MISMATCH');
@@ -74,7 +76,12 @@ function assessJob(document, job) {
   if (Object.keys(job.expectedInputs).some((key) => receipt.inputs[key] !== null && job.expectedInputs[key] !== null && receipt.inputs[key] !== job.expectedInputs[key])) block('INPUT_COMPATIBILITY_MISMATCH');
   if (job.expectedDependencyDigests !== null && !sameSet(receipt.consumedArtifactDigests, job.expectedDependencyDigests)) block('DEPENDENCY_CONSUMPTION_MISMATCH');
   const started = time(receipt.startedAt); const completed = time(receipt.completedAt);
-  if (completed < started || started !== apiStart || completed !== time(job.completedAt)) block('EXECUTION_TIME_MISMATCH');
+  const apiEnd = time(job.completedAt);
+  if (completed < started || (receipt.executionBoundary === 'RUN_SCOPES'
+    ? apiStart !== null && started < apiStart || apiEnd !== null && completed > apiEnd
+    : started !== apiStart || completed !== apiEnd)) block('EXECUTION_TIME_MISMATCH');
+  if (receipt.exitCode !== null && receipt.exitCode !== 0) { result.gate = combine([result.gate, 'FAIL']); result.failureClass = receipt.tests?.failed > 0 ? 'CODE_OR_TEST_FAILURE' : 'UNKNOWN_FAILURE'; }
+  if (receipt.cleanup === 'FAILED') block('CLEANUP_FAILED');
   if (result.gate === 'BLOCKED') return result;
   if (!expectedComplete || Object.values(receipt.inputs).some((value) => value === null)) {
     unknown('EXECUTION_INPUTS_UNKNOWN');
@@ -107,7 +114,8 @@ function assessJob(document, job) {
   if (['cancelled', 'timed_out', 'skipped', 'action_required', 'stale', 'startup_failure', 'neutral'].includes(job.apiConclusion)) {
     result.gate = 'BLOCKED'; result.failureClass = job.apiConclusion === 'cancelled' ? 'CANCELLED' : job.apiConclusion === 'timed_out' ? 'TIMEOUT' : 'NOT_SUCCESSFUL'; issues.push('API_JOB_NOT_SUCCESSFUL');
   }
-  if (receipt.exitCode !== 0 || job.apiConclusion === 'failure') {
+  if (receipt.exitCode === null) { result.gate = combine([result.gate, 'UNKNOWN']); unknown('EXIT_CODE_UNKNOWN'); }
+  if (receipt.exitCode !== null && receipt.exitCode !== 0 || job.apiConclusion === 'failure') {
     result.gate = combine([result.gate, 'FAIL']); result.failureClass = receipt.tests?.failed > 0 ? 'CODE_OR_TEST_FAILURE' : 'UNKNOWN_FAILURE';
   }
   if (receipt.cleanup === 'FAILED') block('CLEANUP_FAILED');

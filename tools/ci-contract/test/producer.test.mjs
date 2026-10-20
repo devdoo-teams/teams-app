@@ -156,6 +156,17 @@ test('unknown or incomplete counters remain null without substituting the number
   }
 });
 
+test('partial runner observation retains missing exit/time evidence without becoming full execution proof', (t) => {
+  const data = producerFixture();
+  change(data, 'job.json', (row) => { row.exitCode = null; row.coverageComplete = false; row.executionBoundary = 'RUN_SCOPES'; });
+  change(data, 'step-1.json', (row) => { row.state = 'MISSING'; row.completedAt = null; row.exitCode = null; row.testEvidence = 'UNKNOWN'; row.tests = null; });
+  const value = readProducerCapture(materialize(t, data));
+  assert.equal(value.receipt.exitCode, null); assert.equal(value.receipt.coverageComplete, false);
+  assert.equal(value.receipt.executionBoundary, 'RUN_SCOPES'); assert.equal(value.receipt.tests.executed, null);
+  const input = readerInput(t, value.receipt, 1); const assessment = assessResult(input.result);
+  assert.equal(assessment.jobs[0].executionRelation, 'UNKNOWN'); assert.equal(assessment.evidenceGate, 'UNKNOWN');
+});
+
 test('individual test deficits, excess, zero suites and skips cannot cancel into aggregate success', (t) => {
   for (const mutate of [
     (x) => { change(x, 'step-1.json', (row) => { row.tests.executed = 1; }); change(x, 'step-2.json', (row) => { row.tests.executed = 4; }); },

@@ -17,11 +17,11 @@ const workflow = { type: 'string', pattern: '^\\.github/workflows/[A-Za-z0-9_-]+
 
 export const schema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
-  $id: 'urn:devdoo:ci-evidence-result:1.2.0',
+  $id: 'urn:devdoo:ci-evidence-result:1.3.0',
   title: 'Teams and iPhone normalized CI evidence record (P0)',
   description: 'Structural/consistency contract only. This document does not authenticate producer claims or admit a release.',
   ...object({
-    schemaVersion: choices('1.0.0', '1.1.0', '1.2.0'), policyVersion: { const: 'ci-contract-p0/1' },
+    schemaVersion: choices('1.0.0', '1.1.0', '1.2.0', '1.3.0'), policyVersion: { const: 'ci-contract-p0/1' },
     evidenceKind: choices('FIXTURE', 'OBSERVATION'),
     identity: object({
       repository, workflow, runId: ref('id'), attempt,
@@ -73,7 +73,7 @@ export const schema = {
     origin: object({ runId: ref('id'), attempt, jobKey, matrixDigest: nullable(ref('digest')), receiptDigest: nullable(ref('digest')) }),
     receipt: object({
       producer: object({ repository, workflow, runId: ref('id'), attempt, jobKey, matrixDigest: ref('digest'), invocationId: short }),
-      inputs: ref('inputs'), startedAt: date, completedAt: date, exitCode: { type: 'integer', minimum: 0, maximum: 255 },
+      inputs: ref('inputs'), startedAt: date, completedAt: date, exitCode: nullable({ type: 'integer', minimum: 0, maximum: 255 }),
       tests: nullable(object({ expected: nullable(count), executed: nullable(count), failed: nullable(count), unexpectedSkipped: nullable(count) })),
       cleanup: choices('VERIFIED', 'FAILED', 'UNKNOWN', 'NOT_REQUIRED'),
       producedArtifactDigests: { ...array(ref('digest'), 200), uniqueItems: true },
@@ -96,3 +96,5 @@ schema.properties.evidenceIssues = array(choices('ARTIFACT_DIGEST_MISMATCH', 'LE
 schema.$defs.receipt.properties.producer.properties.runNumber = ref('id');
 schema.$defs.receipt.properties.sourceEvidenceDigest = ref('digest');
 schema.$defs.receipt.properties.evidenceKind = choices('FIXTURE', 'OBSERVATION');
+schema.$defs.receipt.properties.coverageComplete = { type: 'boolean' };
+schema.$defs.receipt.properties.executionBoundary = choices('API_JOB', 'RUN_SCOPES');

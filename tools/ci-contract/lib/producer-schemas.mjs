@@ -33,8 +33,15 @@ export const producerSchemas = {
     scope: common.properties.requirements.items.properties.scope, kind: choices('TEST', 'BUILD'),
     producedArtifacts: { ...array(label, 20), uniqueItems: true }, consumedArtifacts: { ...array(label, 20), uniqueItems: true } }),
   job: schema({ schemaVersion: { const: 'ci-job-observation/1' }, context, startedAt: date, completedAt: date,
-    exitCode: exit, cleanup: common.$defs.receipt.properties.cleanup }),
+    exitCode: nullable(exit), cleanup: common.$defs.receipt.properties.cleanup }),
   observation: schema({ schemaVersion: { const: 'ci-scope-observation/1' }, context, scopeId: label,
-    definitionDigest: ref('digest'), state: choices('EXECUTED', 'NOT_RUN', 'CANCELLED', 'SKIPPED'),
+    definitionDigest: ref('digest'), state: choices('EXECUTED', 'NOT_RUN', 'CANCELLED', 'SIGNALLED', 'SKIPPED', 'OUTCOME_ONLY', 'MISSING'),
     startedAt: nullable(date), completedAt: nullable(date), exitCode: nullable(exit), testEvidence: choices('COUNTS', 'NONE', 'UNKNOWN'), tests: nullable(tests) }),
 };
+producerSchemas.job.properties.coverageComplete = { type: 'boolean' };
+producerSchemas.capture.properties.evidenceFiles = array(descriptor, 20);
+producerSchemas.job.properties.executionBoundary = choices('API_JOB', 'RUN_SCOPES');
+producerSchemas.observation.properties.runner = object({ source: choices('SHELL', 'ENGINE', 'MISSING'),
+  outcome: choices(null, 'success', 'failure', 'cancelled', 'skipped'), conclusion: choices(null, 'success', 'failure', 'cancelled', 'skipped'),
+  scriptSha256: nullable(ref('digest')), signal: nullable({ type: 'string', pattern: '^SIG[A-Z0-9]{1,12}$', maxLength: 15 }),
+  requestedSignal: choices(null, 'SIGINT', 'SIGTERM') });

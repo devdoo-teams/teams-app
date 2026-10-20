@@ -6,9 +6,9 @@ source attestation service. It reads original job/step observation files and
 measures local source/input/artifact file hashes. It never reconstructs receipts
 from historical API success or rewrites an earlier attempt's producer identity.
 
-No existing workflow, test command, application runtime or iPhone source file is
-changed by this implementation. Live observation capture, workflow wiring and
-artifact upload remain separate integration work.
+The writer itself does not execute commands or edit workflows. Version 1.3 adds
+a separate [runner integration](README-runner-integration.md) that supplies these
+observations. No application runtime or iPhone source file is changed.
 
 ## Use and public boundaries
 
@@ -75,13 +75,14 @@ the output packet.
 | `workflow`, `package`, `lock` | Full original source files, bound to that source observation |
 | `toolchain` | `ci-toolchain/1`: explicit runner OS/architecture/Node/variant matrix and measured tool versions |
 | `profile` | `ci-profile/1`: profile, scope, job kind and exact produced/consumed artifact names |
-| `job` | `ci-job-observation/1`: same original context, original start/end, actual exit code and cleanup state |
+| `job` | `ci-job-observation/1`: same original context, original start/end, nullable actual exit code, cleanup, optional partial coverage and execution boundary |
 | `inputs` | Nonempty named original input-file inventory and hashes |
 | `scopes` | One `ci-scope-observation/1` file for every workflow step, with original context, step-definition digest and execution result |
+| `evidenceFiles` | Optional bounded original runner/source-proof JSON files, included in provenance by raw byte hash |
 | `producedArtifacts`, `consumedArtifacts` | Exact named regular-file inventories from the profile, with actual byte hashes |
 
 No run number or attempt is defaulted. `GITHUB_RUN_ID`, `GITHUB_RUN_NUMBER` and
-`GITHUB_RUN_ATTEMPT` have distinct meanings. Future runner capture must record
+`GITHUB_RUN_ATTEMPT` have distinct meanings. Runner capture must record
 their original values once, together with `GITHUB_JOB`, workflow identity and the
 actually checked-out source. It must not derive actual tested SHA from an event's
 selected `GITHUB_SHA`, or import an entire environment containing credentials.
@@ -114,9 +115,13 @@ The current workflow fixtures cover all **8 jobs / 47 steps**:
 | `artifact` | `teams-candidate` | BUILD | 6 |
 
 Every planned step needs an original observation, including explicit `NOT_RUN`,
-`SKIPPED` or `CANCELLED` evidence after a failure. Missing, extra, duplicated or
-different step definitions are rejected. An exit-zero job cannot conceal an
-unexecuted step, a nonzero step or reported failed tests. Original failed job
+`SKIPPED` or `CANCELLED` evidence after a failure. Version 1.3 also accepts
+`SIGNALLED`, explicitly partial `OUTCOME_ONLY` action metadata and `MISSING`
+observations. Missing, extra, duplicated or different step definitions are
+rejected. A missing observation row is different from an explicit `MISSING` row.
+An exit-zero receipt cannot conceal a nonzero step or reported failed tests;
+partial observations must declare `coverageComplete=false`, preventing full
+execution attribution. Original failed job
 exit and cleanup states remain unchanged; partial execution does not become a
 successful full scope.
 
@@ -158,10 +163,11 @@ P1 also preserves the API `run_number` separately: a known mismatch with the
 receipt blocks, and a missing API number leaves a new receipt's execution
 unverified. Older receipts without the optional number remain accepted.
 
-P1 currently requires exact original receipt/API job timestamp agreement for its
-execution relation. Actual runner start/end versus API job-boundary timing needs
-live contract read-back before integration; never alter original times to force
-that check to pass. P1 currently retains the provenance digest but does not fetch
+Legacy/API_JOB receipts require exact receipt/API job timestamp agreement.
+Version 1.3 RUN_SCOPES receipts require containment inside known API job bounds;
+missing bounds or partial coverage keep attribution UNKNOWN. No timestamp is
+altered to force agreement. Live runner/API read-back remains unverified.
+P1 currently retains the provenance digest but does not fetch
 or authenticate the paired producer packet automatically.
 
 ## Bounds and remaining live gates
@@ -179,9 +185,10 @@ The eight-job observations are synthetic; reading their current workflow
 definitions is not execution of those jobs. Existing Core/optional/Azure tests
 and required-check names were not removed or replaced.
 
-Remaining: live per-step capture and source authentication; actual test-counter
-formats and toolchain measurement; runner/API timestamp contract; CI wiring and
-artifact read-back; transport/ACK; installation/runtime/host UI. No new CI, push,
+Remaining: actual GitHub runner observation and source authentication; actual
+test-counter formats; live runner/API timing and artifact read-back; transport/ACK;
+installation/runtime/host UI. Prospective workflow wiring and local Node/Git
+measurement are provided by the separate adapter. No new CI, push,
 deployment, upload, credential or persistent access is performed here.
 
 ## Official contracts checked 2026-10-21 KST

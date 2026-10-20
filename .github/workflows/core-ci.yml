@@ -15,6 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  TEAMS_CI_RECEIPT_MODE: observation
   NODE_VERSION: 24.19.0
 
 jobs:
@@ -24,15 +25,21 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out source
+        id: ci_original_1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Node.js
+        id: ci_original_2
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - name: Install locked dependencies
+        id: ci_original_3
+        shell: 'node tools/ci-contract/capture-run.mjs step-3 {0}'
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Run bounded source checks
+        id: ci_original_4
+        shell: 'node tools/ci-contract/capture-run.mjs step-4 {0}'
         run: |
           npm run typecheck:core
           npm run typecheck
@@ -48,31 +55,81 @@ jobs:
           npx --no-install tsx scripts/job-detail-selection-test.ts
           npx --no-install tsx scripts/job-conversation-view-test.tsx
       - name: Build Core
+        id: ci_original_5
+        shell: 'node tools/ci-contract/capture-run.mjs step-5 {0}'
         run: npm run build:core
       - name: Run Core tests
+        id: ci_original_6
+        shell: 'node tools/ci-contract/capture-run.mjs step-6 {0}'
         run: npm run test:core
       - name: Validate Teams manifest
+        id: ci_original_7
+        shell: 'node tools/ci-contract/capture-run.mjs step-7 {0}'
         run: npm run validate:manifest
       - name: Verify deterministic Teams package
+        id: ci_original_8
+        shell: 'node tools/ci-contract/capture-run.mjs step-8 {0}'
         run: npm run test:package-determinism
 
+      - name: Finalize CI observation
+        id: ci_receipt_finalize
+        if: always()
+        timeout-minutes: 5
+        shell: bash
+        env:
+          CI_RECEIPT_JOB_STATUS: ${{ job.status }}
+          CI_RECEIPT_RESULTS: '{"step-1":{"outcome":"${{ steps.ci_original_1.outcome }}","conclusion":"${{ steps.ci_original_1.conclusion }}"},"step-2":{"outcome":"${{ steps.ci_original_2.outcome }}","conclusion":"${{ steps.ci_original_2.conclusion }}"},"step-3":{"outcome":"${{ steps.ci_original_3.outcome }}","conclusion":"${{ steps.ci_original_3.conclusion }}"},"step-4":{"outcome":"${{ steps.ci_original_4.outcome }}","conclusion":"${{ steps.ci_original_4.conclusion }}"},"step-5":{"outcome":"${{ steps.ci_original_5.outcome }}","conclusion":"${{ steps.ci_original_5.conclusion }}"},"step-6":{"outcome":"${{ steps.ci_original_6.outcome }}","conclusion":"${{ steps.ci_original_6.conclusion }}"},"step-7":{"outcome":"${{ steps.ci_original_7.outcome }}","conclusion":"${{ steps.ci_original_7.conclusion }}"},"step-8":{"outcome":"${{ steps.ci_original_8.outcome }}","conclusion":"${{ steps.ci_original_8.conclusion }}"}}'
+        run: |
+          set +e
+          node tools/ci-contract/finalize-run.mjs
+          capture_status=$?
+          npm ci --prefix tools/ci-contract --ignore-scripts --no-audit --no-fund
+          deps_status=$?
+          receipt_root="${RUNNER_TEMP}/teams-ci-receipts/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}/${GITHUB_JOB}"
+          normalize_status=1
+          if [ "$deps_status" -eq 0 ] && [ -f "$receipt_root/capture/producer.json" ]; then
+            node tools/ci-contract/produce-receipt.mjs --capture-dir "$receipt_root/capture" --output-dir "$receipt_root/export/packet"
+            normalize_status=$?
+          fi
+          if [ "$capture_status" -ne 0 ] || [ "$deps_status" -ne 0 ] || [ "$normalize_status" -ne 0 ]; then
+            exit 1
+          fi
+      - name: Retain CI observation
+        id: ci_receipt_upload
+        if: always()
+        timeout-minutes: 5
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-observation-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+          path: ${{ runner.temp }}/teams-ci-receipts/${{ github.run_id }}/${{ github.run_attempt }}/${{ github.job }}/export/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
   a2a:
     name: A2A collaboration and remote contracts
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Check out source
+        id: ci_original_1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Node.js
+        id: ci_original_2
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - name: Install locked dependencies
+        id: ci_original_3
+        shell: 'node tools/ci-contract/capture-run.mjs step-3 {0}'
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Build Core for integration runtime fixtures
+        id: ci_original_4
+        shell: 'node tools/ci-contract/capture-run.mjs step-4 {0}'
         run: npm run build:core
       - name: Verify tracked A2A contracts and orchestration
+        id: ci_original_5
+        shell: 'node tools/ci-contract/capture-run.mjs step-5 {0}'
         run: |
           npm run test:a2a-official-contract-audit
           npm run test:a2a-core-contract
@@ -88,6 +145,8 @@ jobs:
           npm run test:a2a-store
           npm run test:a2a-orchestration-identity
       - name: Verify durable lifecycle and authorization
+        id: ci_original_6
+        shell: 'node tools/ci-contract/capture-run.mjs step-6 {0}'
         run: |
           npm run test:a2a-independent-agent-identity
           npm run test:a2a-durable-dispatch
@@ -98,52 +157,138 @@ jobs:
           npm run test:a2a-agent-authorization-policy
           npm run test:a2a-telemetry
       - name: Verify remote peer contracts
+        id: ci_original_7
+        shell: 'node tools/ci-contract/capture-run.mjs step-7 {0}'
         run: |
           npm run test:a2a-remote-client
           npm run test:a2a-remote-http-roundtrip
           npm run test:a2a-remote-agent-adapter
 
+      - name: Finalize CI observation
+        id: ci_receipt_finalize
+        if: always()
+        timeout-minutes: 5
+        shell: bash
+        env:
+          CI_RECEIPT_JOB_STATUS: ${{ job.status }}
+          CI_RECEIPT_RESULTS: '{"step-1":{"outcome":"${{ steps.ci_original_1.outcome }}","conclusion":"${{ steps.ci_original_1.conclusion }}"},"step-2":{"outcome":"${{ steps.ci_original_2.outcome }}","conclusion":"${{ steps.ci_original_2.conclusion }}"},"step-3":{"outcome":"${{ steps.ci_original_3.outcome }}","conclusion":"${{ steps.ci_original_3.conclusion }}"},"step-4":{"outcome":"${{ steps.ci_original_4.outcome }}","conclusion":"${{ steps.ci_original_4.conclusion }}"},"step-5":{"outcome":"${{ steps.ci_original_5.outcome }}","conclusion":"${{ steps.ci_original_5.conclusion }}"},"step-6":{"outcome":"${{ steps.ci_original_6.outcome }}","conclusion":"${{ steps.ci_original_6.conclusion }}"},"step-7":{"outcome":"${{ steps.ci_original_7.outcome }}","conclusion":"${{ steps.ci_original_7.conclusion }}"}}'
+        run: |
+          set +e
+          node tools/ci-contract/finalize-run.mjs
+          capture_status=$?
+          npm ci --prefix tools/ci-contract --ignore-scripts --no-audit --no-fund
+          deps_status=$?
+          receipt_root="${RUNNER_TEMP}/teams-ci-receipts/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}/${GITHUB_JOB}"
+          normalize_status=1
+          if [ "$deps_status" -eq 0 ] && [ -f "$receipt_root/capture/producer.json" ]; then
+            node tools/ci-contract/produce-receipt.mjs --capture-dir "$receipt_root/capture" --output-dir "$receipt_root/export/packet"
+            normalize_status=$?
+          fi
+          if [ "$capture_status" -ne 0 ] || [ "$deps_status" -ne 0 ] || [ "$normalize_status" -ne 0 ]; then
+            exit 1
+          fi
+      - name: Retain CI observation
+        id: ci_receipt_upload
+        if: always()
+        timeout-minutes: 5
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-observation-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+          path: ${{ runner.temp }}/teams-ci-receipts/${{ github.run_id }}/${{ github.run_attempt }}/${{ github.job }}/export/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
   continuity:
     name: Atomic build and runtime continuity
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Check out source
+        id: ci_original_1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Node.js
+        id: ci_original_2
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - name: Install locked dependencies
+        id: ci_original_3
+        shell: 'node tools/ci-contract/capture-run.mjs step-3 {0}'
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Verify atomic and deterministic builds
+        id: ci_original_4
+        shell: 'node tools/ci-contract/capture-run.mjs step-4 {0}'
         run: |
           npm run test:build-client-atomic
           npm run test:server-build-determinism
       - name: Verify tracked remote adapter boundary
+        id: ci_original_5
+        shell: 'node tools/ci-contract/capture-run.mjs step-5 {0}'
         run: npm run test:a2a-remote-agent-adapter
       - name: Build and smoke Core runtime
+        id: ci_original_6
+        shell: 'node tools/ci-contract/capture-run.mjs step-6 {0}'
         run: |
           npm run build:core
           npm run test:runtime-dist
           npm run test:core-runtime-smoke-isolation
 
+      - name: Finalize CI observation
+        id: ci_receipt_finalize
+        if: always()
+        timeout-minutes: 5
+        shell: bash
+        env:
+          CI_RECEIPT_JOB_STATUS: ${{ job.status }}
+          CI_RECEIPT_RESULTS: '{"step-1":{"outcome":"${{ steps.ci_original_1.outcome }}","conclusion":"${{ steps.ci_original_1.conclusion }}"},"step-2":{"outcome":"${{ steps.ci_original_2.outcome }}","conclusion":"${{ steps.ci_original_2.conclusion }}"},"step-3":{"outcome":"${{ steps.ci_original_3.outcome }}","conclusion":"${{ steps.ci_original_3.conclusion }}"},"step-4":{"outcome":"${{ steps.ci_original_4.outcome }}","conclusion":"${{ steps.ci_original_4.conclusion }}"},"step-5":{"outcome":"${{ steps.ci_original_5.outcome }}","conclusion":"${{ steps.ci_original_5.conclusion }}"},"step-6":{"outcome":"${{ steps.ci_original_6.outcome }}","conclusion":"${{ steps.ci_original_6.conclusion }}"}}'
+        run: |
+          set +e
+          node tools/ci-contract/finalize-run.mjs
+          capture_status=$?
+          npm ci --prefix tools/ci-contract --ignore-scripts --no-audit --no-fund
+          deps_status=$?
+          receipt_root="${RUNNER_TEMP}/teams-ci-receipts/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}/${GITHUB_JOB}"
+          normalize_status=1
+          if [ "$deps_status" -eq 0 ] && [ -f "$receipt_root/capture/producer.json" ]; then
+            node tools/ci-contract/produce-receipt.mjs --capture-dir "$receipt_root/capture" --output-dir "$receipt_root/export/packet"
+            normalize_status=$?
+          fi
+          if [ "$capture_status" -ne 0 ] || [ "$deps_status" -ne 0 ] || [ "$normalize_status" -ne 0 ]; then
+            exit 1
+          fi
+      - name: Retain CI observation
+        id: ci_receipt_upload
+        if: always()
+        timeout-minutes: 5
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-observation-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+          path: ${{ runner.temp }}/teams-ci-receipts/${{ github.run_id }}/${{ github.run_attempt }}/${{ github.job }}/export/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
   azure:
     name: Azure Core on deployment runner
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Check out source
+        id: ci_original_1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Node.js
+        id: ci_original_2
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - name: Install locked dependencies
+        id: ci_original_3
+        shell: 'node tools/ci-contract/capture-run.mjs step-3 {0}'
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Verify the complete Azure Core inventory on pinned Linux
+        id: ci_original_4
+        shell: 'node tools/ci-contract/capture-run.mjs step-4 {0}'
         env:
           TEAMS_SOURCE_COMMIT: ${{ github.sha }}
         run: |
@@ -166,26 +311,102 @@ jobs:
           npm run test:azure-core
           npm run build:worker
 
+      - name: Finalize CI observation
+        id: ci_receipt_finalize
+        if: always()
+        timeout-minutes: 5
+        shell: bash
+        env:
+          CI_RECEIPT_JOB_STATUS: ${{ job.status }}
+          CI_RECEIPT_RESULTS: '{"step-1":{"outcome":"${{ steps.ci_original_1.outcome }}","conclusion":"${{ steps.ci_original_1.conclusion }}"},"step-2":{"outcome":"${{ steps.ci_original_2.outcome }}","conclusion":"${{ steps.ci_original_2.conclusion }}"},"step-3":{"outcome":"${{ steps.ci_original_3.outcome }}","conclusion":"${{ steps.ci_original_3.conclusion }}"},"step-4":{"outcome":"${{ steps.ci_original_4.outcome }}","conclusion":"${{ steps.ci_original_4.conclusion }}"}}'
+        run: |
+          set +e
+          node tools/ci-contract/finalize-run.mjs
+          capture_status=$?
+          npm ci --prefix tools/ci-contract --ignore-scripts --no-audit --no-fund
+          deps_status=$?
+          receipt_root="${RUNNER_TEMP}/teams-ci-receipts/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}/${GITHUB_JOB}"
+          normalize_status=1
+          if [ "$deps_status" -eq 0 ] && [ -f "$receipt_root/capture/producer.json" ]; then
+            node tools/ci-contract/produce-receipt.mjs --capture-dir "$receipt_root/capture" --output-dir "$receipt_root/export/packet"
+            normalize_status=$?
+          fi
+          if [ "$capture_status" -ne 0 ] || [ "$deps_status" -ne 0 ] || [ "$normalize_status" -ne 0 ]; then
+            exit 1
+          fi
+      - name: Retain CI observation
+        id: ci_receipt_upload
+        if: always()
+        timeout-minutes: 5
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-observation-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+          path: ${{ runner.temp }}/teams-ci-receipts/${{ github.run_id }}/${{ github.run_attempt }}/${{ github.job }}/export/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
   optional:
     name: Optional providers and Grok route
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Check out source
+        id: ci_original_1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Node.js
+        id: ci_original_2
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - name: Install locked dependencies
+        id: ci_original_3
+        shell: 'node tools/ci-contract/capture-run.mjs step-3 {0}'
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Build optional runtime surfaces without live credentials
+        id: ci_original_4
+        shell: 'node tools/ci-contract/capture-run.mjs step-4 {0}'
         run: npm run build:optional
       - name: Verify optional provider contracts without live credentials
+        id: ci_original_5
+        shell: 'node tools/ci-contract/capture-run.mjs step-5 {0}'
         run: |
           npm run test:optional
 
+      - name: Finalize CI observation
+        id: ci_receipt_finalize
+        if: always()
+        timeout-minutes: 5
+        shell: bash
+        env:
+          CI_RECEIPT_JOB_STATUS: ${{ job.status }}
+          CI_RECEIPT_RESULTS: '{"step-1":{"outcome":"${{ steps.ci_original_1.outcome }}","conclusion":"${{ steps.ci_original_1.conclusion }}"},"step-2":{"outcome":"${{ steps.ci_original_2.outcome }}","conclusion":"${{ steps.ci_original_2.conclusion }}"},"step-3":{"outcome":"${{ steps.ci_original_3.outcome }}","conclusion":"${{ steps.ci_original_3.conclusion }}"},"step-4":{"outcome":"${{ steps.ci_original_4.outcome }}","conclusion":"${{ steps.ci_original_4.conclusion }}"},"step-5":{"outcome":"${{ steps.ci_original_5.outcome }}","conclusion":"${{ steps.ci_original_5.conclusion }}"}}'
+        run: |
+          set +e
+          node tools/ci-contract/finalize-run.mjs
+          capture_status=$?
+          npm ci --prefix tools/ci-contract --ignore-scripts --no-audit --no-fund
+          deps_status=$?
+          receipt_root="${RUNNER_TEMP}/teams-ci-receipts/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}/${GITHUB_JOB}"
+          normalize_status=1
+          if [ "$deps_status" -eq 0 ] && [ -f "$receipt_root/capture/producer.json" ]; then
+            node tools/ci-contract/produce-receipt.mjs --capture-dir "$receipt_root/capture" --output-dir "$receipt_root/export/packet"
+            normalize_status=$?
+          fi
+          if [ "$capture_status" -ne 0 ] || [ "$deps_status" -ne 0 ] || [ "$normalize_status" -ne 0 ]; then
+            exit 1
+          fi
+      - name: Retain CI observation
+        id: ci_receipt_upload
+        if: always()
+        timeout-minutes: 5
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-observation-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+          path: ${{ runner.temp }}/teams-ci-receipts/${{ github.run_id }}/${{ github.run_attempt }}/${{ github.job }}/export/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
   copilot_ui:
     name: Explicit CopilotKit UI verification
     runs-on: ubuntu-latest
@@ -194,19 +415,61 @@ jobs:
       COPILOTKIT_TELEMETRY_DISABLED: 'true'
     steps:
       - name: Check out source
+        id: ci_original_1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Node.js
+        id: ci_original_2
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - name: Install locked dependencies
+        id: ci_original_3
+        shell: 'node tools/ci-contract/capture-run.mjs step-3 {0}'
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Build the pinned optional SDK UI
+        id: ci_original_4
+        shell: 'node tools/ci-contract/capture-run.mjs step-4 {0}'
         run: npm run build:copilot-ui
       - name: Verify installed SDK components and owner-scoped conversation
+        id: ci_original_5
+        shell: 'node tools/ci-contract/capture-run.mjs step-5 {0}'
         run: npm run test:copilot-ui
 
+      - name: Finalize CI observation
+        id: ci_receipt_finalize
+        if: always()
+        timeout-minutes: 5
+        shell: bash
+        env:
+          CI_RECEIPT_JOB_STATUS: ${{ job.status }}
+          CI_RECEIPT_RESULTS: '{"step-1":{"outcome":"${{ steps.ci_original_1.outcome }}","conclusion":"${{ steps.ci_original_1.conclusion }}"},"step-2":{"outcome":"${{ steps.ci_original_2.outcome }}","conclusion":"${{ steps.ci_original_2.conclusion }}"},"step-3":{"outcome":"${{ steps.ci_original_3.outcome }}","conclusion":"${{ steps.ci_original_3.conclusion }}"},"step-4":{"outcome":"${{ steps.ci_original_4.outcome }}","conclusion":"${{ steps.ci_original_4.conclusion }}"},"step-5":{"outcome":"${{ steps.ci_original_5.outcome }}","conclusion":"${{ steps.ci_original_5.conclusion }}"}}'
+        run: |
+          set +e
+          node tools/ci-contract/finalize-run.mjs
+          capture_status=$?
+          npm ci --prefix tools/ci-contract --ignore-scripts --no-audit --no-fund
+          deps_status=$?
+          receipt_root="${RUNNER_TEMP}/teams-ci-receipts/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}/${GITHUB_JOB}"
+          normalize_status=1
+          if [ "$deps_status" -eq 0 ] && [ -f "$receipt_root/capture/producer.json" ]; then
+            node tools/ci-contract/produce-receipt.mjs --capture-dir "$receipt_root/capture" --output-dir "$receipt_root/export/packet"
+            normalize_status=$?
+          fi
+          if [ "$capture_status" -ne 0 ] || [ "$deps_status" -ne 0 ] || [ "$normalize_status" -ne 0 ]; then
+            exit 1
+          fi
+      - name: Retain CI observation
+        id: ci_receipt_upload
+        if: always()
+        timeout-minutes: 5
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-observation-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+          path: ${{ runner.temp }}/teams-ci-receipts/${{ github.run_id }}/${{ github.run_attempt }}/${{ github.job }}/export/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
   container:
     name: Docker Core runtime build
     needs: [core, a2a, continuity, azure]
@@ -216,17 +479,24 @@ jobs:
       contents: read
     steps:
       - name: Check out source
+        id: ci_original_1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Node.js
+        id: ci_original_2
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - name: Install locked dependencies
+        id: ci_original_3
+        shell: 'node tools/ci-contract/capture-run.mjs step-3 {0}'
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Build the verified Core artifact before Docker packaging
+        id: ci_original_4
+        shell: 'node tools/ci-contract/capture-run.mjs step-4 {0}'
         run: npm run build:core
       - name: Build the exact runtime image without publishing
+        id: ci_original_5
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
@@ -237,6 +507,8 @@ jobs:
           build-args: |
             TEAMS_SOURCE_COMMIT=${{ github.sha }}
       - name: Smoke the exact runtime image
+        id: ci_original_6
+        shell: 'node tools/ci-contract/capture-run.mjs step-6 {0}'
         env:
           IMAGE_TAG: teams-sdk-mvp:${{ github.sha }}
         run: |
@@ -303,6 +575,40 @@ jobs:
           curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:3978/tabs/home/${asset_path#./}" >"$asset_file"
           test -s "$asset_file"
 
+      - name: Finalize CI observation
+        id: ci_receipt_finalize
+        if: always()
+        timeout-minutes: 5
+        shell: bash
+        env:
+          CI_RECEIPT_JOB_STATUS: ${{ job.status }}
+          CI_RECEIPT_RESULTS: '{"step-1":{"outcome":"${{ steps.ci_original_1.outcome }}","conclusion":"${{ steps.ci_original_1.conclusion }}"},"step-2":{"outcome":"${{ steps.ci_original_2.outcome }}","conclusion":"${{ steps.ci_original_2.conclusion }}"},"step-3":{"outcome":"${{ steps.ci_original_3.outcome }}","conclusion":"${{ steps.ci_original_3.conclusion }}"},"step-4":{"outcome":"${{ steps.ci_original_4.outcome }}","conclusion":"${{ steps.ci_original_4.conclusion }}"},"step-5":{"outcome":"${{ steps.ci_original_5.outcome }}","conclusion":"${{ steps.ci_original_5.conclusion }}"},"step-6":{"outcome":"${{ steps.ci_original_6.outcome }}","conclusion":"${{ steps.ci_original_6.conclusion }}"}}'
+        run: |
+          set +e
+          node tools/ci-contract/finalize-run.mjs
+          capture_status=$?
+          npm ci --prefix tools/ci-contract --ignore-scripts --no-audit --no-fund
+          deps_status=$?
+          receipt_root="${RUNNER_TEMP}/teams-ci-receipts/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}/${GITHUB_JOB}"
+          normalize_status=1
+          if [ "$deps_status" -eq 0 ] && [ -f "$receipt_root/capture/producer.json" ]; then
+            node tools/ci-contract/produce-receipt.mjs --capture-dir "$receipt_root/capture" --output-dir "$receipt_root/export/packet"
+            normalize_status=$?
+          fi
+          if [ "$capture_status" -ne 0 ] || [ "$deps_status" -ne 0 ] || [ "$normalize_status" -ne 0 ]; then
+            exit 1
+          fi
+      - name: Retain CI observation
+        id: ci_receipt_upload
+        if: always()
+        timeout-minutes: 5
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-observation-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+          path: ${{ runner.temp }}/teams-ci-receipts/${{ github.run_id }}/${{ github.run_attempt }}/${{ github.job }}/export/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
   artifact:
     name: Immutable release candidate
     if: github.event_name == 'workflow_dispatch'
@@ -321,15 +627,21 @@ jobs:
       APPLICATION_ID_URI: ${{ vars.APPLICATION_ID_URI }}
     steps:
       - name: Check out the verified commit
+        id: ci_original_1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Node.js
+        id: ci_original_2
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - name: Install locked dependencies
+        id: ci_original_3
+        shell: 'node tools/ci-contract/capture-run.mjs step-3 {0}'
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Build and verify the exact artifact
+        id: ci_original_4
+        shell: 'node tools/ci-contract/capture-run.mjs step-4 {0}'
         run: |
           npm run build:core
           npm run test:core-runtime-smoke-isolation
@@ -354,6 +666,8 @@ jobs:
           console.log(`exact artifact manifest verified: v${manifest.version}, agent-only permissions`);
           NODE
       - name: Record release identity and checksums
+        id: ci_original_5
+        shell: 'node tools/ci-contract/capture-run.mjs step-5 {0}'
         run: |
           mkdir -p dist/evidence
           node --input-type=module <<'NODE'
@@ -373,6 +687,7 @@ jobs:
             | sort -z \
             | xargs -0 sha256sum > dist/evidence/SHA256SUMS
       - name: Upload immutable release candidate
+        id: ci_original_6
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: teams-core-${{ github.sha }}
@@ -380,6 +695,40 @@ jobs:
             dist/
             appPackage/build/teams-sdk-mvp.zip
           include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+      - name: Finalize CI observation
+        id: ci_receipt_finalize
+        if: always()
+        timeout-minutes: 5
+        shell: bash
+        env:
+          CI_RECEIPT_JOB_STATUS: ${{ job.status }}
+          CI_RECEIPT_RESULTS: '{"step-1":{"outcome":"${{ steps.ci_original_1.outcome }}","conclusion":"${{ steps.ci_original_1.conclusion }}"},"step-2":{"outcome":"${{ steps.ci_original_2.outcome }}","conclusion":"${{ steps.ci_original_2.conclusion }}"},"step-3":{"outcome":"${{ steps.ci_original_3.outcome }}","conclusion":"${{ steps.ci_original_3.conclusion }}"},"step-4":{"outcome":"${{ steps.ci_original_4.outcome }}","conclusion":"${{ steps.ci_original_4.conclusion }}"},"step-5":{"outcome":"${{ steps.ci_original_5.outcome }}","conclusion":"${{ steps.ci_original_5.conclusion }}"},"step-6":{"outcome":"${{ steps.ci_original_6.outcome }}","conclusion":"${{ steps.ci_original_6.conclusion }}"}}'
+        run: |
+          set +e
+          node tools/ci-contract/finalize-run.mjs
+          capture_status=$?
+          npm ci --prefix tools/ci-contract --ignore-scripts --no-audit --no-fund
+          deps_status=$?
+          receipt_root="${RUNNER_TEMP}/teams-ci-receipts/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}/${GITHUB_JOB}"
+          normalize_status=1
+          if [ "$deps_status" -eq 0 ] && [ -f "$receipt_root/capture/producer.json" ]; then
+            node tools/ci-contract/produce-receipt.mjs --capture-dir "$receipt_root/capture" --output-dir "$receipt_root/export/packet"
+            normalize_status=$?
+          fi
+          if [ "$capture_status" -ne 0 ] || [ "$deps_status" -ne 0 ] || [ "$normalize_status" -ne 0 ]; then
+            exit 1
+          fi
+      - name: Retain CI observation
+        id: ci_receipt_upload
+        if: always()
+        timeout-minutes: 5
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-observation-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+          path: ${{ runner.temp }}/teams-ci-receipts/${{ github.run_id }}/${{ github.run_attempt }}/${{ github.job }}/export/
           if-no-files-found: error
           retention-days: 14
           compression-level: 0

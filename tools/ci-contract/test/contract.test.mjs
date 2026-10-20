@@ -42,6 +42,15 @@ test('valid current receipt has a scope gate, never an installed/UI pass', () =>
   assert.ok(result.liveGates.every((x) => x.state === 'UNVERIFIED'));
 });
 
+test('a run-scope receipt requires known enclosing API timestamps for attribution', () => {
+  for (const missing of ['startedAt', 'completedAt']) {
+    const value = complete(); value.jobs[0].receipt.executionBoundary = 'RUN_SCOPES';
+    value.jobs[0][missing] = null; reseal(value.jobs[0]);
+    const result = assessResult(value);
+    assert.equal(result.evidenceGate, 'UNKNOWN'); assert.equal(result.jobs[0].executionRelation, 'UNKNOWN');
+  }
+});
+
 test('checksummed carried receipts do not add tests or duration to new execution', () => {
   const result = assessResult(reused());
   assert.equal(result.jobs[0].executionRelation, 'CARRY_FORWARD_VERIFIED');

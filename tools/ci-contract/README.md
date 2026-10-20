@@ -3,11 +3,13 @@
 This directory is an independent, private Node package for the Teams and iPhone
 projects. It implements the common result schema, record consistency checks,
 notification template, synthetic regression fixtures and bounded local CLIs.
-It does not change either application's runtime or its existing CI workflow.
+It does not change either application's runtime. The Teams workflow has a
+locally prepared observation integration; no remote workflow was run for it.
 
-Package/result schema 1.2.0 adds a [local receipt producer](README-producer.md),
-following the 1.1.0 [GitHub result reader](README-github-reader.md).
-Existing 1.0.0/1.1.0 result records remain accepted. The reader converts captured REST
+Package/result schema 1.3.0 adds [runner observation integration](README-runner-integration.md),
+following the 1.2.0 [local receipt producer](README-producer.md) and 1.1.0
+[GitHub result reader](README-github-reader.md).
+Existing 1.0.0/1.1.0/1.2.0 result records remain accepted. The reader converts captured REST
 responses and hashes local artifact bytes; it preserves absent producer identity,
 inputs and counts as unknown. It performs no network requests itself.
 
@@ -64,12 +66,14 @@ Do not use this package alone for release admission or proof of zero model use.
 
 P1 adds local captured-response normalization and artifact byte hash read-back.
 The local producer serializes original structured job/step observations into
-receipts with source and artifact hashes. Source authentication, automatic
-collection, prospective live runner observation capture and CI integration,
-instrumentation verification, authenticated delivery and ACK verification remain
+receipts with source and artifact hashes. The runner adapter captures real local
+command exits and prepares prospective CI collection. Actual GitHub runner
+read-back, source authentication, instrumentation verification, authenticated
+delivery and ACK verification remain
 separate work. No GitHub run, rerun, webhook, schedule, service, credential or persistent
-access is created by this package. It imports only Node builtins and the pinned
-MIT-licensed Ajv validation dependencies. Input records cannot select modules,
+access is created by this package. The common contract imports Node builtins and
+pinned MIT-licensed Ajv dependencies; the runner adapter also reuses the existing
+process-tree terminator. Input records cannot select modules,
 commands, URLs to fetch, notification destinations or output filenames.
 
 ## Contract and consistency policy

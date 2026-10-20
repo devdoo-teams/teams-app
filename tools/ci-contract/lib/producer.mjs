@@ -6,34 +6,15 @@ import addFormats from 'ajv-formats';
 import { readTextFile, readJsonFile, hashRegularFile } from './io.mjs';
 import { canonical, digest, contractDigest, validateReceipt } from './contract.mjs';
 import { producerSchemas } from './producer-schemas.mjs';
+import { workflowJobPlan, jobPolicies as jobKinds } from './workflow-plan.mjs';
+export { workflowJobPlan } from './workflow-plan.mjs';
 const ajv = new Ajv2020({ strict: true, ownProperties: true }); addFormats(ajv);
 const validators = Object.fromEntries(Object.entries(producerSchemas).map(([key, schema]) => [key, ajv.compile(schema)]));
 const requireValue = (value, code = 'PRODUCER_INPUT_REJECTED') => { if (!value) throw new Error(code); };
 const hash = (value) => createHash('sha256').update(value).digest('hex');
-const jobKinds = { core: ['teams-core', 'TEST'], a2a: ['teams-a2a', 'TEST'], continuity: ['teams-continuity', 'TEST'], azure: ['teams-azure', 'TEST'],
-  optional: ['teams-optional', 'TEST'], copilot_ui: ['teams-optional', 'TEST'], container: ['teams-container', 'BUILD'], artifact: ['teams-candidate', 'BUILD'] };
 export function producerDigest() {
-  const sources = ['producer.mjs', 'producer-schemas.mjs', '../produce-receipt.mjs'].map((file) => ({ file, sha256: hash(readFileSync(new URL(file, import.meta.url))) }));
+  const sources = ['producer.mjs', 'producer-schemas.mjs', 'workflow-plan.mjs', '../produce-receipt.mjs'].map((file) => ({ file, sha256: hash(readFileSync(new URL(file, import.meta.url))) }));
   return digest({ sources, contractDigest: contractDigest() });
-}
-
-// This is a bounded text-layout inventory, not a general YAML interpreter.
-// Each complete step block is hashed verbatim, including its run/uses settings.
-export function workflowJobPlan(text, jobKey) {
-  requireValue(typeof text === 'string' && !text.includes('\r') && text.split('\njobs:\n').length === 2, 'WORKFLOW_LAYOUT_UNSUPPORTED');
-  const jobs = [...text.matchAll(/^  ([A-Za-z0-9_]+):\n/gm)].filter((match) => match.index > text.indexOf('\njobs:\n'));
-  requireValue(jobs.length > 0 && jobs.length <= 16 && new Set(jobs.map((x) => x[1])).size === jobs.length, 'WORKFLOW_LAYOUT_UNSUPPORTED');
-  const index = jobs.findIndex((match) => match[1] === jobKey); requireValue(index >= 0 && Object.hasOwn(jobKinds, jobKey), 'JOB_NOT_IN_WORKFLOW');
-  const block = text.slice(jobs[index].index, jobs[index + 1]?.index ?? text.length);
-  requireValue((block.match(/^    steps:\n/gm) ?? []).length === 1, 'WORKFLOW_LAYOUT_UNSUPPORTED');
-  const starts = [...block.matchAll(/^      - name: ([^\r\n]{1,160})\n/gm)];
-  requireValue(starts.length > 0 && starts.length <= 100 && (block.match(/^      - /gm) ?? []).length === starts.length, 'WORKFLOW_LAYOUT_UNSUPPORTED');
-  return starts.map((match, index) => {
-    const definition = block.slice(match.index, starts[index + 1]?.index ?? block.length);
-    const actions = [...definition.matchAll(/^        (run|uses):/gm)];
-    requireValue(actions.length === 1, 'WORKFLOW_LAYOUT_UNSUPPORTED');
-    return { id: `step-${index + 1}`, name: match[1], type: actions[0][1] === 'run' ? 'RUN' : 'ACTION', definitionDigest: hash(definition) };
-  });
 }
 
 export function readProducerCapture(captureDirectory) {
@@ -58,6 +39,7 @@ export function readProducerCapture(captureDirectory) {
     const value = read(capture[key], key.toUpperCase(), key === 'workflow' ? 'text' : 'json'); values[key] = value;
     if (validators[key]) requireValue(validators[key](value.value));
   }
+  for (const descriptor of capture.evidenceFiles ?? []) read(descriptor, 'RUNNER_EVIDENCE');
   const context = capture.context; const profile = values.profile.value;
   const tools = values.toolchain.value.tools;
   requireValue(new Set(tools.map((tool) => tool.name)).size === tools.length
@@ -96,14 +78,17 @@ export function readProducerCapture(captureDirectory) {
       requireValue(start >= previousEnd && end >= start && end <= jobEnd, 'EXECUTION_OBSERVATION_MISMATCH'); previousEnd = end;
     } else {
       requireValue(row.exitCode === null && row.tests === null, 'EXECUTION_OBSERVATION_MISMATCH');
-      if (row.state !== 'CANCELLED') requireValue(row.startedAt === null && row.completedAt === null, 'EXECUTION_OBSERVATION_MISMATCH');
+      if (!['CANCELLED', 'SIGNALLED', 'MISSING'].includes(row.state)) requireValue(row.startedAt === null && row.completedAt === null, 'EXECUTION_OBSERVATION_MISMATCH');
       else {
         const start = row.startedAt === null ? null : Date.parse(row.startedAt); const end = row.completedAt === null ? null : Date.parse(row.completedAt);
         requireValue((start === null || start >= previousEnd && start <= jobEnd) && (end === null || end >= (start ?? previousEnd) && end <= jobEnd), 'EXECUTION_OBSERVATION_MISMATCH');
         if (end !== null) previousEnd = end;
       }
     }
-    if (job.exitCode === 0) requireValue(row.state === 'EXECUTED' && row.exitCode === 0 && !(row.tests?.failed > 0), 'EXECUTION_OBSERVATION_MISMATCH');
+    if (['OUTCOME_ONLY', 'MISSING'].includes(row.state)) requireValue(job.coverageComplete === false, 'PARTIAL_EVIDENCE_NOT_DECLARED');
+    if (row.state === 'OUTCOME_ONLY') requireValue(scope.type === 'ACTION', 'ACTION_OBSERVATION_MISMATCH');
+    if (job.exitCode === 0) requireValue((job.coverageComplete === false || row.state === 'EXECUTED')
+      && (row.state !== 'EXECUTED' || row.exitCode === 0) && !(row.tests?.failed > 0), 'EXECUTION_OBSERVATION_MISMATCH');
     if (job.exitCode === 0 && row.tests) requireValue((row.tests.expected === null || row.tests.expected > 0)
       && (row.tests.expected === null || row.tests.executed === null || row.tests.expected === row.tests.executed)
       && !(row.tests.unexpectedSkipped > 0), 'SCOPE_TEST_COUNT_MISMATCH');
@@ -131,6 +116,8 @@ export function readProducerCapture(captureDirectory) {
     modelMeasurement: { measurementScope: 'supplied-job-observations', instrumentationVersion: 'ci-producer/1', coverageComplete: false,
       credentialIsolationVerified: false, unobservedPaths: ['descendant-processes', 'provider-requests'], observedModelCalls: null, blockedModelAttempts: null },
     sourceEvidenceDigest: hash(`${canonical(provenance)}\n`) };
+  if (job.coverageComplete !== undefined) receipt.coverageComplete = job.coverageComplete;
+  if (job.executionBoundary !== undefined) receipt.executionBoundary = job.executionBoundary;
   requireValue(validateReceipt(receipt), 'PRODUCER_RECEIPT_INVALID');
   return { receipt, provenance, scopeReport };
 }
